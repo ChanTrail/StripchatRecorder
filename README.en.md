@@ -4,7 +4,7 @@
 
 A self-hosted Stripchat live stream recorder with a web-based management UI. Supports automatic recording, post-processing pipelines, and multi-channel notifications.
 
-[![License: GPL-2.0](https://img.shields.io/badge/License-GPL--2.0-blue.svg)](https://www.gnu.org/licenses/old-licenses/gpl-2.0.html)
+[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](https://www.gnu.org/licenses/old-licenses/gpl-3.0.html)
 [![Docker Image](https://img.shields.io/docker/pulls/chantrail/stripchat-recorder)](https://hub.docker.com/r/chantrail/stripchat-recorder)
 
 ---
@@ -13,6 +13,8 @@ A self-hosted Stripchat live stream recorder with a web-based management UI. Sup
 
 - Monitor multiple streamers and auto-record when they go live
 - Web UI for managing streamers, recordings, and post-processing
+- Supports split network proxies: configure Stripchat API proxy and CDN chunk proxy separately
+- Supports configurable Stripchat mirror site (replaces `stripchat.com` in requests with your mirror domain)
 - Configurable post-processing pipeline with pluggable modules:
   - **contact_sheet** — generates a tiled preview image with timestamps
   - **filter_short** — deletes recordings below a minimum duration
@@ -51,6 +53,16 @@ docker compose up -d
 
 Then open `http://localhost:3030` in your browser.
 
+### Network Proxies and Mirror
+
+In the settings page under "Network Proxies", you can configure:
+
+Stripchat mirror project: <https://github.com/ChanTrail/StripchatMirror>
+
+1. API Proxy: used for Stripchat API access; if a mirror is also set, mirror requests go through this proxy.
+2. CDN Proxy: used for downloading live stream chunks; can be configured independently from the API proxy.
+3. Stripchat Mirror: replaces `stripchat.com` in requests with your mirror domain.
+
 ### docker run
 
 ```bash
@@ -81,7 +93,7 @@ Modules are standalone executables implementing a simple protocol. They receive 
 | `notify_discord`  | Sends recording info and cover image to a Discord Webhook                      |
 | `notify_telegram` | Sends recording info, cover image, and video to Telegram via MTProto           |
 
-Custom modules placed in the `modules` volume directory are discovered automatically. See the [Module Development Guide](docs/module-development.en.md) for details.
+Custom modules placed in the `modules` volume directory are discovered automatically and will not be overwritten when the container restarts. See the [Module Development Guide](docs/module-development.en.md) for details.
 
 ---
 
