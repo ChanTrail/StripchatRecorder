@@ -96,14 +96,14 @@ COPY --from=builder /build/modules_dist/ /app/stripchat-recorder/modules_default
 
 
 RUN chmod +x /app/stripchat-recorder/stripchat-recorder
-RUN echo "server:3030" > /app/stripchat-recorder/config/run_mode.txt.default
+RUN echo "server:3030" > /app/stripchat-recorder/config.default/run_mode.txt
 
 RUN printf '%s\n' \
     '#!/bin/sh' \
     'set -eu' \
     '' \
     'cp -an /app/stripchat-recorder/modules_default/. /app/stripchat-recorder/modules/' \
-    'cp -af /app/stripchat-recorder/config/run_mode.txt.default /app/stripchat-recorder/config/run_mode.txt' \
+    'cp -af /app/stripchat-recorder/config.default/run_mode.txt /app/stripchat-recorder/config/run_mode.txt' \
     '' \
     'exec /app/stripchat-recorder/stripchat-recorder "$@"' \
     > /entrypoint.sh && chmod +x /entrypoint.sh
