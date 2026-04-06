@@ -13,6 +13,24 @@ import { defineStore } from "pinia";
 import { ref, watch } from "vue";
 import { call, on } from "@/lib/api";
 
+/**
+ * 生成一个随机 ID，优先使用 crypto.randomUUID()，
+ * 在非安全上下文（如通过 IP 访问的 HTTP 页面）下降级为 Math.random() 实现。
+ *
+ * Generate a random ID, preferring crypto.randomUUID().
+ * Falls back to a Math.random()-based implementation in non-secure contexts
+ * (e.g. HTTP pages accessed via IP address).
+ */
+function generateId(): string {
+	if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+		return crypto.randomUUID();
+	}
+	return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+		const r = (Math.random() * 16) | 0;
+		return (c === "x" ? r : (r & 0x3) | 0x8).toString(16);
+	});
+}
+
 /** 模块参数定义 / Module parameter definition */
 export interface ParamDef {
 	/** 参数键名 / Parameter key */
@@ -158,7 +176,7 @@ export const usePostprocessStore = defineStore("postprocess", () => {
 			defaults[p.key] = coerceDefault(p.type, p.default);
 		}
 		pipeline.value.nodes.push({
-			nodeId: crypto.randomUUID(),
+			nodeId: generateId(),
 			moduleId,
 			params: defaults,
 			enabled: true,

@@ -1,7 +1,6 @@
 {
 	"$schema": "https://schema.tauri.app/config/2",
 	"productName": "stripchat-recorder",
-	"version": "0.1.2",
 	"identifier": "com.chantrail.stripchat-recorder",
 	"build": {
 		"beforeDevCommand": "npm run dev",
