@@ -88,11 +88,11 @@ RUN apt-get update && apt-get install -y \
     librsvg2-dev \
     && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p /app /app/stripchat-recorder/logs /app/stripchat-recorder/recordings /app/stripchat-recorder/modules_default /app/stripchat-recorder/modules /app/stripchat-recorder/config
+RUN mkdir -p /app /app/stripchat-recorder/logs /app/stripchat-recorder/recordings /app/stripchat-recorder/modules.default /app/stripchat-recorder/modules /app/stripchat-recorder/config /app/stripchat-recorder/config.default
 WORKDIR /app
 
 COPY --from=builder /build/src-tauri/target/release/stripchat-recorder /app/stripchat-recorder/
-COPY --from=builder /build/modules_dist/ /app/stripchat-recorder/modules_default/
+COPY --from=builder /build/modules_dist/ /app/stripchat-recorder/modules.default/
 
 
 RUN chmod +x /app/stripchat-recorder/stripchat-recorder
@@ -102,13 +102,13 @@ RUN printf '%s\n' \
     '#!/bin/sh' \
     'set -eu' \
     '' \
-    'cp -an /app/stripchat-recorder/modules_default/. /app/stripchat-recorder/modules/' \
+    'cp -an /app/stripchat-recorder/modules.default/. /app/stripchat-recorder/modules/' \
     'cp -af /app/stripchat-recorder/config.default/run_mode.txt /app/stripchat-recorder/config/run_mode.txt' \
     '' \
     'exec /app/stripchat-recorder/stripchat-recorder "$@"' \
     > /entrypoint.sh && chmod +x /entrypoint.sh
 
-VOLUME ["/app/stripchat-recorder/logs", "/app/stripchat-recorder/recordings", "/app/stripchat-recorder/modules_default", "/app/stripchat-recorder/modules" , "/app/stripchat-recorder/config"]
+VOLUME ["/app/stripchat-recorder/logs", "/app/stripchat-recorder/recordings", "/app/stripchat-recorder/modules.default", "/app/stripchat-recorder/modules" , "/app/stripchat-recorder/config"]
 
 EXPOSE 3030
 
