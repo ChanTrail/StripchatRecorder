@@ -1,0 +1,13 @@
+[package]
+name = "notify_discord"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "notify_discord"
+path = "src/main.rs"
+
+[dependencies]
+pp_utils = { path = "../pp_utils" }
+ureq = { version = "3", features = ["socks-proxy"] }
+serde_json = "1"

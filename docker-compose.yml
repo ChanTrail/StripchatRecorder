@@ -1,0 +1,14 @@
+services:
+  stripchat-recorder:
+    image: chantrail/stripchat-recorder:latest
+    container_name: stripchat-recorder
+    restart: unless-stopped
+    environment:
+      - TZ=Asia/Shanghai
+    ports:
+      - "3030:3030"
+    volumes:
+      - ./data/logs:/app/stripchat-recorder/logs
+      - ./data/recordings:/app/stripchat-recorder/recordings
+      - ./data/modules:/app/stripchat-recorder/modules
+      - ./data/config:/app/stripchat-recorder/config

@@ -1,0 +1,137 @@
+# StripchatRecorder
+
+> 🌐 [中文](README.md)
+
+A self-hosted Stripchat live stream recorder with a web-based management UI. Supports automatic recording, post-processing pipelines, and multi-channel notifications.
+
+[![License: GPL-2.0](https://img.shields.io/badge/License-GPL--2.0-blue.svg)](https://www.gnu.org/licenses/old-licenses/gpl-2.0.html)
+[![Docker Image](https://img.shields.io/docker/pulls/chantrail/stripchat-recorder)](https://hub.docker.com/r/chantrail/stripchat-recorder)
+
+---
+
+## Features
+
+- Monitor multiple streamers and auto-record when they go live
+- Web UI for managing streamers, recordings, and post-processing
+- Configurable post-processing pipeline with pluggable modules:
+  - **contact_sheet** — generates a tiled preview image with timestamps
+  - **filter_short** — deletes recordings below a minimum duration
+  - **notify_discord** — sends recording info and cover image to a Discord Webhook
+  - **notify_telegram** — sends recording info, cover image, and video via MTProto (supports files >2 GB, HTTP/SOCKS5 proxy)
+- Dual runtime: Tauri desktop app or headless server accessible via browser
+- Real-time UI updates via Server-Sent Events
+- Dark/light mode following system theme
+
+---
+
+## Quick Start (Docker)
+
+### docker-compose (recommended)
+
+```yaml
+services:
+  stripchat-recorder:
+    image: chantrail/stripchat-recorder:latest
+    container_name: stripchat-recorder
+    restart: unless-stopped
+    environment:
+      - TZ=Asia/Shanghai
+    ports:
+      - "3030:3030"
+    volumes:
+      - ./data/logs:/app/stripchat-recorder/logs
+      - ./data/recordings:/app/stripchat-recorder/recordings
+      - ./data/modules:/app/stripchat-recorder/modules
+      - ./data/config:/app/stripchat-recorder/config
+```
+
+```bash
+docker compose up -d
+```
+
+Then open `http://localhost:3030` in your browser.
+
+### docker run
+
+```bash
+docker run -d \
+  --name stripchat-recorder \
+  --restart unless-stopped \
+  -e TZ=Asia/Shanghai \
+  -p 3030:3030 \
+  -v ./data/logs:/app/stripchat-recorder/logs \
+  -v ./data/recordings:/app/stripchat-recorder/recordings \
+  -v ./data/modules:/app/stripchat-recorder/modules \
+  -v ./data/config:/app/stripchat-recorder/config \
+  chantrail/stripchat-recorder:latest
+```
+
+---
+
+## Volumes
+
+| Path | Description |
+|------|-------------|
+| `/app/stripchat-recorder/logs` | Application logs |
+| `/app/stripchat-recorder/recordings` | Recorded video files |
+| `/app/stripchat-recorder/modules_default` | Built-in module binaries (read-only reference) |
+| `/app/stripchat-recorder/modules` | Active modules directory (missing files are copied from `modules_default` on startup, existing files are never overwritten) |
+| `/app/stripchat-recorder/config` | Runtime configuration files |
+
+---
+
+## Post-processing Modules
+
+Modules are standalone executables implementing a simple protocol. They receive input via environment variables and communicate with the host via stdout.
+
+### Built-in Modules
+
+| Module | Description |
+|--------|-------------|
+| `contact_sheet` | Extracts frames at a configurable interval and tiles them into a preview image |
+| `filter_short` | Deletes recordings shorter than a configurable minimum duration |
+| `notify_discord` | Sends recording info and cover image to a Discord Webhook |
+| `notify_telegram` | Sends recording info, cover image, and video to Telegram via MTProto |
+
+Custom modules placed in the `modules` volume directory are discovered automatically. See the [Module Development Guide](docs/module-development.en.md) for details.
+
+---
+
+## Building from Source
+
+**Prerequisites:** Rust, Node.js (LTS), ffmpeg
+
+```bash
+# Install frontend dependencies
+npm install
+
+# Build frontend + Tauri binary
+npm run build
+npx tauri build --no-bundle
+
+# Build post-processing modules
+for dir in modules/*/; do
+  [ -f "$dir/Cargo.toml" ] && cargo build --manifest-path "$dir/Cargo.toml" --release --bins
+done
+```
+
+### Build Docker image
+
+```bash
+docker build -t chantrail/stripchat-recorder .
+```
+
+---
+
+## Tech Stack
+
+- **Frontend:** Vue 3, TypeScript, Vite, Tailwind CSS, Reka UI
+- **Backend / Desktop:** Rust, Tauri 2
+- **Post-processing modules:** Rust (standalone binaries)
+- **Container:** Debian, ffmpeg
+
+---
+
+## License
+
+This project is licensed under the [GNU General Public License v2.0](https://www.gnu.org/licenses/old-licenses/gpl-2.0.html).

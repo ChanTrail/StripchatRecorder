@@ -1,0 +1,42 @@
+[package]
+name = "stripchat-recorder"
+version = "0.1.0"
+description = "Stripchat Stream Recorder"
+authors = ["ChanTrail"]
+edition = "2021"
+
+[lib]
+name = "stripchat_recorder_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-notification = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.13", features = ["json", "socks", "native-tls"], default-features = false }
+chrono = { version = "0.4", features = ["serde"] }
+regex = "1"
+sha2 = "0.10"
+base64 = "0.22"
+parking_lot = "0.12"
+dirs = "6"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+opener = "0.8"
+axum = { version = "0.8", features = ["macros"] }
+axum-extra = { version = "0.12", features = ["typed-header"] }
+tower-http = { version = "0.6", features = ["cors", "fs"] }
+tokio-stream = "0.1"
+async-stream = "0.3"
+rust-embed = { version = "8", features = ["axum"] }
+mime_guess = "2"
+rand = "0.10"
+notify = "8"
+libc = "0.2"
