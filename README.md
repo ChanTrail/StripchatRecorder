@@ -1,10 +1,10 @@
 # StripchatRecorder
 
-> 🌐 [English](README.en.md)
+[简体中文](README.md) | [English](README.en.md)
 
 自托管的 Stripchat 直播录制工具，提供基于 Web 的管理界面，支持自动录制、后处理流水线和多渠道通知。
 
-[![License: GPL-2.0](https://img.shields.io/badge/License-GPL--2.0-blue.svg)](https://www.gnu.org/licenses/old-licenses/gpl-2.0.html)
+[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](https://www.gnu.org/licenses/old-licenses/gpl-3.0.html)
 [![Docker Image](https://img.shields.io/docker/pulls/chantrail/stripchat-recorder)](https://hub.docker.com/r/chantrail/stripchat-recorder)
 
 ---
@@ -13,6 +13,8 @@
 
 - 监控多个主播，上线时自动开始录制
 - Web UI 管理主播、录制文件和后处理任务
+- 支持分离式网络代理：可分别配置 Stripchat API 代理与 CDN 分片代理
+- 支持配置 Stripchat 镜像站（将请求中的 `stripchat.com` 替换为镜像域名）
 - 可配置的后处理流水线，支持插件化模块：
   - **contact_sheet** — 生成带时间戳的缩略图预览图
   - **filter_short** — 删除低于最短时长的录制文件
@@ -51,6 +53,16 @@ docker compose up -d
 
 启动后在浏览器中打开 `http://localhost:3030`。
 
+### 网络代理与镜像站
+
+在设置页的「网络代理」中可分别配置：
+
+Stripchat 镜像站项目：<https://github.com/ChanTrail/StripchatMirror>
+
+1. API 代理：用于访问 Stripchat API；若同时填写镜像站，则通过该代理访问镜像站。
+2. CDN 代理：用于下载直播分片流，可与 API 代理分开设置。
+3. Stripchat 镜像站：用于替换请求中的 `stripchat.com` 域名。
+
 ### docker run
 
 ```bash
@@ -66,17 +78,19 @@ docker run -d \
   chantrail/stripchat-recorder:latest
 ```
 
+---
+
 ## 后处理模块
 
 模块是实现了简单协议的独立可执行文件，通过环境变量接收输入，通过标准输出与主程序通信。
 
 ### 内置模块
 
-| 模块 | 说明 |
-|------|------|
-| `contact_sheet` | 按配置间隔截帧并拼合为预览图 |
-| `filter_short` | 删除低于最短时长的录制文件 |
-| `notify_discord` | 通过 Discord Webhook 发送录制信息和封面图 |
+| 模块              | 说明                                                |
+| ----------------- | --------------------------------------------------- |
+| `contact_sheet`   | 按配置间隔截帧并拼合为预览图                        |
+| `filter_short`    | 删除低于最短时长的录制文件                          |
+| `notify_discord`  | 通过 Discord Webhook 发送录制信息和封面图           |
 | `notify_telegram` | 通过 MTProto 向 Telegram 发送录制信息、封面图和视频 |
 
 将自定义模块放入 `modules` 数据卷目录后会被自动发现，且不会在容器重启时被覆盖。详见[后处理模块开发文档](docs/module-development.md)。
@@ -120,4 +134,10 @@ docker build -t chantrail/stripchat-recorder .
 
 ## 开源许可证
 
-本项目基于 [GNU 通用公共许可证 v2.0](https://www.gnu.org/licenses/old-licenses/gpl-2.0.html) 发布。
+本项目基于 [GNU 通用公共许可证 v3.0](https://www.gnu.org/licenses/old-licenses/gpl-3.0.html) 发布。
+
+---
+
+## 免责声明
+
+本项目仅用于技术研究与学习交流。使用者需自行承担部署、运维与合规风险。

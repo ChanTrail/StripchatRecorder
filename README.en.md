@@ -1,6 +1,6 @@
 # StripchatRecorder
 
-> 🌐 [中文](README.md)
+[简体中文](README.md) | [English](README.en.md)
 
 A self-hosted Stripchat live stream recorder with a web-based management UI. Supports automatic recording, post-processing pipelines, and multi-channel notifications.
 
@@ -68,30 +68,18 @@ docker run -d \
 
 ---
 
-## Volumes
-
-| Path | Description |
-|------|-------------|
-| `/app/stripchat-recorder/logs` | Application logs |
-| `/app/stripchat-recorder/recordings` | Recorded video files |
-| `/app/stripchat-recorder/modules_default` | Built-in module binaries (read-only reference) |
-| `/app/stripchat-recorder/modules` | Active modules directory (missing files are copied from `modules_default` on startup, existing files are never overwritten) |
-| `/app/stripchat-recorder/config` | Runtime configuration files |
-
----
-
 ## Post-processing Modules
 
 Modules are standalone executables implementing a simple protocol. They receive input via environment variables and communicate with the host via stdout.
 
 ### Built-in Modules
 
-| Module | Description |
-|--------|-------------|
-| `contact_sheet` | Extracts frames at a configurable interval and tiles them into a preview image |
-| `filter_short` | Deletes recordings shorter than a configurable minimum duration |
-| `notify_discord` | Sends recording info and cover image to a Discord Webhook |
-| `notify_telegram` | Sends recording info, cover image, and video to Telegram via MTProto |
+| Module            | Description                                                                    |
+| ----------------- | ------------------------------------------------------------------------------ |
+| `contact_sheet`   | Extracts frames at a configurable interval and tiles them into a preview image |
+| `filter_short`    | Deletes recordings shorter than a configurable minimum duration                |
+| `notify_discord`  | Sends recording info and cover image to a Discord Webhook                      |
+| `notify_telegram` | Sends recording info, cover image, and video to Telegram via MTProto           |
 
 Custom modules placed in the `modules` volume directory are discovered automatically. See the [Module Development Guide](docs/module-development.en.md) for details.
 
@@ -134,4 +122,10 @@ docker build -t chantrail/stripchat-recorder .
 
 ## License
 
-This project is licensed under the [GNU General Public License v2.0](https://www.gnu.org/licenses/old-licenses/gpl-2.0.html).
+This project is licensed under the [GNU General Public License v3.0](https://www.gnu.org/licenses/old-licenses/gpl-3.0.html).
+
+---
+
+## Disclaimer
+
+This project is intended for technical research and learning only. Users are responsible for deployment, operations, and compliance risks.
