@@ -388,27 +388,50 @@ async fn upload_with_progress(
     done: Arc<AtomicUsize>, total: usize,
 ) -> Result<grammers_client::media::Uploaded, String> {
     const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+    // Retry delays for transient upload failures: 60s, 120s, 180s
+    const MAX_INNER: u32 = 3;
+    const RETRY_DELAYS: [u64; 3] = [30, 60, 90];
+
     let name = path.file_name().unwrap().to_string_lossy().to_string();
-    let before = done.load(Ordering::Relaxed);
 
-    let result = tokio::time::timeout(ATTEMPT_TIMEOUT, async {
-        let file = tokio::fs::File::open(path).await
-            .map_err(|e| format!("open {} failed: {}", path.display(), e))?;
-        let size = file.metadata().await
-            .map_err(|e| format!("metadata failed: {}", e))?.len() as usize;
-        let mut reader = ProgressReader::new(file, Arc::clone(&done), total);
-        client.upload_stream(&mut reader, size, name.clone()).await
-            .map_err(|e| format!("upload failed: {}", e))
-    }).await;
+    let mut inner_attempt = 0u32;
+    loop {
+        let before = done.load(Ordering::Relaxed);
 
-    match result {
-        Ok(inner) => inner,
-        Err(_) => {
-            // 超时时回滚已计入的字节数 / Roll back counted bytes on timeout
-            let after = done.load(Ordering::Relaxed);
-            done.fetch_sub(after.saturating_sub(before), Ordering::Relaxed);
-            Err(format!("upload of {} timed out after {:?}", path.display(), ATTEMPT_TIMEOUT))
+        let result = tokio::time::timeout(ATTEMPT_TIMEOUT, async {
+            let file = tokio::fs::File::open(path).await
+                .map_err(|e| format!("open {} failed: {}", path.display(), e))?;
+            let size = file.metadata().await
+                .map_err(|e| format!("metadata failed: {}", e))?.len() as usize;
+            let mut reader = ProgressReader::new(file, Arc::clone(&done), total);
+            client.upload_stream(&mut reader, size, name.clone()).await
+                .map_err(|e| format!("upload failed: {}", e))
+        }).await;
+
+        let err = match result {
+            Ok(Ok(uploaded)) => return Ok(uploaded),
+            Ok(Err(e)) => e,
+            Err(_) => {
+                // 超时时回滚已计入的字节数 / Roll back counted bytes on timeout
+                let after = done.load(Ordering::Relaxed);
+                done.fetch_sub(after.saturating_sub(before), Ordering::Relaxed);
+                format!("upload of {} timed out after {:?}", path.display(), ATTEMPT_TIMEOUT)
+            }
+        };
+
+        inner_attempt += 1;
+        if inner_attempt >= MAX_INNER {
+            return Err(err);
         }
+        let delay_secs = RETRY_DELAYS[(inner_attempt as usize - 1).min(RETRY_DELAYS.len() - 1)];
+        eprintln!(
+            "upload attempt {}/{} failed: {}. retrying in {}s…",
+            inner_attempt, MAX_INNER, err, delay_secs
+        );
+        // 回滚已计入的字节数 / Roll back counted bytes before retry
+        let after = done.load(Ordering::Relaxed);
+        done.fetch_sub(after.saturating_sub(before), Ordering::Relaxed);
+        tokio::time::sleep(Duration::from_secs(delay_secs)).await;
     }
 }
 

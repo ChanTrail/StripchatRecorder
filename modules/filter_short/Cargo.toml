@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "filter_short"
+name = "filter_short v0.1.0"
 path = "src/main.rs"
 
 [dependencies]

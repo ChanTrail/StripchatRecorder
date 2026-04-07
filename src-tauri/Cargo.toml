@@ -1,6 +1,6 @@
 [package]
 name = "stripchat-recorder"
-version = "0.1.3"
+version = "0.1.4"
 description = "Stripchat Stream Recorder"
 authors = ["ChanTrail"]
 edition = "2021"

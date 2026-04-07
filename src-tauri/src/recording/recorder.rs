@@ -194,23 +194,6 @@ impl RecorderManager {
         let mouflon_keys = self.state.get_mouflon_keys();
         let merge_format = settings.merge_format.clone();
 
-        let tg_size_limit: Option<u64> = {
-            let pipeline = self.state.get_pipeline();
-            let has_tg_video = pipeline.nodes.iter().any(|n| {
-                n.enabled
-                    && n.module_id == "notify_telegram"
-                    && n.params
-                        .get("send_video")
-                        .and_then(|v: &serde_json::Value| v.as_bool())
-                        .unwrap_or(true)
-            });
-            if has_tg_video {
-                Some(2 * 1024 * 1024 * 1024)
-            } else {
-                None
-            }
-        };
-
         tokio::spawn(async move {
             if let Err(e) = manager
                 .recording_loop(
@@ -221,7 +204,6 @@ impl RecorderManager {
                     cdn_proxy.as_deref(),
                     sc_mirror.as_deref(),
                     mouflon_keys,
-                    tg_size_limit,
                     stop_rx,
                     Arc::clone(&emitter),
                 )
@@ -360,7 +342,6 @@ impl RecorderManager {
         cdn_proxy: Option<&str>,
         sc_mirror: Option<&str>,
         mouflon_keys: HashMap<String, String>,
-        size_limit_bytes: Option<u64>,
         mut stop_rx: mpsc::Receiver<()>,
         emitter: Arc<dyn Emitter>,
     ) -> Result<()> {
@@ -417,15 +398,6 @@ impl RecorderManager {
                                     "segment_count": downloaded_sequences.len(),
                                     "size_bytes": size_bytes,
                                 }));
-                                if let Some(limit) = size_limit_bytes {
-                                    if size_bytes >= limit {
-                                        tracing::info!(
-                                            "Recording {} reached size limit ({} bytes), stopping",
-                                            username, size_bytes
-                                        );
-                                        break;
-                                    }
-                                }
                             } else {
                                 retry_count += 1;
                             }
@@ -472,20 +444,19 @@ impl RecorderManager {
                                         url_prefix = get_url_prefix(&new_url);
                                         current_playlist_url = new_url;
                                         playlist_refresh_failures = 0;
+                                        retry_count = 0;
                                         wait_next_round = false;
                                     } else if !info.is_recordable {
                                         tracing::warn!("Stream no longer recordable → {} (status: {}), stopping", username, info.status);
                                         break;
                                     } else {
-                                        tracing::warn!("Stream no longer recordable → {}", username);
+                                        tracing::warn!("No playlist URL yet → {} (status: {}), retrying", username, info.status);
                                         playlist_refresh_failures += 1;
-                                        retry_count += 1;
                                     }
                                 }
                                 Err(refresh_err) => {
                                     tracing::error!("Playlist refresh failed → {}: {}", username, refresh_err);
                                     playlist_refresh_failures += 1;
-                                    retry_count += 1;
                                 }
                             }
                             if playlist_refresh_failures >= MAX_PLAYLIST_REFRESH_FAILURES {
@@ -527,8 +498,10 @@ impl RecorderManager {
     ) -> Result<(usize, usize)> {
         let playlist = api.fetch_playlist(playlist_url).await?;
         let (segments, init_url) = parse_playlist(&playlist, url_prefix, mouflon_keys)?;
-
-        if init_url.is_some() && init_url.as_deref() != cached_init_url.as_deref() {
+        let init_url_path = |u: &str| u.split('?').next().unwrap_or(u).to_string();
+        let new_init_path = init_url.as_deref().map(init_url_path);
+        let cached_init_path = cached_init_url.as_deref().map(init_url_path);
+        if new_init_path.is_some() && new_init_path != cached_init_path {
             if let Some(ref url) = init_url {
                 match api.download_segment(url).await {
                     Ok(data) => {

@@ -129,60 +129,19 @@ impl<R: Read> Read for ProgressReader<R> {
     }
 }
 
-/// 模块主逻辑：收集录制信息 -> 构建消息 -> 发送到 Discord Webhook。
-/// Main module logic: collect recording info -> build message -> send to Discord Webhook.
-fn run() -> Result<(), String> {
-    // 读取输入文件路径 / Read input file path
-    let input_str = env::var("PP_INPUT").map_err(|_| "PP_INPUT not set".to_string())?;
-    let input = PathBuf::from(&input_str);
-
-    if !input.exists() {
-        return Err(format!("Input file not found: {}", input.display()));
-    }
-
-    // 读取模块参数 / Read module parameters
-    let webhook_url = param("webhook_url", "");
-    if webhook_url.is_empty() {
-        return Err("webhook_url is required".to_string());
-    }
-    let proxy = param("proxy", "");
-    let bot_name = param("username", "Recorder Bot");
-
-    emit_progress_step(0, 3);
-
-    // 从文件名解析主播名和时间戳 / Parse model name and timestamp from filename
-    let stem = input
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("recording");
-    let (model_name, timestamp) = parse_stem(stem);
-    let file_size = fs::metadata(&input).map(|m| m.len()).unwrap_or(0);
-    let duration = video_duration(&input).unwrap_or(0.0);
-
-    // 构建 Discord 消息内容（Markdown 格式）/ Build Discord message content (Markdown format)
-    let content = format!(
-        "**ModelName:** `#{model}`\n\
-         **Timestamp:** `{ts}`\n\
-         **Duration:** `{dur}`\n\
-         **FileName:** `{name}`\n\
-         **FileSize:** `{size}`",
-        model = model_name,
-        ts = if timestamp.is_empty() {
-            "—".to_string()
-        } else {
-            timestamp
-        },
-        dur = format_duration(duration),
-        name = input.file_name().and_then(|n| n.to_str()).unwrap_or(""),
-        size = format_bytes(file_size),
-    );
-
-    emit_progress_step(1, 3);
-
-    let agent = build_agent(&proxy);
-    let cover = find_cover(&input);
-
-    if let Some(ref img_path) = cover {
+/// 执行一次 Discord Webhook 请求（含封面图或纯文字）。
+/// Perform a single Discord Webhook request (with cover image or text-only).
+///
+/// 返回 `Ok(())` 表示成功，`Err(String)` 表示需要重试的错误。
+/// Returns `Ok(())` on success, `Err(String)` for retryable errors.
+fn send_once(
+    agent: &ureq::Agent,
+    webhook_url: &str,
+    bot_name: &str,
+    content: &str,
+    cover: Option<&PathBuf>,
+) -> Result<(), String> {
+    if let Some(img_path) = cover {
         // 有封面图：使用 multipart/form-data 同时发送消息和图片
         // Has cover image: send message and image together using multipart/form-data
         let img_bytes =
@@ -235,7 +194,7 @@ fn run() -> Result<(), String> {
         let upload_start = Instant::now();
 
         let resp = agent
-            .post(&webhook_url)
+            .post(webhook_url)
             .header("Content-Type", &content_type)
             .send(send_body)
             .map_err(|e| format!("Discord request failed: {}", e))?;
@@ -252,14 +211,14 @@ fn run() -> Result<(), String> {
         if resp.status() != 200 && resp.status() != 204 {
             let status = resp.status();
             let body = resp.into_body().read_to_string().unwrap_or_default();
+            // 429 限流或 5xx 服务端错误视为可重试 / 429 rate-limit or 5xx server errors are retryable
             return Err(format!("Discord returned {}: {}", status, body));
         }
     } else {
         // 无封面图：仅发送文字消息 / No cover image: send text message only
-        emit_progress_step(2, 3);
         let payload = serde_json::json!({ "username": bot_name, "content": content });
         let resp = agent
-            .post(&webhook_url)
+            .post(webhook_url)
             .header("Content-Type", "application/json")
             .send(payload.to_string())
             .map_err(|e| format!("Discord request failed: {}", e))?;
@@ -268,6 +227,87 @@ fn run() -> Result<(), String> {
             let status = resp.status();
             let body = resp.into_body().read_to_string().unwrap_or_default();
             return Err(format!("Discord returned {}: {}", status, body));
+        }
+    }
+    Ok(())
+}
+
+/// 模块主逻辑：收集录制信息 -> 构建消息 -> 带重试地发送到 Discord Webhook。
+/// Main module logic: collect recording info -> build message -> send to Discord Webhook with retries.
+fn run() -> Result<(), String> {
+    // 读取输入文件路径 / Read input file path
+    let input_str = env::var("PP_INPUT").map_err(|_| "PP_INPUT not set".to_string())?;
+    let input = PathBuf::from(&input_str);
+
+    if !input.exists() {
+        return Err(format!("Input file not found: {}", input.display()));
+    }
+
+    // 读取模块参数 / Read module parameters
+    let webhook_url = param("webhook_url", "");
+    if webhook_url.is_empty() {
+        return Err("webhook_url is required".to_string());
+    }
+    let proxy = param("proxy", "");
+    let bot_name = param("username", "Recorder Bot");
+
+    emit_progress_step(0, 3);
+
+    // 从文件名解析主播名和时间戳 / Parse model name and timestamp from filename
+    let stem = input
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("recording");
+    let (model_name, timestamp) = parse_stem(stem);
+    let file_size = fs::metadata(&input).map(|m| m.len()).unwrap_or(0);
+    let duration = video_duration(&input).unwrap_or(0.0);
+
+    // 构建 Discord 消息内容（Markdown 格式）/ Build Discord message content (Markdown format)
+    let content = format!(
+        "**ModelName:** `#{model}`\n\
+         **Timestamp:** `{ts}`\n\
+         **Duration:** `{dur}`\n\
+         **FileName:** `{name}`\n\
+         **FileSize:** `{size}`",
+        model = model_name,
+        ts = if timestamp.is_empty() {
+            "—".to_string()
+        } else {
+            timestamp
+        },
+        dur = format_duration(duration),
+        name = input.file_name().and_then(|n| n.to_str()).unwrap_or(""),
+        size = format_bytes(file_size),
+    );
+
+    emit_progress_step(1, 3);
+
+    let cover = find_cover(&input);
+
+    // 重试参数：最多 5 次，退避延迟 30s / 60s / 90s / 120s
+    // Retry parameters: up to 5 attempts, back-off delays 30s / 60s / 90s / 120s
+    const MAX_ATTEMPTS: u32 = 5;
+    const RETRY_DELAYS: [u64; 4] = [30, 60, 90, 120];
+
+    let mut attempt = 0u32;
+    loop {
+        // 每次重试重建 agent，确保使用全新连接 / Rebuild agent on each attempt for a fresh connection
+        let agent = build_agent(&proxy);
+        let result = send_once(&agent, &webhook_url, &bot_name, &content, cover.as_ref());
+        match result {
+            Ok(()) => break,
+            Err(e) => {
+                attempt += 1;
+                if attempt >= MAX_ATTEMPTS {
+                    return Err(e);
+                }
+                let delay = RETRY_DELAYS[(attempt as usize - 1).min(RETRY_DELAYS.len() - 1)];
+                eprintln!(
+                    "Discord request failed (attempt {}/{}): {}. retrying in {}s…",
+                    attempt, MAX_ATTEMPTS, e, delay
+                );
+                std::thread::sleep(Duration::from_secs(delay));
+            }
         }
     }
 

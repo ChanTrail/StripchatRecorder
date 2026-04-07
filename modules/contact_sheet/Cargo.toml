@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "contact_sheet"
+name = "contact_sheet v0.1.0"
 path = "src/main.rs"
 
 [dependencies]
