@@ -21,7 +21,7 @@ use std::process::{Command, Stdio};
 /// Module metadata JSON, output via `--describe` argument.
 const DESCRIBE: &str = r#"{
   "id": "contact_sheet",
-  "name": "Contact Sheet",
+  "name": "Contact Sheet 0.1.0",
   "description": "每隔指定秒数截帧，拼合成一张带时间戳的预览图保存到视频同目录",
   "params": [
     {

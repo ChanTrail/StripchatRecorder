@@ -1,10 +1,10 @@
 [package]
 name = "notify_telegram"
-version = "0.1.1"
-edition = "2021"
+version = "0.1.3"
+edition = "2024"
 
 [[bin]]
-name = "notify_telegram v0.1.1"
+name = "notify_telegram_v013"
 path = "src/main.rs"
 
 [dependencies]
@@ -13,4 +13,4 @@ grammers-client   = { version = "0.9", features = ["proxy", "fs"] }
 grammers-session  = { version = "0.9", features = ["sqlite-storage"] }
 grammers-mtsender = { version = "0.9", features = ["proxy"] }
 tokio    = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
-dirs = "5"
+dirs = "6"

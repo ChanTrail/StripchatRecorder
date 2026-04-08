@@ -1,10 +1,10 @@
 [package]
 name = "filter_short"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [[bin]]
-name = "filter_short v0.1.0"
+name = "filter_short_v010"
 path = "src/main.rs"
 
 [dependencies]

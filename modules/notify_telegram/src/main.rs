@@ -41,7 +41,7 @@ const PROGRESS_SCALE: usize = 10_000;
 /// Module metadata JSON, output via `--describe` argument.
 const DESCRIBE: &str = r#"{
   "id": "notify_telegram",
-  "name": "Telegram 通知",
+  "name": "Telegram 通知 0.1.3",
   "description": "将录制信息、封面图和视频通过 MTProto 发送到 Telegram（支持超过 50MB 的大文件，支持 HTTP/SOCKS5 代理）",
   "params": [
     {
@@ -159,6 +159,80 @@ fn tmp_dir() -> PathBuf {
     let tmp = base.join("tmp");
     fs::create_dir_all(&tmp).ok();
     tmp
+}
+
+/// 获取图片的宽度和高度（使用 ffprobe）。
+/// Get image width and height using ffprobe.
+fn image_dimensions(path: &Path) -> Option<(u32, u32)> {
+    let out = Command::new("ffprobe")
+        .args(["-v", "error", "-select_streams", "v:0",
+               "-show_entries", "stream=width,height", "-of", "csv=p=0"])
+        .arg(path)
+        .stdout(Stdio::piped()).stderr(Stdio::null())
+        .output().ok()?;
+    let s = String::from_utf8_lossy(&out.stdout);
+    let mut parts = s.trim().splitn(2, ',');
+    let w: u32 = parts.next()?.trim().parse().ok()?;
+    let h: u32 = parts.next()?.trim().parse().ok()?;
+    Some((w, h))
+}
+
+/// 若封面图不满足 Telegram 限制（宽+高 < 10000 且宽高比 < 20:1），则等比缩放。
+/// Resize cover image if it violates Telegram limits (w+h < 10000 and aspect ratio < 20:1).
+/// Returns Some(new_path) if resized, None if no resize needed.
+fn resize_cover_for_telegram(img: &Path) -> Result<Option<PathBuf>, String> {
+    let (w, h) = match image_dimensions(img) {
+        Some(d) => d,
+        None => return Ok(None), // 无法获取尺寸，跳过
+    };
+
+    // 检查是否需要缩放
+    let sum_ok = (w + h) < 10000;
+    let ratio_ok = w.max(h) < h.min(w).saturating_mul(20);
+    if sum_ok && ratio_ok {
+        return Ok(None);
+    }
+
+    // 计算目标尺寸：同时满足两个约束
+    // 约束1: w' + h' < 10000  => scale <= 9999 / (w+h)
+    // 约束2: max(w',h') / min(w',h') < 20  => 宽高比不变，只要原始比例 < 20:1 就满足
+    //        若原始比例 >= 20:1，则将长边限制为短边的 19 倍
+    let (tw, th) = if !ratio_ok {
+        // 先修正宽高比：将长边缩到短边的 19 倍
+        if w >= h {
+            (h * 19, h)
+        } else {
+            (w, w * 19)
+        }
+    } else {
+        (w, h)
+    };
+
+    // 再检查 sum 约束
+    let (tw, th) = if tw + th >= 10000 {
+        // 等比缩放使 w'+h' = 9999
+        let scale = 9999.0 / (tw + th) as f64;
+        let nw = ((tw as f64 * scale).floor() as u32).max(1);
+        let nh = ((th as f64 * scale).floor() as u32).max(1);
+        (nw, nh)
+    } else {
+        (tw, th)
+    };
+
+    let stem = img.file_stem().and_then(|s| s.to_str()).unwrap_or("cover");
+    let out_path = tmp_dir().join(format!("{}_tg_resized.jpg", stem));
+
+    let status = Command::new("ffmpeg")
+        .args(["-y", "-i"]).arg(img)
+        .args(["-vf", &format!("scale={}:{}", tw, th), "-q:v", "2"])
+        .arg(&out_path)
+        .stdout(Stdio::null()).stderr(Stdio::null())
+        .status().map_err(|e| format!("ffmpeg not found: {}", e))?;
+
+    if !status.success() {
+        return Err("ffmpeg failed to resize cover image for Telegram".to_string());
+    }
+    Ok(Some(out_path))
 }
 
 /// 使用 ffprobe 获取视频的时长、宽度和高度。
@@ -388,7 +462,6 @@ async fn upload_with_progress(
     done: Arc<AtomicUsize>, total: usize,
 ) -> Result<grammers_client::media::Uploaded, String> {
     const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(30 * 60);
-    // Retry delays for transient upload failures: 60s, 120s, 180s
     const MAX_INNER: u32 = 3;
     const RETRY_DELAYS: [u64; 3] = [30, 60, 90];
 
@@ -488,15 +561,15 @@ async fn upload_and_send(
 
     let peer = resolve_peer(&client, chat_id, username).await?;
 
-    // 处理封面图：非 jpg/png 格式需先用 ffmpeg 转换
-    // Handle cover image: non-jpg/png formats need ffmpeg conversion first
+    // 处理封面图：非 jpg/png 格式需先用 ffmpeg 转换，然后检查尺寸限制
+    // Handle cover image: non-jpg/png formats need ffmpeg conversion first, then check dimension limits
     let converted_cover: Option<PathBuf>;
+    let resized_cover: Option<PathBuf>;
     let effective_cover: Option<&Path>;
     if let Some(img) = cover {
         let ext = img.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
         if matches!(ext.as_str(), "jpg" | "jpeg" | "png") {
             converted_cover = None;
-            effective_cover = Some(img);
         } else {
             let tmp = tmp_dir().join(format!(
                 "{}_tg_tmp.png",
@@ -508,10 +581,15 @@ async fn upload_and_send(
                 .status().map_err(|e| format!("ffmpeg not found: {}", e))?;
             if !status.success() { return Err("ffmpeg failed to convert cover image".to_string()); }
             converted_cover = Some(tmp);
-            effective_cover = converted_cover.as_deref();
         }
+        let after_format: &Path = converted_cover.as_deref().unwrap_or(img);
+        // 检查并等比缩放封面图以满足 Telegram 尺寸限制
+        // Check and proportionally resize cover image to meet Telegram dimension limits
+        resized_cover = resize_cover_for_telegram(after_format)?;
+        effective_cover = resized_cover.as_deref().or(Some(after_format));
     } else {
         converted_cover = None;
+        resized_cover = None;
         effective_cover = None;
     }
 
@@ -587,6 +665,7 @@ async fn upload_and_send(
 
     // 清理转换后的临时封面图 / Clean up converted temporary cover image
     if let Some(ref tmp) = converted_cover { let _ = fs::remove_file(tmp); }
+    if let Some(ref tmp) = resized_cover { let _ = fs::remove_file(tmp); }
 
     if send_video {
         struct UploadedPart {

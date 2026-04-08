@@ -885,7 +885,7 @@
 											<div
 												class="flex items-center justify-between text-xs text-muted-foreground"
 											>
-												<span class="truncate max-w-45">{{
+												<span class="truncate max-w-50">{{
 													ppProgress[f.path].moduleName
 												}}</span>
 												<span class="tabular-nums shrink-0">{{

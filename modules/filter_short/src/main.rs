@@ -21,7 +21,7 @@ use pp_utils::{param_f64, param_bool, video_duration, PROGRESS_SCALE};
 /// Module metadata JSON, output via `--describe` argument.
 const DESCRIBE: &str = r#"{
   "id": "filter_short",
-  "name": "过滤短视频",
+  "name": "过滤短视频 0.1.0",
   "description": "删除时长低于指定阈值的视频文件",
   "params": [
     {
