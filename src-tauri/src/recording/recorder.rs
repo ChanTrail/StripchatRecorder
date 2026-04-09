@@ -231,6 +231,7 @@ impl RecorderManager {
             let merge_format_clone = merge_format.clone();
             let state_clone = Arc::clone(&manager.state);
             let emitter_clone = Arc::clone(&emitter);
+            let manager_clone = Arc::clone(&manager);
 
             emitter.emit(
                 "recording-merge-waiting",
@@ -241,11 +242,16 @@ impl RecorderManager {
                 }),
             );
 
+            manager.waiting_merge_dirs.write().insert(session_dir.clone());
+
             let video_duration_secs = tokio::task::spawn_blocking(move || {
                 let _startup_guard = state_clone
                     .startup_lock
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
+
+                manager_clone.waiting_merge_dirs.write().remove(&session_dir_clone);
+                manager_clone.merging_dirs.write().insert(session_dir_clone.clone());
 
                 emitter_clone.emit(
                     "recording-merging",
@@ -264,6 +270,8 @@ impl RecorderManager {
                     &emitter_clone,
                     &session_dir_str,
                 );
+
+                manager_clone.merging_dirs.write().remove(&session_dir_clone);
 
                 if duration.is_some() {
                     let parent = session_dir_clone.parent().unwrap_or(&session_dir_clone);

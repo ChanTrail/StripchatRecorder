@@ -327,6 +327,11 @@
 		Object.values(recordingSpeed.value).reduce((sum, s) => sum + s, 0),
 	);
 
+	/** 正在录制的文件数量 / Number of files currently recording */
+	const recordingCount = computed(
+		() => files.value.filter((f) => f.is_recording).length,
+	);
+
 	/** 磁盘使用率百分比 / Disk usage percentage */
 	const diskUsedPct = computed(() => {
 		if (!diskSpace.value || diskSpace.value.total_bytes === 0) return 0;
@@ -617,6 +622,9 @@
 					class="flex items-center gap-3 text-sm text-muted-foreground flex-wrap"
 				>
 					<span>共 {{ files.length }} 个文件</span>
+					<span v-if="recordingCount > 0" class="text-destructive"
+						>{{ recordingCount }} 个录制中</span
+					>
 					<span v-if="selectedCount > 0" class="text-foreground"
 						>已选 {{ selectedCount }} 个</span
 					>
