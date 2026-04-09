@@ -41,7 +41,7 @@ const PROGRESS_SCALE: usize = 10_000;
 /// Module metadata JSON, output via `--describe` argument.
 const DESCRIBE: &str = r#"{
   "id": "notify_telegram",
-  "name": "Telegram 通知 0.1.3",
+  "name": "Telegram 通知 0.1.4",
   "description": "将录制信息、封面图和视频通过 MTProto 发送到 Telegram（支持超过 50MB 的大文件，支持 HTTP/SOCKS5 代理）",
   "params": [
     {
@@ -181,15 +181,20 @@ fn image_dimensions(path: &Path) -> Option<(u32, u32)> {
 /// Resize cover image if it violates Telegram limits (w+h < 10000 and aspect ratio < 20:1).
 /// Returns Some(new_path) if resized, None if no resize needed.
 fn resize_cover_for_telegram(img: &Path) -> Result<Option<PathBuf>, String> {
+    const MAX_PHOTO_BYTES: u64 = 10 * 1024 * 1024; // Telegram photo limit: 10 MB
+
     let (w, h) = match image_dimensions(img) {
         Some(d) => d,
         None => return Ok(None), // 无法获取尺寸，跳过
     };
 
+    let file_size = fs::metadata(img).map(|m| m.len()).unwrap_or(0);
+
     // 检查是否需要缩放
     let sum_ok = (w + h) < 10000;
     let ratio_ok = w.max(h) < h.min(w).saturating_mul(20);
-    if sum_ok && ratio_ok {
+    let size_ok = file_size < MAX_PHOTO_BYTES;
+    if sum_ok && ratio_ok && size_ok {
         return Ok(None);
     }
 
@@ -222,16 +227,33 @@ fn resize_cover_for_telegram(img: &Path) -> Result<Option<PathBuf>, String> {
     let stem = img.file_stem().and_then(|s| s.to_str()).unwrap_or("cover");
     let out_path = tmp_dir().join(format!("{}_tg_resized.jpg", stem));
 
-    let status = Command::new("ffmpeg")
-        .args(["-y", "-i"]).arg(img)
-        .args(["-vf", &format!("scale={}:{}", tw, th), "-q:v", "2"])
-        .arg(&out_path)
-        .stdout(Stdio::null()).stderr(Stdio::null())
-        .status().map_err(|e| format!("ffmpeg not found: {}", e))?;
+    // 若文件超过 10MB，逐步降低质量直到满足大小限制
+    // If file exceeds 10MB, progressively lower quality until size limit is met
+    let q_values: &[&str] = if !size_ok { &["5", "10", "15", "20", "25", "31"] } else { &["2"] };
+    let mut success = false;
+    for &q in q_values {
+        let status = Command::new("ffmpeg")
+            .args(["-y", "-i"]).arg(img)
+            .args(["-vf", &format!("scale={}:{}", tw, th), "-q:v", q])
+            .arg(&out_path)
+            .stdout(Stdio::null()).stderr(Stdio::null())
+            .status().map_err(|e| format!("ffmpeg not found: {}", e))?;
 
-    if !status.success() {
-        return Err("ffmpeg failed to resize cover image for Telegram".to_string());
+        if !status.success() {
+            return Err("ffmpeg failed to resize cover image for Telegram".to_string());
+        }
+
+        let out_size = fs::metadata(&out_path).map(|m| m.len()).unwrap_or(u64::MAX);
+        if out_size < MAX_PHOTO_BYTES {
+            success = true;
+            break;
+        }
     }
+
+    if !success {
+        return Err("cover image exceeds Telegram 10MB photo limit even after compression".to_string());
+    }
+
     Ok(Some(out_path))
 }
 
@@ -668,6 +690,8 @@ async fn upload_and_send(
     if let Some(ref tmp) = resized_cover { let _ = fs::remove_file(tmp); }
 
     if send_video {
+        // 用于保存上传结果以便发送失败时重建 InputMedia（Uploaded 实现了 Clone，InputMedia 没有）
+        // Store upload results to rebuild InputMedia on send retry (Uploaded is Clone, InputMedia is not)
         struct UploadedPart {
             video: grammers_client::media::Uploaded,
             thumb: Option<grammers_client::media::Uploaded>,
@@ -687,48 +711,110 @@ async fn upload_and_send(
         // 清理转换后的临时视频文件 / Clean up converted temporary video files
         for tmp in &converted_parts { let _ = fs::remove_file(tmp); }
 
+        // 保存封面图的 Uploaded（用于重试时重建）/ Save cover Uploaded for retry rebuilding
+        let uploaded_cover_saved = uploaded_cover.take();
         let total_parts = uploaded_parts.len();
-        let mut all_items: Vec<InputMedia> = Vec::new();
 
-        // 封面图作为相册第一张 / Cover image as first item in album
-        if let Some(cover_file) = uploaded_cover.take() {
-            all_items.push(InputMedia::new().photo(cover_file));
-        }
-
-        // 构建视频媒体项，最后一个视频附带说明文字
-        // Build video media items, last video gets the caption
-        for (idx, part) in uploaded_parts.into_iter().enumerate() {
-            let mut video_item = InputMedia::new().document(part.video);
-            if let Some(thumb) = part.thumb { video_item = video_item.thumbnail(thumb); }
-            video_item = video_item.attribute(Attribute::Video {
-                round_message: false, supports_streaming: true,
-                duration: std::time::Duration::from_secs_f64(part.duration),
-                w: part.w, h: part.h,
-            });
-            if idx == total_parts - 1 {
-                video_item = video_item.fmt_entities(base_caption_entities.clone()).caption(base_caption_text.clone());
+        // 辅助函数：从保存的 Uploaded 重建 InputMedia 列表
+        // Helper: rebuild InputMedia list from saved Uploaded values
+        let build_items = |cover: &Option<grammers_client::media::Uploaded>,
+                           parts: &Vec<UploadedPart>| -> Vec<InputMedia> {
+            let mut items: Vec<InputMedia> = Vec::new();
+            if let Some(c) = cover {
+                items.push(InputMedia::new().photo(c.clone()));
             }
-            all_items.push(video_item);
-        }
+            for (idx, part) in parts.iter().enumerate() {
+                let mut item = InputMedia::new().document(part.video.clone());
+                if let Some(ref t) = part.thumb { item = item.thumbnail(t.clone()); }
+                item = item.attribute(Attribute::Video {
+                    round_message: false, supports_streaming: true,
+                    duration: std::time::Duration::from_secs_f64(part.duration),
+                    w: part.w, h: part.h,
+                });
+                if idx == total_parts - 1 {
+                    item = item.fmt_entities(base_caption_entities.clone()).caption(base_caption_text.clone());
+                }
+                items.push(item);
+            }
+            items
+        };
 
-        // 每批最多 10 条发送相册（Telegram 限制）/ Send album in batches of max 10 (Telegram limit)
+        // 每批最多 10 条发送相册，发送失败立即重试（不重新上传）
+        // Send album in batches of max 10; retry send on failure without re-uploading
         const MAX_ALBUM: usize = 10;
-        let mut batch_idx = 0;
-        while !all_items.is_empty() {
-            let take = MAX_ALBUM.min(all_items.len());
-            let batch: Vec<InputMedia> = all_items.drain(..take).collect();
-            client.send_album(peer.clone(), batch).await
-                .map_err(|e| format!("send_album (batch {}) failed: {}", batch_idx + 1, e))?;
-            batch_idx += 1;
+        const MAX_SEND: u32 = 3;
+        const SEND_RETRY_DELAY: Duration = Duration::from_secs(30);
+
+        let all_items = build_items(&uploaded_cover_saved, &uploaded_parts);
+        let n_batches = all_items.len().div_ceil(MAX_ALBUM);
+        for batch_idx in 0..n_batches {
+            let start = batch_idx * MAX_ALBUM;
+            let mut send_attempt = 0u32;
+            loop {
+                // 每次重试都重建这一批的 InputMedia
+                // Rebuild this batch's InputMedia on each attempt
+                let batch: Vec<InputMedia> = build_items(&uploaded_cover_saved, &uploaded_parts)
+                    .into_iter().skip(start).take(MAX_ALBUM).collect();
+                match client.send_album(peer.clone(), batch).await {
+                    Ok(_) => break,
+                    Err(e) => {
+                        send_attempt += 1;
+                        let msg = format!("send_album (batch {}) failed: {}", batch_idx + 1, e);
+                        if send_attempt >= MAX_SEND {
+                            return Err(msg);
+                        }
+                        eprintln!("send failed (attempt {}/{}): {}. retrying in {:?}…",
+                            send_attempt, MAX_SEND, msg, SEND_RETRY_DELAY);
+                        tokio::time::sleep(SEND_RETRY_DELAY).await;
+                    }
+                }
+            }
         }
     } else if let Some(cover_file) = uploaded_cover {
-        // 仅发送封面图和说明文字 / Send cover image with caption only
-        let msg = InputMessage::new().photo(cover_file).fmt_entities(base_caption_entities).text(base_caption_text);
-        client.send_message(peer, msg).await.map_err(|e| format!("send_message (photo) failed: {}", e))?;
+        // 仅发送封面图和说明文字，发送失败立即重试（不重新上传）
+        // Send cover image with caption only; retry send on failure without re-uploading
+        const MAX_SEND: u32 = 3;
+        const SEND_RETRY_DELAY: Duration = Duration::from_secs(30);
+        let mut send_attempt = 0u32;
+        loop {
+            let msg = InputMessage::new()
+                .photo(cover_file.clone())
+                .fmt_entities(base_caption_entities.clone())
+                .text(base_caption_text.clone());
+            match client.send_message(peer.clone(), msg).await {
+                Ok(_) => break,
+                Err(e) => {
+                    send_attempt += 1;
+                    let err = format!("send_message (photo) failed: {}", e);
+                    if send_attempt >= MAX_SEND { return Err(err); }
+                    eprintln!("send failed (attempt {}/{}): {}. retrying in {:?}…",
+                        send_attempt, MAX_SEND, err, SEND_RETRY_DELAY);
+                    tokio::time::sleep(SEND_RETRY_DELAY).await;
+                }
+            }
+        }
     } else {
-        // 无封面图：仅发送文字消息 / No cover image: send text message only
-        let msg = InputMessage::new().fmt_entities(base_caption_entities).text(base_caption_text);
-        client.send_message(peer, msg).await.map_err(|e| format!("send_message (text) failed: {}", e))?;
+        // 无封面图：仅发送文字消息，发送失败立即重试（不重新上传）
+        // No cover image: send text message only; retry send on failure without re-uploading
+        const MAX_SEND: u32 = 3;
+        const SEND_RETRY_DELAY: Duration = Duration::from_secs(30);
+        let mut send_attempt = 0u32;
+        loop {
+            let msg = InputMessage::new()
+                .fmt_entities(base_caption_entities.clone())
+                .text(base_caption_text.clone());
+            match client.send_message(peer.clone(), msg).await {
+                Ok(_) => break,
+                Err(e) => {
+                    send_attempt += 1;
+                    let err = format!("send_message (text) failed: {}", e);
+                    if send_attempt >= MAX_SEND { return Err(err); }
+                    eprintln!("send failed (attempt {}/{}): {}. retrying in {:?}…",
+                        send_attempt, MAX_SEND, err, SEND_RETRY_DELAY);
+                    tokio::time::sleep(SEND_RETRY_DELAY).await;
+                }
+            }
+        }
     }
 
     Ok(())
@@ -777,14 +863,14 @@ fn run() -> Result<(), String> {
     let video_parts: Vec<PathBuf> = if send_video { split_video(&input, TG_MAX_BYTES)? } else { vec![input.clone()] };
     let is_split = video_parts.len() > 1 || video_parts.first().map(|p| p != &input).unwrap_or(false);
 
-    // 构建 Tokio 运行时并执行异步上传，最多重试 5 次
-    // Build Tokio runtime and execute async upload with up to 5 retries
+    // 构建 Tokio 运行时并执行异步上传，最多重试 3 次
+    // Build Tokio runtime and execute async upload with up to 3 retries
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|e| format!("tokio runtime error: {}", e))?
         .block_on(async {
-            const MAX_OUTER: u32 = 5;
+            const MAX_OUTER: u32 = 3;
             const RECONNECT_DELAY: Duration = Duration::from_secs(30);
             let mut attempt = 0u32;
             loop {
