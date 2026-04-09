@@ -368,6 +368,7 @@ impl RecorderManager {
         let mut retry_count = 0;
         let mut playlist_refresh_failures = 0;
         let mut consecutive_cdn_failures: usize = 0;
+        let mut last_size_snapshot: Option<(u64, std::time::Instant)> = None;
         const MAX_RETRIES: u32 = 10;
         const MAX_PLAYLIST_REFRESH_FAILURES: u32 = 5;
         const CDN_FAILURE_REFRESH_THRESHOLD: usize = 3;
@@ -401,11 +402,22 @@ impl RecorderManager {
                                 consecutive_cdn_failures = 0;
                                 retry_count = 0;
                                 let size_bytes = dir_size_bytes(session_dir).unwrap_or(0);
-                                emitter.emit("recording-file-update", &serde_json::json!({
+                                let now = std::time::Instant::now();
+                                let speed_bps = last_size_snapshot.map(|(prev_size, prev_time)| {
+                                    let dt = now.duration_since(prev_time).as_secs_f64();
+                                    let ds = size_bytes.saturating_sub(prev_size) as f64;
+                                    if dt > 0.0 { ds / dt } else { 0.0 }
+                                });
+                                last_size_snapshot = Some((size_bytes, now));
+                                let mut payload = serde_json::json!({
                                     "path": session_dir.to_string_lossy(),
                                     "segment_count": downloaded_sequences.len(),
                                     "size_bytes": size_bytes,
-                                }));
+                                });
+                                if let Some(spd) = speed_bps {
+                                    payload["speed_bps"] = serde_json::json!(spd);
+                                }
+                                emitter.emit("recording-file-update", &payload);
                             } else {
                                 retry_count += 1;
                             }

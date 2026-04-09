@@ -187,8 +187,13 @@
 				</Button>
 			</nav>
 		</aside>
-		<main class="flex-1 overflow-y-auto p-6">
-			<RouterView />
+		<main class="flex-1 overflow-hidden">
+			<div
+				class="h-full overflow-y-auto"
+				:class="route.path !== '/recordings' ? 'p-6' : ''"
+			>
+				<RouterView />
+			</div>
 		</main>
 	</div>
 	<NotifyLayer />

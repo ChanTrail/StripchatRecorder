@@ -20,7 +20,7 @@
     - Multi-column sorting and group collapsing
 -->
 <script setup lang="ts">
-	import { onMounted, onUnmounted, computed, ref } from "vue";
+	import { onMounted, onUnmounted, computed, ref, watchEffect } from "vue";
 	import { call, on } from "@/lib/api";
 	import { useNotify } from "../composables/useNotify";
 	import { usePostprocessStore } from "@/stores/postprocess";
@@ -76,30 +76,6 @@
 
 	/** 各文件的实时录制速度（字节/秒）/ Real-time recording speed per file (bytes/second) */
 	const recordingSpeed = ref<Record<string, number>>({});
-	/** 上次文件大小快照 / Last file size snapshot */
-	const lastSizeSnapshot = new Map<string, { size: number; time: number }>();
-	/** 待处理的文件大小更新 / Pending file size updates */
-	const pendingSizeUpdate = new Map<string, { size: number; time: number }>();
-
-	/**
-	 * 每 2 秒计算一次各录制文件的录制速度。
-	 * Calculate recording speed for each file every 2 seconds.
-	 */
-	function tickRecordingSpeed() {
-		const now = Date.now();
-		const updated: Record<string, number> = { ...recordingSpeed.value };
-		for (const [path, pending] of pendingSizeUpdate.entries()) {
-			const prev = lastSizeSnapshot.get(path);
-			if (prev && now > prev.time) {
-				const dt = (pending.time - prev.time) / 1000;
-				const ds = pending.size - prev.size;
-				updated[path] = dt > 0 && ds > 0 ? ds / dt : 0;
-			}
-			lastSizeSnapshot.set(path, pending);
-		}
-		pendingSizeUpdate.clear();
-		recordingSpeed.value = updated;
-	}
 
 	const merging = useMerging();
 	const {
@@ -350,8 +326,6 @@
 		await refreshDiskSpace();
 		const diskTimer = setInterval(refreshDiskSpace, 30_000);
 		unlisteners.push(() => clearInterval(diskTimer));
-		const speedTimer = setInterval(tickRecordingSpeed, 2_000);
-		unlisteners.push(() => clearInterval(speedTimer));
 		if (!ppStore.pipeline?.nodes?.length) await ppStore.fetchPipeline();
 		await restoreFromBackend();
 
@@ -383,13 +357,12 @@
 
 		unlisteners.push(
 			await on("recording-file-update", async (payload) => {
-				const p = payload as { path: string; size_bytes: number };
+				const p = payload as { path: string; size_bytes: number; speed_bps?: number };
 				const f = files.value.find((r) => r.path === p.path);
 				if (f) {
-					pendingSizeUpdate.set(p.path, {
-						size: p.size_bytes,
-						time: Date.now(),
-					});
+					if (p.speed_bps != null) {
+						recordingSpeed.value = { ...recordingSpeed.value, [p.path]: p.speed_bps };
+					}
 					f.size_bytes = p.size_bytes;
 				} else {
 					await load();
@@ -471,8 +444,6 @@
 					frozenDuration.value[activeFile.path] =
 						p.record_duration_secs ?? elapsed.value[activeFile.path] ?? 0;
 					delete recordingSpeed.value[activeFile.path];
-					lastSizeSnapshot.delete(activeFile.path);
-					pendingSizeUpdate.delete(activeFile.path);
 				}
 				if (p.session_dir) {
 					clearMergingForSessionDir(p.session_dir);
@@ -530,6 +501,7 @@
 					modTotal: number;
 					moduleName: string;
 				};
+				const prev = ppProgress.value[p.path];
 				ppProgress.value[p.path] = makePpProgress(
 					p.done,
 					p.total,
@@ -537,6 +509,8 @@
 					p.modTotal,
 					p.moduleName ?? "",
 					p.pct,
+					prev?.moduleName ?? "",
+					prev?.modulePct ?? 0,
 				);
 			}),
 		);
@@ -561,10 +535,24 @@
 		recCleanup();
 		unlisteners.forEach((fn) => fn());
 	});
+
+	/** 顶部 header 元素引用，用于动态计算表头 sticky 偏移 */
+	const headerEl = ref<HTMLElement | null>(null);
+	const headerHeight = ref(0);
+	let headerRo: ResizeObserver | null = null;
+	watchEffect(() => {
+		headerRo?.disconnect();
+		if (!headerEl.value) return;
+		headerRo = new ResizeObserver((entries) => {
+			headerHeight.value = entries[0].borderBoxSize[0].blockSize;
+		});
+		headerRo.observe(headerEl.value);
+	});
+	onUnmounted(() => headerRo?.disconnect());
 </script>
 
 <template>
-	<div class="flex flex-col gap-5">
+	<div class="flex flex-col h-full overflow-y-auto">
 		<Dialog :open="previewOpen" @update:open="previewOpen = $event">
 			<DialogContent
 				class="p-0 overflow-hidden flex flex-col"
@@ -615,7 +603,7 @@
 			</DialogContent>
 		</Dialog>
 
-		<header class="flex items-start justify-between gap-4">
+		<header ref="headerEl" class="flex items-start justify-between gap-4 shrink-0 px-6 pt-6 pb-4 sticky top-0 z-10 bg-background">
 			<div class="flex-1 min-w-0">
 				<h1 class="text-xl font-bold mb-0.5">录制文件</h1>
 				<div
@@ -682,6 +670,7 @@
 			</div>
 		</header>
 
+		<div class="px-6 pb-6">
 		<div
 			v-if="loading && files.length === 0"
 			class="text-center text-muted-foreground py-16"
@@ -696,7 +685,7 @@
 		</div>
 
 		<Table v-else>
-			<TableHeader>
+			<TableHeader class="sticky z-10 bg-background" :style="{ top: `${headerHeight}px` }">
 				<TableRow>
 					<TableHead class="w-8">
 						<Checkbox
@@ -888,6 +877,7 @@
 											</div>
 											<Progress
 												:model-value="ppProgress[f.path].overallPct"
+												:animated="false"
 												class="h-1.5"
 											/>
 											<div
@@ -902,6 +892,7 @@
 											</div>
 											<Progress
 												:model-value="ppProgress[f.path].modulePct"
+												:animated="false"
 												class="h-1.5"
 											/>
 										</div>
@@ -982,6 +973,7 @@
 				</template>
 			</TableBody>
 		</Table>
+		</div>
 	</div>
 </template>
 

@@ -83,6 +83,8 @@ export function makePpProgress(
 	moduleTotal: number,
 	moduleName: string,
 	overallPctFallback = 0,
+	prevModuleName = "",
+	prevModulePct = 0,
 ): PpProgress {
 	const overallPctByNode =
 		overallTotal > 0 ? clampPct2((overallDone * 100) / overallTotal) : 0;
@@ -94,9 +96,13 @@ export function makePpProgress(
 			: clampPct2(overallPctFallback);
 
 	const hasModuleProgress = moduleTotal > 0;
-	const modulePct = hasModuleProgress
+	const rawModulePct = hasModuleProgress
 		? clampPct2((moduleDone * 100) / moduleTotal)
 		: 0;
+	// 同一模块内防止进度倒退；模块切换时允许从 0 重新开始
+	// Prevent regression within the same module; allow reset to 0 on module switch
+	const isSameModule = moduleName.trim() === prevModuleName.trim() && moduleName.trim() !== "";
+	const modulePct = isSameModule ? Math.max(rawModulePct, prevModulePct) : rawModulePct;
 
 	// 计算当前执行的模块序号（1-based）
 	// Calculate the current executing module index (1-based)
