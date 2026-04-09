@@ -29,5 +29,9 @@ fn main() {
     // Re-run build.rs whenever package.json changes
     println!("cargo:rerun-if-changed=../package.json");
 
+    // 确保 dist/ 目录存在，避免 RustEmbed 在目录不存在时编译报错
+    // Ensure dist/ exists so RustEmbed doesn't fail when the frontend hasn't been built yet
+    let _ = fs::create_dir_all("../dist");
+
     tauri_build::build()
 }

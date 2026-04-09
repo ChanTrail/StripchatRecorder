@@ -181,7 +181,7 @@ pub fn get_disk_space_inner(output_dir: &str) -> Result<DiskSpace> {
             .collect();
         let mut free_bytes: u64 = 0;
         let mut total_bytes: u64 = 0;
-        extern "system" {
+        unsafe extern "system" {
             fn GetDiskFreeSpaceExW(
                 lp_directory_name: *const u16,
                 lp_free_bytes_available_to_caller: *mut u64,
