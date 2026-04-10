@@ -5,8 +5,10 @@ services:
     restart: unless-stopped
     environment:
       - TZ=Asia/Shanghai
+      # - LANGUAGE=en-US  # Set to en-US or zh-CN to override interface language
+      # - PORT=3030        # Set to override the server port (default: 3030)
     ports:
-      - "3030:3030"
+      - "${PORT:-3030}:${PORT:-3030}"
     volumes:
       - ./data/logs:/app/stripchat-recorder/logs
       - ./data/recordings:/app/stripchat-recorder/recordings

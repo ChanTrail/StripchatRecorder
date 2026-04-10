@@ -119,11 +119,21 @@ RUN printf '%s\n' \
     'cp -an /app/stripchat-recorder/modules.default/. /app/stripchat-recorder/modules/' \
     'cp -an /app/stripchat-recorder/config.default/settings.json /app/stripchat-recorder/config/settings.json' \
     '' \
+    '# Override language from LANGUAGE env var if set (e.g. LANGUAGE=en-US)' \
+    'if [ -n "${LANGUAGE:-}" ]; then' \
+    '    sed -i "s/\"language\": \"[^\"]*\"/\"language\": \"${LANGUAGE}\"/" /app/stripchat-recorder/config/settings.json' \
+    'fi' \
+    '' \
+    '# Override server port from PORT env var if set (e.g. PORT=8080)' \
+    'if [ -n "${PORT:-}" ]; then' \
+    '    sed -i "s/\"server_port\": [0-9]*/\"server_port\": ${PORT}/" /app/stripchat-recorder/config/settings.json' \
+    'fi' \
+    '' \
     'exec /app/stripchat-recorder/stripchat-recorder "$@"' \
     > /entrypoint.sh && chmod +x /entrypoint.sh
 
 VOLUME ["/app/stripchat-recorder/logs", "/app/stripchat-recorder/recordings", "/app/stripchat-recorder/modules.default", "/app/stripchat-recorder/modules" , "/app/stripchat-recorder/config"]
 
-EXPOSE 3030
+EXPOSE ${PORT:-3030}
 
 ENTRYPOINT ["/entrypoint.sh"]

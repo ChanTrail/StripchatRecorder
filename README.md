@@ -13,6 +13,11 @@
 
 - 监控多个主播，上线时自动开始录制
 - Web UI 管理主播、录制文件和后处理任务
+- **主播查找**：通过 [camgirlfinder.net](https://camgirlfinder.net) 查找主播，支持：
+  - 人脸识别搜索：上传图片自动检测人脸，找出相似主播
+  - 名字搜索：按用户名关键词搜索
+  - 从结果卡片直接一键添加到录制列表
+  - 对任意主播发起相似人脸搜索
 - 支持分离式网络代理：可分别配置 Stripchat API 代理与 CDN 分片代理
 - 支持配置 Stripchat 镜像站（将请求中的 `stripchat.com` 替换为镜像域名）
 - 可配置的后处理流水线，支持插件化模块：
@@ -39,8 +44,10 @@ services:
     restart: unless-stopped
     environment:
       - TZ=Asia/Shanghai
+      # - LANGUAGE=en-US  # 设置界面语言，支持 zh-CN（默认）或 en-US
+      # - PORT=3030        # 设置服务端口（默认 3030）
     ports:
-      - "3030:3030"
+      - "${PORT:-3030}:${PORT:-3030}"
     volumes:
       - ./data/logs:/app/stripchat-recorder/logs
       - ./data/recordings:/app/stripchat-recorder/recordings
@@ -73,6 +80,8 @@ docker run -d \
   --name stripchat-recorder \
   --restart unless-stopped \
   -e TZ=Asia/Shanghai \
+  -e LANGUAGE=en-US \
+  -e PORT=3030 \
   -p 3030:3030 \
   -v ./data/logs:/app/stripchat-recorder/logs \
   -v ./data/recordings:/app/stripchat-recorder/recordings \

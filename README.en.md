@@ -13,6 +13,11 @@ A self-hosted Stripchat live stream recorder with a web-based management UI. Sup
 
 - Monitor multiple streamers and auto-record when they go live
 - Web UI for managing streamers, recordings, and post-processing
+- **Streamer Finder**: discover streamers via [camgirlfinder.net](https://camgirlfinder.net), supporting:
+  - Face search: upload an image, auto-detect a face, and find similar streamers
+  - Name search: search by username keyword
+  - One-click add to recording list directly from result cards
+  - Launch a similar-face search from any streamer card
 - Supports split network proxies: configure Stripchat API proxy and CDN chunk proxy separately
 - Supports configurable Stripchat mirror site (replaces `stripchat.com` in requests with your mirror domain)
 - Configurable post-processing pipeline with pluggable modules:
@@ -39,8 +44,10 @@ services:
     restart: unless-stopped
     environment:
       - TZ=Asia/Shanghai
+      # - LANGUAGE=en-US  # Set interface language: zh-CN (default) or en-US
+      # - PORT=3030        # Set server port (default: 3030)
     ports:
-      - "3030:3030"
+      - "${PORT:-3030}:${PORT:-3030}"
     volumes:
       - ./data/logs:/app/stripchat-recorder/logs
       - ./data/recordings:/app/stripchat-recorder/recordings
@@ -73,6 +80,8 @@ docker run -d \
   --name stripchat-recorder \
   --restart unless-stopped \
   -e TZ=Asia/Shanghai \
+  -e LANGUAGE=en-US \
+  -e PORT=3030 \
   -p 3030:3030 \
   -v ./data/logs:/app/stripchat-recorder/logs \
   -v ./data/recordings:/app/stripchat-recorder/recordings \
