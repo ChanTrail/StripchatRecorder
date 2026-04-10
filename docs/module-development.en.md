@@ -287,7 +287,7 @@ A complete Rust module that copies the video file to a specified directory.
 [package]
 name = "copy_to_dir"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [[bin]]
 name = "copy_to_dir"

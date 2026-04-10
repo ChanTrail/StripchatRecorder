@@ -287,7 +287,7 @@ emit_progress_step(3, 3); // PROGRESS:10000/10000
 [package]
 name = "copy_to_dir"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [[bin]]
 name = "copy_to_dir"
