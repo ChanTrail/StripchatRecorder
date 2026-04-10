@@ -1,5 +1,8 @@
 # 自定义语言
 
+[简体中文](> 🌐 [English](custom-locale.md)
+) | [English](custom-locale.en.md)
+
 本文档说明如何为 StripchatRecorder 添加新的界面语言或修改现有翻译。
 
 ---
@@ -27,12 +30,12 @@ src/
 ```ts
 // src/locales/ja-JP.ts
 export default {
-  nav: {
-    streamers: "配信者",
-    recordings: "録画",
-    // ...
-  },
-  // ...
+	nav: {
+		streamers: "配信者",
+		recordings: "録画",
+		// ...
+	},
+	// ...
 };
 ```
 
@@ -50,15 +53,16 @@ export type MessageSchema = typeof zhCN;
 
 const savedLocale = localStorage.getItem("locale") ?? "zh-CN";
 
-const i18n = createI18n<[MessageSchema], "zh-CN" | "en-US" | "ja-JP">({ // 新增类型
-  legacy: false,
-  locale: savedLocale,
-  fallbackLocale: "zh-CN",
-  messages: {
-    "zh-CN": zhCN,
-    "en-US": enUS,
-    "ja-JP": jaJP, // 新增
-  },
+const i18n = createI18n<[MessageSchema], "zh-CN" | "en-US" | "ja-JP">({
+	// 新增类型
+	legacy: false,
+	locale: savedLocale,
+	fallbackLocale: "zh-CN",
+	messages: {
+		"zh-CN": zhCN,
+		"en-US": enUS,
+		"ja-JP": jaJP, // 新增
+	},
 });
 
 export default i18n;
@@ -93,7 +97,7 @@ let (lang_code, lang_en) = match lang_idx {
 | `notify`         | 系统通知与弹窗               |
 | `home`           | 主播列表页                   |
 | `streamerCard`   | 主播卡片组件                 |
-| `addStreamer`     | 添加主播对话框               |
+| `addStreamer`    | 添加主播对话框               |
 | `recordings`     | 录制文件页                   |
 | `postprocess`    | 后处理流水线页               |
 | `finder`         | 主播查找页                   |
@@ -104,10 +108,10 @@ let (lang_code, lang_en) = match lang_idx {
 
 ```ts
 // 原文
-reconnected: "已重新连接到服务器，{n} 秒后刷新页面…"
+reconnected: "已重新连接到服务器，{n} 秒后刷新页面…";
 
 // 翻译（保留 {n}）
-reconnected: "サーバーに再接続しました。{n} 秒後にリロードします…"
+reconnected: "サーバーに再接続しました。{n} 秒後にリロードします…";
 ```
 
 ---

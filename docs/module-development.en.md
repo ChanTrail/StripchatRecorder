@@ -1,6 +1,7 @@
 # Post-processing Module Development Guide
 
-> 🌐 [中文](module-development.md)
+[简体中文](> 🌐 [English](module-development.md)
+) | [English](module-development.en.md)
 
 This document describes how to write custom post-processing modules for StripchatRecorder.
 
@@ -39,29 +40,29 @@ PP_INPUT=<path>  PP_PARAM_<KEY>=<value> ...  ./<module_binary>
 
 A module must support two invocation modes:
 
-| Mode | Command | Description |
-|------|---------|-------------|
+| Mode     | Command                 | Description                                        |
+| -------- | ----------------------- | -------------------------------------------------- |
 | Describe | `./<module> --describe` | Output module metadata JSON, perform no processing |
-| Execute | `./<module>` | Read env vars and execute processing logic |
+| Execute  | `./<module>`            | Read env vars and execute processing logic         |
 
 ### Environment Variables
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `PP_INPUT` | Yes | Absolute path to the input video file |
-| `PP_PARAM_<KEY>` | No | Module parameter; `<KEY>` is the uppercased parameter key |
-| `PP_EXE_DIR` | No | Directory containing the module binary, useful for temp files |
+| Variable         | Required | Description                                                   |
+| ---------------- | -------- | ------------------------------------------------------------- |
+| `PP_INPUT`       | Yes      | Absolute path to the input video file                         |
+| `PP_PARAM_<KEY>` | No       | Module parameter; `<KEY>` is the uppercased parameter key     |
+| `PP_EXE_DIR`     | No       | Directory containing the module binary, useful for temp files |
 
 ### Stdout Protocol
 
 The module communicates with the host by writing lines with specific prefixes to stdout:
 
-| Output line | Description |
-|-------------|-------------|
-| `OUTPUT:<path>` | **Must be emitted once.** Passes `<path>` as input to the next module. If the module deletes the file (e.g. `filter_short`), omit this line and subsequent modules will be skipped. |
-| `PROGRESS:<done>/<total>` | Progress report; both values are integers, `total` is always `10000` (i.e. `done=5000` means 50%). |
-| `STATUS:<text>` | Optional status text (e.g. upload speed), shown next to the progress bar in the UI. |
-| `SKIP:<reason>` | Optional. Notifies the host that processing was skipped (e.g. output already exists). Still requires an `OUTPUT:` line. |
+| Output line               | Description                                                                                                                                                                         |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OUTPUT:<path>`           | **Must be emitted once.** Passes `<path>` as input to the next module. If the module deletes the file (e.g. `filter_short`), omit this line and subsequent modules will be skipped. |
+| `PROGRESS:<done>/<total>` | Progress report; both values are integers, `total` is always `10000` (i.e. `done=5000` means 50%).                                                                                  |
+| `STATUS:<text>`           | Optional status text (e.g. upload speed), shown next to the progress bar in the UI.                                                                                                 |
+| `SKIP:<reason>`           | Optional. Notifies the host that processing was skipped (e.g. output already exists). Still requires an `OUTPUT:` line.                                                             |
 
 Lines not starting with one of the above prefixes are ignored by the host.
 
@@ -71,10 +72,10 @@ All diagnostic messages, warnings, and errors should be written to stderr. The h
 
 ### Exit Code
 
-| Exit code | Meaning |
-|-----------|---------|
-| `0` | Success |
-| Non-zero | Failure; pipeline is aborted, subsequent modules are not executed |
+| Exit code | Meaning                                                           |
+| --------- | ----------------------------------------------------------------- |
+| `0`       | Success                                                           |
+| Non-zero  | Failure; pipeline is aborted, subsequent modules are not executed |
 
 ---
 
@@ -86,28 +87,29 @@ When invoked with `--describe`, the module must print a JSON object to stdout an
 
 ```jsonc
 {
-  "id": "my_module",          // Unique identifier, lowercase letters, digits, underscores only
-  "name": "My Module",        // Display name shown in the UI
-  "description": "Does X",    // Short description shown in the UI
-  "params": [                 // Parameter list, may be empty array
-    {
-      "key": "param_key",     // Parameter key, maps to env var PP_PARAM_PARAM_KEY
-      "label": "Param Label", // Label shown in the UI
-      "type": "string",       // Parameter type, see below
-      "default": ""           // Default value
-    }
-  ]
+	"id": "my_module", // Unique identifier, lowercase letters, digits, underscores only
+	"name": "My Module", // Display name shown in the UI
+	"description": "Does X", // Short description shown in the UI
+	"params": [
+		// Parameter list, may be empty array
+		{
+			"key": "param_key", // Parameter key, maps to env var PP_PARAM_PARAM_KEY
+			"label": "Param Label", // Label shown in the UI
+			"type": "string", // Parameter type, see below
+			"default": "", // Default value
+		},
+	],
 }
 ```
 
 ### Field Reference
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `id` | string | Yes | Unique module ID, must not conflict within the same instance |
-| `name` | string | Yes | Display name in the UI |
-| `description` | string | Yes | Description in the UI |
-| `params` | array | Yes | Parameter definitions; pass empty array if none |
+| Field         | Type   | Required | Description                                                  |
+| ------------- | ------ | -------- | ------------------------------------------------------------ |
+| `id`          | string | Yes      | Unique module ID, must not conflict within the same instance |
+| `name`        | string | Yes      | Display name in the UI                                       |
+| `description` | string | Yes      | Description in the UI                                        |
+| `params`      | array  | Yes      | Parameter definitions; pass empty array if none              |
 
 ---
 
@@ -115,22 +117,22 @@ When invoked with `--describe`, the module must print a JSON object to stdout an
 
 The `type` field of each param object determines how the UI renders it and the format of the env var value.
 
-| Type | UI Control | Env var value format |
-|------|-----------|----------------------|
-| `string` | Text input | Any string |
-| `number` | Number input | Decimal integer or float string |
-| `boolean` | Toggle switch | `"true"` or `"false"` |
-| `select` | Dropdown select | One of the option value strings |
+| Type      | UI Control      | Env var value format            |
+| --------- | --------------- | ------------------------------- |
+| `string`  | Text input      | Any string                      |
+| `number`  | Number input    | Decimal integer or float string |
+| `boolean` | Toggle switch   | `"true"` or `"false"`           |
+| `select`  | Dropdown select | One of the option value strings |
 
 `select` type requires an additional `options` field:
 
 ```jsonc
 {
-  "key": "format",
-  "label": "Output Format",
-  "type": "select",
-  "default": "webp",
-  "options": ["webp", "jpg", "png"]
+	"key": "format",
+	"label": "Output Format",
+	"type": "select",
+	"default": "webp",
+	"options": ["webp", "jpg", "png"],
 }
 ```
 

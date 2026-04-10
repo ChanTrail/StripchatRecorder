@@ -1,5 +1,8 @@
 # Custom Locale
 
+[简体中文](> 🌐 [English](custom-locale.md)
+) | [English](custom-locale.en.md)
+
 This document explains how to add a new UI language or modify existing translations in StripchatRecorder.
 
 ---
@@ -27,12 +30,12 @@ Copy the full contents of `zh-CN.ts` as a template and translate all strings:
 ```ts
 // src/locales/ja-JP.ts
 export default {
-  nav: {
-    streamers: "配信者",
-    recordings: "録画",
-    // ...
-  },
-  // ...
+	nav: {
+		streamers: "配信者",
+		recordings: "録画",
+		// ...
+	},
+	// ...
 };
 ```
 
@@ -50,15 +53,16 @@ export type MessageSchema = typeof zhCN;
 
 const savedLocale = localStorage.getItem("locale") ?? "zh-CN";
 
-const i18n = createI18n<[MessageSchema], "zh-CN" | "en-US" | "ja-JP">({ // add type
-  legacy: false,
-  locale: savedLocale,
-  fallbackLocale: "zh-CN",
-  messages: {
-    "zh-CN": zhCN,
-    "en-US": enUS,
-    "ja-JP": jaJP, // add
-  },
+const i18n = createI18n<[MessageSchema], "zh-CN" | "en-US" | "ja-JP">({
+	// add type
+	legacy: false,
+	locale: savedLocale,
+	fallbackLocale: "zh-CN",
+	messages: {
+		"zh-CN": zhCN,
+		"en-US": enUS,
+		"ja-JP": jaJP, // add
+	},
 });
 
 export default i18n;
@@ -86,28 +90,28 @@ let (lang_code, lang_en) = match lang_idx {
 
 ## Translation Key Reference
 
-| Top-level key    | Description                              |
-| ---------------- | ---------------------------------------- |
-| `nav`            | Sidebar navigation labels                |
-| `common`         | Shared button text (confirm, cancel…)   |
-| `notify`         | System notifications and dialogs        |
-| `home`           | Streamers list page                      |
-| `streamerCard`   | Streamer card component                  |
-| `addStreamer`     | Add streamer dialog                      |
-| `recordings`     | Recordings page                          |
-| `postprocess`    | Post-processing pipeline page            |
-| `finder`         | Streamer finder page                     |
-| `settings`       | Settings page                            |
-| `usePostprocess` | Post-processing task status messages     |
+| Top-level key    | Description                           |
+| ---------------- | ------------------------------------- |
+| `nav`            | Sidebar navigation labels             |
+| `common`         | Shared button text (confirm, cancel…) |
+| `notify`         | System notifications and dialogs      |
+| `home`           | Streamers list page                   |
+| `streamerCard`   | Streamer card component               |
+| `addStreamer`    | Add streamer dialog                   |
+| `recordings`     | Recordings page                       |
+| `postprocess`    | Post-processing pipeline page         |
+| `finder`         | Streamer finder page                  |
+| `settings`       | Settings page                         |
+| `usePostprocess` | Post-processing task status messages  |
 
 Interpolation variables use the `{variableName}` format. Keep placeholders as-is when translating:
 
 ```ts
 // Original
-reconnected: "Reconnected to server, reloading in {n} second(s)…"
+reconnected: "Reconnected to server, reloading in {n} second(s)…";
 
 // Translation (keep {n})
-reconnected: "サーバーに再接続しました。{n} 秒後にリロードします…"
+reconnected: "サーバーに再接続しました。{n} 秒後にリロードします…";
 ```
 
 ---
