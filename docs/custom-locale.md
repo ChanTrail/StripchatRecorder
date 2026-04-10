@@ -1,7 +1,6 @@
 # 自定义语言
 
-[简体中文](> 🌐 [English](custom-locale.md)
-) | [English](custom-locale.en.md)
+[简体中文](custom-locale.md) | [English](custom-locale.en.md)
 
 本文档说明如何为 StripchatRecorder 添加新的界面语言或修改现有翻译。
 

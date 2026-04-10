@@ -1,7 +1,6 @@
 # Post-processing Module Development Guide
 
-[简体中文](> 🌐 [English](module-development.md)
-) | [English](module-development.en.md)
+[简体中文](module-development.md) | [English](module-development.en.md)
 
 This document describes how to write custom post-processing modules for StripchatRecorder.
 

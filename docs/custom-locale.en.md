@@ -1,7 +1,6 @@
 # Custom Locale
 
-[简体中文](> 🌐 [English](custom-locale.md)
-) | [English](custom-locale.en.md)
+[简体中文](custom-locale.md) | [English](custom-locale.en.md)
 
 This document explains how to add a new UI language or modify existing translations in StripchatRecorder.
 

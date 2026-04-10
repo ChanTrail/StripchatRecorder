@@ -1,7 +1,6 @@
 # 后处理模块开发文档
 
-[简体中文](> 🌐 [English](module-development.md)
-) | [English](module-development.en.md)
+[简体中文](module-development.md) | [English](module-development.en.md)
 
 本文档描述如何为 StripchatRecorder 编写自定义后处理模块。
 
