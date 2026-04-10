@@ -96,14 +96,28 @@ COPY --from=builder /build/modules_dist/ /app/stripchat-recorder/modules.default
 
 
 RUN chmod +x /app/stripchat-recorder/stripchat-recorder
-RUN echo "server:3030" > /app/stripchat-recorder/config.default/run_mode.txt
+RUN printf '%s\n' \
+    '{' \
+    '  "output_dir": "/app/stripchat-recorder/recordings",' \
+    '  "poll_interval_secs": 30,' \
+    '  "auto_record": true,' \
+    '  "api_proxy_url": null,' \
+    '  "cdn_proxy_url": null,' \
+    '  "sc_mirror_url": null,' \
+    '  "max_concurrent": 0,' \
+    '  "merge_format": "mp4",' \
+    '  "language": "zh-CN",' \
+    '  "run_mode": "server",' \
+    '  "server_port": 3030' \
+    '}' \
+    > /app/stripchat-recorder/config.default/settings.json
 
 RUN printf '%s\n' \
     '#!/bin/sh' \
     'set -eu' \
     '' \
     'cp -an /app/stripchat-recorder/modules.default/. /app/stripchat-recorder/modules/' \
-    'cp -af /app/stripchat-recorder/config.default/run_mode.txt /app/stripchat-recorder/config/run_mode.txt' \
+    'cp -an /app/stripchat-recorder/config.default/settings.json /app/stripchat-recorder/config/settings.json' \
     '' \
     'exec /app/stripchat-recorder/stripchat-recorder "$@"' \
     > /entrypoint.sh && chmod +x /entrypoint.sh

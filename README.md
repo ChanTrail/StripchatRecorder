@@ -23,6 +23,7 @@
 - 双运行模式：可作为 Tauri 桌面应用或无头服务器通过浏览器访问
 - 基于 SSE 的实时 UI 更新
 - 跟随系统主题的深色/浅色模式
+- 支持自定义界面语言，详见[自定义语言文档](docs/custom-locale.md)
 
 ---
 
@@ -52,6 +53,8 @@ docker compose up -d
 ```
 
 启动后在浏览器中打开 `http://localhost:3030`。
+
+Docker 镜像默认以 Server 模式运行（端口 3030），配置写入挂载的 `config/settings.json`。
 
 ### 网络代理与镜像站
 
@@ -100,6 +103,16 @@ docker run -d \
 ## 从源码构建
 
 **前置依赖：** Rust、Node.js (LTS)、ffmpeg
+
+### 首次启动配置
+
+直接运行二进制文件时，若 `config/settings.json` 中尚未配置运行模式，会自动进入命令行 TUI 引导配置：
+
+1. 选择界面语言（中文 / English）
+2. 选择运行模式（Desktop 桌面端 / Server 服务器端）
+3. Server 模式下输入监听端口（默认 3030）
+
+配置完成后写入 `config/settings.json`，下次启动直接读取，不再弹出配置界面。
 
 ```bash
 # 安装前端依赖

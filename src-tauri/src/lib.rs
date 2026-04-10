@@ -28,78 +28,214 @@ enum RunMode {
     Server(u16),
 }
 
-/// 返回运行模式持久化文件的路径。
-/// Returns the path to the run mode persistence file.
-fn mode_file_path() -> std::path::PathBuf {
-    config::settings::AppState::config_dir().join("run_mode.txt")
-}
-
-/// 从磁盘读取上次保存的运行模式，文件不存在或格式无效时返回 `None`。
-/// Reads the previously saved run mode from disk; returns `None` if the file is missing or invalid.
+/// 从 settings.json 读取上次保存的运行模式，未配置时返回 `None`。
+/// Reads the previously saved run mode from settings.json; returns `None` if not yet configured.
 fn load_saved_mode() -> Option<RunMode> {
-    let content = std::fs::read_to_string(mode_file_path()).ok()?;
-    let content = content.trim();
-    if content == "desktop" {
-        return Some(RunMode::Desktop);
+    let state = config::settings::AppState::new().ok()?;
+    let settings = state.get_settings();
+    // run_mode 为空字符串表示尚未首次配置 / empty string means not yet configured
+    if settings.run_mode.is_empty() {
+        return None;
     }
-    if let Some(port_str) = content.strip_prefix("server:") {
-        if let Ok(port) = port_str.parse::<u16>() {
-            return Some(RunMode::Server(port));
+    match settings.run_mode.as_str() {
+        "desktop" => Some(RunMode::Desktop),
+        "server" => Some(RunMode::Server(settings.server_port)),
+        _ => None,
+    }
+}
+
+/// 将运行模式和端口持久化到 settings.json。
+/// Persists the run mode and port to settings.json.
+fn save_mode(mode: &RunMode, lang: &str) {
+    if let Ok(state) = config::settings::AppState::new() {
+        let mut settings = state.get_settings();
+        settings.language = lang.to_string();
+        match mode {
+            RunMode::Desktop => {
+                settings.run_mode = "desktop".to_string();
+            }
+            RunMode::Server(port) => {
+                settings.run_mode = "server".to_string();
+                settings.server_port = *port;
+            }
         }
+        let _ = state.update_settings(settings);
     }
-    None
 }
 
-/// 将运行模式持久化到磁盘，供下次启动时直接使用。
-/// Persists the run mode to disk so it can be reused on the next launch.
-fn save_mode(mode: &RunMode) {
-    let path = mode_file_path();
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let content = match mode {
-        RunMode::Desktop => "desktop".to_string(),
-        RunMode::Server(port) => format!("server:{}", port),
+/// 通过 crossterm TUI 让用户选择运行模式（仅首次启动时调用）。
+/// 先选语言，再选运行模式，返回 (RunMode, 语言码)。
+/// Uses crossterm TUI to let the user select run mode (called only on first launch).
+/// Language is selected first, then run mode; returns (RunMode, language_code).
+fn ask_mode_interactive() -> (RunMode, String) {
+    use crossterm::{
+        cursor,
+        event::{self, Event, KeyCode},
+        execute,
+        style::{Color, Print, ResetColor, SetForegroundColor},
+        terminal::{self, ClearType},
     };
-    let _ = std::fs::write(path, content);
-}
+    use std::io::{self, Write};
 
-/// 通过交互式命令行提示用户选择运行模式（仅首次启动时调用）。
-/// Prompts the user to select a run mode via interactive CLI (called only on first launch).
-fn ask_mode_interactive() -> RunMode {
-    use std::io::{self, BufRead, Write};
+    // ── 通用方向键菜单 / Generic arrow-key menu ──────────────────────────────
+    fn run_menu<W: Write>(
+        stdout: &mut W,
+        title: &str,
+        items: &[&str],
+        highlight: Color,
+    ) -> usize {
+        use crossterm::event::KeyEventKind;
+        let mut selected = 0usize;
+        loop {
+            execute!(stdout, terminal::Clear(ClearType::All), cursor::MoveTo(0, 0)).unwrap();
+            execute!(
+                stdout,
+                SetForegroundColor(Color::Cyan),
+                Print(format!("  {}\n\n", title)),
+                ResetColor
+            )
+            .unwrap();
+            for (i, item) in items.iter().enumerate() {
+                if i == selected {
+                    execute!(
+                        stdout,
+                        SetForegroundColor(highlight),
+                        Print(format!("  ▶  {}\n", item)),
+                        ResetColor
+                    )
+                    .unwrap();
+                } else {
+                    execute!(stdout, Print(format!("     {}\n", item))).unwrap();
+                }
+            }
+            execute!(
+                stdout,
+                Print("\n"),
+                SetForegroundColor(Color::DarkGrey),
+                Print("  ↑/↓ 移动  Enter 确认 / ↑/↓ move  Enter confirm"),
+                ResetColor
+            )
+            .unwrap();
+            stdout.flush().unwrap();
 
-    println!("┌─────────────────────────────────────────┐");
-    println!("│   Stripchat Recorder — 首次启动配置      │");
-    println!("├─────────────────────────────────────────┤");
-    println!("│  [1] Desktop 模式  (Tauri 图形界面)      │");
-    println!("│  [2] Server  模式  (HTTP API + SSE)      │");
-    println!("└─────────────────────────────────────────┘");
-    print!("请选择运行模式 [1/2]: ");
-    let _ = io::stdout().flush();
+            if let Ok(Event::Key(key)) = event::read() {
+                // 只处理按下事件，忽略释放和重复 / Only handle Press, ignore Release/Repeat
+                if key.kind != KeyEventKind::Press {
+                    continue;
+                }
+                match key.code {
+                    KeyCode::Up => {
+                        if selected > 0 {
+                            selected -= 1;
+                        }
+                    }
+                    KeyCode::Down => {
+                        if selected + 1 < items.len() {
+                            selected += 1;
+                        }
+                    }
+                    KeyCode::Enter => break,
+                    _ => {}
+                }
+            }
+        }
+        selected
+    }
 
-    let stdin = io::stdin();
-    let choice = stdin
-        .lock()
-        .lines()
-        .next()
-        .and_then(|l| l.ok())
-        .unwrap_or_default();
+    // ── 输入端口号（crossterm raw mode）/ Input port number via crossterm ────
+    fn ask_port<W: Write>(stdout: &mut W, lang_en: bool) -> u16 {
+        use crossterm::event::KeyEventKind;
+        let (title, hint) = if lang_en {
+            ("  Listen port (↵ = 3030):", "  Backspace to delete, Enter to confirm")
+        } else {
+            ("  监听端口（回车默认 3030）:", "  Backspace 删除，Enter 确认")
+        };
 
-    if choice.trim() == "2" {
-        print!("请输入监听端口 [默认 3030]: ");
-        let _ = io::stdout().flush();
-        let port_str = stdin
-            .lock()
-            .lines()
-            .next()
-            .and_then(|l| l.ok())
-            .unwrap_or_default();
-        let port: u16 = port_str.trim().parse().unwrap_or(3030);
+        let mut input = String::new();
+
+        loop {
+            execute!(stdout, terminal::Clear(ClearType::All), cursor::MoveTo(0, 0)).unwrap();
+            execute!(
+                stdout,
+                SetForegroundColor(Color::Cyan),
+                Print(format!("{}\n\n", title)),
+                ResetColor,
+                Print(format!("  > {}_\n\n", input)),
+                SetForegroundColor(Color::DarkGrey),
+                Print(hint),
+                ResetColor,
+            )
+            .unwrap();
+            stdout.flush().unwrap();
+
+            if let Ok(Event::Key(key)) = event::read() {
+                if key.kind != KeyEventKind::Press {
+                    continue;
+                }
+                match key.code {
+                    KeyCode::Enter => break,
+                    KeyCode::Backspace => { input.pop(); }
+                    KeyCode::Char(c) if c.is_ascii_digit() && input.len() < 5 => {
+                        input.push(c);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        input.trim().parse::<u16>().unwrap_or(3030)
+    }
+
+    let mut stdout = io::stdout();
+    terminal::enable_raw_mode().expect("Failed to enable raw mode");
+    execute!(stdout, cursor::Hide).unwrap();
+
+    // 清空启动时残留的输入事件（如回车键）/ Drain leftover input events from startup
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    while event::poll(std::time::Duration::from_millis(0)).unwrap_or(false) {
+        let _ = event::read();
+    }
+
+    // ── Step 1: 选语言 / Select language ─────────────────────────────────────
+    let lang_items = ["中文 (zh-CN)", "English (en-US)"];
+    let lang_idx = run_menu(
+        &mut stdout,
+        "Stripchat Recorder — Select Language / 选择语言",
+        &lang_items,
+        Color::Green,
+    );
+    let (lang_code, lang_en) = if lang_idx == 1 {
+        ("en-US", true)
+    } else {
+        ("zh-CN", false)
+    };
+
+    // 将语言写入配置 / Persist language to config
+    // （由调用方 run_with_mode_select 统一处理 / handled by run_with_mode_select）
+
+    // ── Step 2: 选运行模式 / Select run mode ─────────────────────────────────
+    let (title, mode_items) = if lang_en {
+        (
+            "Stripchat Recorder — First Launch Setup",
+            ["Desktop mode  (Tauri GUI)", "Server mode   (HTTP API + SSE)"],
+        )
+    } else {
+        (
+            "Stripchat Recorder — 首次启动配置",
+            ["Desktop 模式  (Tauri 图形界面)", "Server  模式  (HTTP API + SSE)"],
+        )
+    };
+    let mode_idx = run_menu(&mut stdout, title, &mode_items, Color::Yellow);
+
+    let mode = if mode_idx == 1 {
+        let port = ask_port(&mut stdout, lang_en);
         RunMode::Server(port)
     } else {
         RunMode::Desktop
-    }
+    };
+
+    execute!(stdout, cursor::Show, terminal::Clear(ClearType::All), cursor::MoveTo(0, 0)).unwrap();
+    terminal::disable_raw_mode().unwrap();
+    (mode, lang_code.to_string())
 }
 
 /// 应用程序主入口：读取或交互式选择运行模式，然后启动对应的运行时。
@@ -108,8 +244,8 @@ pub fn run_with_mode_select() {
     let mode = match load_saved_mode() {
         Some(m) => m,
         None => {
-            let m = ask_mode_interactive();
-            save_mode(&m);
+            let (m, lang) = ask_mode_interactive();
+            save_mode(&m, &lang);
             m
         }
     };

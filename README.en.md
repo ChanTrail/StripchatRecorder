@@ -23,6 +23,7 @@ A self-hosted Stripchat live stream recorder with a web-based management UI. Sup
 - Dual runtime: Tauri desktop app or headless server accessible via browser
 - Real-time UI updates via Server-Sent Events
 - Dark/light mode following system theme
+- Custom UI language support, see [Custom Locale Guide](docs/custom-locale.en.md)
 
 ---
 
@@ -52,6 +53,8 @@ docker compose up -d
 ```
 
 Then open `http://localhost:3030` in your browser.
+
+The Docker image runs in Server mode by default (port 3030). Configuration is written to the mounted `config/settings.json`.
 
 ### Network Proxies and Mirror
 
@@ -100,6 +103,16 @@ Custom modules placed in the `modules` volume directory are discovered automatic
 ## Building from Source
 
 **Prerequisites:** Rust, Node.js (LTS), ffmpeg
+
+### First-launch Setup
+
+When running the binary directly, if no run mode has been configured in `config/settings.json`, an interactive TUI will guide you through setup:
+
+1. Select UI language (Chinese / English)
+2. Select run mode (Desktop / Server)
+3. If Server mode, enter the listen port (default 3030)
+
+The choices are saved to `config/settings.json` and the TUI will not appear again on subsequent launches.
 
 ```bash
 # Install frontend dependencies

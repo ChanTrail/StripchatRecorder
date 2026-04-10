@@ -30,7 +30,7 @@
 	const route = useRoute();
 	const { toast, confirm } = useNotify();
 	const streamersStore = useStreamersStore();
-	const { t } = useI18n();
+	const { t, locale } = useI18n();
 
 	/** 侧边栏导航项配置 / Sidebar navigation items configuration */
 	const navItems = [
@@ -110,6 +110,15 @@
 		// 初始化主题并监听系统主题变化 / Initialize theme and listen for system theme changes
 		applyTheme(mq.matches);
 		mq.addEventListener("change", onThemeChange);
+
+		// 从后端同步语言设置 / Sync language from backend settings
+		try {
+			const settings = await call<{ language?: string }>("get_settings");
+			if (settings?.language) {
+				locale.value = settings.language as "zh-CN" | "en-US";
+				localStorage.setItem("locale", settings.language);
+			}
+		} catch {}
 
 		// 监听 ffmpeg 缺失警告 / Listen for ffmpeg missing warning
 		unlistenFfmpeg = await on("ffmpeg-missing", (payload) => {

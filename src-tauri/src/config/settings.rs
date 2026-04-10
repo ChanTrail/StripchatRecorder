@@ -61,11 +61,35 @@ pub struct Settings {
     /// 录制片段合并格式（默认 "mp4"）/ Recording segment merge format (default "mp4")
     #[serde(default = "default_merge_format")]
     pub merge_format: String,
+    /// 界面语言（"zh-CN" 或 "en-US"）/ UI language ("zh-CN" or "en-US")
+    #[serde(default = "default_language")]
+    pub language: String,
+    /// 运行模式（"desktop" 或 "server"）/ Run mode ("desktop" or "server")
+    #[serde(default = "default_run_mode")]
+    pub run_mode: String,
+    /// Server 模式监听端口 / Server mode listen port
+    #[serde(default = "default_server_port")]
+    pub server_port: u16,
 }
 
 /// 合并格式的默认值 / Default value for merge format
 fn default_merge_format() -> String {
     "mp4".to_string()
+}
+
+/// 语言的默认值 / Default value for language
+fn default_language() -> String {
+    "zh-CN".to_string()
+}
+
+/// 运行模式的默认值 / Default value for run mode
+fn default_run_mode() -> String {
+    String::new()
+}
+
+/// Server 端口的默认值 / Default value for server port
+fn default_server_port() -> u16 {
+    3030
 }
 
 /// 返回可执行文件所在目录，用于定位配置文件和模块目录。
@@ -92,6 +116,9 @@ impl Default for Settings {
             sc_mirror_url: None,
             max_concurrent: 0,
             merge_format: default_merge_format(),
+            language: default_language(),
+            run_mode: default_run_mode(),
+            server_port: default_server_port(),
         }
     }
 }
