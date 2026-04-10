@@ -48,8 +48,10 @@
 		TableRow,
 	} from "@/components/ui/table";
 	import { formatSize, formatDuration } from "@/utils/format";
+	import { useI18n } from "vue-i18n";
 
 	const { toast, confirm } = useNotify();
+	const { t } = useI18n();
 	const ppStore = usePostprocessStore();
 	/** 事件取消订阅函数列表 / Event unsubscribe function list */
 	const unlisteners: (() => void)[] = [];
@@ -194,9 +196,9 @@
 		is_recording: boolean;
 	}) {
 		const ok = await confirm({
-			title: "删除录制文件",
-			message: `确定要删除 ${f.name} 吗？此操作不可撤销。`,
-			confirmText: "删除",
+			title: t("recordings.delete.title"),
+			message: t("recordings.delete.message", { name: f.name }),
+			confirmText: t("recordings.delete.confirm"),
 			danger: true,
 		});
 		if (!ok) return;
@@ -210,7 +212,7 @@
 			delete elapsed.value[f.path];
 			ppRemoveFile(f.path);
 			selected.value.delete(f.path);
-			toast(`已删除 ${f.name}`, "success");
+			toast(t("recordings.delete.done", { name: f.name }), "success");
 		} catch (e) {
 			localDeletedPaths.delete(f.path);
 			toast(String(e), "error");
@@ -225,9 +227,9 @@
 		const paths = [...selected.value];
 		const count = paths.length;
 		const ok = await confirm({
-			title: "批量删除",
-			message: `确定要删除选中的 ${count} 个文件吗？此操作不可撤销。`,
-			confirmText: "删除",
+			title: t("recordings.delete.batchTitle"),
+			message: t("recordings.delete.batchMessage", { count }),
+			confirmText: t("recordings.delete.confirm"),
 			danger: true,
 		});
 		if (!ok) return;
@@ -250,8 +252,8 @@
 				failed++;
 			}
 		}
-		if (failed > 0) toast(`删除完成，${failed} 个文件失败`, "error");
-		else toast(`已删除 ${count} 个文件`, "success");
+		if (failed > 0) toast(t("recordings.delete.batchFailed", { count: failed }), "error");
+		else toast(t("recordings.delete.batchDone", { count }), "success");
 	}
 
 	/**
@@ -350,7 +352,7 @@
 				if (!files.value.some((f) => f.is_recording)) stopTick();
 				if (!isLocal) {
 					const name = p.path.split(/[\\/]/).pop() ?? p.path;
-					toast(`其他客户端删除了录制文件：${name}`, "info");
+					toast(t("recordings.otherClientDeleted", { name }), "info");
 				}
 			}),
 		);
@@ -591,13 +593,15 @@
 						}"
 					/>
 					<Transition name="fade">
-						<button
+						<Button
 							v-if="previewScale !== 1"
-							class="absolute bottom-5 left-1/2 -translate-x-1/2 z-10 rounded-full bg-black/60 hover:bg-black/80 text-white text-xs px-3 py-1.5 backdrop-blur-sm transition-colors"
+							variant="secondary"
+							size="sm"
+							class="absolute bottom-5 left-1/2 -translate-x-1/2 z-10 rounded-full bg-black/60 hover:bg-black/80 text-white text-xs px-3 py-1.5 backdrop-blur-sm"
 							@click="resetPreviewTransform"
 						>
-							{{ Math.round(previewScale * 100) }}% · 重置
-						</button>
+							{{ t("recordings.resetZoom", { pct: Math.round(previewScale * 100) }) }}
+						</Button>
 					</Transition>
 				</div>
 			</DialogContent>
@@ -605,19 +609,19 @@
 
 		<header ref="headerEl" class="flex items-start justify-between gap-4 shrink-0 px-6 pt-6 pb-4 sticky top-0 z-10 bg-background">
 			<div class="flex-1 min-w-0">
-				<h1 class="text-xl font-bold mb-0.5">录制文件</h1>
+				<h1 class="text-xl font-bold mb-0.5">{{ t("recordings.title") }}</h1>
 				<div
 					class="flex items-center gap-3 text-sm text-muted-foreground flex-wrap"
 				>
-					<span>共 {{ files.length }} 个文件</span>
+					<span>{{ t("recordings.subtitle.total", { count: files.length }) }}</span>
 					<span v-if="recordingCount > 0" class="text-destructive"
-						>{{ recordingCount }} 个录制中</span
+						>{{ t("recordings.subtitle.recording", { count: recordingCount }) }}</span
 					>
 					<span v-if="selectedCount > 0" class="text-foreground"
-						>已选 {{ selectedCount }} 个</span
+						>{{ t("recordings.subtitle.selected", { count: selectedCount }) }}</span
 					>
 					<span v-if="totalRecordingSpeed > 0">
-						总录制速度
+						{{ t("recordings.subtitle.totalSpeed") }}
 						<span class="text-foreground tabular-nums"
 							>{{ formatSize(totalRecordingSpeed) }}/s</span
 						>
@@ -654,7 +658,7 @@
 					:disabled="ppSelectableCount === 0"
 					@click="postProcessSelected"
 				>
-					批量后处理 ({{ ppSelectableCount }})
+					{{ t("recordings.batchPostprocess", { count: ppSelectableCount }) }}
 				</Button>
 				<Button
 					v-if="selectedCount > 0"
@@ -662,10 +666,10 @@
 					size="sm"
 					@click="deleteSelected"
 				>
-					删除选中 ({{ selectedCount }})
+					{{ t("recordings.deleteSelected", { count: selectedCount }) }}
 				</Button>
 				<Button v-if="isTauri" variant="outline" @click="openDir"
-					>打开目录</Button
+					>{{ t("recordings.openDir") }}</Button
 				>
 			</div>
 		</header>
@@ -675,13 +679,13 @@
 			v-if="loading && files.length === 0"
 			class="text-center text-muted-foreground py-16"
 		>
-			加载中...
+			{{ t("recordings.loading") }}
 		</div>
 		<div
 			v-else-if="files.length === 0"
 			class="text-center text-muted-foreground py-16"
 		>
-			暂无录制文件
+			{{ t("recordings.empty") }}
 		</div>
 
 		<Table v-else>
@@ -693,12 +697,12 @@
 							@update:model-value="setAllChecked"
 						/>
 					</TableHead>
-					<TableHead class="w-px whitespace-nowrap">文件名</TableHead>
+					<TableHead class="w-px whitespace-nowrap">{{ t("recordings.table.filename") }}</TableHead>
 					<TableHead
 						class="cursor-pointer select-none whitespace-nowrap"
 						@click="toggleSort('size_bytes')"
 					>
-						大小
+						{{ t("recordings.table.size") }}
 						<component
 							:is="sortIcon('size_bytes')"
 							class="inline size-3.5 ml-0.5"
@@ -708,26 +712,26 @@
 						class="cursor-pointer select-none whitespace-nowrap"
 						@click="toggleSort('started_at')"
 					>
-						起始时间
+						{{ t("recordings.table.startTime") }}
 						<component
 							:is="sortIcon('started_at')"
 							class="inline size-3.5 ml-0.5"
 						/>
 					</TableHead>
-					<TableHead>录制时长</TableHead>
+					<TableHead>{{ t("recordings.table.recordDuration") }}</TableHead>
 					<TableHead
 						class="cursor-pointer select-none whitespace-nowrap"
 						@click="toggleSort('video_duration_secs')"
 					>
-						视频时长
+						{{ t("recordings.table.videoDuration") }}
 						<component
 							:is="sortIcon('video_duration_secs')"
 							class="inline size-3.5 ml-0.5"
 						/>
 					</TableHead>
-					<TableHead>录制速度</TableHead>
-					<TableHead class="min-w-45">后处理</TableHead>
-					<TableHead>操作</TableHead>
+					<TableHead>{{ t("recordings.table.speed") }}</TableHead>
+					<TableHead class="min-w-45">{{ t("recordings.table.postprocess") }}</TableHead>
+					<TableHead>{{ t("recordings.table.actions") }}</TableHead>
 				</TableRow>
 			</TableHeader>
 			<TableBody>
@@ -751,10 +755,10 @@
 								v-if="group.hasRecording"
 								variant="destructive"
 								class="ml-2 text-[10px]"
-								>录制中</Badge
+								>{{ t("recordings.status.recording") }}</Badge
 							>
 							<span class="ml-2 text-xs text-muted-foreground font-normal">
-								{{ group.files.length }} 个文件 ·
+								{{ t("recordings.group.fileCount", { count: group.files.length }) }} ·
 								{{ formatSize(group.totalSize) }}
 							</span>
 						</TableCell>
@@ -771,7 +775,7 @@
 									<div class="flex items-center gap-1.5">
 										<span>{{ f.name }}</span>
 										<Badge variant="outline" class="text-[10px] shrink-0">{{
-											isWaitingMerge(f.path) ? "等待合并" : "合并中"
+											isWaitingMerge(f.path) ? t("recordings.status.waitingMerge") : t("recordings.status.merging")
 										}}</Badge>
 									</div>
 								</TableCell>
@@ -781,7 +785,7 @@
 											class="size-4 animate-spin shrink-0 text-muted-foreground"
 										/>
 										<span class="text-xs text-muted-foreground shrink-0">{{
-											isWaitingMerge(f.path) ? "等待合并视频…" : "正在合并视频…"
+											isWaitingMerge(f.path) ? t("recordings.status.waitingMergeVideo") : t("recordings.status.mergingVideo")
 										}}</span>
 										<template v-if="!isWaitingMerge(f.path)">
 											<div
@@ -817,7 +821,7 @@
 										v-if="f.is_recording"
 										variant="destructive"
 										class="ml-1.5 text-[10px]"
-										>录制中</Badge
+										>{{ t("recordings.status.recording") }}</Badge
 									>
 								</TableCell>
 								<TableCell class="tabular-nums">{{
@@ -868,8 +872,8 @@
 											>
 												<span>{{
 													ppProgress[f.path].moduleExecLabel
-														? `${ppProgress[f.path].moduleExecLabel} 总进度`
-														: "总进度"
+														? t("recordings.status.overallProgressWithLabel", { label: ppProgress[f.path].moduleExecLabel })
+														: t("recordings.status.overallProgress")
 												}}</span>
 												<span class="tabular-nums shrink-0">{{
 													ppProgress[f.path].overallLabel
@@ -884,10 +888,14 @@
 												class="flex items-center justify-between text-xs text-muted-foreground"
 											>
 												<span class="truncate max-w-50">{{
-													ppProgress[f.path].moduleName
+													ppProgress[f.path].moduleName === "processing"
+														? t("usePostprocess.processing")
+														: ppProgress[f.path].moduleName
 												}}</span>
 												<span class="tabular-nums shrink-0">{{
-													ppProgress[f.path].moduleLabel
+													ppProgress[f.path].moduleLabel === "waiting"
+														? t("usePostprocess.waitingProgress")
+														: ppProgress[f.path].moduleLabel
 												}}</span>
 											</div>
 											<Progress
@@ -901,7 +909,7 @@
 											class="flex items-center gap-1.5 text-xs text-muted-foreground"
 										>
 											<Loader2 class="size-3 animate-spin shrink-0" />
-											<span>等待中…</span>
+											<span>{{ t("recordings.status.waiting") }}</span>
 										</div>
 										<div
 											v-else-if="
@@ -909,13 +917,13 @@
 											"
 											class="flex flex-col gap-1.5"
 										>
-											<div class="text-lg text-green-500">已完成</div>
+											<div class="text-lg text-green-500">{{ t("recordings.status.done") }}</div>
 										</div>
 										<div
 											v-else-if="ppStatus[f.path] === 'error'"
 											class="text-lg text-destructive"
 										>
-											失败
+											{{ t("recordings.status.failed") }}
 										</div>
 										<span v-else class="text-xs text-muted-foreground">—</span>
 									</div>
@@ -927,9 +935,9 @@
 											size="sm"
 											variant="outline"
 											:disabled="f.is_recording"
-											:title="f.is_recording ? '录制中，无法播放' : ''"
+											:title="f.is_recording ? t('recordings.actions.playDisabled') : ''"
 											@click="openFile(f.path)"
-											>播放</Button
+											>{{ t("recordings.actions.play") }}</Button
 										>
 										<Button
 											v-if="moduleOutputs[f.path]?.['contact_sheet']"
@@ -948,22 +956,22 @@
 												ppStatus[f.path] === 'running' ||
 												ppStatus[f.path] === 'waiting'
 											"
-											:title="f.is_recording ? '录制中' : ''"
+											:title="f.is_recording ? t('recordings.status.recording') : ''"
 											@click="runPostprocess(f.path)"
 										>
 											<Loader2
 												v-if="ppStatus[f.path] === 'running'"
 												class="size-3.5 animate-spin"
 											/>
-											<span v-else>后处理</span>
+											<span v-else>{{ t("recordings.actions.postprocess") }}</span>
 										</Button>
 										<Button
 											size="sm"
 											variant="destructive"
 											:disabled="f.is_recording"
-											:title="f.is_recording ? '文件正在录制中' : ''"
+											:title="f.is_recording ? t('recordings.actions.deleteDisabled') : ''"
 											@click="deleteFile(f)"
-											>删除</Button
+											>{{ t("recordings.actions.delete") }}</Button
 										>
 									</div>
 								</TableCell>

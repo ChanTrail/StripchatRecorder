@@ -10,6 +10,7 @@ import HomeView from "../views/HomeView.vue";
 import RecordingsView from "../views/RecordingsView.vue";
 import SettingsView from "../views/SettingsView.vue";
 import PostprocessView from "../views/PostprocessView.vue";
+import FinderView from "../views/FinderView.vue";
 
 export default createRouter({
 	history: createWebHistory(),
@@ -22,5 +23,7 @@ export default createRouter({
 		{ path: "/postprocess", component: PostprocessView },
 		// 应用设置页 / Application settings page
 		{ path: "/settings", component: SettingsView },
+		// 主播查找页 / Streamer finder page
+		{ path: "/finder", component: FinderView },
 	],
 });

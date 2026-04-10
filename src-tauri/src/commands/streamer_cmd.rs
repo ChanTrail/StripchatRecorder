@@ -223,3 +223,25 @@ pub async fn stop_recording(
     });
     Ok(())
 }
+
+/// 验证主播用户名是否存在于 Stripchat（通过后端代理/镜像）。
+/// Verify whether a streamer username exists on Stripchat (via backend proxy/mirror).
+#[tauri::command]
+pub async fn verify_streamer(
+    username: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<serde_json::Value> {
+    let settings = state.get_settings();
+    let api = StripchatApi::new_api_only(
+        settings.api_proxy_url.as_deref(),
+        settings.cdn_proxy_url.as_deref(),
+        settings.sc_mirror_url.as_deref(),
+    )?;
+    match api.get_stream_info(&username, false).await {
+        Ok(_) => Ok(serde_json::json!({ "exists": true })),
+        Err(crate::core::error::AppError::UserNotFound(_)) => {
+            Ok(serde_json::json!({ "exists": false }))
+        }
+        Err(e) => Err(e),
+    }
+}

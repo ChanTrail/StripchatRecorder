@@ -18,6 +18,7 @@ import { ref } from "vue";
 import { call } from "@/lib/api";
 import { usePostprocessStore } from "@/stores/postprocess";
 import { useNotify } from "./useNotify";
+import { useI18n } from "vue-i18n";
 
 /** 后处理任务状态 / Post-processing task status */
 export type PpStatus = "idle" | "waiting" | "running" | "done" | "error";
@@ -114,7 +115,7 @@ export function makePpProgress(
 		moduleExecLabel = `${moduleIndex}/${overallTotal}`;
 	}
 
-	const normalizedModuleName = moduleName.trim() || "处理中";
+	const normalizedModuleName = moduleName.trim() || "processing";
 
 	return {
 		overallDone,
@@ -124,7 +125,7 @@ export function makePpProgress(
 		moduleDone,
 		moduleTotal,
 		modulePct,
-		moduleLabel: hasModuleProgress ? formatPct2(modulePct) : "等待进度…",
+		moduleLabel: hasModuleProgress ? formatPct2(modulePct) : "waiting",
 		moduleName: normalizedModuleName,
 		moduleExecLabel,
 		currentModuleText: moduleExecLabel
@@ -140,6 +141,7 @@ export function makePpProgress(
 export function usePostprocess() {
 	const ppStore = usePostprocessStore();
 	const { toast } = useNotify();
+	const { t } = useI18n();
 
 	/** 各文件路径的后处理状态 / Post-processing status per file path */
 	const ppStatus = ref<Record<string, PpStatus>>({});
@@ -198,7 +200,7 @@ export function usePostprocess() {
 				moduleOutputs.value = { ...moduleOutputs.value, [path]: result };
 			}
 		} catch {
-			toast("获取模块输出失败", "error");
+			toast(t("usePostprocess.fetchOutputFailed"), "error");
 		}
 	}
 
@@ -282,7 +284,7 @@ export function usePostprocess() {
 				}
 			}
 		} catch {
-			toast("获取后处理任务失败", "error");
+			toast(t("usePostprocess.fetchTasksFailed"), "error");
 		}
 	}
 
@@ -314,7 +316,7 @@ export function usePostprocess() {
 				100,
 			);
 			const names = payload.results.map((r) => r.moduleId).join(" → ");
-			toast(`后处理完成：${names}`, "success");
+			toast(t("usePostprocess.done", { modules: names }), "success");
 			// 从模块返回的 OUTPUT: 前缀消息中提取输出路径
 			// Extract output paths from module messages prefixed with "OUTPUT:"
 			const outputs: Record<string, string> = {};
@@ -338,7 +340,7 @@ export function usePostprocess() {
 		} else {
 			delete ppProgress.value[payload.path];
 			const failed = payload.results.find((r) => !r.success);
-			toast(`后处理失败 [${failed?.moduleId}]：${failed?.message}`, "error");
+			toast(t("usePostprocess.failed", { moduleId: failed?.moduleId, message: failed?.message }), "error");
 		}
 		return onLoad();
 	}

@@ -37,9 +37,16 @@
 		NumberFieldInput,
 	} from "@/components/ui/number-field";
 	import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+	import { useI18n } from "vue-i18n";
 
 	const store = useSettingsStore();
 	const { toast, confirm } = useNotify();
+	const { t, locale } = useI18n();
+
+	function setLocale(lang: string) {
+		locale.value = lang as "zh-CN" | "en-US";
+		localStorage.setItem("locale", lang);
+	}
 
 	/** 表单响应式数据（与 store.settings 保持同步）/ Reactive form data (synced with store.settings) */
 	const form = reactive<Settings>({
@@ -80,7 +87,7 @@
 		unlisteners.push(
 			await on("mouflon-keys-updated", (payload) => {
 				mouflonKeys.value = payload as Record<string, string>;
-				toast("Mouflon Keys 已由其他客户端更新", "info");
+				toast(t("settings.mouflonUpdatedByOther"), "info");
 			}),
 		);
 	});
@@ -101,7 +108,7 @@
 		async () => {
 			if (!initialized) return;
 			await store.saveSettings({ ...form });
-			toast("设置已保存", "success");
+			toast(t("settings.saved"), "success");
 		},
 		{ deep: true },
 	);
@@ -121,7 +128,7 @@
 			nextTick(() => {
 				initialized = true;
 			});
-			toast("设置已由其他客户端更新", "info");
+			toast(t("settings.updatedByOther"), "info");
 		},
 		{ deep: true },
 	);
@@ -145,7 +152,7 @@
 		if (form[field] === original.value) return;
 		await store.saveSettings({ ...form });
 		original.value = form[field];
-		toast("设置已保存", "success");
+		toast(t("settings.saved"), "success");
 	}
 
 	/**
@@ -156,14 +163,14 @@
 		if (!initialized) return;
 		if (form.output_dir === originalOutputDir.value) return;
 		const ok = await confirm({
-			title: "修改输出目录",
-			message: `将输出目录改为：\n${form.output_dir}\n\n此更改将在下次录制时生效。`,
-			confirmText: "确认",
+			title: t("settings.outputDir.changeTitle"),
+			message: t("settings.outputDir.changeMessage", { dir: form.output_dir }),
+			confirmText: t("settings.outputDir.changeConfirm"),
 		});
 		if (ok) {
 			await store.saveSettings({ ...form });
 			originalOutputDir.value = form.output_dir;
-			toast("输出目录已更新，将在下次录制时生效", "info");
+			toast(t("settings.outputDir.changeDone"), "info");
 		} else {
 			// 用户取消时恢复原始值 / Restore original value if user cancels
 			form.output_dir = originalOutputDir.value;
@@ -208,7 +215,7 @@
 		const pkey = newPkey.value.trim();
 		const pdkey = newPdkey.value.trim();
 		if (!pkey || !pdkey) {
-			keyError.value = "pkey 和 pdkey 均不能为空";
+			keyError.value = t("settings.keyError.empty");
 			return;
 		}
 		try {
@@ -235,24 +242,49 @@
 
 <template>
 	<div class="flex flex-col gap-5 max-w-160">
-		<h1 class="text-xl font-bold">设置</h1>
+		<h1 class="text-xl font-bold">{{ t("settings.title") }}</h1>
 
-		<div v-if="store.loading" class="text-muted-foreground">加载中...</div>
+		<div v-if="store.loading" class="text-muted-foreground">{{ t("settings.loading") }}</div>
 
 		<form v-else class="flex flex-col gap-7">
 			<section class="flex flex-col gap-3.5">
 				<h2
 					class="text-xs font-bold uppercase tracking-widest text-muted-foreground pb-2 border-b"
 				>
-					录制
+					{{ t("settings.sections.language") }}
+				</h2>
+				<div class="flex flex-col gap-1.5">
+					<Label>{{ t("settings.language.label") }}</Label>
+					<RadioGroup
+						:model-value="String(locale)"
+						class="flex flex-row gap-4"
+						@update:model-value="(v) => v && setLocale(String(v))"
+					>
+						<div class="flex items-center gap-2">
+							<RadioGroupItem id="lang-zh" value="zh-CN" />
+							<Label for="lang-zh" class="cursor-pointer">{{ t("settings.language.zhCN") }}</Label>
+						</div>
+						<div class="flex items-center gap-2">
+							<RadioGroupItem id="lang-en" value="en-US" />
+							<Label for="lang-en" class="cursor-pointer">{{ t("settings.language.enUS") }}</Label>
+						</div>
+					</RadioGroup>
+				</div>
+			</section>
+
+			<section class="flex flex-col gap-3.5">
+				<h2
+					class="text-xs font-bold uppercase tracking-widest text-muted-foreground pb-2 border-b"
+				>
+					{{ t("settings.sections.recording") }}
 				</h2>
 
 				<div class="flex flex-col gap-1.5">
-					<Label>输出目录</Label>
+					<Label>{{ t("settings.outputDir.label") }}</Label>
 					<div class="flex gap-2">
 						<Input
 							v-model="form.output_dir"
-							placeholder="/path/to/recordings"
+							:placeholder="t('settings.outputDir.placeholder')"
 							@keyup.enter="saveOutputDir"
 							@blur="saveOutputDir"
 						/>
@@ -262,16 +294,16 @@
 							class="shrink-0"
 							@click="pickDir"
 						>
-							选择
+							{{ t("settings.outputDir.pick") }}
 						</Button>
 					</div>
 					<p class="text-xs text-muted-foreground">
-						修改后按回车或点击其他区域确认
+						{{ t("settings.outputDir.hint") }}
 					</p>
 				</div>
 
 				<div class="flex flex-col gap-1.5">
-					<Label>最大并发录制数</Label>
+					<Label>{{ t("settings.maxConcurrent.label") }}</Label>
 					<NumberField
 						:model-value="form.max_concurrent"
 						:min="0"
@@ -287,11 +319,11 @@
 							<NumberFieldIncrement />
 						</NumberFieldContent>
 					</NumberField>
-					<p class="text-xs text-muted-foreground">0 表示不限制</p>
+					<p class="text-xs text-muted-foreground">{{ t("settings.maxConcurrent.hint") }}</p>
 				</div>
 
 				<div class="flex flex-col gap-1.5">
-					<Label>轮询间隔（秒）</Label>
+					<Label>{{ t("settings.pollInterval.label") }}</Label>
 					<NumberField
 						:model-value="form.poll_interval_secs"
 						:min="10"
@@ -310,7 +342,7 @@
 				</div>
 
 				<div class="flex flex-col gap-1.5">
-					<Label>合并格式</Label>
+					<Label>{{ t("settings.mergeFormat.label") }}</Label>
 					<RadioGroup
 						:model-value="form.merge_format"
 						class="flex flex-row gap-4"
@@ -328,7 +360,7 @@
 						</div>
 					</RadioGroup>
 					<p class="text-xs text-muted-foreground">
-						录制结束后自动合并分片为单一文件的格式
+						{{ t("settings.mergeFormat.hint") }}
 					</p>
 				</div>
 			</section>
@@ -337,13 +369,13 @@
 				<h2
 					class="text-xs font-bold uppercase tracking-widest text-muted-foreground pb-2 border-b"
 				>
-					网络
+					{{ t("settings.sections.network") }}
 				</h2>
 				<div class="flex flex-col gap-1.5">
-					<Label>API 代理（访问 stripchat.com，留空不使用）</Label>
+					<Label>{{ t("settings.apiProxy.label") }}</Label>
 					<Input
 						:model-value="form.api_proxy_url ?? ''"
-						placeholder="socks5://127.0.0.1:10808"
+						:placeholder="t('settings.apiProxy.placeholder')"
 						@update:model-value="
 							form.api_proxy_url = ($event as string) || null
 						"
@@ -351,17 +383,14 @@
 						@blur="saveProxy('api_proxy_url')"
 					/>
 					<p class="text-xs text-muted-foreground">
-						修改后按回车或点击其他区域确认
+						{{ t("settings.apiProxy.hint") }}
 					</p>
 				</div>
 				<div class="flex flex-col gap-1.5">
-					<Label
-						>Stripchat 镜像站（替换 API 中的 stripchat.com
-						域名，留空不使用）</Label
-					>
+					<Label>{{ t("settings.scMirror.label") }}</Label>
 					<Input
 						:model-value="form.sc_mirror_url ?? ''"
-						placeholder="stripchat.example.com"
+						:placeholder="t('settings.scMirror.placeholder')"
 						@update:model-value="
 							form.sc_mirror_url = ($event as string) || null
 						"
@@ -369,14 +398,14 @@
 						@blur="saveProxy('sc_mirror_url')"
 					/>
 					<p class="text-xs text-muted-foreground">
-						同时填写 API 代理与镜像站时，将通过 API 代理访问镜像站
+						{{ t("settings.scMirror.hint") }}
 					</p>
 				</div>
 				<div class="flex flex-col gap-1.5">
-					<Label>CDN 代理（下载 HLS 分片，留空不使用）</Label>
+					<Label>{{ t("settings.cdnProxy.label") }}</Label>
 					<Input
 						:model-value="form.cdn_proxy_url ?? ''"
-						placeholder="socks5://127.0.0.1:10808"
+						:placeholder="t('settings.cdnProxy.placeholder')"
 						@update:model-value="
 							form.cdn_proxy_url = ($event as string) || null
 						"
@@ -384,7 +413,7 @@
 						@blur="saveProxy('cdn_proxy_url')"
 					/>
 					<p class="text-xs text-muted-foreground">
-						修改后按回车或点击其他区域确认
+						{{ t("settings.cdnProxy.hint") }}
 					</p>
 				</div>
 			</section>
@@ -393,15 +422,13 @@
 				<h2
 					class="text-xs font-bold uppercase tracking-widest text-muted-foreground pb-2 border-b"
 				>
-					Mouflon 解密密钥
+					{{ t("settings.sections.mouflonKeys") }}
 				</h2>
 				<p class="text-xs text-muted-foreground leading-relaxed">
-					Stripchat 对 HLS 分片文件名进行了加密（Mouflon
-					系统）。录制前需在此填入对应的
+					{{ t("settings.mouflonKeysDesc") }}
 					<code class="bg-muted px-1 py-0.5 rounded text-xs font-mono"
 						>pkey → pdkey</code
 					>
-					密钥对，密钥可从社区渠道获取。
 				</p>
 
 				<table
@@ -413,12 +440,12 @@
 							<th
 								class="text-left px-2 py-1.5 border-b text-muted-foreground font-semibold"
 							>
-								pkey（密钥标识符）
+								{{ t("settings.mouflonTable.pkey") }}
 							</th>
 							<th
 								class="text-left px-2 py-1.5 border-b text-muted-foreground font-semibold"
 							>
-								pdkey（解密密钥）
+								{{ t("settings.mouflonTable.pdkey") }}
 							</th>
 							<th class="border-b"></th>
 						</tr>
@@ -437,13 +464,13 @@
 									class="h-6 text-xs px-2"
 									@click="removeKey(pkey)"
 								>
-									删除
+									{{ t("common.delete") }}
 								</Button>
 							</td>
 						</tr>
 					</tbody>
 				</table>
-				<p v-else class="text-xs text-muted-foreground">暂无密钥</p>
+				<p v-else class="text-xs text-muted-foreground">{{ t("settings.noKeys") }}</p>
 
 				<div class="flex gap-2 items-center">
 					<Input
@@ -456,7 +483,7 @@
 						placeholder="pdkey"
 						class="flex-2 font-mono text-xs"
 					/>
-					<Button type="button" variant="outline" @click="addKey">添加</Button>
+					<Button type="button" variant="outline" @click="addKey">{{ t("settings.addKey") }}</Button>
 				</div>
 				<p v-if="keyError" class="text-xs text-destructive">{{ keyError }}</p>
 			</section>

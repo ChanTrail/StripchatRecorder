@@ -1,7 +1,7 @@
 {
 	"name": "stripchat-recorder",
 	"private": true,
-	"version": "0.1.5",
+	"version": "0.2.0",
 	"type": "module",
 	"scripts": {
 		"dev": "vite",
@@ -23,6 +23,7 @@
 		"tailwind-merge": "^3.5.0",
 		"tailwindcss": "^4.2.2",
 		"vue": "^3.5.13",
+		"vue-i18n": "^9.14.4",
 		"vue-router": "^5.0.3",
 		"vue-sonner": "^2.0.9"
 	},

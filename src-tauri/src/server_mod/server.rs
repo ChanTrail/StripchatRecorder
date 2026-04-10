@@ -96,6 +96,7 @@ pub fn build_router(state: ServerState) -> Router {
         .route("/api/streamers/{name}/auto-record", post(set_auto_record))
         .route("/api/streamers/{name}/start", post(start_recording))
         .route("/api/streamers/{name}/stop", post(stop_recording))
+        .route("/api/streamers/{name}/verify", get(verify_streamer))
         .route("/api/settings", get(get_settings).post(save_settings))
         .route(
             "/api/mouflon-keys",
@@ -308,6 +309,26 @@ async fn stop_recording(
         .await
         .map_err(ApiError::from)?;
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn verify_streamer(
+    AxumState(s): AxumState<ServerState>,
+    Path(name): Path<String>,
+) -> ApiResult<serde_json::Value> {
+    let settings = s.app_state.get_settings();
+    let api = crate::streaming::stripchat::StripchatApi::new_api_only(
+        settings.api_proxy_url.as_deref(),
+        settings.cdn_proxy_url.as_deref(),
+        settings.sc_mirror_url.as_deref(),
+    )
+    .map_err(ApiError::from)?;
+    match api.get_stream_info(&name, false).await {
+        Ok(_) => Ok(Json(serde_json::json!({ "exists": true }))),
+        Err(crate::core::error::AppError::UserNotFound(_)) => {
+            Ok(Json(serde_json::json!({ "exists": false })))
+        }
+        Err(e) => Err(ApiError(e.to_string())),
+    }
 }
 
 async fn get_settings(

@@ -16,9 +16,11 @@
 	import StreamerCard from "../components/StreamerCard.vue";
 	import AddStreamerDialog from "../components/AddStreamerDialog.vue";
 	import { Button } from "@/components/ui/button";
+	import { useI18n } from "vue-i18n";
 
 	const store = useStreamersStore();
 	const { toast, confirm } = useNotify();
+	const { t } = useI18n();
 	/** 是否显示添加主播对话框 / Whether to show the add streamer dialog */
 	const showAdd = ref(false);
 
@@ -35,15 +37,15 @@
 	 */
 	async function handleRemove(username: string) {
 		const ok = await confirm({
-			title: "移除主播",
-			message: `确定要移除 ${username} 吗？相关录制文件也会被删除。`,
-			confirmText: "移除",
+			title: t("home.remove.title"),
+			message: t("home.remove.message", { username }),
+			confirmText: t("home.remove.confirm"),
 			danger: true,
 		});
 		if (!ok) return;
 		try {
 			await store.removeStreamer(username);
-			toast(`已移除 ${username}`, "success");
+			toast(t("home.remove.done", { username }), "success");
 		} catch (e) {
 			toast(String(e), "error");
 		}
@@ -58,7 +60,7 @@
 	async function handleStart(username: string) {
 		try {
 			await store.startRecording(username);
-			toast(`开始录制 ${username}`, "success");
+			toast(t("home.start.done", { username }), "success");
 		} catch (e) {
 			toast(String(e), "error");
 		}
@@ -84,7 +86,7 @@
 			await store.setAutoRecord(username, enabled);
 			if (enabled && streamer.is_recordable && !streamer.is_recording) {
 				await store.startRecording(username);
-				toast(`已开始录制 ${username}`, "success");
+				toast(t("home.start.autoStarted", { username }), "success");
 			}
 		} catch (e) {
 			toast(String(e), "error");
@@ -99,15 +101,15 @@
 	 */
 	async function handleStop(username: string) {
 		const ok = await confirm({
-			title: "停止录制",
-			message: `确定要停止录制 ${username} 吗？`,
-			confirmText: "停止",
+			title: t("home.stop.title"),
+			message: t("home.stop.message", { username }),
+			confirmText: t("home.stop.confirm"),
 			danger: true,
 		});
 		if (!ok) return;
 		try {
 			await store.stopRecording(username);
-			toast(`已停止录制 ${username}`, "info");
+			toast(t("home.stop.done", { username }), "info");
 		} catch (e) {
 			toast(String(e), "error");
 		}
@@ -118,30 +120,27 @@
 	<div class="flex flex-col gap-5">
 		<header class="flex items-start justify-between">
 			<div>
-				<h1 class="text-xl font-bold mb-0.5">主播列表</h1>
+				<h1 class="text-xl font-bold mb-0.5">{{ t("home.title") }}</h1>
 				<p class="text-sm text-muted-foreground">
-					共 {{ store.streamers.length }} 位主播，{{
-						store.streamers.filter((s) => s.is_recording).length
-					}}
-					个录制中
+					{{ t("home.subtitle", { total: store.streamers.length, recording: store.streamers.filter((s) => s.is_recording).length }) }}
 				</p>
 			</div>
-			<Button @click="showAdd = true">+ 添加主播</Button>
+			<Button @click="showAdd = true">{{ t("home.addStreamer") }}</Button>
 		</header>
 
 		<div
 			v-if="store.loading && store.streamers.length === 0"
 			class="text-center text-muted-foreground py-16"
 		>
-			加载中...
+			{{ t("home.loadingStreamers") }}
 		</div>
 
 		<div
 			v-else-if="store.streamers.length === 0"
 			class="text-center text-muted-foreground py-16 flex flex-col items-center gap-3"
 		>
-			<p>还没有添加主播</p>
-			<Button @click="showAdd = true">添加第一个主播</Button>
+			<p>{{ t("home.noStreamers") }}</p>
+			<Button @click="showAdd = true">{{ t("home.addFirst") }}</Button>
 		</div>
 
 		<div

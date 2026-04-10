@@ -20,6 +20,7 @@
 	import { usePostprocessStore, type PipelineNode } from "@/stores/postprocess";
 	import { useNotify } from "@/composables/useNotify";
 	import { Button } from "@/components/ui/button";
+	import { GripVertical, ChevronUp, ChevronDown, X } from "lucide-vue-next";
 	import { Switch } from "@/components/ui/switch";
 	import { Input } from "@/components/ui/input";
 	import { Label } from "@/components/ui/label";
@@ -27,6 +28,7 @@
 	import {
 		Dialog,
 		DialogContent,
+		DialogDescription,
 		DialogHeader,
 		DialogTitle,
 	} from "@/components/ui/dialog";
@@ -45,16 +47,18 @@
 		NumberFieldInput,
 	} from "@/components/ui/number-field";
 	import PipelineNodeBox from "@/components/PipelineNodeBox.vue";
+	import { useI18n } from "vue-i18n";
 
 	const store = usePostprocessStore();
 	const { toast } = useNotify();
+	const { t } = useI18n();
 
 	onMounted(async () => {
 		await Promise.all([store.fetchModules(), store.fetchPipeline()]);
 		// 初始化模块监听器，当其他客户端更新流水线时显示提示
 		// Initialize module watcher; show notification when another client updates the pipeline
 		store.initModuleWatcher(() =>
-			toast("后处理流水线已由其他客户端更新", "info"),
+			toast(t("postprocess.updatedByOther"), "info"),
 		);
 	});
 
@@ -176,18 +180,18 @@
 	<div class="flex flex-col gap-6 max-w-2xl mx-auto">
 		<div class="flex items-center justify-between">
 			<div>
-				<h1 class="text-lg font-semibold">后处理流水线</h1>
+				<h1 class="text-lg font-semibold">{{ t("postprocess.title") }}</h1>
 				<p class="text-sm text-muted-foreground mt-0.5">
-					录制合并完成后，视频文件将依次经过以下模块处理
+					{{ t("postprocess.description") }}
 				</p>
 			</div>
 			<span class="text-xs text-muted-foreground">
-				{{ store.saving ? "保存中…" : "已自动保存" }}
+				{{ store.saving ? t("postprocess.saving") : t("postprocess.saved") }}
 			</span>
 		</div>
 
 		<div class="relative">
-			<PipelineNodeBox label="输入" description="合并后的单视频文件" fixed />
+			<PipelineNodeBox :label="t('postprocess.input.label')" :description="t('postprocess.input.description')" fixed />
 			<div
 				v-if="store.pipeline.nodes.length > 0"
 				class="absolute left-1/2 -translate-x-1/2 w-0.5 h-6 bg-border"
@@ -219,12 +223,11 @@
 					]"
 				>
 					<div class="flex items-center gap-3">
-						<span
-							class="cursor-grab text-muted-foreground select-none text-lg leading-none"
+						<GripVertical
+							class="cursor-grab text-muted-foreground select-none size-5"
 							@mousedown="isDraggingHandle = true"
 							@mouseup="isDraggingHandle = false"
-							>⠿</span
-						>
+						/>
 
 						<div class="flex-1 min-w-0">
 							<div class="flex items-center gap-2">
@@ -237,13 +240,13 @@
 									v-if="isModuleMissing(node)"
 									variant="destructive"
 									class="text-xs"
-									>模块缺失</Badge
+									>{{ t("postprocess.node.missing") }}</Badge
 								>
 								<Badge
 									v-else-if="!node.enabled"
 									variant="secondary"
 									class="text-xs"
-									>已跳过</Badge
+									>{{ t("postprocess.node.skipped") }}</Badge
 								>
 							</div>
 							<p class="text-xs text-muted-foreground truncate">
@@ -258,7 +261,7 @@
 								class="h-7 w-7"
 								:disabled="idx === 0"
 								@click="store.moveNode(node.nodeId, 'up')"
-								>↑</Button
+							><ChevronUp class="size-4" /></Button
 							>
 							<Button
 								variant="ghost"
@@ -266,11 +269,11 @@
 								class="h-7 w-7"
 								:disabled="idx === store.pipeline.nodes.length - 1"
 								@click="store.moveNode(node.nodeId, 'down')"
-								>↓</Button
+							><ChevronDown class="size-4" /></Button
 							>
 
 							<span class="text-xs text-muted-foreground select-none"
-								>跳过</span
+								>{{ t("postprocess.node.skip") }}</span
 							>
 							<Switch
 								:model-value="!node.enabled"
@@ -282,7 +285,7 @@
 								size="icon"
 								class="h-7 w-7 text-destructive hover:text-destructive"
 								@click="store.removeNode(node.nodeId)"
-								>✕</Button
+							><X class="size-4" /></Button
 							>
 						</div>
 					</div>
@@ -364,18 +367,19 @@
 				v-if="store.pipeline.nodes.length === 0"
 				class="text-sm text-muted-foreground"
 			>
-				暂无后处理节点，点击下方添加
+				{{ t("postprocess.empty") }}
 			</div>
 
 			<Button variant="outline" size="sm" @click="openPicker">
-				+ 添加模块
+				{{ t("postprocess.addModule") }}
 			</Button>
 		</div>
 
 		<Dialog :open="showPicker" @update:open="showPicker = $event">
 			<DialogContent class="max-w-sm">
 				<DialogHeader>
-					<DialogTitle>选择模块</DialogTitle>
+					<DialogTitle>{{ t("postprocess.picker.title") }}</DialogTitle>
+					<DialogDescription class="sr-only">从可用模块列表中选择要添加到流水线的模块</DialogDescription>
 				</DialogHeader>
 				<div class="flex flex-col gap-1 mt-1">
 					<div
@@ -383,25 +387,25 @@
 						class="text-sm text-muted-foreground px-2 py-4 text-center"
 					>
 						<template v-if="store.modules.length === 0">
-							未找到模块。<br />
+							{{ t("postprocess.picker.noModules") }}<br />
 							<span class="text-xs"
-								>请将模块可执行文件放入程序目录下的
-								<code>modules/</code> 文件夹</span
+								>{{ t("postprocess.picker.noModulesHint") }}</span
 							>
 						</template>
-						<template v-else> 所有模块已添加 </template>
+						<template v-else> {{ t("postprocess.picker.allAdded") }} </template>
 					</div>
-					<button
+					<Button
 						v-for="mod in availableModules"
 						:key="mod.id"
-						class="flex flex-col items-start px-3 py-2.5 rounded-lg hover:bg-accent text-left transition-colors"
+						variant="ghost"
+						class="flex flex-col items-start px-3 py-2.5 rounded-lg text-left h-auto w-full"
 						@click="addModule(mod.id)"
 					>
 						<span class="text-sm font-medium">{{ mod.name }}</span>
 						<span class="text-xs text-muted-foreground">{{
 							mod.description
 						}}</span>
-					</button>
+					</Button>
 				</div>
 			</DialogContent>
 		</Dialog>
@@ -410,8 +414,7 @@
 			v-if="store.pipeline.nodes.length > 0"
 			class="text-xs text-muted-foreground text-center"
 		>
-			{{ enabledNodes.length }} 个执行节点 · 共
-			{{ store.pipeline.nodes.length }} 个节点
+			{{ t("postprocess.stats", { enabled: enabledNodes.length, total: store.pipeline.nodes.length }) }}
 		</div>
 	</div>
 </template>

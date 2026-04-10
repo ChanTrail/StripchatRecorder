@@ -178,6 +178,10 @@ const COMMAND_MAP: Record<
 		method: "POST",
 		url: (a) => `/api/streamers/${a.username}/stop`,
 	},
+	verify_streamer: {
+		method: "GET",
+		url: (a) => `/api/streamers/${a.username}/verify`,
+	},
 	get_settings: { method: "GET", url: () => "/api/settings" },
 	save_settings_cmd: {
 		method: "POST",

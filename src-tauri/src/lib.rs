@@ -216,6 +216,7 @@ fn run_desktop() {
             commands::streamer_cmd::set_auto_record,
             commands::streamer_cmd::start_recording,
             commands::streamer_cmd::stop_recording,
+            commands::streamer_cmd::verify_streamer,
             commands::settings_cmd::get_settings,
             commands::settings_cmd::save_settings_cmd,
             commands::settings_cmd::pick_output_dir,
