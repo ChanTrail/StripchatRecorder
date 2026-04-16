@@ -152,6 +152,7 @@ export default {
 		stats: "{enabled} active node(s) · {total} total",
 		picker: {
 			title: "Select Module",
+			description: "Select a module from the available list to add to the pipeline",
 			noModules: "No modules found.",
 			noModulesHint: "Place module executables in the modules/ folder in the app directory",
 			allAdded: "All modules already added",

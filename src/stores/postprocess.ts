@@ -12,6 +12,7 @@
 import { defineStore } from "pinia";
 import { ref, watch } from "vue";
 import { call, on } from "@/lib/api";
+import { useI18n } from "vue-i18n";
 
 /**
  * 生成一个随机 ID，优先使用 crypto.randomUUID()，
@@ -65,6 +66,13 @@ function coerceDefault(
 	return String(value);
 }
 
+/** 模块 i18n 翻译（单个语言）/ Module i18n translation for a single locale */
+export interface ModuleI18nLocale {
+	name?: string;
+	description?: string;
+	params?: Record<string, { label?: string }>;
+}
+
 /** 后处理模块信息 / Post-processing module information */
 export interface ModuleInfo {
 	/** 模块唯一 ID / Module unique ID */
@@ -75,6 +83,8 @@ export interface ModuleInfo {
 	description: string;
 	/** 模块参数定义列表 / Module parameter definitions */
 	params: ParamDef[];
+	/** 多语言翻译（可选）/ i18n translations (optional) */
+	i18n?: Record<string, ModuleI18nLocale>;
 }
 
 /** 流水线节点（模块实例）/ Pipeline node (module instance) */
@@ -110,13 +120,48 @@ export const usePostprocessStore = defineStore("postprocess", () => {
 	/** 防抖保存定时器 / Debounce save timer */
 	let _saveTimer: ReturnType<typeof setTimeout> | null = null;
 
+	const { locale } = useI18n();
+
+	/**
+	 * 根据当前语言对模块的 name/description/params[].label 应用 i18n 翻译。
+	 * Apply i18n translations to module name/description/params[].label based on current locale.
+	 */
+	function applyModuleI18n(raw: ModuleInfo[]): ModuleInfo[] {
+		const lang = locale.value;
+		return raw.map((mod) => {
+			const tr = mod.i18n?.[lang];
+			if (!tr) return mod;
+			return {
+				...mod,
+				name: tr.name ?? mod.name,
+				description: tr.description ?? mod.description,
+				params: mod.params.map((p) => ({
+					...p,
+					label: tr.params?.[p.key]?.label ?? p.label,
+				})),
+			};
+		});
+	}
+
+	/** 原始模块列表（未应用 i18n，用于语言切换时重新翻译）/ Raw module list (before i18n, for re-translating on locale change) */
+	const _rawModules = ref<ModuleInfo[]>([]);
+
 	/**
 	 * 从后端获取可用模块列表。
 	 * Fetch the available module list from the backend.
 	 */
 	async function fetchModules() {
-		modules.value = await call<ModuleInfo[]>("list_modules");
+		const raw = await call<ModuleInfo[]>("list_modules");
+		_rawModules.value = raw;
+		modules.value = applyModuleI18n(raw);
 	}
+
+	// 语言切换时重新应用模块翻译 / Re-apply module translations on locale change
+	watch(locale, () => {
+		if (_rawModules.value.length > 0) {
+			modules.value = applyModuleI18n(_rawModules.value);
+		}
+	});
 
 	/**
 	 * 从后端获取当前流水线配置。

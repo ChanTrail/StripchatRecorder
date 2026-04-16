@@ -508,7 +508,10 @@
 			await on("postprocess-started", (payload) => {
 				const p = payload as { path: string };
 				ppStatus.value[p.path] = "running";
-				ppProgress.value[p.path] = makePpProgress(0, 0, 0, 0, "", 0);
+				ppProgress.value[p.path] = makePpProgress(0, 0, 0, 0, "", 0, "", 0, {
+					processing: t("usePostprocess.processing"),
+					waiting: t("usePostprocess.waitingProgress"),
+				});
 			}),
 		);
 
@@ -533,6 +536,10 @@
 					p.pct,
 					prev?.moduleName ?? "",
 					prev?.modulePct ?? 0,
+					{
+						processing: t("usePostprocess.processing"),
+						waiting: t("usePostprocess.waitingProgress"),
+					},
 				);
 			}),
 		);

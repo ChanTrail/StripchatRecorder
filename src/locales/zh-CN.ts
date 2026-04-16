@@ -152,6 +152,7 @@ export default {
 		stats: "{enabled} 个执行节点 · 共 {total} 个节点",
 		picker: {
 			title: "选择模块",
+			description: "从可用模块列表中选择要添加到流水线的模块",
 			noModules: "未找到模块。",
 			noModulesHint: "请将模块可执行文件放入程序目录下的 modules/ 文件夹",
 			allAdded: "所有模块已添加",

@@ -45,6 +45,9 @@ pub struct ModuleInfo {
     pub description: String,
     /// 模块参数定义列表 / Module parameter definitions
     pub params: Vec<ParamDef>,
+    /// 多语言翻译（可选，key 为语言代码如 "en-US"）/ i18n translations (optional, key is locale like "en-US")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub i18n: Option<serde_json::Value>,
     /// 模块可执行文件路径（不序列化，运行时填充）/ Module executable path (not serialized, filled at runtime)
     #[serde(skip)]
     pub exe_path: PathBuf,

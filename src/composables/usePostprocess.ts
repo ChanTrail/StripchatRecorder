@@ -66,6 +66,19 @@ function formatPct2(value: number): string {
 	return `${clampPct2(value).toFixed(2)}%`;
 }
 
+/** 传入 makePpProgress 的 i18n 标签 / i18n labels passed to makePpProgress */
+export interface PpProgressLabels {
+	/** 无模块名时的占位文字 / Placeholder when module name is empty */
+	processing: string;
+	/** 无进度数据时的标签文字 / Label when no progress data is available */
+	waiting: string;
+}
+
+const DEFAULT_LABELS: PpProgressLabels = {
+	processing: "processing",
+	waiting: "waiting",
+};
+
 /**
  * 根据整体进度和模块进度构建 PpProgress 对象。
  * Build a PpProgress object from overall and module progress values.
@@ -76,6 +89,9 @@ function formatPct2(value: number): string {
  * @param moduleTotal - 当前模块总进度 / Current module total progress
  * @param moduleName - 当前模块名称 / Current module name
  * @param overallPctFallback - 整体进度的备用百分比（来自后端上报）/ Fallback overall percentage (from backend)
+ * @param prevModuleName - 上一次的模块名称（用于防止进度倒退）/ Previous module name (for regression prevention)
+ * @param prevModulePct - 上一次的模块进度（用于防止进度倒退）/ Previous module progress (for regression prevention)
+ * @param labels - i18n 标签 / i18n labels
  */
 export function makePpProgress(
 	overallDone: number,
@@ -86,6 +102,7 @@ export function makePpProgress(
 	overallPctFallback = 0,
 	prevModuleName = "",
 	prevModulePct = 0,
+	labels: PpProgressLabels = DEFAULT_LABELS,
 ): PpProgress {
 	const overallPctByNode =
 		overallTotal > 0 ? clampPct2((overallDone * 100) / overallTotal) : 0;
@@ -118,7 +135,7 @@ export function makePpProgress(
 		moduleExecLabel = `${moduleIndex}/${overallTotal}`;
 	}
 
-	const normalizedModuleName = moduleName.trim() || "processing";
+	const normalizedModuleName = moduleName.trim() || labels.processing;
 
 	return {
 		overallDone,
@@ -128,7 +145,7 @@ export function makePpProgress(
 		moduleDone,
 		moduleTotal,
 		modulePct,
-		moduleLabel: hasModuleProgress ? formatPct2(modulePct) : "waiting",
+		moduleLabel: hasModuleProgress ? formatPct2(modulePct) : labels.waiting,
 		moduleName: normalizedModuleName,
 		moduleExecLabel,
 		currentModuleText: moduleExecLabel
@@ -145,6 +162,12 @@ export function usePostprocess() {
 	const ppStore = usePostprocessStore();
 	const { toast } = useNotify();
 	const { t } = useI18n();
+
+	/** i18n 标签，传入 makePpProgress / i18n labels passed to makePpProgress */
+	const ppLabels = (): PpProgressLabels => ({
+		processing: t("usePostprocess.processing"),
+		waiting: t("usePostprocess.waitingProgress"),
+	});
 
 	/** 各文件路径的后处理状态 / Post-processing status per file path */
 	const ppStatus = ref<Record<string, PpStatus>>({});
@@ -215,7 +238,7 @@ export function usePostprocess() {
 	 */
 	async function runPostprocess(path: string) {
 		ppStatus.value[path] = "running";
-		ppProgress.value[path] = makePpProgress(0, 0, 0, 0, "", 0);
+		ppProgress.value[path] = makePpProgress(0, 0, 0, 0, "", 0, "", 0, ppLabels());
 		try {
 			await call("run_postprocess_cmd", { path });
 		} catch (e) {
@@ -258,6 +281,9 @@ export function usePostprocess() {
 						t.modTotal,
 						t.moduleName,
 						t.pct,
+						"",
+						0,
+						ppLabels(),
 					);
 					// 推断并缓存模块输出路径 / Infer and cache module output paths
 					const inferred = inferModuleOutputs(t.path);
@@ -287,6 +313,9 @@ export function usePostprocess() {
 						t.modTotal,
 						t.moduleName,
 						t.pct,
+						"",
+						0,
+						ppLabels(),
 					);
 				}
 			}
@@ -321,6 +350,9 @@ export function usePostprocess() {
 				0,
 				"",
 				100,
+				"",
+				0,
+				ppLabels(),
 			);
 			const names = payload.results.map((r) => r.moduleId).join(" → ");
 			toast(t("usePostprocess.done", { modules: names }), "success");

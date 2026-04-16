@@ -41,7 +41,7 @@ const PROGRESS_SCALE: usize = 10_000;
 /// Module metadata JSON, output via `--describe` argument.
 const DESCRIBE: &str = r#"{
   "id": "notify_telegram",
-  "name": "Telegram 通知 0.1.5",
+  "name": "Telegram 通知 0.2.0",
   "description": "将录制信息、封面图和视频通过 MTProto 发送到 Telegram（支持超过 50MB 的大文件，支持 HTTP/SOCKS5 代理）",
   "params": [
     {
@@ -86,7 +86,21 @@ const DESCRIBE: &str = r#"{
       "type": "boolean",
       "default": true
     }
-  ]
+  ],
+  "i18n": {
+    "en-US": {
+      "name": "Telegram Notification 0.1.5",
+      "description": "Send recording info, cover image and video to Telegram via MTProto (supports files over 50 MB and HTTP/SOCKS5 proxies)",
+      "params": {
+        "api_id": { "label": "API ID (from my.telegram.org)" },
+        "bot_token": { "label": "Bot Token (from @BotFather)" },
+        "chat_id": { "label": "Chat ID (supergroup format: -100xxxxxxxxxx)" },
+        "username": { "label": "Group username (required for supergroups, e.g. mygroupname, without @)" },
+        "proxy": { "label": "Proxy (http:// or socks5://)" },
+        "send_video": { "label": "Also send video file" }
+      }
+    }
+  }
 }"#;
 
 /// 带进度上报的异步读取器，包装任意 `AsyncRead` 实现。

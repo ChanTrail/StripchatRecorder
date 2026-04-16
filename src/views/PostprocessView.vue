@@ -379,7 +379,7 @@
 			<DialogContent class="max-w-sm">
 				<DialogHeader>
 					<DialogTitle>{{ t("postprocess.picker.title") }}</DialogTitle>
-					<DialogDescription class="sr-only">从可用模块列表中选择要添加到流水线的模块</DialogDescription>
+					<DialogDescription class="sr-only">{{ t("postprocess.picker.description") }}</DialogDescription>
 				</DialogHeader>
 				<div class="flex flex-col gap-1 mt-1">
 					<div
