@@ -123,3 +123,9 @@ Edit `src/locales/zh-CN.ts` or `src/locales/en-US.ts` directly, then rebuild:
 npm run dev   # dev mode with hot reload
 npm run build # production build
 ```
+
+---
+
+## Module Internationalization
+
+Post-processing modules provide their own translations by declaring an `i18n` field in the `--describe` JSON output. No frontend changes are required. See the [Module Development Guide](module-development.en.md#internationalization-i18n) for details.

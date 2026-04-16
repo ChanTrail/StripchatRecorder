@@ -12,12 +12,13 @@ This document describes how to write custom post-processing modules for Stripcha
 2. [Module Protocol](#module-protocol)
 3. [Metadata Descriptor](#metadata-descriptor)
 4. [Parameter Types](#parameter-types)
-5. [Pipeline Mechanics](#pipeline-mechanics)
-6. [Progress Reporting](#progress-reporting)
-7. [pp_utils Library](#pp_utils-library)
-8. [Full Example](#full-example)
-9. [Deploying a Module](#deploying-a-module)
-10. [Notes](#notes)
+5. [Internationalization (i18n)](#internationalization-i18n)
+6. [Pipeline Mechanics](#pipeline-mechanics)
+7. [Progress Reporting](#progress-reporting)
+8. [pp_utils Library](#pp_utils-library)
+9. [Full Example](#full-example)
+10. [Deploying a Module](#deploying-a-module)
+11. [Notes](#notes)
 
 ---
 
@@ -134,6 +135,52 @@ The `type` field of each param object determines how the UI renders it and the f
 	"options": ["webp", "jpg", "png"],
 }
 ```
+
+---
+
+## Internationalization (i18n)
+
+Modules can declare an optional `i18n` field in their DESCRIBE JSON to provide translations for `name`, `description`, and parameter `label` values. The host automatically selects the translation matching the user's current UI language, falling back to the original field values when no translation is found.
+
+### JSON Schema
+
+```jsonc
+{
+	"id": "my_module",
+	"name": "我的模块", // default language (Chinese)
+	"description": "模块功能描述",
+	"params": [
+		{
+			"key": "dest_dir",
+			"label": "目标目录路径",
+			"type": "string",
+			"default": ""
+		}
+	],
+	"i18n": {
+		"en-US": {
+			"name": "My Module",
+			"description": "Module description",
+			"params": {
+				"dest_dir": { "label": "Destination Directory" }
+			}
+		}
+		// additional locales can be added, e.g. "ja-JP": { ... }
+	}
+}
+```
+
+### Field Reference
+
+Keys in the `i18n` object are BCP 47 language tags (e.g. `"en-US"`, `"ja-JP"`). Each value is a translation object:
+
+| Field         | Type   | Required | Description                                                                                    |
+| ------------- | ------ | -------- | ---------------------------------------------------------------------------------------------- |
+| `name`        | string | No       | Module name in this locale; falls back to top-level `name` if omitted                         |
+| `description` | string | No       | Module description in this locale; falls back to top-level `description` if omitted            |
+| `params`      | object | No       | Keys are parameter `key` values, values are `{ "label": "..." }`; falls back to original label |
+
+All translation fields are optional. Any omitted field automatically falls back to its original value, so partial translations are fully supported.
 
 ---
 
@@ -315,7 +362,16 @@ const DESCRIBE: &str = r#"{
       "type": "string",
       "default": ""
     }
-  ]
+  ],
+  "i18n": {
+    "zh-CN": {
+      "name": "复制到目录",
+      "description": "将录制文件复制到指定目录",
+      "params": {
+        "dest_dir": { "label": "目标目录路径" }
+      }
+    }
+  }
 }"#;
 
 fn run() -> Result<(), String> {

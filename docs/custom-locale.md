@@ -123,3 +123,9 @@ reconnected: "サーバーに再接続しました。{n} 秒後にリロード�
 npm run dev   # 开发模式，热更新
 npm run build # 生产构建
 ```
+
+---
+
+## 模块的多语言支持
+
+后处理模块通过在 `--describe` 输出的 JSON 中声明 `i18n` 字段来提供多语言翻译，无需修改前端代码。详见[模块开发文档](module-development.md#多语言支持)。

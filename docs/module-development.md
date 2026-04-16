@@ -12,12 +12,13 @@
 2. [模块协议](#模块协议)
 3. [元数据描述](#元数据描述)
 4. [参数类型](#参数类型)
-5. [流水线机制](#流水线机制)
-6. [进度上报](#进度上报)
-7. [pp_utils 工具库](#pp_utils-工具库)
-8. [完整示例](#完整示例)
-9. [部署模块](#部署模块)
-10. [注意事项](#注意事项)
+5. [多语言支持](#多语言支持)
+6. [流水线机制](#流水线机制)
+7. [进度上报](#进度上报)
+8. [pp_utils 工具库](#pp_utils-工具库)
+9. [完整示例](#完整示例)
+10. [部署模块](#部署模块)
+11. [注意事项](#注意事项)
 
 ---
 
@@ -134,6 +135,52 @@ PP_INPUT=<path>  PP_PARAM_<KEY>=<value> ...  ./<module_binary>
 	"options": ["webp", "jpg", "png"],
 }
 ```
+
+---
+
+## 多语言支持
+
+模块可以在 DESCRIBE JSON 中声明可选的 `i18n` 字段，为 `name`、`description` 和参数 `label` 提供多语言翻译。主程序会根据用户当前的界面语言自动选择对应翻译，找不到时回退到原始字段值。
+
+### JSON 结构
+
+```jsonc
+{
+	"id": "my_module",
+	"name": "我的模块", // 默认语言（中文）
+	"description": "模块功能描述",
+	"params": [
+		{
+			"key": "dest_dir",
+			"label": "目标目录路径",
+			"type": "string",
+			"default": ""
+		}
+	],
+	"i18n": {
+		"en-US": {
+			"name": "My Module",
+			"description": "Module description",
+			"params": {
+				"dest_dir": { "label": "Destination Directory" }
+			}
+		}
+		// 可继续添加其他语言，如 "ja-JP": { ... }
+	}
+}
+```
+
+### 字段说明
+
+`i18n` 对象的键为 BCP 47 语言标签（如 `"en-US"`、`"ja-JP"`），值为该语言的翻译对象：
+
+| 字段          | 类型   | 必填 | 说明                                                   |
+| ------------- | ------ | ---- | ------------------------------------------------------ |
+| `name`        | string | 否   | 该语言下的模块名称，省略时使用顶层 `name`              |
+| `description` | string | 否   | 该语言下的模块描述，省略时使用顶层 `description`       |
+| `params`      | object | 否   | 键为参数 `key`，值为 `{ "label": "..." }`，省略时使用参数原始 `label` |
+
+所有翻译字段均为可选，未提供的字段自动回退到原始值，因此可以只翻译部分字段。
 
 ---
 
@@ -315,7 +362,16 @@ const DESCRIBE: &str = r#"{
       "type": "string",
       "default": ""
     }
-  ]
+  ],
+  "i18n": {
+    "en-US": {
+      "name": "Copy to Directory",
+      "description": "Copies the recording to a specified directory",
+      "params": {
+        "dest_dir": { "label": "Destination Directory" }
+      }
+    }
+  }
 }"#;
 
 fn run() -> Result<(), String> {
