@@ -145,10 +145,11 @@ export function useMerging() {
 	 */
 	function clearMergingForUsername(username: string) {
 		const next = new Map(mergingDirs.value);
-		// 通过路径中倒数第二段判断是否属于该主播
-		// Identify streamer by the second-to-last path segment
+		// 通过路径中倒数第二段判断是否属于该主播（过滤空段以兼容 Windows 路径）
+		// Identify streamer by the second-to-last path segment (filter empty segments for Windows paths)
 		for (const [dir] of next) {
-			if (dir.split(/[\\/]/).slice(-2, -1)[0] === username) next.delete(dir);
+			const parts = dir.split(/[\\/]/).filter(Boolean);
+			if (parts.slice(-2, -1)[0] === username) next.delete(dir);
 		}
 		mergingDirs.value = next;
 		for (const dir of Object.keys(mergeProgress.value)) {
@@ -156,8 +157,8 @@ export function useMerging() {
 		}
 		const nextWaiting = new Map(waitingMergeDirs.value);
 		for (const [dir] of nextWaiting) {
-			if (dir.split(/[\\/]/).slice(-2, -1)[0] === username)
-				nextWaiting.delete(dir);
+			const parts = dir.split(/[\\/]/).filter(Boolean);
+			if (parts.slice(-2, -1)[0] === username) nextWaiting.delete(dir);
 		}
 		waitingMergeDirs.value = nextWaiting;
 	}

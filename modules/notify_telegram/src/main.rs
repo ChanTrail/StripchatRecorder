@@ -41,7 +41,7 @@ const PROGRESS_SCALE: usize = 10_000;
 /// Module metadata JSON, output via `--describe` argument.
 const DESCRIBE: &str = r#"{
   "id": "notify_telegram",
-  "name": "Telegram 通知 0.1.4",
+  "name": "Telegram 通知 0.1.5",
   "description": "将录制信息、封面图和视频通过 MTProto 发送到 Telegram（支持超过 50MB 的大文件，支持 HTTP/SOCKS5 代理）",
   "params": [
     {

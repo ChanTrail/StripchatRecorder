@@ -10,10 +10,10 @@
 //! - Automatically triggering the post-processing pipeline after recording completes
 //! - Merging leftover incomplete recording segments on startup
 
+use crate::config::settings::AppState;
 use crate::core::emitter::{Emitter, EmitterExt};
 use crate::core::error::{AppError, Result};
 use crate::recording::hls::{get_url_prefix, parse_playlist};
-use crate::config::settings::AppState;
 use crate::streaming::stripchat::StripchatApi;
 use chrono::Local;
 use parking_lot::RwLock;
@@ -23,7 +23,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, LazyLock};
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::{Semaphore, mpsc};
 
 /// 全局 ffmpeg 并发信号量，限制同时运行的 ffmpeg 进程数（最多 4 个）。
 /// Global ffmpeg concurrency semaphore, limiting simultaneous ffmpeg processes (max 4).
@@ -242,7 +242,10 @@ impl RecorderManager {
                 }),
             );
 
-            manager.waiting_merge_dirs.write().insert(session_dir.clone());
+            manager
+                .waiting_merge_dirs
+                .write()
+                .insert(session_dir.clone());
 
             let video_duration_secs = tokio::task::spawn_blocking(move || {
                 let _startup_guard = state_clone
@@ -250,8 +253,14 @@ impl RecorderManager {
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
 
-                manager_clone.waiting_merge_dirs.write().remove(&session_dir_clone);
-                manager_clone.merging_dirs.write().insert(session_dir_clone.clone());
+                manager_clone
+                    .waiting_merge_dirs
+                    .write()
+                    .remove(&session_dir_clone);
+                manager_clone
+                    .merging_dirs
+                    .write()
+                    .insert(session_dir_clone.clone());
 
                 emitter_clone.emit(
                     "recording-merging",
@@ -271,7 +280,10 @@ impl RecorderManager {
                     &session_dir_str,
                 );
 
-                manager_clone.merging_dirs.write().remove(&session_dir_clone);
+                manager_clone
+                    .merging_dirs
+                    .write()
+                    .remove(&session_dir_clone);
 
                 if duration.is_some() {
                     let parent = session_dir_clone.parent().unwrap_or(&session_dir_clone);
@@ -302,6 +314,7 @@ impl RecorderManager {
                 "recording-stopped",
                 &serde_json::json!({
                     "username": username,
+                    "session_dir": session_dir.to_string_lossy(),
                     "record_duration_secs": record_duration_secs,
                     "video_duration_secs": video_duration_secs,
                 }),
@@ -781,6 +794,16 @@ fn merge_segments(
     match status {
         Ok(s) if s.success() => {
             tracing::info!("Merge complete: {:?}", output_path);
+            // 发送最终 100% 进度事件，避免进度卡在最后一次轮询值
+            // Emit final 100% progress event to prevent progress stalling at last poll value
+            emitter.emit(
+                "merge-progress",
+                &serde_json::json!({
+                    "session_dir": session_dir_str,
+                    "out_bytes": total_bytes,
+                    "total_bytes": total_bytes,
+                }),
+            );
             if let Err(e) = fs::remove_dir_all(session_dir) {
                 tracing::error!("Failed to remove segment dir: {}", e);
             }

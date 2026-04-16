@@ -252,7 +252,8 @@
 				failed++;
 			}
 		}
-		if (failed > 0) toast(t("recordings.delete.batchFailed", { count: failed }), "error");
+		if (failed > 0)
+			toast(t("recordings.delete.batchFailed", { count: failed }), "error");
 		else toast(t("recordings.delete.batchDone", { count }), "success");
 	}
 
@@ -341,6 +342,16 @@
 		);
 
 		unlisteners.push(
+			await on("sse-lagged", async () => {
+				// SSE 广播队列溢出，事件已丢失，重新从后端恢复完整状态
+				// SSE broadcast queue overflowed, events lost; restore full state from backend
+				await load();
+				await initFromBackend();
+				await restoreFromBackend();
+			}),
+		);
+
+		unlisteners.push(
 			await on("recording-deleted", (payload) => {
 				const p = payload as { path: string };
 				const isLocal = localDeletedPaths.has(p.path);
@@ -359,11 +370,18 @@
 
 		unlisteners.push(
 			await on("recording-file-update", async (payload) => {
-				const p = payload as { path: string; size_bytes: number; speed_bps?: number };
+				const p = payload as {
+					path: string;
+					size_bytes: number;
+					speed_bps?: number;
+				};
 				const f = files.value.find((r) => r.path === p.path);
 				if (f) {
 					if (p.speed_bps != null) {
-						recordingSpeed.value = { ...recordingSpeed.value, [p.path]: p.speed_bps };
+						recordingSpeed.value = {
+							...recordingSpeed.value,
+							[p.path]: p.speed_bps,
+						};
 					}
 					f.size_bytes = p.size_bytes;
 				} else {
@@ -473,7 +491,9 @@
 						}
 					}
 				}
-				await restoreFromBackend();
+				// 延迟调用，避免覆盖 postprocess-waiting/started 事件已设置的状态
+				// Delay to avoid overwriting state set by postprocess-waiting/started events
+				setTimeout(() => restoreFromBackend(), 300);
 			}),
 		);
 
@@ -600,26 +620,35 @@
 							class="absolute bottom-5 left-1/2 -translate-x-1/2 z-10 rounded-full bg-black/60 hover:bg-black/80 text-white text-xs px-3 py-1.5 backdrop-blur-sm"
 							@click="resetPreviewTransform"
 						>
-							{{ t("recordings.resetZoom", { pct: Math.round(previewScale * 100) }) }}
+							{{
+								t("recordings.resetZoom", {
+									pct: Math.round(previewScale * 100),
+								})
+							}}
 						</Button>
 					</Transition>
 				</div>
 			</DialogContent>
 		</Dialog>
 
-		<header ref="headerEl" class="flex items-start justify-between gap-4 shrink-0 px-6 pt-6 pb-4 sticky top-0 z-10 bg-background">
+		<header
+			ref="headerEl"
+			class="flex items-start justify-between gap-4 shrink-0 px-6 pt-6 pb-4 sticky top-0 z-10 bg-background"
+		>
 			<div class="flex-1 min-w-0">
 				<h1 class="text-xl font-bold mb-0.5">{{ t("recordings.title") }}</h1>
 				<div
 					class="flex items-center gap-3 text-sm text-muted-foreground flex-wrap"
 				>
-					<span>{{ t("recordings.subtitle.total", { count: files.length }) }}</span>
-					<span v-if="recordingCount > 0" class="text-destructive"
-						>{{ t("recordings.subtitle.recording", { count: recordingCount }) }}</span
-					>
-					<span v-if="selectedCount > 0" class="text-foreground"
-						>{{ t("recordings.subtitle.selected", { count: selectedCount }) }}</span
-					>
+					<span>{{
+						t("recordings.subtitle.total", { count: files.length })
+					}}</span>
+					<span v-if="recordingCount > 0" class="text-destructive">{{
+						t("recordings.subtitle.recording", { count: recordingCount })
+					}}</span>
+					<span v-if="selectedCount > 0" class="text-foreground">{{
+						t("recordings.subtitle.selected", { count: selectedCount })
+					}}</span>
 					<span v-if="totalRecordingSpeed > 0">
 						{{ t("recordings.subtitle.totalSpeed") }}
 						<span class="text-foreground tabular-nums"
@@ -668,319 +697,356 @@
 				>
 					{{ t("recordings.deleteSelected", { count: selectedCount }) }}
 				</Button>
-				<Button v-if="isTauri" variant="outline" @click="openDir"
-					>{{ t("recordings.openDir") }}</Button
-				>
+				<Button v-if="isTauri" variant="outline" @click="openDir">{{
+					t("recordings.openDir")
+				}}</Button>
 			</div>
 		</header>
 
 		<div class="px-6 pb-6">
-		<div
-			v-if="loading && files.length === 0"
-			class="text-center text-muted-foreground py-16"
-		>
-			{{ t("recordings.loading") }}
-		</div>
-		<div
-			v-else-if="files.length === 0"
-			class="text-center text-muted-foreground py-16"
-		>
-			{{ t("recordings.empty") }}
-		</div>
+			<div
+				v-if="loading && files.length === 0"
+				class="text-center text-muted-foreground py-16"
+			>
+				{{ t("recordings.loading") }}
+			</div>
+			<div
+				v-else-if="files.length === 0"
+				class="text-center text-muted-foreground py-16"
+			>
+				{{ t("recordings.empty") }}
+			</div>
 
-		<Table v-else>
-			<TableHeader class="sticky z-10 bg-background" :style="{ top: `${headerHeight}px` }">
-				<TableRow>
-					<TableHead class="w-8">
-						<Checkbox
-							:model-value="getAllChecked()"
-							@update:model-value="setAllChecked"
-						/>
-					</TableHead>
-					<TableHead class="w-px whitespace-nowrap">{{ t("recordings.table.filename") }}</TableHead>
-					<TableHead
-						class="cursor-pointer select-none whitespace-nowrap"
-						@click="toggleSort('size_bytes')"
-					>
-						{{ t("recordings.table.size") }}
-						<component
-							:is="sortIcon('size_bytes')"
-							class="inline size-3.5 ml-0.5"
-						/>
-					</TableHead>
-					<TableHead
-						class="cursor-pointer select-none whitespace-nowrap"
-						@click="toggleSort('started_at')"
-					>
-						{{ t("recordings.table.startTime") }}
-						<component
-							:is="sortIcon('started_at')"
-							class="inline size-3.5 ml-0.5"
-						/>
-					</TableHead>
-					<TableHead>{{ t("recordings.table.recordDuration") }}</TableHead>
-					<TableHead
-						class="cursor-pointer select-none whitespace-nowrap"
-						@click="toggleSort('video_duration_secs')"
-					>
-						{{ t("recordings.table.videoDuration") }}
-						<component
-							:is="sortIcon('video_duration_secs')"
-							class="inline size-3.5 ml-0.5"
-						/>
-					</TableHead>
-					<TableHead>{{ t("recordings.table.speed") }}</TableHead>
-					<TableHead class="min-w-45">{{ t("recordings.table.postprocess") }}</TableHead>
-					<TableHead>{{ t("recordings.table.actions") }}</TableHead>
-				</TableRow>
-			</TableHeader>
-			<TableBody>
-				<template v-for="group in groups" :key="group.username">
-					<TableRow
-						class="bg-muted/40 hover:bg-muted/60 cursor-pointer"
-						@click="toggleGroup(group.username)"
-					>
-						<TableCell class="w-8" @click.stop>
+			<Table v-else>
+				<TableHeader
+					class="sticky z-10 bg-background"
+					:style="{ top: `${headerHeight}px` }"
+				>
+					<TableRow>
+						<TableHead class="w-8">
 							<Checkbox
-								:model-value="getGroupChecked(group)"
-								@update:model-value="setGroupChecked(group)"
+								:model-value="getAllChecked()"
+								@update:model-value="setAllChecked"
 							/>
-						</TableCell>
-						<TableCell colspan="7" class="font-semibold">
-							<span class="mr-2 text-muted-foreground text-xs">{{
-								collapsedGroups.has(group.username) ? "▶" : "▼"
-							}}</span>
-							{{ group.username }}
-							<Badge
-								v-if="group.hasRecording"
-								variant="destructive"
-								class="ml-2 text-[10px]"
-								>{{ t("recordings.status.recording") }}</Badge
-							>
-							<span class="ml-2 text-xs text-muted-foreground font-normal">
-								{{ t("recordings.group.fileCount", { count: group.files.length }) }} ·
-								{{ formatSize(group.totalSize) }}
-							</span>
-						</TableCell>
-						<TableCell />
+						</TableHead>
+						<TableHead class="w-px whitespace-nowrap">{{
+							t("recordings.table.filename")
+						}}</TableHead>
+						<TableHead
+							class="cursor-pointer select-none whitespace-nowrap"
+							@click="toggleSort('size_bytes')"
+						>
+							{{ t("recordings.table.size") }}
+							<component
+								:is="sortIcon('size_bytes')"
+								class="inline size-3.5 ml-0.5"
+							/>
+						</TableHead>
+						<TableHead
+							class="cursor-pointer select-none whitespace-nowrap"
+							@click="toggleSort('started_at')"
+						>
+							{{ t("recordings.table.startTime") }}
+							<component
+								:is="sortIcon('started_at')"
+								class="inline size-3.5 ml-0.5"
+							/>
+						</TableHead>
+						<TableHead>{{ t("recordings.table.recordDuration") }}</TableHead>
+						<TableHead
+							class="cursor-pointer select-none whitespace-nowrap"
+							@click="toggleSort('video_duration_secs')"
+						>
+							{{ t("recordings.table.videoDuration") }}
+							<component
+								:is="sortIcon('video_duration_secs')"
+								class="inline size-3.5 ml-0.5"
+							/>
+						</TableHead>
+						<TableHead>{{ t("recordings.table.speed") }}</TableHead>
+						<TableHead class="min-w-45">{{
+							t("recordings.table.postprocess")
+						}}</TableHead>
+						<TableHead>{{ t("recordings.table.actions") }}</TableHead>
 					</TableRow>
+				</TableHeader>
+				<TableBody>
+					<template v-for="group in groups" :key="group.username">
+						<TableRow
+							class="bg-muted/40 hover:bg-muted/60 cursor-pointer"
+							@click="toggleGroup(group.username)"
+						>
+							<TableCell class="w-8" @click.stop>
+								<Checkbox
+									:model-value="getGroupChecked(group)"
+									@update:model-value="setGroupChecked(group)"
+								/>
+							</TableCell>
+							<TableCell colspan="7" class="font-semibold">
+								<span class="mr-2 text-muted-foreground text-xs">{{
+									collapsedGroups.has(group.username) ? "▶" : "▼"
+								}}</span>
+								{{ group.username }}
+								<Badge
+									v-if="group.hasRecording"
+									variant="destructive"
+									class="ml-2 text-[10px]"
+									>{{ t("recordings.status.recording") }}</Badge
+								>
+								<span class="ml-2 text-xs text-muted-foreground font-normal">
+									{{
+										t("recordings.group.fileCount", {
+											count: group.files.length,
+										})
+									}}
+									·
+									{{ formatSize(group.totalSize) }}
+								</span>
+							</TableCell>
+							<TableCell />
+						</TableRow>
 
-					<template v-if="!collapsedGroups.has(group.username)">
-						<TableRow v-for="f in group.files" :key="f.path" class="relative">
-							<template v-if="isMerging(f.path)">
-								<TableCell class="w-8">
-									<Checkbox :model-value="false" :disabled="true" />
-								</TableCell>
-								<TableCell class="font-medium w-px whitespace-nowrap pl-7">
-									<div class="flex items-center gap-1.5">
-										<span>{{ f.name }}</span>
-										<Badge variant="outline" class="text-[10px] shrink-0">{{
-											isWaitingMerge(f.path) ? t("recordings.status.waitingMerge") : t("recordings.status.merging")
-										}}</Badge>
-									</div>
-								</TableCell>
-								<td colspan="7" class="p-2 align-middle w-full">
-									<div class="flex items-center gap-3 h-9 w-full">
-										<Loader2
-											class="size-4 animate-spin shrink-0 text-muted-foreground"
+						<template v-if="!collapsedGroups.has(group.username)">
+							<TableRow v-for="f in group.files" :key="f.path" class="relative">
+								<template v-if="isMerging(f.path)">
+									<TableCell class="w-8">
+										<Checkbox :model-value="false" :disabled="true" />
+									</TableCell>
+									<TableCell class="font-medium w-px whitespace-nowrap pl-7">
+										<div class="flex items-center gap-1.5">
+											<span>{{ f.name }}</span>
+											<Badge variant="outline" class="text-[10px] shrink-0">{{
+												isWaitingMerge(f.path)
+													? t("recordings.status.waitingMerge")
+													: t("recordings.status.merging")
+											}}</Badge>
+										</div>
+									</TableCell>
+									<td colspan="7" class="p-2 align-middle w-full">
+										<div class="flex items-center gap-3 h-9 w-full">
+											<Loader2
+												class="size-4 animate-spin shrink-0 text-muted-foreground"
+											/>
+											<span class="text-xs text-muted-foreground shrink-0">{{
+												isWaitingMerge(f.path)
+													? t("recordings.status.waitingMergeVideo")
+													: t("recordings.status.mergingVideo")
+											}}</span>
+											<template v-if="!isWaitingMerge(f.path)">
+												<div
+													class="flex-1 bg-muted rounded-full h-1.5 overflow-hidden"
+												>
+													<div
+														class="h-full bg-primary rounded-full transition-all duration-500"
+														:style="{
+															width: `${getMergeProgress(f.path) ?? 0}%`,
+														}"
+													/>
+												</div>
+												<span
+													class="tabular-nums text-xs text-muted-foreground w-14 shrink-0"
+													>{{
+														(getMergeProgress(f.path) ?? 0).toFixed(2)
+													}}%</span
+												>
+											</template>
+										</div>
+									</td>
+								</template>
+
+								<template v-else>
+									<TableCell class="w-8">
+										<Checkbox
+											:model-value="getFileChecked(f.path)"
+											:disabled="f.is_recording"
+											@update:model-value="setFileChecked(f.path)"
 										/>
-										<span class="text-xs text-muted-foreground shrink-0">{{
-											isWaitingMerge(f.path) ? t("recordings.status.waitingMergeVideo") : t("recordings.status.mergingVideo")
+									</TableCell>
+									<TableCell class="font-medium w-px whitespace-nowrap pl-7">
+										{{ f.name }}
+										<Badge
+											v-if="f.is_recording"
+											variant="destructive"
+											class="ml-1.5 text-[10px]"
+											>{{ t("recordings.status.recording") }}</Badge
+										>
+									</TableCell>
+									<TableCell class="tabular-nums">{{
+										formatSize(f.size_bytes)
+									}}</TableCell>
+									<TableCell class="tabular-nums text-muted-foreground">{{
+										new Date(f.started_at).toLocaleString()
+									}}</TableCell>
+									<TableCell class="tabular-nums">
+										<span v-if="f.is_recording" class="text-destructive">{{
+											formatDuration(elapsed[f.path] ?? 0)
 										}}</span>
-										<template v-if="!isWaitingMerge(f.path)">
+										<span
+											v-else-if="frozenDuration[f.path] != null"
+											class="text-muted-foreground"
+											>{{ formatDuration(frozenDuration[f.path]) }}</span
+										>
+										<span v-else class="text-muted-foreground">—</span>
+									</TableCell>
+									<TableCell class="tabular-nums">
+										<span v-if="f.video_duration_secs != null">{{
+											formatDuration(f.video_duration_secs)
+										}}</span>
+										<span v-else-if="frozenVideoDuration[f.path] != null">{{
+											formatDuration(frozenVideoDuration[f.path])
+										}}</span>
+										<span v-else class="text-muted-foreground">—</span>
+									</TableCell>
+									<TableCell class="tabular-nums">
+										<span
+											v-if="f.is_recording && recordingSpeed[f.path] != null"
+											class="text-xs"
+										>
+											{{ formatSize(recordingSpeed[f.path]) }}/s
+										</span>
+										<span v-else class="text-muted-foreground">—</span>
+									</TableCell>
+									<TableCell class="min-w-45">
+										<div v-if="!f.is_recording">
 											<div
-												class="flex-1 bg-muted rounded-full h-1.5 overflow-hidden"
+												v-if="
+													ppStatus[f.path] === 'running' && ppProgress[f.path]
+												"
+												class="flex flex-col gap-1.5"
 											>
 												<div
-													class="h-full bg-primary rounded-full transition-all duration-500"
-													:style="{
-														width: `${getMergeProgress(f.path) ?? 0}%`,
-													}"
+													class="flex items-center justify-between text-xs text-muted-foreground"
+												>
+													<span>{{
+														ppProgress[f.path].moduleExecLabel
+															? t(
+																	"recordings.status.overallProgressWithLabel",
+																	{ label: ppProgress[f.path].moduleExecLabel },
+																)
+															: t("recordings.status.overallProgress")
+													}}</span>
+													<span class="tabular-nums shrink-0">{{
+														ppProgress[f.path].overallLabel
+													}}</span>
+												</div>
+												<Progress
+													:model-value="ppProgress[f.path].overallPct"
+													:animated="false"
+													class="h-1.5"
+												/>
+												<div
+													class="flex items-center justify-between text-xs text-muted-foreground"
+												>
+													<span class="truncate max-w-50">{{
+														ppProgress[f.path].moduleName === "processing"
+															? t("usePostprocess.processing")
+															: ppProgress[f.path].moduleName
+													}}</span>
+													<span class="tabular-nums shrink-0">{{
+														ppProgress[f.path].moduleLabel === "waiting"
+															? t("usePostprocess.waitingProgress")
+															: ppProgress[f.path].moduleLabel
+													}}</span>
+												</div>
+												<Progress
+													:model-value="ppProgress[f.path].modulePct"
+													:animated="false"
+													class="h-1.5"
 												/>
 											</div>
-											<span
-												class="tabular-nums text-xs text-muted-foreground w-14 shrink-0"
-												>{{ (getMergeProgress(f.path) ?? 0).toFixed(2) }}%</span
-											>
-										</template>
-									</div>
-								</td>
-							</template>
-
-							<template v-else>
-								<TableCell class="w-8">
-									<Checkbox
-										:model-value="getFileChecked(f.path)"
-										:disabled="f.is_recording"
-										@update:model-value="setFileChecked(f.path)"
-									/>
-								</TableCell>
-								<TableCell class="font-medium w-px whitespace-nowrap pl-7">
-									{{ f.name }}
-									<Badge
-										v-if="f.is_recording"
-										variant="destructive"
-										class="ml-1.5 text-[10px]"
-										>{{ t("recordings.status.recording") }}</Badge
-									>
-								</TableCell>
-								<TableCell class="tabular-nums">{{
-									formatSize(f.size_bytes)
-								}}</TableCell>
-								<TableCell class="tabular-nums text-muted-foreground">{{
-									new Date(f.started_at).toLocaleString()
-								}}</TableCell>
-								<TableCell class="tabular-nums">
-									<span v-if="f.is_recording" class="text-destructive">{{
-										formatDuration(elapsed[f.path] ?? 0)
-									}}</span>
-									<span
-										v-else-if="frozenDuration[f.path] != null"
-										class="text-muted-foreground"
-										>{{ formatDuration(frozenDuration[f.path]) }}</span
-									>
-									<span v-else class="text-muted-foreground">—</span>
-								</TableCell>
-								<TableCell class="tabular-nums">
-									<span v-if="f.video_duration_secs != null">{{
-										formatDuration(f.video_duration_secs)
-									}}</span>
-									<span v-else-if="frozenVideoDuration[f.path] != null">{{
-										formatDuration(frozenVideoDuration[f.path])
-									}}</span>
-									<span v-else class="text-muted-foreground">—</span>
-								</TableCell>
-								<TableCell class="tabular-nums">
-									<span
-										v-if="f.is_recording && recordingSpeed[f.path] != null"
-										class="text-xs"
-									>
-										{{ formatSize(recordingSpeed[f.path]) }}/s
-									</span>
-									<span v-else class="text-muted-foreground">—</span>
-								</TableCell>
-								<TableCell class="min-w-45">
-									<div v-if="!f.is_recording">
-										<div
-											v-if="
-												ppStatus[f.path] === 'running' && ppProgress[f.path]
-											"
-											class="flex flex-col gap-1.5"
-										>
 											<div
-												class="flex items-center justify-between text-xs text-muted-foreground"
+												v-else-if="ppStatus[f.path] === 'waiting'"
+												class="flex items-center gap-1.5 text-xs text-muted-foreground"
 											>
-												<span>{{
-													ppProgress[f.path].moduleExecLabel
-														? t("recordings.status.overallProgressWithLabel", { label: ppProgress[f.path].moduleExecLabel })
-														: t("recordings.status.overallProgress")
-												}}</span>
-												<span class="tabular-nums shrink-0">{{
-													ppProgress[f.path].overallLabel
-												}}</span>
+												<Loader2 class="size-3 animate-spin shrink-0" />
+												<span>{{ t("recordings.status.waiting") }}</span>
 											</div>
-											<Progress
-												:model-value="ppProgress[f.path].overallPct"
-												:animated="false"
-												class="h-1.5"
-											/>
 											<div
-												class="flex items-center justify-between text-xs text-muted-foreground"
+												v-else-if="
+													ppStatus[f.path] === 'done' && ppProgress[f.path]
+												"
+												class="flex flex-col gap-1.5"
 											>
-												<span class="truncate max-w-50">{{
-													ppProgress[f.path].moduleName === "processing"
-														? t("usePostprocess.processing")
-														: ppProgress[f.path].moduleName
-												}}</span>
-												<span class="tabular-nums shrink-0">{{
-													ppProgress[f.path].moduleLabel === "waiting"
-														? t("usePostprocess.waitingProgress")
-														: ppProgress[f.path].moduleLabel
-												}}</span>
+												<div class="text-lg text-green-500">
+													{{ t("recordings.status.done") }}
+												</div>
 											</div>
-											<Progress
-												:model-value="ppProgress[f.path].modulePct"
-												:animated="false"
-												class="h-1.5"
-											/>
-										</div>
-										<div
-											v-else-if="ppStatus[f.path] === 'waiting'"
-											class="flex items-center gap-1.5 text-xs text-muted-foreground"
-										>
-											<Loader2 class="size-3 animate-spin shrink-0" />
-											<span>{{ t("recordings.status.waiting") }}</span>
-										</div>
-										<div
-											v-else-if="
-												ppStatus[f.path] === 'done' && ppProgress[f.path]
-											"
-											class="flex flex-col gap-1.5"
-										>
-											<div class="text-lg text-green-500">{{ t("recordings.status.done") }}</div>
-										</div>
-										<div
-											v-else-if="ppStatus[f.path] === 'error'"
-											class="text-lg text-destructive"
-										>
-											{{ t("recordings.status.failed") }}
+											<div
+												v-else-if="ppStatus[f.path] === 'error'"
+												class="text-lg text-destructive"
+											>
+												{{ t("recordings.status.failed") }}
+											</div>
+											<span v-else class="text-xs text-muted-foreground"
+												>—</span
+											>
 										</div>
 										<span v-else class="text-xs text-muted-foreground">—</span>
-									</div>
-									<span v-else class="text-xs text-muted-foreground">—</span>
-								</TableCell>
-								<TableCell>
-									<div class="flex gap-1.5">
-										<Button
-											size="sm"
-											variant="outline"
-											:disabled="f.is_recording"
-											:title="f.is_recording ? t('recordings.actions.playDisabled') : ''"
-											@click="openFile(f.path)"
-											>{{ t("recordings.actions.play") }}</Button
-										>
-										<Button
-											v-if="moduleOutputs[f.path]?.['contact_sheet']"
-											size="sm"
-											variant="outline"
-											title="查看 Contact Sheet 预览图"
-											@click="openModuleOutput(f.path, 'contact_sheet')"
-										>
-											<Image class="size-3.5" />
-										</Button>
-										<Button
-											size="sm"
-											variant="outline"
-											:disabled="
-												f.is_recording ||
-												ppStatus[f.path] === 'running' ||
-												ppStatus[f.path] === 'waiting'
-											"
-											:title="f.is_recording ? t('recordings.status.recording') : ''"
-											@click="runPostprocess(f.path)"
-										>
-											<Loader2
-												v-if="ppStatus[f.path] === 'running'"
-												class="size-3.5 animate-spin"
-											/>
-											<span v-else>{{ t("recordings.actions.postprocess") }}</span>
-										</Button>
-										<Button
-											size="sm"
-											variant="destructive"
-											:disabled="f.is_recording"
-											:title="f.is_recording ? t('recordings.actions.deleteDisabled') : ''"
-											@click="deleteFile(f)"
-											>{{ t("recordings.actions.delete") }}</Button
-										>
-									</div>
-								</TableCell>
-							</template>
-						</TableRow>
+									</TableCell>
+									<TableCell>
+										<div class="flex gap-1.5">
+											<Button
+												size="sm"
+												variant="outline"
+												:disabled="f.is_recording"
+												:title="
+													f.is_recording
+														? t('recordings.actions.playDisabled')
+														: ''
+												"
+												@click="openFile(f.path)"
+												>{{ t("recordings.actions.play") }}</Button
+											>
+											<Button
+												v-if="moduleOutputs[f.path]?.['contact_sheet']"
+												size="sm"
+												variant="outline"
+												title="查看 Contact Sheet 预览图"
+												@click="openModuleOutput(f.path, 'contact_sheet')"
+											>
+												<Image class="size-3.5" />
+											</Button>
+											<Button
+												size="sm"
+												variant="outline"
+												:disabled="
+													f.is_recording ||
+													ppStatus[f.path] === 'running' ||
+													ppStatus[f.path] === 'waiting'
+												"
+												:title="
+													f.is_recording ? t('recordings.status.recording') : ''
+												"
+												@click="runPostprocess(f.path)"
+											>
+												<Loader2
+													v-if="ppStatus[f.path] === 'running'"
+													class="size-3.5 animate-spin"
+												/>
+												<span v-else>{{
+													t("recordings.actions.postprocess")
+												}}</span>
+											</Button>
+											<Button
+												size="sm"
+												variant="destructive"
+												:disabled="f.is_recording"
+												:title="
+													f.is_recording
+														? t('recordings.actions.deleteDisabled')
+														: ''
+												"
+												@click="deleteFile(f)"
+												>{{ t("recordings.actions.delete") }}</Button
+											>
+										</div>
+									</TableCell>
+								</template>
+							</TableRow>
+						</template>
 					</template>
-				</template>
-			</TableBody>
-		</Table>
+				</TableBody>
+			</Table>
 		</div>
 	</div>
 </template>
@@ -995,4 +1061,3 @@
 		opacity: 0;
 	}
 </style>
-

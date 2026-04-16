@@ -14,17 +14,18 @@ use pp_utils::{
     emit_progress_step, find_cover, format_bytes, format_duration, format_speed, param, parse_stem,
     video_duration, PROGRESS_SCALE,
 };
+use socket2::{Domain, Socket, Type};
 use std::env;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
-use socket2::{Socket, Domain, Type};
 
 const DESCRIBE: &str = r#"{
   "id": "notify_discord",
-  "name": "Discord 通知 0.1.2",
+  "name": "Discord 通知 0.1.3",
   "description": "将录制信息和封面图发送到 Discord Webhook",
   "params": [
     {
@@ -48,6 +49,61 @@ const DESCRIBE: &str = r#"{
   ]
 }"#;
 
+/// 获取临时文件目录（优先使用可执行文件同目录下的 tmp 子目录）。
+/// Get the temporary file directory (prefers a `tmp` subdirectory next to the executable).
+fn tmp_dir() -> PathBuf {
+    let base = std::env::var("PP_EXE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+                .unwrap_or_else(|| PathBuf::from("."))
+        });
+    let tmp = base.join("tmp");
+    fs::create_dir_all(&tmp).ok();
+    tmp
+}
+
+/// 若封面图超过 Discord 的 10MB 限制，用 ffmpeg 逐步降低质量压缩到限制以内。
+/// If the cover image exceeds Discord's 10 MB limit, compress it with ffmpeg
+/// by progressively lowering quality until it fits.
+fn resize_cover_for_discord(img: &Path) -> Result<Option<PathBuf>, String> {
+    const MAX_BYTES: u64 = 10 * 1024 * 1024;
+
+    let file_size = fs::metadata(img).map(|m| m.len()).unwrap_or(0);
+    if file_size < MAX_BYTES {
+        return Ok(None); // 无需处理 / no action needed
+    }
+
+    let stem = img.file_stem().and_then(|s| s.to_str()).unwrap_or("cover");
+    let out_path = tmp_dir().join(format!("{}_dc_resized.jpg", stem));
+
+    // 逐步降低 JPEG 质量（ffmpeg -q:v 越大质量越低）直到文件小于 10MB
+    // Progressively lower JPEG quality until the file is under 10 MB
+    for &q in &["5", "10", "15", "20", "25", "31"] {
+        let status = Command::new("ffmpeg")
+            .args(["-y", "-i"])
+            .arg(img)
+            .args(["-q:v", q])
+            .arg(&out_path)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map_err(|e| format!("ffmpeg not found: {}", e))?;
+
+        if !status.success() {
+            return Err("ffmpeg failed to compress cover image for Discord".to_string());
+        }
+
+        if fs::metadata(&out_path).map(|m| m.len()).unwrap_or(u64::MAX) < MAX_BYTES {
+            return Ok(Some(out_path));
+        }
+    }
+
+    Err("cover image exceeds Discord 10 MB limit even after compression".to_string())
+}
+
 /// 解析 URL，返回 (host, port, path)
 fn parse_url(url: &str) -> Result<(String, u16, String), String> {
     let url = url.trim();
@@ -65,7 +121,9 @@ fn parse_url(url: &str) -> Result<(String, u16, String), String> {
         (rest, "/".to_string())
     };
     let (host, port) = if let Some(idx) = authority.rfind(':') {
-        let p: u16 = authority[idx + 1..].parse().map_err(|_| "invalid port".to_string())?;
+        let p: u16 = authority[idx + 1..]
+            .parse()
+            .map_err(|_| "invalid port".to_string())?;
         (authority[..idx].to_string(), p)
     } else {
         (authority.to_string(), default_port)
@@ -74,46 +132,73 @@ fn parse_url(url: &str) -> Result<(String, u16, String), String> {
 }
 
 /// 通过 CONNECT 隧道建立到目标的 TcpStream（HTTP 代理）
-fn connect_via_http_proxy_stream(mut stream: TcpStream, target_host: &str, target_port: u16)
-    -> Result<TcpStream, String>
-{
+fn connect_via_http_proxy_stream(
+    mut stream: TcpStream,
+    target_host: &str,
+    target_port: u16,
+) -> Result<TcpStream, String> {
     let req = format!(
         "CONNECT {}:{} HTTP/1.1\r\nHost: {}:{}\r\nProxy-Connection: keep-alive\r\n\r\n",
         target_host, target_port, target_host, target_port
     );
-    stream.write_all(req.as_bytes()).map_err(|e| format!("proxy CONNECT write: {}", e))?;
+    stream
+        .write_all(req.as_bytes())
+        .map_err(|e| format!("proxy CONNECT write: {}", e))?;
     let mut buf = Vec::new();
     let mut tmp = [0u8; 1];
     loop {
-        stream.read_exact(&mut tmp).map_err(|e| format!("proxy CONNECT read: {}", e))?;
+        stream
+            .read_exact(&mut tmp)
+            .map_err(|e| format!("proxy CONNECT read: {}", e))?;
         buf.push(tmp[0]);
-        if buf.ends_with(b"\r\n\r\n") { break; }
-        if buf.len() > 4096 { return Err("proxy CONNECT response too large".to_string()); }
+        if buf.ends_with(b"\r\n\r\n") {
+            break;
+        }
+        if buf.len() > 4096 {
+            return Err("proxy CONNECT response too large".to_string());
+        }
     }
     let resp = String::from_utf8_lossy(&buf);
     if !resp.starts_with("HTTP/1.1 200") && !resp.starts_with("HTTP/1.0 200") {
-        return Err(format!("proxy CONNECT rejected: {}", resp.lines().next().unwrap_or("")));
+        return Err(format!(
+            "proxy CONNECT rejected: {}",
+            resp.lines().next().unwrap_or("")
+        ));
     }
     Ok(stream)
 }
 
 /// 通过 SOCKS5 代理建立 TcpStream
-fn connect_via_socks5_stream(mut stream: TcpStream, target_host: &str, target_port: u16)
-    -> Result<TcpStream, String>
-{
-    stream.write_all(&[0x05, 0x01, 0x00]).map_err(|e| format!("socks5 write: {}", e))?;
+fn connect_via_socks5_stream(
+    mut stream: TcpStream,
+    target_host: &str,
+    target_port: u16,
+) -> Result<TcpStream, String> {
+    stream
+        .write_all(&[0x05, 0x01, 0x00])
+        .map_err(|e| format!("socks5 write: {}", e))?;
     let mut resp = [0u8; 2];
-    stream.read_exact(&mut resp).map_err(|e| format!("socks5 read: {}", e))?;
-    if resp[1] != 0x00 { return Err("socks5 auth not accepted".to_string()); }
+    stream
+        .read_exact(&mut resp)
+        .map_err(|e| format!("socks5 read: {}", e))?;
+    if resp[1] != 0x00 {
+        return Err("socks5 auth not accepted".to_string());
+    }
     let host_bytes = target_host.as_bytes();
     let mut req = vec![0x05, 0x01, 0x00, 0x03, host_bytes.len() as u8];
     req.extend_from_slice(host_bytes);
     req.push((target_port >> 8) as u8);
     req.push((target_port & 0xff) as u8);
-    stream.write_all(&req).map_err(|e| format!("socks5 write: {}", e))?;
+    stream
+        .write_all(&req)
+        .map_err(|e| format!("socks5 write: {}", e))?;
     let mut resp2 = [0u8; 10];
-    stream.read_exact(&mut resp2).map_err(|e| format!("socks5 read: {}", e))?;
-    if resp2[1] != 0x00 { return Err(format!("socks5 connect rejected: {}", resp2[1])); }
+    stream
+        .read_exact(&mut resp2)
+        .map_err(|e| format!("socks5 read: {}", e))?;
+    if resp2[1] != 0x00 {
+        return Err(format!("socks5 connect rejected: {}", resp2[1]));
+    }
     Ok(stream)
 }
 
@@ -122,7 +207,11 @@ fn connect_via_socks5_stream(mut stream: TcpStream, target_host: &str, target_po
 fn tcp_connect(host: &str, port: u16, proxy: &str) -> Result<TcpStream, String> {
     // 用 socket2 建立连接，以便设置 SO_SNDBUF
     let make_stream = |addr: std::net::SocketAddr| -> Result<TcpStream, String> {
-        let domain = if addr.is_ipv6() { Domain::IPV6 } else { Domain::IPV4 };
+        let domain = if addr.is_ipv6() {
+            Domain::IPV6
+        } else {
+            Domain::IPV4
+        };
         let sock = Socket::new(domain, Type::STREAM, None)
             .map_err(|e| format!("socket create failed: {}", e))?;
         // 32 KB 发送缓冲区：让 write_all 在数据真正发出前阻塞，进度才是真实的
@@ -143,10 +232,14 @@ fn tcp_connect(host: &str, port: u16, proxy: &str) -> Result<TcpStream, String> 
                     .map(|i| i.collect())
                     .unwrap_or_default()
             });
-        let addr = addrs.into_iter().next()
+        let addr = addrs
+            .into_iter()
+            .next()
             .ok_or_else(|| format!("could not resolve host: {}", host))?;
         let stream = make_stream(addr)?;
-        stream.set_write_timeout(Some(Duration::from_secs(600))).ok();
+        stream
+            .set_write_timeout(Some(Duration::from_secs(600)))
+            .ok();
         stream.set_read_timeout(Some(Duration::from_secs(600))).ok();
         return Ok(stream);
     }
@@ -165,7 +258,14 @@ fn tcp_connect(host: &str, port: u16, proxy: &str) -> Result<TcpStream, String> 
         let p: u16 = proxy_authority[idx + 1..].parse().unwrap_or(1080);
         (&proxy_authority[..idx], p)
     } else {
-        (proxy_authority, if proxy_scheme == "socks5" { 1080u16 } else { 8080u16 })
+        (
+            proxy_authority,
+            if proxy_scheme == "socks5" {
+                1080u16
+            } else {
+                8080u16
+            },
+        )
     };
 
     // 代理连接：先用 socket2 连到代理，设置小缓冲区，再做隧道握手
@@ -177,9 +277,15 @@ fn tcp_connect(host: &str, port: u16, proxy: &str) -> Result<TcpStream, String> 
                 .map(|i| i.collect())
                 .unwrap_or_default()
         });
-    let proxy_addr = proxy_addrs.into_iter().next()
+    let proxy_addr = proxy_addrs
+        .into_iter()
+        .next()
         .ok_or_else(|| format!("could not resolve proxy: {}", proxy_host))?;
-    let domain = if proxy_addr.is_ipv6() { Domain::IPV6 } else { Domain::IPV4 };
+    let domain = if proxy_addr.is_ipv6() {
+        Domain::IPV6
+    } else {
+        Domain::IPV4
+    };
     let sock = Socket::new(domain, Type::STREAM, None)
         .map_err(|e| format!("socket create failed: {}", e))?;
     sock.set_send_buffer_size(32 * 1024)
@@ -195,7 +301,9 @@ fn tcp_connect(host: &str, port: u16, proxy: &str) -> Result<TcpStream, String> 
     } else {
         connect_via_http_proxy_stream(stream, host, port)?
     };
-    stream.set_write_timeout(Some(Duration::from_secs(600))).ok();
+    stream
+        .set_write_timeout(Some(Duration::from_secs(600)))
+        .ok();
     stream.set_read_timeout(Some(Duration::from_secs(600))).ok();
     Ok(stream)
 }
@@ -206,20 +314,26 @@ fn tls_wrap(stream: TcpStream, host: &str) -> Result<rustls_wrapper::TlsStream, 
 }
 
 mod rustls_wrapper {
+    use rustls::pki_types::ServerName;
+    use rustls::{ClientConfig, ClientConnection, StreamOwned};
     use std::io::{self, Read, Write};
     use std::net::TcpStream;
     use std::sync::Arc;
-    use rustls::pki_types::ServerName;
-    use rustls::{ClientConfig, ClientConnection, StreamOwned};
 
     pub struct TlsStream(StreamOwned<ClientConnection, TcpStream>);
 
     impl Read for TlsStream {
-        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> { self.0.read(buf) }
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            self.0.read(buf)
+        }
     }
     impl Write for TlsStream {
-        fn write(&mut self, buf: &[u8]) -> io::Result<usize> { self.0.write(buf) }
-        fn flush(&mut self) -> io::Result<()> { self.0.flush() }
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.write(buf)
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            self.0.flush()
+        }
     }
 
     pub fn wrap(stream: TcpStream, host: &str) -> Result<TlsStream, String> {
@@ -240,10 +354,10 @@ mod rustls_wrapper {
 /// 这是获得真实上传进度的关键：直接写入 TCP/TLS stream = 直接发送到网络。
 fn write_multipart_with_progress(
     stream: &mut dyn Write,
-    header_bytes: &[u8],   // HTTP 请求头
-    pre_file: &[u8],       // multipart 文件字段之前的部分（payload_json + 文件头）
-    img_bytes: &[u8],      // 图片数据
-    post_file: &[u8],      // multipart 结束边界
+    header_bytes: &[u8], // HTTP 请求头
+    pre_file: &[u8],     // multipart 文件字段之前的部分（payload_json + 文件头）
+    img_bytes: &[u8],    // 图片数据
+    post_file: &[u8],    // multipart 结束边界
 ) -> io::Result<()> {
     let total = (pre_file.len() + img_bytes.len() + post_file.len()) as u64;
     let mut done: u64 = 0;
@@ -295,10 +409,16 @@ fn read_http_response(stream: &mut dyn Read) -> Result<(u16, String), String> {
     let mut header_buf = Vec::new();
     let mut tmp = [0u8; 1];
     loop {
-        stream.read_exact(&mut tmp).map_err(|e| format!("read response: {}", e))?;
+        stream
+            .read_exact(&mut tmp)
+            .map_err(|e| format!("read response: {}", e))?;
         header_buf.push(tmp[0]);
-        if header_buf.ends_with(b"\r\n\r\n") { break; }
-        if header_buf.len() > 65536 { return Err("response header too large".to_string()); }
+        if header_buf.ends_with(b"\r\n\r\n") {
+            break;
+        }
+        if header_buf.len() > 65536 {
+            return Err("response header too large".to_string());
+        }
     }
     let header_str = String::from_utf8_lossy(&header_buf);
     let status: u16 = header_str
@@ -309,12 +429,14 @@ fn read_http_response(stream: &mut dyn Read) -> Result<(u16, String), String> {
         .unwrap_or(0);
 
     // 解析 Content-Length 或 Transfer-Encoding: chunked
-    let content_length: Option<usize> = header_str.lines()
+    let content_length: Option<usize> = header_str
+        .lines()
         .find(|l| l.to_lowercase().starts_with("content-length:"))
         .and_then(|l| l.split(':').nth(1))
         .and_then(|v| v.trim().parse().ok());
-    let is_chunked = header_str.lines()
-        .any(|l| l.to_lowercase().contains("transfer-encoding") && l.to_lowercase().contains("chunked"));
+    let is_chunked = header_str.lines().any(|l| {
+        l.to_lowercase().contains("transfer-encoding") && l.to_lowercase().contains("chunked")
+    });
 
     let body = if let Some(len) = content_length {
         let mut buf = vec![0u8; len];
@@ -328,11 +450,17 @@ fn read_http_response(stream: &mut dyn Read) -> Result<(u16, String), String> {
             loop {
                 stream.read_exact(&mut tmp).unwrap_or(());
                 size_line.push(tmp[0]);
-                if size_line.ends_with(b"\r\n") { break; }
+                if size_line.ends_with(b"\r\n") {
+                    break;
+                }
             }
             let size_str = String::from_utf8_lossy(&size_line).trim().to_string();
-            let chunk_size = usize::from_str_radix(size_str.split(';').next().unwrap_or("0").trim(), 16).unwrap_or(0);
-            if chunk_size == 0 { break; }
+            let chunk_size =
+                usize::from_str_radix(size_str.split(';').next().unwrap_or("0").trim(), 16)
+                    .unwrap_or(0);
+            if chunk_size == 0 {
+                break;
+            }
             let mut chunk = vec![0u8; chunk_size];
             stream.read_exact(&mut chunk).unwrap_or(());
             body.extend_from_slice(&chunk);
@@ -366,9 +494,13 @@ fn send_once(
             .and_then(|n| n.to_str())
             .unwrap_or("cover.jpg")
             .to_string();
-        let mime = if img_name.ends_with(".png") { "image/png" }
-            else if img_name.ends_with(".webp") { "image/webp" }
-            else { "image/jpeg" };
+        let mime = if img_name.ends_with(".png") {
+            "image/png"
+        } else if img_name.ends_with(".webp") {
+            "image/webp"
+        } else {
+            "image/jpeg"
+        };
 
         let payload_json =
             serde_json::json!({ "username": bot_name, "content": content }).to_string();
@@ -416,10 +548,14 @@ fn send_once(
                 &pre_file,
                 &img_bytes,
                 &post_file,
-            ).map_err(|e| format!("write failed: {}", e))?;
+            )
+            .map_err(|e| format!("write failed: {}", e))?;
             let elapsed = upload_start.elapsed();
             if elapsed.as_secs_f64() > 0.0 {
-                println!("STATUS:{}", format_speed(body_len as f64 / elapsed.as_secs_f64()));
+                println!(
+                    "STATUS:{}",
+                    format_speed(body_len as f64 / elapsed.as_secs_f64())
+                );
             }
             let (status, body) = read_http_response(&mut tls)?;
             if status != 200 && status != 204 {
@@ -433,10 +569,14 @@ fn send_once(
                 &pre_file,
                 &img_bytes,
                 &post_file,
-            ).map_err(|e| format!("write failed: {}", e))?;
+            )
+            .map_err(|e| format!("write failed: {}", e))?;
             let elapsed = upload_start.elapsed();
             if elapsed.as_secs_f64() > 0.0 {
-                println!("STATUS:{}", format_speed(body_len as f64 / elapsed.as_secs_f64()));
+                println!(
+                    "STATUS:{}",
+                    format_speed(body_len as f64 / elapsed.as_secs_f64())
+                );
             }
             let (status, body) = read_http_response(&mut tcp)?;
             if status != 200 && status != 204 {
@@ -454,8 +594,10 @@ fn send_once(
         let tcp = tcp_connect(&host, port, proxy)?;
         if is_https {
             let mut tls = tls_wrap(tcp, &host)?;
-            tls.write_all(http_header.as_bytes()).map_err(|e| format!("write: {}", e))?;
-            tls.write_all(payload.as_bytes()).map_err(|e| format!("write: {}", e))?;
+            tls.write_all(http_header.as_bytes())
+                .map_err(|e| format!("write: {}", e))?;
+            tls.write_all(payload.as_bytes())
+                .map_err(|e| format!("write: {}", e))?;
             tls.flush().map_err(|e| format!("flush: {}", e))?;
             let (status, body) = read_http_response(&mut tls)?;
             if status != 200 && status != 204 {
@@ -463,8 +605,10 @@ fn send_once(
             }
         } else {
             let mut tcp = tcp;
-            tcp.write_all(http_header.as_bytes()).map_err(|e| format!("write: {}", e))?;
-            tcp.write_all(payload.as_bytes()).map_err(|e| format!("write: {}", e))?;
+            tcp.write_all(http_header.as_bytes())
+                .map_err(|e| format!("write: {}", e))?;
+            tcp.write_all(payload.as_bytes())
+                .map_err(|e| format!("write: {}", e))?;
             tcp.flush().map_err(|e| format!("flush: {}", e))?;
             let (status, body) = read_http_response(&mut tcp)?;
             if status != 200 && status != 204 {
@@ -491,7 +635,10 @@ fn run() -> Result<(), String> {
 
     emit_progress_step(0, 3);
 
-    let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("recording");
+    let stem = input
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("recording");
     let (model_name, timestamp) = parse_stem(stem);
     let file_size = fs::metadata(&input).map(|m| m.len()).unwrap_or(0);
     let duration = video_duration(&input).unwrap_or(0.0);
@@ -503,7 +650,11 @@ fn run() -> Result<(), String> {
          **FileName:** `{name}`\n\
          **FileSize:** `{size}`",
         model = model_name,
-        ts = if timestamp.is_empty() { "—".to_string() } else { timestamp },
+        ts = if timestamp.is_empty() {
+            "—".to_string()
+        } else {
+            timestamp
+        },
         dur = format_duration(duration),
         name = input.file_name().and_then(|n| n.to_str()).unwrap_or(""),
         size = format_bytes(file_size),
@@ -513,12 +664,26 @@ fn run() -> Result<(), String> {
 
     let cover = find_cover(&input);
 
+    // 若封面图超过 Discord 10MB 限制则压缩 / Compress cover if it exceeds Discord's 10 MB limit
+    let effective_cover: Option<PathBuf> = if let Some(ref img) = cover {
+        let resized = resize_cover_for_discord(img)?;
+        Some(resized.unwrap_or_else(|| img.clone()))
+    } else {
+        None
+    };
+
     const MAX_ATTEMPTS: u32 = 5;
     const RETRY_DELAYS: [u64; 4] = [30, 60, 90, 120];
 
     let mut attempt = 0u32;
     loop {
-        let result = send_once(&webhook_url, &proxy, &bot_name, &content, cover.as_ref());
+        let result = send_once(
+            &webhook_url,
+            &proxy,
+            &bot_name,
+            &content,
+            effective_cover.as_ref(),
+        );
         match result {
             Ok(()) => break,
             Err(e) => {

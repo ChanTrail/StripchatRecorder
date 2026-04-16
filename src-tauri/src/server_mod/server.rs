@@ -7,20 +7,20 @@
 //! plus an SSE real-time event stream.
 //! Also embeds frontend static assets (compiled into the binary via rust-embed).
 
-use crate::core::emitter::{BroadcastEmitter, EmitterExt, Event};
-use crate::streaming::monitor::StatusMonitor;
-use crate::recording::recorder::RecorderManager;
 use crate::config::settings::AppState;
+use crate::core::emitter::{BroadcastEmitter, EmitterExt, Event};
+use crate::recording::recorder::RecorderManager;
+use crate::streaming::monitor::StatusMonitor;
 use axum::extract::Query;
 use axum::{
+    Json, Router,
     extract::{Path, State as AxumState},
-    http::{header, StatusCode, Uri},
+    http::{StatusCode, Uri, header},
     response::{
-        sse::{self, Sse},
         IntoResponse, Response,
+        sse::{self, Sse},
     },
     routing::{delete, get, post},
-    Json, Router,
 };
 use rust_embed::RustEmbed;
 use serde::Deserialize;
@@ -145,7 +145,14 @@ async fn sse_handler(
                     let data = format!(r#"{{"event":"{}","payload":{}}}"#, e.name, e.payload);
                     yield Ok(sse::Event::default().data(data));
                 }
-                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Lagged(n)) => {
+                    // 队列溢出，丢失了 n 条事件；断开连接让前端重连并恢复状态
+                    // Queue overflow, lost n events; close connection so frontend reconnects and restores state
+                    tracing::warn!("SSE broadcast lagged, {} events dropped", n);
+                    let data = r#"{"event":"sse-lagged","payload":{}}"#;
+                    yield Ok(sse::Event::default().data(data));
+                    break;
+                }
                 Err(broadcast::error::RecvError::Closed) => break,
             }
         }
@@ -620,9 +627,10 @@ async fn save_pipeline(
 }
 
 async fn list_modules() -> ApiResult<serde_json::Value> {
-    let modules: Vec<crate::postprocess::pipeline::ModuleInfo> = tokio::task::spawn_blocking(crate::postprocess::pipeline::discover_modules)
-        .await
-        .unwrap_or_default();
+    let modules: Vec<crate::postprocess::pipeline::ModuleInfo> =
+        tokio::task::spawn_blocking(crate::postprocess::pipeline::discover_modules)
+            .await
+            .unwrap_or_default();
     Ok(Json(serde_json::to_value(modules).unwrap()))
 }
 
@@ -724,10 +732,13 @@ pub async fn run_server(port: u16) {
 
     let app_state = AppState::new().expect("Failed to initialize app state");
     let recorder = RecorderManager::new(Arc::clone(&app_state));
-    let (tx, _) = broadcast::channel::<Event>(256);
+    let (tx, _) = broadcast::channel::<Event>(4096);
     let emitter: Arc<dyn crate::core::emitter::Emitter> = Arc::new(BroadcastEmitter(tx.clone()));
     let monitor = StatusMonitor::new(Arc::clone(&app_state), Arc::clone(&recorder));
-    crate::watcher::fs_watch::start_recordings_dir_watcher(Arc::clone(&app_state), Arc::clone(&emitter));
+    crate::watcher::fs_watch::start_recordings_dir_watcher(
+        Arc::clone(&app_state),
+        Arc::clone(&emitter),
+    );
     crate::watcher::fs_watch::start_modules_dir_watcher(Arc::clone(&emitter));
 
     if !crate::recording::recorder::ffmpeg_available() {

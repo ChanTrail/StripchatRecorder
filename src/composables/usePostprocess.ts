@@ -102,8 +102,11 @@ export function makePpProgress(
 		: 0;
 	// 同一模块内防止进度倒退；模块切换时允许从 0 重新开始
 	// Prevent regression within the same module; allow reset to 0 on module switch
-	const isSameModule = moduleName.trim() === prevModuleName.trim() && moduleName.trim() !== "";
-	const modulePct = isSameModule ? Math.max(rawModulePct, prevModulePct) : rawModulePct;
+	const isSameModule =
+		moduleName.trim() === prevModuleName.trim() && moduleName.trim() !== "";
+	const modulePct = isSameModule
+		? Math.max(rawModulePct, prevModulePct)
+		: rawModulePct;
 
 	// 计算当前执行的模块序号（1-based）
 	// Calculate the current executing module index (1-based)
@@ -270,7 +273,11 @@ export function usePostprocess() {
 				// Only restore in-memory running/waiting tasks (persisted tasks handled above)
 				if (!t.fromMemory) continue;
 				if (t.status === "waiting") {
-					ppStatus.value[t.path] = "waiting";
+					// 若已有更新的状态（running），不降级覆盖
+					// Don't downgrade if a newer status (running) is already set
+					if (ppStatus.value[t.path] !== "running") {
+						ppStatus.value[t.path] = "waiting";
+					}
 				} else if (t.status === "running") {
 					ppStatus.value[t.path] = t.status as PpStatus;
 					ppProgress.value[t.path] = makePpProgress(
@@ -340,7 +347,13 @@ export function usePostprocess() {
 		} else {
 			delete ppProgress.value[payload.path];
 			const failed = payload.results.find((r) => !r.success);
-			toast(t("usePostprocess.failed", { moduleId: failed?.moduleId, message: failed?.message }), "error");
+			toast(
+				t("usePostprocess.failed", {
+					moduleId: failed?.moduleId,
+					message: failed?.message,
+				}),
+				"error",
+			);
 		}
 		return onLoad();
 	}
