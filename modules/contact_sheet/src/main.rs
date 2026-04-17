@@ -20,79 +20,79 @@ use std::process::{Command, Stdio};
 /// 模块元数据 JSON，通过 `--describe` 参数输出。
 /// Module metadata JSON, output via `--describe` argument.
 const DESCRIBE: &str = r#"{
-  "id": "contact_sheet",
-  "name": "Contact Sheet 0.2.0",
-  "description": "每隔指定秒数截帧，拼合成一张带时间戳的预览图保存到视频同目录",
-  "params": [
-    {
-      "key": "interval",
-      "label": "截帧间隔（秒）",
-      "type": "number",
-      "default": 30
-    },
-    {
-      "key": "thumb_width",
-      "label": "单帧宽度（px）",
-      "type": "number",
-      "default": 320
-    },
-    {
-      "key": "format",
-      "label": "图片格式",
-      "type": "select",
-      "default": "webp",
-      "options": ["webp", "jpg", "png"]
-    },
-    {
-      "key": "quality",
-      "label": "图片质量（1-100，jpg/webp 有效）",
-      "type": "number",
-      "default": 100
-    },
-    {
-      "key": "cols",
-      "label": "列数（0=自动）",
-      "type": "number",
-      "default": 0
-    },
-    {
-      "key": "rows",
-      "label": "行数（0=自动）",
-      "type": "number",
-      "default": 0
-    },
-    {
-      "key": "fontfile",
-      "label": "字体文件路径（留空自动检测）",
-      "type": "string",
-      "default": ""
-    },
-    {
-      "key": "fontsize",
-      "label": "时间戳字号",
-      "type": "number",
-      "default": 18
+    "id": "contact_sheet",
+    "name": "Contact Sheet 0.2.0",
+    "description": "每隔指定秒数截帧，拼合成一张带时间戳的预览图保存到视频同目录",
+    "params": [
+        {
+        "key": "interval",
+        "label": "截帧间隔（秒）",
+        "type": "number",
+        "default": 30
+        },
+        {
+        "key": "thumb_width",
+        "label": "单帧宽度（px）",
+        "type": "number",
+        "default": 320
+        },
+        {
+        "key": "format",
+        "label": "图片格式",
+        "type": "select",
+        "default": "webp",
+        "options": ["webp", "jpg", "png"]
+        },
+        {
+        "key": "quality",
+        "label": "图片质量（1-100，jpg/webp 有效）",
+        "type": "number",
+        "default": 100
+        },
+        {
+        "key": "cols",
+        "label": "列数（0=自动）",
+        "type": "number",
+        "default": 0
+        },
+        {
+        "key": "rows",
+        "label": "行数（0=自动）",
+        "type": "number",
+        "default": 0
+        },
+        {
+        "key": "fontfile",
+        "label": "字体文件路径（留空自动检测）",
+        "type": "string",
+        "default": ""
+        },
+        {
+        "key": "fontsize",
+        "label": "时间戳字号",
+        "type": "number",
+        "default": 18
+        }
+    ],
+    "i18n": {
+        "en-US": {
+        "name": "Contact Sheet 0.1.0",
+        "description": "Extract frames at specified intervals and tile them into a timestamped preview image saved next to the video",
+        "params": {
+            "interval": { "label": "Frame interval (seconds)" },
+            "thumb_width": { "label": "Thumbnail width (px)" },
+            "format": { "label": "Image format" },
+            "quality": { "label": "Image quality (1-100, jpg/webp only)" },
+            "cols": { "label": "Columns (0 = auto)" },
+            "rows": { "label": "Rows (0 = auto)" },
+            "fontfile": { "label": "Font file path (leave empty for auto-detect)" },
+            "fontsize": { "label": "Timestamp font size" }
+        }
+        }
     }
-  ],
-  "i18n": {
-    "en-US": {
-      "name": "Contact Sheet 0.1.0",
-      "description": "Extract frames at specified intervals and tile them into a timestamped preview image saved next to the video",
-      "params": {
-        "interval": { "label": "Frame interval (seconds)" },
-        "thumb_width": { "label": "Thumbnail width (px)" },
-        "format": { "label": "Image format" },
-        "quality": { "label": "Image quality (1-100, jpg/webp only)" },
-        "cols": { "label": "Columns (0 = auto)" },
-        "rows": { "label": "Rows (0 = auto)" },
-        "fontfile": { "label": "Font file path (leave empty for auto-detect)" },
-        "fontsize": { "label": "Timestamp font size" }
-      }
-    }
-  }
 }"#;
 
-/// 根据帧数计算最优列数（使网格接近正方形）。
+/// 根据帧数计算最优列数
 /// 若用户指定了列数则直接使用。
 ///
 /// Calculate the optimal number of columns for the grid (to make it roughly square).
@@ -256,10 +256,24 @@ fn run() -> Result<(), String> {
         String::new()
     };
 
-    // 构建 ffmpeg 视频过滤器：降帧率 + 缩放 + 时间戳水印
-    // Build ffmpeg video filter: fps reduction + scale + timestamp overlay
+    // 构建 ffmpeg 视频过滤器：按时间点选帧 + 缩放 + 时间戳水印
+    // Build ffmpeg video filter: select frames by timestamp + scale + timestamp overlay
+    //
+    // 使用 select='not(mod(t,{interval}))' 按原始时间戳选帧，pts 全程保持不变，
+    // drawtext 的 %{pts\:hms} 因此能正确显示视频中的实际时间位置。
+    // 避免使用 fps 过滤器，因为它会重置 pts 导致时间戳显示错误。
+    //
+    // Use select='not(mod(t,{interval}))' to pick frames by original timestamp,
+    // keeping pts intact throughout so drawtext's %{pts\:hms} shows the correct
+    // position in the video. Avoids the fps filter which resets pts to 0.
+    // select 过滤器：选取第一帧，以及距上一帧已过 interval 秒的帧
+    // isnan(prev_selected_t) 匹配第一帧；gte(t-prev_selected_t, interval) 匹配后续帧
+    // 这样 pts 保持原始值，drawtext 能正确显示视频时间码。
+    //
+    // select filter: pick the first frame, then any frame at least `interval` seconds
+    // after the previously selected one. pts stays intact for correct drawtext timestamps.
     let vf = format!(
-        "fps=1/{interval},scale={w}:-1{dt}",
+        "select='isnan(prev_selected_t)+gte(t-prev_selected_t\\,{interval})',scale={w}:-1{dt}",
         interval = interval,
         w = thumb_width,
         dt = drawtext_filter
@@ -272,6 +286,7 @@ fn run() -> Result<(), String> {
         .args(["-y", "-i"])
         .arg(&input)
         .args(["-vf", &vf])
+        .args(["-vsync", "vfr"])
         .args(["-frames:v", &frame_count.to_string()])
         .arg(&frame_pattern)
         .args(["-progress", "pipe:1"])
@@ -285,16 +300,22 @@ fn run() -> Result<(), String> {
         })?;
 
     {
-        // 从 ffmpeg 的 -progress 输出中解析帧数并上报进度
-        // Parse frame count from ffmpeg's -progress output and report progress
+        // 用 out_time_us 估算进度（select 过滤器输出的 frame= 是输入帧号，不适合做进度）
+        // Use out_time_us to estimate progress (frame= from select filter counts input frames)
         use std::io::{BufRead, BufReader};
         let stdout = child.stdout.take().expect("stdout piped");
         let reader = BufReader::new(stdout);
+        let total_us = (duration * 1_000_000.0) as u64;
         let mut last_reported = 0u32;
         for line in reader.lines().map_while(Result::ok) {
-            if let Some(val) = line.strip_prefix("frame=") {
-                if let Ok(n) = val.trim().parse::<u32>() {
-                    let clamped = n.min(frame_count);
+            if let Some(val) = line.strip_prefix("out_time_us=") {
+                if let Ok(us) = val.trim().parse::<u64>() {
+                    let progress = if total_us > 0 {
+                        ((us as f64 / total_us as f64) * frame_count as f64) as u32
+                    } else {
+                        0
+                    };
+                    let clamped = progress.min(frame_count);
                     if clamped != last_reported {
                         emit_progress(clamped, frame_count);
                         last_reported = clamped;

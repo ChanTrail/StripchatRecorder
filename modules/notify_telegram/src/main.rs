@@ -711,17 +711,27 @@ async fn upload_and_send(
             thumb: Option<grammers_client::media::Uploaded>,
             duration: f64, w: i32, h: i32,
         }
-        let mut uploaded_parts: Vec<UploadedPart> = Vec::new();
-        // 依次上传每个视频片段及其缩略图 / Upload each video part and its thumbnail sequentially
-        for (part_path, meta) in effective_parts.iter().zip(part_metas.iter()) {
-            let video = upload_with_progress(&client, part_path, Arc::clone(&done), upload_total).await?;
-            let thumb = if let Some(ref tp) = meta.thumb_path {
-                let t = upload_with_progress(&client, tp, Arc::clone(&done), upload_total).await;
-                let _ = fs::remove_file(tp);
-                Some(t?)
-            } else { None };
-            uploaded_parts.push(UploadedPart { video, thumb, duration: meta.duration, w: meta.w, h: meta.h });
-        }
+        // 并行上传所有视频片段及其缩略图，避免顺序上传时先上传的文件 parts 在服务器端过期
+        // Upload all video parts and thumbnails in parallel to avoid FILE_PART_MISSING caused by
+        // sequential uploads where early parts expire before send_album is called
+        let upload_futures: Vec<_> = effective_parts.iter().zip(part_metas.iter()).map(|(part_path, meta)| {
+            let client = &client;
+            let done = Arc::clone(&done);
+            let thumb_path = meta.thumb_path.clone();
+            async move {
+                let video = upload_with_progress(client, part_path, Arc::clone(&done), upload_total).await?;
+                let thumb = if let Some(ref tp) = thumb_path {
+                    let t = upload_with_progress(client, tp, Arc::clone(&done), upload_total).await;
+                    let _ = fs::remove_file(tp);
+                    Some(t?)
+                } else { None };
+                Ok::<_, String>((video, thumb))
+            }
+        }).collect();
+        let results = futures::future::try_join_all(upload_futures).await?;
+        let uploaded_parts: Vec<UploadedPart> = results.into_iter().zip(part_metas.iter()).map(|((video, thumb), meta)| {
+            UploadedPart { video, thumb, duration: meta.duration, w: meta.w, h: meta.h }
+        }).collect();
         // 清理转换后的临时视频文件 / Clean up converted temporary video files
         for tmp in &converted_parts { let _ = fs::remove_file(tmp); }
 
@@ -755,6 +765,8 @@ async fn upload_and_send(
 
         // 每批最多 10 条发送相册，发送失败立即重试（不重新上传）
         // Send album in batches of max 10; retry send on failure without re-uploading
+        // FILE_PART_MISSING 表示已上传的文件分片在服务器端已失效，必须重新上传，直接返回错误
+        // FILE_PART_MISSING means uploaded file parts have expired on the server and must be re-uploaded
         const MAX_ALBUM: usize = 10;
         const MAX_SEND: u32 = 3;
         const SEND_RETRY_DELAY: Duration = Duration::from_secs(30);
@@ -772,8 +784,13 @@ async fn upload_and_send(
                 match client.send_album(peer.clone(), batch).await {
                     Ok(_) => break,
                     Err(e) => {
-                        send_attempt += 1;
                         let msg = format!("send_album (batch {}) failed: {}", batch_idx + 1, e);
+                        // FILE_PART_MISSING 无法通过重试发送解决，必须重新上传，直接返回让外层重试
+                        // FILE_PART_MISSING cannot be resolved by retrying send; must re-upload
+                        if msg.contains("FILE_PART_MISSING") {
+                            return Err(msg);
+                        }
+                        send_attempt += 1;
                         if send_attempt >= MAX_SEND {
                             return Err(msg);
                         }

@@ -171,6 +171,36 @@ pub fn run_postprocess_for_path_inner(
     }
 
     let modules = discover_modules();
+
+    // 预检：确认所有启用节点的模块都存在，缺失则直接报错
+    // Pre-check: verify all enabled nodes have their modules available, fail fast if not
+    let missing: Vec<&str> = pipeline
+        .nodes
+        .iter()
+        .filter(|n| n.enabled)
+        .filter(|n| !modules.iter().any(|m| m.id == n.module_id))
+        .map(|n| n.module_id.as_str())
+        .collect();
+
+    if !missing.is_empty() {
+        let msg = format!(
+            "后处理模块缺失：{}，请检查 modules/ 目录",
+            missing.join(", ")
+        );
+        state.pp_task_finish(&path_str, false);
+        emitter.emit(
+            "postprocess-done",
+            &serde_json::json!({ "path": path_str, "results": [{
+                "nodeId": "",
+                "moduleId": missing[0],
+                "success": false,
+                "message": msg,
+                "output": null
+            }] }),
+        );
+        return;
+    }
+
     let total = pipeline.nodes.iter().filter(|n| n.enabled).count();
 
     state.pp_task_start(&path_str, total);

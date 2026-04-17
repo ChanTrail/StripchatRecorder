@@ -216,16 +216,17 @@ pub fn run_pipeline(
         let module = match modules.iter().find(|m| m.id == node.module_id) {
             Some(m) => m,
             None => {
+                // 模块缺失，终止整条流水线 / Module missing, abort the entire pipeline
                 results.push(NodeResult {
                     node_id: node.node_id.clone(),
                     module_id: node.module_id.clone(),
                     success: false,
-                    message: format!("Module '{}' not found", node.module_id),
+                    message: format!("模块 '{}' 不存在，请检查 modules/ 目录", node.module_id),
                     output: None,
                 });
                 done += 1;
                 on_progress(done, total, 0, 0, &node.module_id, "");
-                continue;
+                break;
             }
         };
 
