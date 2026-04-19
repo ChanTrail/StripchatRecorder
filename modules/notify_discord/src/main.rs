@@ -24,39 +24,39 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 const DESCRIBE: &str = r#"{
-  "id": "notify_discord",
-  "name": "Discord 通知 0.2.0",
-  "description": "将录制信息和封面图发送到 Discord Webhook",
-  "params": [
-    {
-      "key": "webhook_url",
-      "label": "Webhook URL",
-      "type": "string",
-      "default": ""
-    },
-    {
-      "key": "proxy",
-      "label": "代理地址（支持 http://、socks5://）",
-      "type": "string",
-      "default": ""
-    },
-    {
-      "key": "username",
-      "label": "Bot 显示名称",
-      "type": "string",
-      "default": "Recorder Bot"
+    "id": "notify_discord",
+    "name": "Discord 通知 0.2.0",
+    "description": "将录制信息和封面图发送到 Discord Webhook",
+    "params": [
+        {
+        "key": "webhook_url",
+        "label": "Webhook URL",
+        "type": "string",
+        "default": ""
+        },
+        {
+        "key": "proxy",
+        "label": "代理地址（支持 http://、socks5://）",
+        "type": "string",
+        "default": ""
+        },
+        {
+        "key": "username",
+        "label": "Bot 显示名称",
+        "type": "string",
+        "default": "Recorder Bot"
+        }
+    ],
+    "i18n": {
+        "en-US": {
+        "name": "Discord Notification 0.1.3",
+        "description": "Send recording info and cover image to a Discord Webhook",
+        "params": {
+            "proxy": { "label": "Proxy (http:// or socks5://)" },
+            "username": { "label": "Bot display name" }
+        }
+        }
     }
-  ],
-  "i18n": {
-    "en-US": {
-      "name": "Discord Notification 0.1.3",
-      "description": "Send recording info and cover image to a Discord Webhook",
-      "params": {
-        "proxy": { "label": "Proxy (http:// or socks5://)" },
-        "username": { "label": "Bot display name" }
-      }
-    }
-  }
 }"#;
 
 /// 获取临时文件目录（优先使用可执行文件同目录下的 tmp 子目录）。

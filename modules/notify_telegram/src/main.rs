@@ -17,21 +17,20 @@
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use grammers_client::Client;
-use grammers_client::media::{Attribute, InputMedia};
+use grammers_client::client::{ClientConfiguration, AutoSleep};
+use grammers_client::media::{Attribute, InputMedia, Uploaded};
 use grammers_client::message::InputMessage;
 use grammers_client::sender::{ConnectionParams, SenderPool};
 use grammers_client::tl;
 use grammers_session::storages::SqliteSession;
 use grammers_session::types::{PeerAuth, PeerId, PeerRef};
-use tokio::io::{AsyncRead, ReadBuf};
+use tokio::io::AsyncReadExt;
 use pp_utils::{param, param_bool, format_duration, format_bytes, format_speed, parse_stem, find_cover};
 
 /// 进度上报的缩放基数 / Progress reporting scale base
@@ -40,125 +39,68 @@ const PROGRESS_SCALE: usize = 10_000;
 /// 模块元数据 JSON，通过 `--describe` 参数输出。
 /// Module metadata JSON, output via `--describe` argument.
 const DESCRIBE: &str = r#"{
-  "id": "notify_telegram",
-  "name": "Telegram 通知 0.2.0",
-  "description": "将录制信息、封面图和视频通过 MTProto 发送到 Telegram（支持超过 50MB 的大文件，支持 HTTP/SOCKS5 代理）",
-  "params": [
-    {
-      "key": "api_id",
-      "label": "API ID（从 my.telegram.org 获取）",
-      "type": "string",
-      "default": ""
-    },
-    {
-      "key": "api_hash",
-      "label": "API Hash",
-      "type": "string",
-      "default": ""
-    },
-    {
-      "key": "bot_token",
-      "label": "Bot Token（从 @BotFather 获取）",
-      "type": "string",
-      "default": ""
-    },
-    {
-      "key": "chat_id",
-      "label": "Chat ID（超级群组填 -100xxxxxxxxxx 格式）",
-      "type": "string",
-      "default": ""
-    },
-    {
-      "key": "username",
-      "label": "群组 Username（超级群组必填，如 mygroupname，不含 @）",
-      "type": "string",
-      "default": ""
-    },
-    {
-      "key": "proxy",
-      "label": "代理地址（支持 http://、socks5://）",
-      "type": "string",
-      "default": ""
-    },
-    {
-      "key": "send_video",
-      "label": "同时发送视频文件",
-      "type": "boolean",
-      "default": true
-    }
-  ],
-  "i18n": {
-    "en-US": {
-      "name": "Telegram Notification 0.1.5",
-      "description": "Send recording info, cover image and video to Telegram via MTProto (supports files over 50 MB and HTTP/SOCKS5 proxies)",
-      "params": {
-        "api_id": { "label": "API ID (from my.telegram.org)" },
-        "bot_token": { "label": "Bot Token (from @BotFather)" },
-        "chat_id": { "label": "Chat ID (supergroup format: -100xxxxxxxxxx)" },
-        "username": { "label": "Group username (required for supergroups, e.g. mygroupname, without @)" },
-        "proxy": { "label": "Proxy (http:// or socks5://)" },
-        "send_video": { "label": "Also send video file" }
-      }
-    }
-  }
-}"#;
-
-/// 带进度上报的异步读取器，包装任意 `AsyncRead` 实现。
-/// 在上传文件时实时向标准输出发送进度和速度信息。
-///
-/// Async reader with progress reporting, wrapping any `AsyncRead` implementation.
-/// Reports progress and speed to stdout in real-time during file upload.
-struct ProgressReader<R: AsyncRead + Unpin> {
-    inner: R,
-    /// 已上传字节数（原子计数，跨任务共享）/ Uploaded bytes (atomic counter, shared across tasks)
-    done: Arc<AtomicUsize>,
-    /// 总字节数 / Total bytes
-    total: usize,
-    /// 上次上报的缩放进度值（避免重复上报）/ Last reported scaled progress (avoids duplicate reports)
-    last_reported: usize,
-    /// 速度计算窗口内的字节数 / Bytes in current speed calculation window
-    speed_bytes: usize,
-    /// 速度计算窗口开始时间 / Speed calculation window start time
-    speed_last: Instant,
-}
-
-impl<R: AsyncRead + Unpin> ProgressReader<R> {
-    fn new(inner: R, done: Arc<AtomicUsize>, total: usize) -> Self {
-        Self { inner, done, total, last_reported: usize::MAX, speed_bytes: 0, speed_last: Instant::now() }
-    }
-}
-
-impl<R: AsyncRead + Unpin> AsyncRead for ProgressReader<R> {
-    fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<std::io::Result<()>> {
-        let before = buf.filled().len();
-        let result = Pin::new(&mut self.inner).poll_read(cx, buf);
-        let delta = buf.filled().len() - before;
-        if delta > 0 && self.total > 0 {
-            // 原子累加已上传字节数 / Atomically accumulate uploaded bytes
-            let done = self.done.fetch_add(delta, Ordering::Relaxed) + delta;
-            self.speed_bytes += delta;
-            let scaled = ((done as u128) * (PROGRESS_SCALE as u128) / (self.total as u128))
-                .min(PROGRESS_SCALE as u128) as usize;
-            if scaled != self.last_reported {
-                self.last_reported = scaled;
-                print!("PROGRESS:{}/{}\n", scaled, PROGRESS_SCALE);
-                use std::io::Write;
-                let _ = std::io::stdout().flush();
-            }
-            // 每秒上报一次上传速度 / Report upload speed once per second
-            let elapsed = self.speed_last.elapsed();
-            if elapsed >= Duration::from_secs(1) {
-                let bps = self.speed_bytes as f64 / elapsed.as_secs_f64();
-                print!("STATUS:{}\n", format_speed(bps));
-                use std::io::Write;
-                let _ = std::io::stdout().flush();
-                self.speed_bytes = 0;
-                self.speed_last = Instant::now();
-            }
+    "id": "notify_telegram",
+    "name": "Telegram 通知 0.2.0",
+    "description": "将录制信息、封面图和视频通过 MTProto 发送到 Telegram（支持超过 50MB 的大文件，支持 HTTP/SOCKS5 代理）",
+    "params": [
+        {
+        "key": "api_id",
+        "label": "API ID（从 my.telegram.org 获取）",
+        "type": "string",
+        "default": ""
+        },
+        {
+        "key": "api_hash",
+        "label": "API Hash",
+        "type": "string",
+        "default": ""
+        },
+        {
+        "key": "bot_token",
+        "label": "Bot Token（从 @BotFather 获取）",
+        "type": "string",
+        "default": ""
+        },
+        {
+        "key": "chat_id",
+        "label": "Chat ID（超级群组填 -100xxxxxxxxxx 格式）",
+        "type": "string",
+        "default": ""
+        },
+        {
+        "key": "username",
+        "label": "群组 Username（超级群组必填，如 mygroupname，不含 @）",
+        "type": "string",
+        "default": ""
+        },
+        {
+        "key": "proxy",
+        "label": "代理地址（支持 http://、socks5://）",
+        "type": "string",
+        "default": ""
+        },
+        {
+        "key": "send_video",
+        "label": "同时发送视频文件",
+        "type": "boolean",
+        "default": true
         }
-        result
+    ],
+    "i18n": {
+        "en-US": {
+        "name": "Telegram Notification 0.1.5",
+        "description": "Send recording info, cover image and video to Telegram via MTProto (supports files over 50 MB and HTTP/SOCKS5 proxies)",
+        "params": {
+            "api_id": { "label": "API ID (from my.telegram.org)" },
+            "bot_token": { "label": "Bot Token (from @BotFather)" },
+            "chat_id": { "label": "Chat ID (supergroup format: -100xxxxxxxxxx)" },
+            "username": { "label": "Group username (required for supergroups, e.g. mygroupname, without @)" },
+            "proxy": { "label": "Proxy (http:// or socks5://)" },
+            "send_video": { "label": "Also send video file" }
+        }
+        }
     }
-}
+}"#;
 
 /// 获取临时文件目录（优先使用可执行文件同目录下的 tmp 子目录）。
 /// Get the temporary file directory (prefers a `tmp` subdirectory next to the executable).
@@ -485,63 +427,123 @@ async fn resolve_peer(client: &Client, chat_id: i64, username: &str) -> Result<P
     Ok(build_peer_ref(chat_id))
 }
 
-/// 上传文件到 Telegram，带进度上报和超时控制（30 分钟）。
-/// Upload a file to Telegram with progress reporting and timeout (30 minutes).
+/// 上传文件到 Telegram，支持断点续传、进度上报。
 ///
-/// # 参数 / Parameters
-/// - `client`: Telegram 客户端 / Telegram client
-/// - `path`: 要上传的文件路径 / File path to upload
-/// - `done`: 已上传字节数的原子计数器（跨多文件共享）/ Atomic counter of uploaded bytes (shared across files)
-/// - `total`: 所有文件的总字节数 / Total bytes across all files
+/// 直接调用底层 `SaveBigFilePart` TL 函数，保持同一 `file_id`，
+/// 网络中断后从上次成功的分块处继续，而不是从头重传。
+///
+/// Upload a file to Telegram with resumable upload and progress reporting.
+///
+/// Calls the underlying `SaveBigFilePart` TL function directly, keeping the same
+/// `file_id` across retries so that interrupted uploads resume from the last
+/// successfully uploaded part instead of restarting from the beginning.
 async fn upload_with_progress(
     client: &Client, path: &Path,
     done: Arc<AtomicUsize>, total: usize,
-) -> Result<grammers_client::media::Uploaded, String> {
-    const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(30 * 60);
-    const MAX_INNER: u32 = 3;
-    const RETRY_DELAYS: [u64; 3] = [30, 60, 90];
+) -> Result<Uploaded, String> {
+    // 每个分块 512 KB（Telegram 最大分块大小）/ 512 KB per chunk (Telegram max chunk size)
+    const CHUNK_SIZE: usize = 512 * 1024;
+    // 单个分块的最大重试次数 / Max retries per chunk
+    const MAX_CHUNK_RETRIES: u32 = 20;
+    // 重试延迟序列（秒）/ Retry delay sequence (seconds)
+    const RETRY_DELAYS: [u64; 6] = [5, 10, 20, 30, 60, 120];
 
     let name = path.file_name().unwrap().to_string_lossy().to_string();
 
-    let mut inner_attempt = 0u32;
-    loop {
-        let before = done.load(Ordering::Relaxed);
+    let mut file = tokio::fs::File::open(path).await
+        .map_err(|e| format!("open {} failed: {}", path.display(), e))?;
+    let size = file.metadata().await
+        .map_err(|e| format!("metadata failed: {}", e))?.len() as usize;
 
-        let result = tokio::time::timeout(ATTEMPT_TIMEOUT, async {
-            let file = tokio::fs::File::open(path).await
-                .map_err(|e| format!("open {} failed: {}", path.display(), e))?;
-            let size = file.metadata().await
-                .map_err(|e| format!("metadata failed: {}", e))?.len() as usize;
-            let mut reader = ProgressReader::new(file, Arc::clone(&done), total);
-            client.upload_stream(&mut reader, size, name.clone()).await
-                .map_err(|e| format!("upload failed: {}", e))
-        }).await;
+    let total_parts = ((size + CHUNK_SIZE - 1) / CHUNK_SIZE) as i32;
+    // 生成一次性 file_id，整个上传过程保持不变 / Generate file_id once; keep it for the entire upload
+    let file_id = {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let t = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+        // 混合时间戳和随机数避免碰撞 / Mix timestamp and pseudo-random to avoid collision
+        (t.as_nanos() as i64) ^ (path.as_os_str().len() as i64 * 0x9e3779b97f4a7c15_u64 as i64)
+    };
 
-        let err = match result {
-            Ok(Ok(uploaded)) => return Ok(uploaded),
-            Ok(Err(e)) => e,
-            Err(_) => {
-                // 超时时回滚已计入的字节数 / Roll back counted bytes on timeout
-                let after = done.load(Ordering::Relaxed);
-                done.fetch_sub(after.saturating_sub(before), Ordering::Relaxed);
-                format!("upload of {} timed out after {:?}", path.display(), ATTEMPT_TIMEOUT)
+    let mut buf = vec![0u8; CHUNK_SIZE];
+    let mut speed_bytes: usize = 0;
+    let mut speed_last = Instant::now();
+
+    for part in 0..total_parts {
+        // 读取当前分块 / Read current chunk
+        let mut read = 0usize;
+        while read < CHUNK_SIZE {
+            match file.read(&mut buf[read..]).await {
+                Ok(0) => break,
+                Ok(n) => read += n,
+                Err(e) => return Err(format!("read chunk {} failed: {}", part, e)),
             }
-        };
-
-        inner_attempt += 1;
-        if inner_attempt >= MAX_INNER {
-            return Err(err);
         }
-        let delay_secs = RETRY_DELAYS[(inner_attempt as usize - 1).min(RETRY_DELAYS.len() - 1)];
-        eprintln!(
-            "upload attempt {}/{} failed: {}. retrying in {}s…",
-            inner_attempt, MAX_INNER, err, delay_secs
-        );
-        // 回滚已计入的字节数 / Roll back counted bytes before retry
-        let after = done.load(Ordering::Relaxed);
-        done.fetch_sub(after.saturating_sub(before), Ordering::Relaxed);
-        tokio::time::sleep(Duration::from_secs(delay_secs)).await;
+        if read == 0 { break; }
+        let chunk = buf[..read].to_vec();
+
+        // 带重试的分块上传 / Upload chunk with retry
+        let mut chunk_attempt = 0u32;
+        loop {
+            let result = client.invoke(&tl::functions::upload::SaveBigFilePart {
+                file_id,
+                file_part: part,
+                file_total_parts: total_parts,
+                bytes: chunk.clone(),
+            }).await;
+
+            match result {
+                Ok(true) => break,
+                Ok(false) => {
+                    // 服务端拒绝存储，按网络错误处理 / Server refused to store, treat as network error
+                    let err = format!("server rejected part {}", part);
+                    chunk_attempt += 1;
+                    if chunk_attempt >= MAX_CHUNK_RETRIES { return Err(err); }
+                    let delay = RETRY_DELAYS[(chunk_attempt as usize - 1).min(RETRY_DELAYS.len() - 1)];
+                    eprintln!("chunk {}/{} attempt {}/{}: {}. retrying in {}s…",
+                        part + 1, total_parts, chunk_attempt, MAX_CHUNK_RETRIES, err, delay);
+                    tokio::time::sleep(Duration::from_secs(delay)).await;
+                }
+                Err(e) => {
+                    let err = format!("part {} upload error: {}", part, e);
+                    chunk_attempt += 1;
+                    if chunk_attempt >= MAX_CHUNK_RETRIES { return Err(err); }
+                    let delay = RETRY_DELAYS[(chunk_attempt as usize - 1).min(RETRY_DELAYS.len() - 1)];
+                    eprintln!("chunk {}/{} attempt {}/{}: {}. retrying in {}s…",
+                        part + 1, total_parts, chunk_attempt, MAX_CHUNK_RETRIES, err, delay);
+                    tokio::time::sleep(Duration::from_secs(delay)).await;
+                }
+            }
+        }
+
+        // 更新进度和速度 / Update progress and speed
+        let delta = read;
+        if total > 0 {
+            let new_done = done.fetch_add(delta, Ordering::Relaxed) + delta;
+            speed_bytes += delta;
+            let scaled = ((new_done as u128) * (PROGRESS_SCALE as u128) / (total as u128))
+                .min(PROGRESS_SCALE as u128) as usize;
+            print!("PROGRESS:{}/{}\n", scaled, PROGRESS_SCALE);
+            use std::io::Write;
+            let _ = std::io::stdout().flush();
+
+            let elapsed = speed_last.elapsed();
+            if elapsed >= Duration::from_secs(1) {
+                let bps = speed_bytes as f64 / elapsed.as_secs_f64();
+                print!("STATUS:{}\n", format_speed(bps));
+                let _ = std::io::stdout().flush();
+                speed_bytes = 0;
+                speed_last = Instant::now();
+            }
+        }
     }
+
+    Ok(Uploaded::from_raw(
+        tl::types::InputFileBig {
+            id: file_id,
+            parts: total_parts,
+            name,
+        }.into(),
+    ))
 }
 
 /// 核心异步函数：建立 Telegram 连接、上传文件并发送消息。
@@ -587,7 +589,15 @@ async fn upload_and_send(
     let pool = SenderPool::with_configuration(Arc::clone(&session), api_id, conn_params);
     let runner = pool.runner;
     tokio::spawn(async move { runner.run().await });
-    let client = Client::new(pool.handle);
+    // 配置激进的 retry policy：I/O 错误视为 5 秒 flood，flood wait 阈值提高到 5 分钟
+    // Aggressive retry policy: treat I/O errors as 5s flood, raise flood-wait threshold to 5 min
+    let client = Client::with_configuration(pool.handle, ClientConfiguration {
+        retry_policy: Box::new(AutoSleep {
+            threshold: Duration::from_secs(300),
+            io_errors_as_flood_of: Some(Duration::from_secs(5)),
+        }),
+        auto_cache_peers: true,
+    });
 
     // Bot 登录（会话已存在时跳过）/ Bot sign-in (skipped if session already exists)
     if !client.is_authorized().await.map_err(|e| format!("is_authorized failed: {}", e))? {
@@ -711,27 +721,35 @@ async fn upload_and_send(
             thumb: Option<grammers_client::media::Uploaded>,
             duration: f64, w: i32, h: i32,
         }
-        // 并行上传所有视频片段及其缩略图，避免顺序上传时先上传的文件 parts 在服务器端过期
-        // Upload all video parts and thumbnails in parallel to avoid FILE_PART_MISSING caused by
-        // sequential uploads where early parts expire before send_album is called
-        let upload_futures: Vec<_> = effective_parts.iter().zip(part_metas.iter()).map(|(part_path, meta)| {
+
+        // 串行上传所有视频片段及其缩略图。
+        // 并行上传在网络不稳定时会导致 FILE_PART_MISSING：多个文件的分块交错发送，
+        // 服务端在高负载下可能丢弃部分分块，即使 SaveBigFilePart 返回了 true。
+        // Serial upload of all video parts and thumbnails.
+        // Parallel upload causes FILE_PART_MISSING on unstable networks: interleaved chunks from
+        // multiple files can be silently dropped by the server under load even when SaveBigFilePart
+        // returns true.
+        let do_upload = |done: Arc<AtomicUsize>| {
             let client = &client;
-            let done = Arc::clone(&done);
-            let thumb_path = meta.thumb_path.clone();
+            let effective_parts = &effective_parts;
+            let part_metas = &part_metas;
             async move {
-                let video = upload_with_progress(client, part_path, Arc::clone(&done), upload_total).await?;
-                let thumb = if let Some(ref tp) = thumb_path {
-                    let t = upload_with_progress(client, tp, Arc::clone(&done), upload_total).await;
-                    let _ = fs::remove_file(tp);
-                    Some(t?)
-                } else { None };
-                Ok::<_, String>((video, thumb))
+                let mut parts: Vec<UploadedPart> = Vec::new();
+                for (part_path, meta) in effective_parts.iter().zip(part_metas.iter()) {
+                    let video = upload_with_progress(client, part_path, Arc::clone(&done), upload_total).await?;
+                    let thumb = if let Some(ref tp) = meta.thumb_path {
+                        let t = upload_with_progress(client, tp, Arc::clone(&done), upload_total).await;
+                        let _ = fs::remove_file(tp);
+                        Some(t?)
+                    } else { None };
+                    parts.push(UploadedPart { video, thumb, duration: meta.duration, w: meta.w, h: meta.h });
+                }
+                Ok::<_, String>(parts)
             }
-        }).collect();
-        let results = futures::future::try_join_all(upload_futures).await?;
-        let uploaded_parts: Vec<UploadedPart> = results.into_iter().zip(part_metas.iter()).map(|((video, thumb), meta)| {
-            UploadedPart { video, thumb, duration: meta.duration, w: meta.w, h: meta.h }
-        }).collect();
+        };
+
+        let mut uploaded_parts = do_upload(Arc::clone(&done)).await?;
+
         // 清理转换后的临时视频文件 / Clean up converted temporary video files
         for tmp in &converted_parts { let _ = fs::remove_file(tmp); }
 
@@ -763,43 +781,56 @@ async fn upload_and_send(
             items
         };
 
-        // 每批最多 10 条发送相册，发送失败立即重试（不重新上传）
-        // Send album in batches of max 10; retry send on failure without re-uploading
-        // FILE_PART_MISSING 表示已上传的文件分片在服务器端已失效，必须重新上传，直接返回错误
-        // FILE_PART_MISSING means uploaded file parts have expired on the server and must be re-uploaded
+        // 每批最多 10 条发送相册。
+        // FILE_PART_MISSING 时重新上传所有文件后重试，最多 MAX_REUPLOAD 次。
+        // Send album in batches of max 10.
+        // On FILE_PART_MISSING, re-upload all files and retry, up to MAX_REUPLOAD times.
         const MAX_ALBUM: usize = 10;
         const MAX_SEND: u32 = 3;
+        const MAX_REUPLOAD: u32 = 3;
         const SEND_RETRY_DELAY: Duration = Duration::from_secs(30);
 
-        let all_items = build_items(&uploaded_cover_saved, &uploaded_parts);
-        let n_batches = all_items.len().div_ceil(MAX_ALBUM);
-        for batch_idx in 0..n_batches {
-            let start = batch_idx * MAX_ALBUM;
-            let mut send_attempt = 0u32;
-            loop {
-                // 每次重试都重建这一批的 InputMedia
-                // Rebuild this batch's InputMedia on each attempt
-                let batch: Vec<InputMedia> = build_items(&uploaded_cover_saved, &uploaded_parts)
-                    .into_iter().skip(start).take(MAX_ALBUM).collect();
-                match client.send_album(peer.clone(), batch).await {
-                    Ok(_) => break,
-                    Err(e) => {
-                        let msg = format!("send_album (batch {}) failed: {}", batch_idx + 1, e);
-                        // FILE_PART_MISSING 无法通过重试发送解决，必须重新上传，直接返回让外层重试
-                        // FILE_PART_MISSING cannot be resolved by retrying send; must re-upload
-                        if msg.contains("FILE_PART_MISSING") {
-                            return Err(msg);
+        let mut reupload_count = 0u32;
+        loop {
+            let n_batches = build_items(&uploaded_cover_saved, &uploaded_parts).len().div_ceil(MAX_ALBUM);
+            let mut need_reupload = false;
+            let mut send_err = String::new();
+
+            'batches: for batch_idx in 0..n_batches {
+                let start = batch_idx * MAX_ALBUM;
+                let mut send_attempt = 0u32;
+                loop {
+                    let batch: Vec<InputMedia> = build_items(&uploaded_cover_saved, &uploaded_parts)
+                        .into_iter().skip(start).take(MAX_ALBUM).collect();
+                    match client.send_album(peer.clone(), batch).await {
+                        Ok(_) => break,
+                        Err(e) => {
+                            let msg = format!("send_album (batch {}) failed: {}", batch_idx + 1, e);
+                            if msg.contains("FILE_PART_MISSING") {
+                                need_reupload = true;
+                                send_err = msg;
+                                break 'batches;
+                            }
+                            send_attempt += 1;
+                            if send_attempt >= MAX_SEND { return Err(msg); }
+                            eprintln!("send failed (attempt {}/{}): {}. retrying in {:?}…",
+                                send_attempt, MAX_SEND, msg, SEND_RETRY_DELAY);
+                            tokio::time::sleep(SEND_RETRY_DELAY).await;
                         }
-                        send_attempt += 1;
-                        if send_attempt >= MAX_SEND {
-                            return Err(msg);
-                        }
-                        eprintln!("send failed (attempt {}/{}): {}. retrying in {:?}…",
-                            send_attempt, MAX_SEND, msg, SEND_RETRY_DELAY);
-                        tokio::time::sleep(SEND_RETRY_DELAY).await;
                     }
                 }
             }
+
+            if !need_reupload { break; }
+
+            reupload_count += 1;
+            if reupload_count > MAX_REUPLOAD {
+                return Err(format!("{} (re-upload limit reached)", send_err));
+            }
+            eprintln!("FILE_PART_MISSING, re-uploading all files (attempt {}/{})…",
+                reupload_count, MAX_REUPLOAD);
+            done.store(0, Ordering::Relaxed);
+            uploaded_parts = do_upload(Arc::clone(&done)).await?;
         }
     } else if let Some(cover_file) = uploaded_cover {
         // 仅发送封面图和说明文字，发送失败立即重试（不重新上传）

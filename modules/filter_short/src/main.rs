@@ -13,40 +13,40 @@
 //! - 标准输出 `OUTPUT:{path}`: 视频通过过滤时输出路径 / Output path when video passes filter
 //! - 标准输出 `PROGRESS:{done}/{total}`: 进度上报 / Progress reporting
 
+use pp_utils::{param_bool, param_f64, video_duration, PROGRESS_SCALE};
 use std::env;
 use std::path::PathBuf;
-use pp_utils::{param_f64, param_bool, video_duration, PROGRESS_SCALE};
 
 /// 模块元数据 JSON，通过 `--describe` 参数输出。
 /// Module metadata JSON, output via `--describe` argument.
 const DESCRIBE: &str = r#"{
-  "id": "filter_short",
-  "name": "过滤短视频 0.2.0",
-  "description": "删除时长低于指定阈值的视频文件",
-  "params": [
-    {
-      "key": "min_duration",
-      "label": "最短时长（秒）",
-      "type": "number",
-      "default": 60
-    },
-    {
-      "key": "dry_run",
-      "label": "仅预览，不实际删除",
-      "type": "boolean",
-      "default": false
+    "id": "filter_short",
+    "name": "过滤短视频 0.2.0",
+    "description": "删除时长低于指定阈值的视频文件",
+    "params": [
+        {
+        "key": "min_duration",
+        "label": "最短时长（秒）",
+        "type": "number",
+        "default": 60
+        },
+        {
+        "key": "dry_run",
+        "label": "仅预览，不实际删除",
+        "type": "boolean",
+        "default": false
+        }
+    ],
+    "i18n": {
+        "en-US": {
+        "name": "Filter Short Videos 0.1.0",
+        "description": "Delete video files shorter than the specified duration threshold",
+        "params": {
+            "min_duration": { "label": "Minimum duration (seconds)" },
+            "dry_run": { "label": "Dry run (preview only, no deletion)" }
+        }
+        }
     }
-  ],
-  "i18n": {
-    "en-US": {
-      "name": "Filter Short Videos 0.1.0",
-      "description": "Delete video files shorter than the specified duration threshold",
-      "params": {
-        "min_duration": { "label": "Minimum duration (seconds)" },
-        "dry_run": { "label": "Dry run (preview only, no deletion)" }
-      }
-    }
-  }
 }"#;
 
 /// 模块主逻辑：读取参数、检查视频时长、决定是否删除。
@@ -79,14 +79,18 @@ fn run() -> Result<(), String> {
         if dry_run {
             eprintln!(
                 "DRY_RUN: would delete '{}' (duration {:.1}s < {:.1}s)",
-                input.display(), duration, min_duration
+                input.display(),
+                duration,
+                min_duration
             );
         } else {
             std::fs::remove_file(&input)
                 .map_err(|e| format!("Failed to delete '{}': {}", input.display(), e))?;
             eprintln!(
                 "Deleted '{}' (duration {:.1}s < {:.1}s)",
-                input.display(), duration, min_duration
+                input.display(),
+                duration,
+                min_duration
             );
         }
         // 视频被删除时不输出 OUTPUT，流水线后续模块将跳过
