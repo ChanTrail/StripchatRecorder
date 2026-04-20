@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 
 use grammers_client::Client;
 use grammers_client::client::{ClientConfiguration, AutoSleep};
-use grammers_client::media::{Attribute, InputMedia, Uploaded};
+use grammers_client::media::{InputMedia, Uploaded};
 use grammers_client::message::InputMessage;
 use grammers_client::sender::{ConnectionParams, SenderPool};
 use grammers_client::tl;
@@ -455,18 +455,26 @@ async fn upload_with_progress(
     let size = file.metadata().await
         .map_err(|e| format!("metadata failed: {}", e))?.len() as usize;
 
+    // 与 grammers 保持一致：> 10MB 用大文件接口，否则用小文件接口
+    // Match grammers behavior: use big-file API for >10MB, small-file API otherwise.
+    // InputMediaUploadedPhoto requires InputFile (small), not InputFileBig — using the wrong
+    // one causes PHOTO_SAVE_FILE_INVALID.
+    const BIG_FILE_THRESHOLD: usize = 10 * 1024 * 1024;
+    let is_big = size > BIG_FILE_THRESHOLD;
+
     let total_parts = ((size + CHUNK_SIZE - 1) / CHUNK_SIZE) as i32;
     // 生成一次性 file_id，整个上传过程保持不变 / Generate file_id once; keep it for the entire upload
     let file_id = {
         use std::time::{SystemTime, UNIX_EPOCH};
         let t = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
-        // 混合时间戳和随机数避免碰撞 / Mix timestamp and pseudo-random to avoid collision
         (t.as_nanos() as i64) ^ (path.as_os_str().len() as i64 * 0x9e3779b97f4a7c15_u64 as i64)
     };
 
     let mut buf = vec![0u8; CHUNK_SIZE];
     let mut speed_bytes: usize = 0;
     let mut speed_last = Instant::now();
+    // md5 仅小文件需要 / md5 only needed for small files
+    let mut md5_ctx = md5::Context::new();
 
     for part in 0..total_parts {
         // 读取当前分块 / Read current chunk
@@ -480,21 +488,29 @@ async fn upload_with_progress(
         }
         if read == 0 { break; }
         let chunk = buf[..read].to_vec();
+        if !is_big { md5_ctx.consume(&chunk); }
 
         // 带重试的分块上传 / Upload chunk with retry
         let mut chunk_attempt = 0u32;
         loop {
-            let result = client.invoke(&tl::functions::upload::SaveBigFilePart {
-                file_id,
-                file_part: part,
-                file_total_parts: total_parts,
-                bytes: chunk.clone(),
-            }).await;
+            let result = if is_big {
+                client.invoke(&tl::functions::upload::SaveBigFilePart {
+                    file_id,
+                    file_part: part,
+                    file_total_parts: total_parts,
+                    bytes: chunk.clone(),
+                }).await
+            } else {
+                client.invoke(&tl::functions::upload::SaveFilePart {
+                    file_id,
+                    file_part: part,
+                    bytes: chunk.clone(),
+                }).await
+            };
 
             match result {
                 Ok(true) => break,
                 Ok(false) => {
-                    // 服务端拒绝存储，按网络错误处理 / Server refused to store, treat as network error
                     let err = format!("server rejected part {}", part);
                     chunk_attempt += 1;
                     if chunk_attempt >= MAX_CHUNK_RETRIES { return Err(err); }
@@ -516,10 +532,9 @@ async fn upload_with_progress(
         }
 
         // 更新进度和速度 / Update progress and speed
-        let delta = read;
         if total > 0 {
-            let new_done = done.fetch_add(delta, Ordering::Relaxed) + delta;
-            speed_bytes += delta;
+            let new_done = done.fetch_add(read, Ordering::Relaxed) + read;
+            speed_bytes += read;
             let scaled = ((new_done as u128) * (PROGRESS_SCALE as u128) / (total as u128))
                 .min(PROGRESS_SCALE as u128) as usize;
             print!("PROGRESS:{}/{}\n", scaled, PROGRESS_SCALE);
@@ -537,13 +552,14 @@ async fn upload_with_progress(
         }
     }
 
-    Ok(Uploaded::from_raw(
-        tl::types::InputFileBig {
-            id: file_id,
-            parts: total_parts,
-            name,
-        }.into(),
-    ))
+    Ok(Uploaded::from_raw(if is_big {
+        tl::types::InputFileBig { id: file_id, parts: total_parts, name }.into()
+    } else {
+        tl::types::InputFile {
+            id: file_id, parts: total_parts, name,
+            md5_checksum: format!("{:x}", md5_ctx.finalize()),
+        }.into()
+    }))
 }
 
 /// 核心异步函数：建立 Telegram 连接、上传文件并发送消息。
@@ -704,76 +720,137 @@ async fn upload_and_send(
     // 共享的已上传字节计数器 / Shared uploaded bytes counter
     let done = Arc::new(AtomicUsize::new(0));
 
-    // 上传封面图 / Upload cover image
-    let mut uploaded_cover = if let Some(img) = effective_cover {
-        Some(upload_with_progress(&client, img, Arc::clone(&done), upload_total).await?)
-    } else { None };
-
-    // 清理转换后的临时封面图 / Clean up converted temporary cover image
-    if let Some(ref tmp) = converted_cover { let _ = fs::remove_file(tmp); }
-    if let Some(ref tmp) = resized_cover { let _ = fs::remove_file(tmp); }
-
     if send_video {
-        // 用于保存上传结果以便发送失败时重建 InputMedia（Uploaded 实现了 Clone，InputMedia 没有）
-        // Store upload results to rebuild InputMedia on send retry (Uploaded is Clone, InputMedia is not)
-        struct UploadedPart {
-            video: grammers_client::media::Uploaded,
-            thumb: Option<grammers_client::media::Uploaded>,
-            duration: f64, w: i32, h: i32,
+        // 固化后的视频分片，包含服务端永久 Media 引用和元数据
+        // Committed video parts: server-side permanent Media reference + metadata
+        struct CommittedPart {
+            media: grammers_client::media::Media,  // 已通过 UploadMedia 固化 / committed via UploadMedia
         }
 
-        // 串行上传所有视频片段及其缩略图。
-        // 并行上传在网络不稳定时会导致 FILE_PART_MISSING：多个文件的分块交错发送，
-        // 服务端在高负载下可能丢弃部分分块，即使 SaveBigFilePart 返回了 true。
-        // Serial upload of all video parts and thumbnails.
-        // Parallel upload causes FILE_PART_MISSING on unstable networks: interleaved chunks from
-        // multiple files can be silently dropped by the server under load even when SaveBigFilePart
-        // returns true.
-        let do_upload = |done: Arc<AtomicUsize>| {
+        // 上传单个文件后立即调用 messages.UploadMedia 固化到服务端，带重试。
+        // 固化后的 Media 不受上传 session TTL 限制（约 10 分钟），可安全地在之后发送。
+        //
+        // Upload a file then immediately commit it via messages.UploadMedia, with retry.
+        // Committed Media is not subject to the ~10-minute upload session TTL.
+        async fn commit_media(
+            client: &Client,
+            peer: &PeerRef,
+            raw_media: tl::enums::InputMedia,
+        ) -> Result<grammers_client::media::Media, String> {
+            const MAX_RETRIES: u32 = 10;
+            const DELAYS: [u64; 5] = [5, 10, 20, 40, 60];
+            let mut attempt = 0u32;
+            loop {
+                match client.invoke(&tl::functions::messages::UploadMedia {
+                    business_connection_id: None,
+                    peer: peer.clone().into(),
+                    media: raw_media.clone(),
+                }).await {
+                    Ok(committed) => {
+                        return grammers_client::media::Media::from_raw(committed)
+                            .ok_or_else(|| "UploadMedia returned unrecognized media type".to_string());
+                    }
+                    Err(e) => {
+                        attempt += 1;
+                        if attempt >= MAX_RETRIES {
+                            return Err(format!("UploadMedia failed after {} attempts: {}", attempt, e));
+                        }
+                        let delay = DELAYS[(attempt as usize - 1).min(DELAYS.len() - 1)];
+                        eprintln!("UploadMedia attempt {}/{} failed: {}. retrying in {}s…",
+                            attempt, MAX_RETRIES, e, delay);
+                        tokio::time::sleep(Duration::from_secs(delay)).await;
+                    }
+                }
+            }
+        }
+
+        // 上传封面图并立即固化 / Upload cover and commit immediately
+        let committed_cover: Option<grammers_client::media::Media> = if let Some(img) = effective_cover {
+            let uploaded = upload_with_progress(&client, img, Arc::clone(&done), upload_total).await?;
+            let raw: tl::enums::InputMedia = tl::types::InputMediaUploadedPhoto {
+                spoiler: false,
+                file: uploaded.raw,
+                stickers: None,
+                ttl_seconds: None,
+            }.into();
+            Some(commit_media(&client, &peer, raw).await?)
+        } else { None };
+        if let Some(ref tmp) = converted_cover { let _ = fs::remove_file(tmp); }
+        if let Some(ref tmp) = resized_cover { let _ = fs::remove_file(tmp); }
+
+        // 串行上传每个视频片段及其缩略图，上传后立即固化。
+        // Serial upload + immediate commit for each video part and its thumbnail.
+        let do_upload_and_commit = |done: Arc<AtomicUsize>| {
             let client = &client;
             let effective_parts = &effective_parts;
             let part_metas = &part_metas;
+            let peer = &peer;
             async move {
-                let mut parts: Vec<UploadedPart> = Vec::new();
+                let mut parts: Vec<CommittedPart> = Vec::new();
                 for (part_path, meta) in effective_parts.iter().zip(part_metas.iter()) {
-                    let video = upload_with_progress(client, part_path, Arc::clone(&done), upload_total).await?;
-                    let thumb = if let Some(ref tp) = meta.thumb_path {
+                    let thumb_uploaded = if let Some(ref tp) = meta.thumb_path {
                         let t = upload_with_progress(client, tp, Arc::clone(&done), upload_total).await;
                         let _ = fs::remove_file(tp);
                         Some(t?)
                     } else { None };
-                    parts.push(UploadedPart { video, thumb, duration: meta.duration, w: meta.w, h: meta.h });
+
+                    let video_uploaded = upload_with_progress(client, part_path, Arc::clone(&done), upload_total).await?;
+
+                    // 直接构建 InputMediaUploadedDocument，避免访问私有字段
+                    // Build InputMediaUploadedDocument directly to avoid accessing private fields
+                    let ext = part_path.extension().and_then(|e| e.to_str()).unwrap_or("mp4").to_lowercase();
+                    let mime = if ext == "mkv" { "video/x-matroska" } else { "video/mp4" };
+                    let raw_media: tl::enums::InputMedia = tl::types::InputMediaUploadedDocument {
+                        nosound_video: false,
+                        force_file: false,
+                        spoiler: false,
+                        file: video_uploaded.raw,
+                        thumb: thumb_uploaded.map(|t| t.raw),
+                        mime_type: mime.to_string(),
+                        attributes: vec![
+                            tl::types::DocumentAttributeFilename {
+                                file_name: part_path.file_name().unwrap().to_string_lossy().to_string()
+                            }.into(),
+                            tl::types::DocumentAttributeVideo {
+                                round_message: false,
+                                supports_streaming: true,
+                                nosound: false,
+                                duration: meta.duration,
+                                w: meta.w,
+                                h: meta.h,
+                                preload_prefix_size: None,
+                                video_start_ts: None,
+                                video_codec: None,
+                            }.into(),
+                        ],
+                        stickers: None,
+                        ttl_seconds: None,
+                        video_cover: None,
+                        video_timestamp: None,
+                    }.into();
+
+                    let committed = commit_media(client, peer, raw_media).await?;
+                    parts.push(CommittedPart { media: committed });
                 }
                 Ok::<_, String>(parts)
             }
         };
 
-        let mut uploaded_parts = do_upload(Arc::clone(&done)).await?;
-
-        // 清理转换后的临时视频文件 / Clean up converted temporary video files
+        let mut committed_parts = do_upload_and_commit(Arc::clone(&done)).await?;
         for tmp in &converted_parts { let _ = fs::remove_file(tmp); }
 
-        // 保存封面图的 Uploaded（用于重试时重建）/ Save cover Uploaded for retry rebuilding
-        let uploaded_cover_saved = uploaded_cover.take();
-        let total_parts = uploaded_parts.len();
+        let total_parts = committed_parts.len();
 
-        // 辅助函数：从保存的 Uploaded 重建 InputMedia 列表
-        // Helper: rebuild InputMedia list from saved Uploaded values
-        let build_items = |cover: &Option<grammers_client::media::Uploaded>,
-                           parts: &Vec<UploadedPart>| -> Vec<InputMedia> {
+        // 辅助函数：从固化的 Media 重建 InputMedia 列表（用于发送重试）
+        // Helper: rebuild InputMedia list from committed Media (for send retry)
+        let build_items = |cover: &Option<grammers_client::media::Media>,
+                           parts: &Vec<CommittedPart>| -> Vec<InputMedia> {
             let mut items: Vec<InputMedia> = Vec::new();
             if let Some(c) = cover {
-                items.push(InputMedia::new().photo(c.clone()));
+                items.push(InputMedia::new().copy_media(c));
             }
             for (idx, part) in parts.iter().enumerate() {
-                let mut item = InputMedia::new().document(part.video.clone());
-                if let Some(ref t) = part.thumb { item = item.thumbnail(t.clone()); }
-                item = item.attribute(Attribute::Video {
-                    round_message: false, supports_streaming: true,
-                    duration: std::time::Duration::from_secs_f64(part.duration),
-                    w: part.w, h: part.h,
-                });
-                if idx == total_parts - 1 {
+                let mut item = InputMedia::new().copy_media(&part.media);                if idx == total_parts - 1 {
                     item = item.fmt_entities(base_caption_entities.clone()).caption(base_caption_text.clone());
                 }
                 items.push(item);
@@ -781,18 +858,18 @@ async fn upload_and_send(
             items
         };
 
-        // 每批最多 10 条发送相册。
-        // FILE_PART_MISSING 时重新上传所有文件后重试，最多 MAX_REUPLOAD 次。
-        // Send album in batches of max 10.
-        // On FILE_PART_MISSING, re-upload all files and retry, up to MAX_REUPLOAD times.
+        // 每批最多 10 条发送相册。固化后的 InputMedia 不会有 FILE_PART_MISSING，
+        // 但仍保留重传逻辑以防万一。
+        // Send album in batches of max 10. Committed InputMedia won't get FILE_PART_MISSING,
+        // but keep re-upload logic as a safety net.
         const MAX_ALBUM: usize = 10;
-        const MAX_SEND: u32 = 3;
+        const MAX_SEND: u32 = 5;
         const MAX_REUPLOAD: u32 = 3;
         const SEND_RETRY_DELAY: Duration = Duration::from_secs(30);
 
         let mut reupload_count = 0u32;
         loop {
-            let n_batches = build_items(&uploaded_cover_saved, &uploaded_parts).len().div_ceil(MAX_ALBUM);
+            let n_batches = build_items(&committed_cover, &committed_parts).len().div_ceil(MAX_ALBUM);
             let mut need_reupload = false;
             let mut send_err = String::new();
 
@@ -800,7 +877,7 @@ async fn upload_and_send(
                 let start = batch_idx * MAX_ALBUM;
                 let mut send_attempt = 0u32;
                 loop {
-                    let batch: Vec<InputMedia> = build_items(&uploaded_cover_saved, &uploaded_parts)
+                    let batch: Vec<InputMedia> = build_items(&committed_cover, &committed_parts)
                         .into_iter().skip(start).take(MAX_ALBUM).collect();
                     match client.send_album(peer.clone(), batch).await {
                         Ok(_) => break,
@@ -830,17 +907,19 @@ async fn upload_and_send(
             eprintln!("FILE_PART_MISSING, re-uploading all files (attempt {}/{})…",
                 reupload_count, MAX_REUPLOAD);
             done.store(0, Ordering::Relaxed);
-            uploaded_parts = do_upload(Arc::clone(&done)).await?;
+            committed_parts = do_upload_and_commit(Arc::clone(&done)).await?;
         }
-    } else if let Some(cover_file) = uploaded_cover {
-        // 仅发送封面图和说明文字，发送失败立即重试（不重新上传）
-        // Send cover image with caption only; retry send on failure without re-uploading
-        const MAX_SEND: u32 = 3;
+    } else if let Some(img) = effective_cover {
+        // 仅发送封面图和说明文字 / Send cover image with caption only
+        let uploaded = upload_with_progress(&client, img, Arc::clone(&done), upload_total).await?;
+        if let Some(ref tmp) = converted_cover { let _ = fs::remove_file(tmp); }
+        if let Some(ref tmp) = resized_cover { let _ = fs::remove_file(tmp); }
+        const MAX_SEND: u32 = 5;
         const SEND_RETRY_DELAY: Duration = Duration::from_secs(30);
         let mut send_attempt = 0u32;
         loop {
             let msg = InputMessage::new()
-                .photo(cover_file.clone())
+                .photo(uploaded.clone())
                 .fmt_entities(base_caption_entities.clone())
                 .text(base_caption_text.clone());
             match client.send_message(peer.clone(), msg).await {
