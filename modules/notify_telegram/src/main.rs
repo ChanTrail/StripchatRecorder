@@ -216,7 +216,7 @@ fn extract_video_thumbnail(input: &Path) -> Result<PathBuf, String> {
 /// - `max_bytes`: 每个片段的最大字节数 / Maximum bytes per segment
 fn split_video(input: &Path, max_bytes: u64) -> Result<Vec<PathBuf>, String> {
     let file_size = fs::metadata(input).map_err(|e| format!("stat failed: {}", e))?.len();
-    if file_size <= max_bytes { return Ok(vec![input.to_path_buf()]); }
+    if file_size <= (max_bytes as f64 * 0.95) as u64 { return Ok(vec![input.to_path_buf()]); }
 
     let duration = pp_utils::video_duration(input).unwrap_or(0.0);
     if duration <= 0.0 { return Err("cannot split: unable to determine video duration".to_string()); }
@@ -938,10 +938,10 @@ fn run() -> Result<(), String> {
 
     let cover = find_cover(&input);
 
-    // Telegram 单文件大小限制为 2GB，留 5% 余量确保可上传
-    // Telegram single file size limit is 2GB; leave 5% margin to upload
+    // Telegram 单文件大小限制为 2GB
+    // Telegram single file size limit is 2GB
     const TG_MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
-    let video_parts: Vec<PathBuf> = if send_video { split_video(&input, (TG_MAX_BYTES as f64 * 0.95) as u64)? } else { vec![input.clone()] };
+    let video_parts: Vec<PathBuf> = if send_video { split_video(&input, TG_MAX_BYTES)? } else { vec![input.clone()] };
     let is_split = video_parts.len() > 1 || video_parts.first().map(|p| p != &input).unwrap_or(false);
 
     // 构建 Tokio 运行时并执行异步上传，最多重试 3 次
