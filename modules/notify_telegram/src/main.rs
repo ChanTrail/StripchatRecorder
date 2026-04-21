@@ -88,7 +88,7 @@ const DESCRIBE: &str = r#"{
     ],
     "i18n": {
         "en-US": {
-        "name": "Telegram Notification 0.1.5",
+        "name": "Telegram Notification 0.2.0",
         "description": "Send recording info, cover image and video to Telegram via MTProto (supports files over 50 MB and HTTP/SOCKS5 proxies)",
         "params": {
             "api_id": { "label": "API ID (from my.telegram.org)" },

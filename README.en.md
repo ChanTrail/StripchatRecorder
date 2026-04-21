@@ -103,7 +103,7 @@ Modules are standalone executables implementing a simple protocol. They receive 
 | `contact_sheet`   | Extracts frames at a configurable interval and tiles them into a preview image |
 | `filter_short`    | Deletes recordings shorter than a configurable minimum duration                |
 | `notify_discord`  | Sends recording info and cover image to a Discord Webhook                      |
-| `notify_telegram` | Sends recording info, cover image, and video to Telegram via MTProto           |
+| `notify_telegram` | Sends recording info, cover image, and video to Telegram via MTProto (supports files >2 GB, HTTP/SOCKS5 proxy) |
 
 Custom modules placed in the `modules` volume directory are discovered automatically and will not be overwritten when the container restarts. See the [Module Development Guide](docs/module-development.en.md) for details.
 

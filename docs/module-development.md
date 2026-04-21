@@ -18,7 +18,8 @@
 8. [pp_utils 工具库](#pp_utils-工具库)
 9. [完整示例](#完整示例)
 10. [部署模块](#部署模块)
-11. [注意事项](#注意事项)
+11. [内置模块](#内置模块)
+12. [注意事项](#注意事项)
 
 ---
 
@@ -250,10 +251,10 @@ pp_utils = { path = "../pp_utils" }
 ```rust
 use pp_utils::{param, param_u32, param_f64, param_bool};
 
-let url: String  = param("webhook_url", "");       // 字符串参数
-let interval: u32 = param_u32("interval", 30);     // u32 参数
+let url: String   = param("webhook_url", "");        // 字符串参数
+let interval: u32 = param_u32("interval", 30);       // u32 参数
 let min_dur: f64  = param_f64("min_duration", 60.0); // f64 参数
-let dry_run: bool = param_bool("dry_run", false);  // 布尔参数（"true"/"1"/"yes" 均视为 true）
+let dry_run: bool = param_bool("dry_run", false);    // 布尔参数（"true"/"1"/"yes" 均视为 true）
 ```
 
 参数键名不区分大小写，`param("interval", ...)` 对应环境变量 `PP_PARAM_INTERVAL`。
@@ -308,7 +309,10 @@ let cover: Option<PathBuf> = find_cover(Path::new("/recordings/alice_20240101_12
 ### 进度上报
 
 ```rust
-use pp_utils::{emit_progress, emit_progress_step};
+use pp_utils::{emit_progress, emit_progress_step, PROGRESS_SCALE};
+
+// PROGRESS_SCALE = 10_000，可用于手动构造进度输出
+println!("PROGRESS:0/{}", PROGRESS_SCALE);
 
 // 按已完成量/总量上报（自动缩放到 10000）
 emit_progress(0, 100);   // PROGRESS:0/10000
@@ -439,7 +443,60 @@ chmod +x ./data/modules/copy_to_dir
 
 完成后在 Web UI 的「设置 → 后处理流水线」中即可看到并启用新模块。
 
-> **注意：** 每次容器启动时，`modules_default` 中在 `modules` 里尚不存在的文件会被补充复制进来，已存在的文件不会被覆盖。因此自定义模块和手动替换的内置模块在重启后均会保留。
+> **注意：** 每次容器启动时，`modules.default` 中在 `modules` 里尚不存在的文件会被补充复制进来，已存在的文件不会被覆盖。因此自定义模块和手动替换的内置模块在重启后均会保留。
+
+---
+
+## 内置模块
+
+项目自带以下四个模块，位于 `modules/` 目录，容器启动时会自动复制到 `modules.default/`。
+
+| 模块 ID           | 说明                                                                 |
+| ----------------- | -------------------------------------------------------------------- |
+| `filter_short`    | 删除时长低于阈值的视频，支持 `dry_run` 预览模式                      |
+| `contact_sheet`   | 按指定间隔截帧，拼合成带时间戳水印的预览图，保存到视频同目录         |
+| `notify_discord`  | 将录制信息和封面图通过 Webhook 发送到 Discord，支持 HTTP/SOCKS5 代理 |
+| `notify_telegram` | 通过 MTProto 将录制信息、封面图和视频发送到 Telegram，支持超过 2GB 的大文件自动分割 |
+
+### filter_short 参数
+
+| 参数           | 类型    | 默认值 | 说明                         |
+| -------------- | ------- | ------ | ---------------------------- |
+| `min_duration` | number  | `60`   | 最短时长（秒），低于此值删除 |
+| `dry_run`      | boolean | `false`| 仅预览，不实际删除           |
+
+### contact_sheet 参数
+
+| 参数         | 类型   | 默认值  | 说明                                   |
+| ------------ | ------ | ------- | -------------------------------------- |
+| `interval`   | number | `30`    | 截帧间隔（秒）                         |
+| `thumb_width`| number | `320`   | 单帧宽度（px）                         |
+| `format`     | select | `webp`  | 图片格式：`webp`、`jpg`、`png`         |
+| `quality`    | number | `100`   | 图片质量（1-100，jpg/webp 有效）       |
+| `cols`       | number | `0`     | 列数，`0` 为自动                       |
+| `rows`       | number | `0`     | 行数，`0` 为自动                       |
+| `fontfile`   | string | `""`    | 字体文件路径，留空自动检测             |
+| `fontsize`   | number | `18`    | 时间戳字号                             |
+
+### notify_discord 参数
+
+| 参数          | 类型   | 默认值          | 说明                              |
+| ------------- | ------ | --------------- | --------------------------------- |
+| `webhook_url` | string | `""`            | Discord Webhook URL（必填）       |
+| `proxy`       | string | `""`            | 代理地址，支持 `http://`、`socks5://` |
+| `username`    | string | `Recorder Bot`  | Bot 显示名称                      |
+
+### notify_telegram 参数
+
+| 参数          | 类型    | 默认值  | 说明                                              |
+| ------------- | ------- | ------- | ------------------------------------------------- |
+| `api_id`      | string  | `""`    | Telegram API ID（从 my.telegram.org 获取，必填）  |
+| `api_hash`    | string  | `""`    | Telegram API Hash（必填）                         |
+| `bot_token`   | string  | `""`    | Bot Token（从 @BotFather 获取，必填）             |
+| `chat_id`     | string  | `""`    | Chat ID，超级群组格式为 `-100xxxxxxxxxx`（必填）  |
+| `username`    | string  | `""`    | 群组 Username，超级群组必填（不含 `@`）           |
+| `proxy`       | string  | `""`    | 代理地址，支持 `http://`、`socks5://`             |
+| `send_video`  | boolean | `true`  | 是否同时发送视频文件                              |
 
 ---
 
