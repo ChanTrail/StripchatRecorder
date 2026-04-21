@@ -12,7 +12,7 @@
 
 use pp_utils::{
     emit_progress_step, find_cover, format_bytes, format_duration, format_speed, param, parse_stem,
-    video_duration, PROGRESS_SCALE,
+    tmp_dir, video_duration, PROGRESS_SCALE,
 };
 use socket2::{Domain, Socket, Type};
 use std::env;
@@ -58,22 +58,6 @@ const DESCRIBE: &str = r#"{
         }
     }
 }"#;
-
-/// 获取临时文件目录（优先使用可执行文件同目录下的 tmp 子目录）。
-/// Get the temporary file directory (prefers a `tmp` subdirectory next to the executable).
-fn tmp_dir() -> PathBuf {
-    let base = std::env::var("PP_EXE_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            std::env::current_exe()
-                .ok()
-                .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-                .unwrap_or_else(|| PathBuf::from("."))
-        });
-    let tmp = base.join("tmp");
-    fs::create_dir_all(&tmp).ok();
-    tmp
-}
 
 /// 若封面图超过 Discord 的 10MB 限制，用 ffmpeg 逐步降低质量压缩到限制以内。
 /// If the cover image exceeds Discord's 10 MB limit, compress it with ffmpeg

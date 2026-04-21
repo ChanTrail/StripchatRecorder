@@ -31,7 +31,7 @@ use grammers_client::tl;
 use grammers_session::storages::SqliteSession;
 use grammers_session::types::{PeerAuth, PeerId, PeerRef};
 use tokio::io::AsyncReadExt;
-use pp_utils::{param, param_bool, format_duration, format_bytes, format_speed, parse_stem, find_cover};
+use pp_utils::{param, param_bool, format_duration, format_bytes, format_speed, parse_stem, find_cover, tmp_dir, image_dimensions, video_meta};
 
 /// 进度上报的缩放基数 / Progress reporting scale base
 const PROGRESS_SCALE: usize = 10_000;
@@ -101,37 +101,6 @@ const DESCRIBE: &str = r#"{
         }
     }
 }"#;
-
-/// 获取临时文件目录（优先使用可执行文件同目录下的 tmp 子目录）。
-/// Get the temporary file directory (prefers a `tmp` subdirectory next to the executable).
-fn tmp_dir() -> PathBuf {
-    let base = env::var("PP_EXE_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            env::current_exe().ok()
-                .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-                .unwrap_or_else(|| PathBuf::from("."))
-        });
-    let tmp = base.join("tmp");
-    fs::create_dir_all(&tmp).ok();
-    tmp
-}
-
-/// 获取图片的宽度和高度（使用 ffprobe）。
-/// Get image width and height using ffprobe.
-fn image_dimensions(path: &Path) -> Option<(u32, u32)> {
-    let out = Command::new("ffprobe")
-        .args(["-v", "error", "-select_streams", "v:0",
-               "-show_entries", "stream=width,height", "-of", "csv=p=0"])
-        .arg(path)
-        .stdout(Stdio::piped()).stderr(Stdio::null())
-        .output().ok()?;
-    let s = String::from_utf8_lossy(&out.stdout);
-    let mut parts = s.trim().splitn(2, ',');
-    let w: u32 = parts.next()?.trim().parse().ok()?;
-    let h: u32 = parts.next()?.trim().parse().ok()?;
-    Some((w, h))
-}
 
 /// 若封面图不满足 Telegram 限制（宽+高 < 10000 且宽高比 < 20:1），则等比缩放。
 /// Resize cover image if it violates Telegram limits (w+h < 10000 and aspect ratio < 20:1).
@@ -211,36 +180,6 @@ fn resize_cover_for_telegram(img: &Path) -> Result<Option<PathBuf>, String> {
     }
 
     Ok(Some(out_path))
-}
-
-/// 使用 ffprobe 获取视频的时长、宽度和高度。
-/// Get video duration, width, and height using ffprobe.
-///
-/// # 返回值 / Returns
-/// `(duration_secs, width, height)`，失败时返回 `None`。
-/// `(duration_secs, width, height)`, or `None` on failure.
-fn video_meta(input: &Path) -> Option<(f64, i32, i32)> {
-    let out = Command::new("ffprobe")
-        .args([
-            "-v", "error",
-            "-select_streams", "v:0",
-            "-show_entries", "format=duration:stream=width,height",
-            "-of", "csv=p=0",
-        ])
-        .arg(input)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    let s = String::from_utf8_lossy(&out.stdout);
-    let mut lines = s.lines().filter(|l| !l.trim().is_empty());
-    let dims_line = lines.next()?;
-    let dur_line  = lines.next()?;
-    let mut dims = dims_line.splitn(2, ',');
-    let w: i32 = dims.next()?.trim().parse().ok()?;
-    let h: i32 = dims.next()?.trim().parse().ok()?;
-    let dur: f64 = dur_line.trim().parse().ok()?;
-    Some((dur, w, h))
 }
 
 /// 使用 ffmpeg 从视频中提取第一帧作为缩略图（用于 Telegram 视频消息的预览图）。
