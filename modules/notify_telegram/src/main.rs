@@ -938,9 +938,10 @@ fn run() -> Result<(), String> {
 
     let cover = find_cover(&input);
 
-    // Telegram 单文件大小限制为 2GB / Telegram single file size limit is 2GB
-    const TG_MAX_BYTES: u64 = 1996 * 1000 * 1000;
-    let video_parts: Vec<PathBuf> = if send_video { split_video(&input, TG_MAX_BYTES)? } else { vec![input.clone()] };
+    // Telegram 单文件大小限制为 2GB，留 5% 余量确保可上传
+    // Telegram single file size limit is 2GB; leave 5% margin to upload
+    const TG_MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+    let video_parts: Vec<PathBuf> = if send_video { split_video(&input, (TG_MAX_BYTES as f64 * 0.95) as u64)? } else { vec![input.clone()] };
     let is_split = video_parts.len() > 1 || video_parts.first().map(|p| p != &input).unwrap_or(false);
 
     // 构建 Tokio 运行时并执行异步上传，最多重试 3 次
