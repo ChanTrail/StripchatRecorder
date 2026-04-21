@@ -1000,7 +1000,7 @@ fn run() -> Result<(), String> {
     let cover = find_cover(&input);
 
     // Telegram 单文件大小限制为 2GB / Telegram single file size limit is 2GB
-    const TG_MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+    const TG_MAX_BYTES: u64 = 2 * 1000 * 1000 * 950;
     let video_parts: Vec<PathBuf> = if send_video { split_video(&input, TG_MAX_BYTES)? } else { vec![input.clone()] };
     let is_split = video_parts.len() > 1 || video_parts.first().map(|p| p != &input).unwrap_or(false);
 

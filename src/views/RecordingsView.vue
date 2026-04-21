@@ -581,7 +581,7 @@
 </script>
 
 <template>
-	<div class="flex flex-col h-full overflow-y-auto">
+	<div class="flex flex-col h-full">
 		<Dialog :open="previewOpen" @update:open="previewOpen = $event">
 			<DialogContent
 				class="p-0 overflow-hidden flex flex-col"
@@ -640,7 +640,7 @@
 
 		<header
 			ref="headerEl"
-			class="flex items-start justify-between gap-4 shrink-0 px-6 pt-6 pb-4 sticky top-0 z-10 bg-background"
+			class="flex items-start justify-between gap-4 shrink-0 px-6 pt-6 pb-4 bg-background"
 		>
 			<div class="flex-1 min-w-0">
 				<h1 class="text-xl font-bold mb-0.5">{{ t("recordings.title") }}</h1>
@@ -710,7 +710,7 @@
 			</div>
 		</header>
 
-		<div class="px-6 pb-6">
+		<div class="px-6 pb-6 overflow-auto flex-1">
 			<div
 				v-if="loading && files.length === 0"
 				class="text-center text-muted-foreground py-16"
@@ -727,7 +727,7 @@
 			<Table v-else>
 				<TableHeader
 					class="sticky z-10 bg-background"
-					:style="{ top: `${headerHeight}px` }"
+					:style="{ top: '0' }"
 				>
 					<TableRow>
 						<TableHead class="w-8">
