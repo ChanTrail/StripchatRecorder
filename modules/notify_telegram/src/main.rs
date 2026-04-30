@@ -214,28 +214,50 @@ fn extract_video_thumbnail(input: &Path) -> Result<PathBuf, String> {
 /// # 参数 / Parameters
 /// - `input`: 输入视频路径 / Input video path
 /// - `max_bytes`: 每个片段的最大字节数 / Maximum bytes per segment
-fn split_video(input: &Path, max_bytes: u64) -> Result<Vec<PathBuf>, String> {
-    let file_size = fs::metadata(input).map_err(|e| format!("stat failed: {}", e))?.len();
-    if file_size <= (max_bytes as f64 * 0.95) as u64 { return Ok(vec![input.to_path_buf()]); }
+/// 用 ffprobe 获取视频的平均比特率（bps），失败时返回 None。
+/// Get the average bitrate of a video via ffprobe (bps), returns None on failure.
+fn probe_bitrate(input: &Path) -> Option<u64> {
+    let out = Command::new("ffprobe")
+        .args(["-v", "error", "-show_entries", "format=bit_rate",
+               "-of", "default=noprint_wrappers=1:nokey=1"])
+        .arg(input)
+        .output()
+        .ok()?;
+    let s = String::from_utf8_lossy(&out.stdout);
+    s.trim().parse::<u64>().ok()
+}
 
+/// 将单个文件切分为不超过 max_bytes 的若干段，返回所有段的路径。
+/// Split a single file into segments not exceeding max_bytes, returns all segment paths.
+fn split_one(input: &Path, max_bytes: u64, dir: &Path, stem: &str, ext: &str, offset: usize) -> Result<Vec<PathBuf>, String> {
+    let file_size = fs::metadata(input).map_err(|e| format!("stat failed: {}", e))?.len();
     let duration = pp_utils::video_duration(input).unwrap_or(0.0);
     if duration <= 0.0 { return Err("cannot split: unable to determine video duration".to_string()); }
 
-    // 按文件大小比例计算每段时长，留 5% 余量防止超出
-    // Calculate segment duration proportionally with 5% margin to prevent overflow
-    let ratio = (max_bytes as f64) / (file_size as f64) * 0.95;
-    let seg_duration = (duration * ratio).floor().max(1.0);
+    // 优先用 ffprobe 比特率计算，回退到文件大小比例，均留 10% 余量
+    // Prefer ffprobe bitrate for calculation, fall back to file-size ratio; keep 10% margin
+    let seg_duration = if let Some(bps) = probe_bitrate(input).filter(|&b| b > 0) {
+        let max_bits = (max_bytes as f64 * 0.90) * 8.0;
+        (max_bits / bps as f64).floor().max(1.0)
+    } else {
+        let ratio = (max_bytes as f64) / (file_size as f64) * 0.90;
+        (duration * ratio).floor().max(1.0)
+    };
+
     let n_segs = (duration / seg_duration).ceil() as usize + 1;
 
-    let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("part");
-    let ext  = input.extension().and_then(|e| e.to_str()).unwrap_or("mp4");
-    let dir  = tmp_dir();
-    let pattern = dir.join(format!("{}_part%03d.{}", stem, ext));
+    // ffmpeg segment 模式不支持任意起始编号，先生成临时名再重命名
+    // ffmpeg segment mode doesn't support arbitrary start numbers; generate then rename
+    let tmp_dir_path = dir.join(format!("_split_tmp_{}", offset));
+    fs::create_dir_all(&tmp_dir_path).map_err(|e| format!("mkdir failed: {}", e))?;
+    let tmp_pattern = tmp_dir_path.join(format!("seg%03d.{}", ext));
 
     let status = Command::new("ffmpeg")
         .args(["-y", "-i"]).arg(input)
-        .args(["-c", "copy", "-f", "segment", "-segment_time", &seg_duration.to_string(), "-reset_timestamps", "1"])
-        .arg(&pattern)
+        .args(["-c", "copy", "-f", "segment",
+               "-segment_time", &seg_duration.to_string(),
+               "-reset_timestamps", "1"])
+        .arg(&tmp_pattern)
         .stdout(Stdio::null()).stderr(Stdio::null())
         .status()
         .map_err(|e| format!("ffmpeg not found: {}", e))?;
@@ -243,19 +265,63 @@ fn split_video(input: &Path, max_bytes: u64) -> Result<Vec<PathBuf>, String> {
     if !status.success() { return Err("ffmpeg failed to split video".to_string()); }
 
     let mut segments: Vec<PathBuf> = (0..n_segs)
-        .map(|i| dir.join(format!("{}_part{:03}.{}", stem, i, ext)))
+        .map(|i| tmp_dir_path.join(format!("seg{:03}.{}", i, ext)))
         .filter(|p| p.exists())
         .collect();
+    segments.sort();
 
     if segments.is_empty() { return Err("ffmpeg produced no segment files".to_string()); }
 
-    let oversized = segments.iter().filter(|p| fs::metadata(p).map(|m| m.len()).unwrap_or(0) > max_bytes).count();
-    if oversized > 0 {
-        return Err(format!("{} segment(s) still exceed 2 GB after splitting", oversized));
+    // 重命名为最终路径，编号从 offset 开始
+    // Rename to final paths starting from offset
+    let mut result = Vec::new();
+    for (i, seg) in segments.iter().enumerate() {
+        let dest = dir.join(format!("{}_part{:03}.{}", stem, offset + i, ext));
+        fs::rename(seg, &dest).map_err(|e| format!("rename failed: {}", e))?;
+        result.push(dest);
+    }
+    let _ = fs::remove_dir(&tmp_dir_path);
+    Ok(result)
+}
+
+fn split_video(input: &Path, max_bytes: u64) -> Result<Vec<PathBuf>, String> {
+    let file_size = fs::metadata(input).map_err(|e| format!("stat failed: {}", e))?.len();
+    if file_size <= (max_bytes as f64 * 0.95) as u64 { return Ok(vec![input.to_path_buf()]); }
+
+    let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("part");
+    let ext  = input.extension().and_then(|e| e.to_str()).unwrap_or("mp4");
+    let dir  = tmp_dir();
+    // 第一次切分
+    // Initial split
+    let initial = split_one(input, max_bytes, &dir, stem, ext, 0)?;
+
+    // 对仍然超大的分片递归再切，最多重试 2 次
+    // Recursively re-split any oversized segments, up to 2 retries
+    let mut final_segments: Vec<PathBuf> = Vec::new();
+    let mut counter = initial.len();
+    for seg in initial {
+        let seg_size = fs::metadata(&seg).map(|m| m.len()).unwrap_or(0);
+        if seg_size > max_bytes {
+            // 递归切分，编号从当前 counter 开始
+            let sub = split_one(&seg, max_bytes, &dir, stem, ext, counter)?;
+            counter += sub.len();
+            // 删除超大的中间文件
+            let _ = fs::remove_file(&seg);
+            final_segments.extend(sub);
+        } else {
+            final_segments.push(seg);
+        }
     }
 
-    segments.sort();
-    Ok(segments)
+    let still_oversized = final_segments.iter()
+        .filter(|p| fs::metadata(p).map(|m| m.len()).unwrap_or(0) > max_bytes)
+        .count();
+    if still_oversized > 0 {
+        return Err(format!("{} segment(s) still exceed the size limit after splitting", still_oversized));
+    }
+
+    final_segments.sort();
+    Ok(final_segments)
 }
 
 /// 获取 Telegram 会话文件路径（存储在系统配置目录下）。

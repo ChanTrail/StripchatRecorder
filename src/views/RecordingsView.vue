@@ -377,11 +377,13 @@
 				};
 				const f = files.value.find((r) => r.path === p.path);
 				if (f) {
-					if (p.speed_bps != null) {
+					if (p.speed_bps != null && f.is_recording) {
 						recordingSpeed.value = {
 							...recordingSpeed.value,
 							[p.path]: p.speed_bps,
 						};
+					} else if (!f.is_recording) {
+						delete recordingSpeed.value[p.path];
 					}
 					f.size_bytes = p.size_bytes;
 				} else {
