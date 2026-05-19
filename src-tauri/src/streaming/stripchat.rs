@@ -429,11 +429,6 @@ impl StripchatApi {
         let normalized = playlist.replace("\r\n", "\n").replace('\r', "\n");
         let lines: Vec<&str> = normalized.split('\n').map(|l| l.trim()).collect();
 
-        tracing::warn!("parse_best_stream: {} lines", lines.len());
-        for (i, l) in lines.iter().enumerate().take(12) {
-            tracing::warn!("  [{}] {:?}", i, l);
-        }
-
         // 收集第一个 Mouflon PSCH 参数
         let mut psch: Option<String> = None;
         let mut pkey: Option<String> = None;
@@ -461,9 +456,7 @@ impl StripchatApi {
                     .find(|seg| seg.trim_start().starts_with("BANDWIDTH="))
                     .and_then(|seg| seg.trim_start().strip_prefix("BANDWIDTH="))
                     .and_then(|v| v.parse::<u64>().ok());
-                tracing::warn!("  STREAM-INF bw={:?}", pending_bandwidth);
             } else if !line.is_empty() && !line.starts_with('#') {
-                tracing::warn!("  URL candidate={:?} pending_bw={:?}", line, pending_bandwidth);
                 if let Some(bw) = pending_bandwidth.take() {
                     if bw > best_bandwidth {
                         best_bandwidth = bw;
@@ -475,7 +468,6 @@ impl StripchatApi {
             }
         }
 
-        tracing::warn!("parse_best_stream result: best_url={:?} psch={:?} pkey={:?}", best_url, psch, pkey);
         best_url.map(|url| (url, psch, pkey))
     }
 
@@ -495,14 +487,8 @@ impl StripchatApi {
 
         let playlist_text = self.fetch_auto_playlist(model_id).await?;
 
-        tracing::warn!("playlist_text bytes: {:?}", &playlist_text.as_bytes()[..playlist_text.len().min(200)]);
-
         let parsed = Self::parse_best_stream(&playlist_text);
-        tracing::warn!("parse_best_stream result: url={:?} psch={:?} pkey={:?}",
-            parsed.as_ref().map(|(u,_,_)| u),
-            parsed.as_ref().and_then(|(_,s,_)| s.as_deref()),
-            parsed.as_ref().and_then(|(_,_,k)| k.as_deref()),
-        );
+
         let (url, psch, pkey) = parsed
             .ok_or_else(|| AppError::StreamOffline(username.to_string()))?;
 
@@ -510,12 +496,10 @@ impl StripchatApi {
             (Some(psch), Some(pkey)) => {
                 // 若 URL 已含 query string 则用 & 追加，否则用 ? 开头
                 let sep = if url.contains('?') { "&" } else { "?" };
-                format!("{}{}playlistType=lowLatency&psch={}&pkey={}", url, sep, psch, pkey)
+                format!("{}{}psch={}&pkey={}", url, sep, psch, pkey)
             }
             _ => url,
         };
-
-        tracing::warn!("final_url:{}", final_url);
 
         Ok(final_url)
     }
