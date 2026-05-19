@@ -368,62 +368,156 @@ impl StripchatApi {
         })
     }
 
-    /// 获取主播的 HLS 播放列表 URL（需要先获取 models 列表以确定 HLS 前缀）。
-    /// Get the HLS playlist URL for a streamer (requires fetching the models list to determine the HLS prefix).
+    /// 对所有 CDN TLD 竞速请求 `_auto.m3u8` master playlist，返回最先成功的响应文本。
+    /// Race all CDN TLDs for the `_auto.m3u8` master playlist and return the first successful response text.
+    async fn fetch_auto_playlist(&self, model_id: i64) -> Result<String> {
+        let client = &self.cdn_client;
+        let mut tasks = tokio::task::JoinSet::new();
+
+        for &tld in CDN_TLDS {
+            // 使用固定路径模板：edge-hls.{tld}/hls/{model_id}/master/{model_id}_auto.m3u8
+            let url = format!(
+                "https://edge-hls.{}/hls/{}/master/{}_auto.m3u8",
+                tld, model_id, model_id
+            );
+            let client = client.clone();
+            tasks.spawn(async move {
+                let resp = client
+                    .get(&url)
+                    .header("Referer", REFERER)
+                    .send()
+                    .await;
+                (tld, url, resp)
+            });
+        }
+
+        let mut errors: Vec<(String, String)> = Vec::new();
+
+        while let Some(join_result) = tasks.join_next().await {
+            let (tld, url, result) = match join_result {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            match result {
+                Ok(resp) if resp.status().is_success() => {
+                    tasks.abort_all();
+                    tracing::debug!("auto.m3u8 via CDN TLD: {}", tld);
+                    return Ok(resp.text().await?);
+                }
+                Ok(resp) => {
+                    errors.push((url, format!("HTTP {}", resp.status())));
+                }
+                Err(e) => {
+                    errors.push((url, e.to_string()));
+                }
+            }
+        }
+
+        for (url, err) in &errors {
+            tracing::error!("auto.m3u8 fetch failed [{}]: {}", url, err);
+        }
+        Err(AppError::Other(format!(
+            "All CDN TLDs failed for model {} _auto.m3u8",
+            model_id
+        )))
+    }
+
+    /// 从 master playlist 文本中解析出 BANDWIDTH 最高的流 URL。
+    /// Parse the stream URL with the highest BANDWIDTH from the master playlist text.
+    fn parse_best_stream(playlist: &str) -> Option<(String, Option<String>, Option<String>)> {
+        // 先把 \r\n 统一成 \n，再按 \n 分割
+        let normalized = playlist.replace("\r\n", "\n").replace('\r', "\n");
+        let lines: Vec<&str> = normalized.split('\n').map(|l| l.trim()).collect();
+
+        tracing::warn!("parse_best_stream: {} lines", lines.len());
+        for (i, l) in lines.iter().enumerate().take(12) {
+            tracing::warn!("  [{}] {:?}", i, l);
+        }
+
+        // 收集第一个 Mouflon PSCH 参数
+        let mut psch: Option<String> = None;
+        let mut pkey: Option<String> = None;
+        for &line in &lines {
+            if let Some(rest) = line.strip_prefix("#EXT-X-MOUFLON:PSCH:") {
+                if let Some((scheme, key)) = rest.split_once(':') {
+                    psch = Some(scheme.to_string());
+                    pkey = Some(key.to_string());
+                    break;
+                }
+            }
+        }
+
+        // 解析 BANDWIDTH 最高的流
+        let mut best_bandwidth: u64 = 0;
+        let mut best_url: Option<String> = None;
+        let mut pending_bandwidth: Option<u64> = None;
+
+        for &line in &lines {
+            if line.starts_with("#EXT-X-STREAM-INF:") {
+                // 去掉标签前缀后再按逗号分割，避免标签名干扰 BANDWIDTH= 匹配
+                let attrs = &line["#EXT-X-STREAM-INF:".len()..];
+                pending_bandwidth = attrs
+                    .split(',')
+                    .find(|seg| seg.trim_start().starts_with("BANDWIDTH="))
+                    .and_then(|seg| seg.trim_start().strip_prefix("BANDWIDTH="))
+                    .and_then(|v| v.parse::<u64>().ok());
+                tracing::warn!("  STREAM-INF bw={:?}", pending_bandwidth);
+            } else if !line.is_empty() && !line.starts_with('#') {
+                tracing::warn!("  URL candidate={:?} pending_bw={:?}", line, pending_bandwidth);
+                if let Some(bw) = pending_bandwidth.take() {
+                    if bw > best_bandwidth {
+                        best_bandwidth = bw;
+                        best_url = Some(line.to_string());
+                    }
+                }
+            } else {
+                pending_bandwidth = None;
+            }
+        }
+
+        tracing::warn!("parse_best_stream result: best_url={:?} psch={:?} pkey={:?}", best_url, psch, pkey);
+        best_url.map(|url| (url, psch, pkey))
+    }
+
+    /// 获取主播的 HLS 播放列表 URL。
+    /// 直接对所有 CDN TLD 竞速请求 `{model_id}_auto.m3u8`，解析最高清晰度流。
+    ///
+    /// Get the HLS playlist URL for a streamer.
+    /// Races all CDN TLDs for `{model_id}_auto.m3u8` and picks the highest-quality stream.
     async fn get_playlist_url(
         &self,
         username: &str,
         model_json: &serde_json::Value,
     ) -> Result<String> {
-        let models_url = self.api_url("https://stripchat.com/api/front/models?primaryTag=girls");
-        let resp = self
-            .api_client
-            .get(models_url)
-            .header("Referer", format!("{}{}", self.referer(), username))
-            .send()
-            .await?;
-
-        let models_json: serde_json::Value = resp.json().await?;
-        let ref_hls = models_json["models"]
-            .as_array()
-            .and_then(|arr| arr.first())
-            .and_then(|m| m["hlsPlaylist"].as_str())
-            .ok_or_else(|| AppError::Other("Cannot get HLS prefix".to_string()))?;
-
-        let hls_prefix: String = ref_hls.split('/').take(3).collect::<Vec<_>>().join("/");
-
         let model_id = model_json["user"]["user"]["id"]
             .as_i64()
             .ok_or_else(|| AppError::Other("Cannot get model ID".to_string()))?;
 
-        let master_url = format!("{}/hls/{}/master/{}.m3u8", hls_prefix, model_id, model_id);
+        let playlist_text = self.fetch_auto_playlist(model_id).await?;
 
-        let resp = self.cdn_get(&master_url).await?;
-        let playlist = resp.text().await?;
-        let mut playlist_url: Option<String> = None;
-        let mut psch: Option<String> = None;
-        let mut pkey: Option<String> = None;
+        tracing::warn!("playlist_text bytes: {:?}", &playlist_text.as_bytes()[..playlist_text.len().min(200)]);
 
-        for line in playlist.lines() {
-            if line.contains("EXT-X-MOUFLON") {
-                let parts: Vec<&str> = line.split(':').collect();
-                if parts.len() >= 4 {
-                    psch = Some(parts[2].to_string());
-                    pkey = Some(parts[3].to_string());
-                }
+        let parsed = Self::parse_best_stream(&playlist_text);
+        tracing::warn!("parse_best_stream result: url={:?} psch={:?} pkey={:?}",
+            parsed.as_ref().map(|(u,_,_)| u),
+            parsed.as_ref().and_then(|(_,s,_)| s.as_deref()),
+            parsed.as_ref().and_then(|(_,_,k)| k.as_deref()),
+        );
+        let (url, psch, pkey) = parsed
+            .ok_or_else(|| AppError::StreamOffline(username.to_string()))?;
+
+        let final_url = match (psch, pkey) {
+            (Some(psch), Some(pkey)) => {
+                // 若 URL 已含 query string 则用 & 追加，否则用 ? 开头
+                let sep = if url.contains('?') { "&" } else { "?" };
+                format!("{}{}playlistType=lowLatency&psch={}&pkey={}", url, sep, psch, pkey)
             }
-            if !line.is_empty() && !line.starts_with('#') {
-                playlist_url = Some(line.to_string());
-            }
-        }
+            _ => url,
+        };
 
-        let mut url = playlist_url.ok_or_else(|| AppError::StreamOffline(username.to_string()))?;
+        tracing::warn!("final_url:{}", final_url);
 
-        if let (Some(psch), Some(pkey)) = (psch, pkey) {
-            url = format!("{}?&psch={}&pkey={}", url, psch, pkey);
-        }
-
-        Ok(url)
+        Ok(final_url)
     }
 
     /// 下载 HLS 播放列表文本内容。
