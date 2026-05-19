@@ -216,6 +216,11 @@ const COMMAND_MAP: Record<
 		url: () => "/api/recordings/postprocess",
 		body: (a) => ({ path: a.path }),
 	},
+	cancel_postprocess: {
+		method: "POST",
+		url: () => "/api/recordings/postprocess-cancel",
+		body: (a) => ({ path: a.path }),
+	},
 	open_recording: {
 		method: "POST",
 		url: () => "/api/recordings/open",

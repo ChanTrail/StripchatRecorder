@@ -172,6 +172,10 @@ pub struct NodeResult {
     /// 模块输出的文件路径（从 `OUTPUT:` 前缀行解析，不序列化）/ Module output file path (parsed from `OUTPUT:` prefix line, not serialized)
     #[serde(skip)]
     pub output: Option<PathBuf>,
+    /// 模块是否请求主程序删除其输入文件（从 `DELETE_INPUT` 协议行解析，不序列化）
+    /// Whether the module requested the host to delete its input file (parsed from `DELETE_INPUT` protocol line, not serialized)
+    #[serde(skip)]
+    pub delete_input: bool,
 }
 
 /// 执行后处理流水线，依次运行所有启用的节点。
@@ -186,6 +190,7 @@ pub struct NodeResult {
 /// - `pipeline`: 流水线配置 / Pipeline configuration
 /// - `modules`: 可用模块列表 / Available module list
 /// - `cancel`: 可选的取消标志 / Optional cancel flag
+/// - `max_tmp_dir_gb`: tmp 目录最大占用（GB，0 = 不限制）/ Max tmp dir size in GB (0 = unlimited)
 /// - `on_progress`: 进度回调（节点完成数, 总节点数, 模块内进度, 模块总进度, 模块名, 状态文字）/ Progress callback
 /// - `on_log`: 日志回调（模块 ID, 流名称, 行内容）/ Log callback
 pub fn run_pipeline(
@@ -193,6 +198,7 @@ pub fn run_pipeline(
     pipeline: &PipelineConfig,
     modules: &[ModuleInfo],
     cancel: Option<Arc<AtomicBool>>,
+    max_tmp_dir_gb: f64,
     on_progress: impl Fn(usize, usize, u32, u32, &str, &str),
     on_log: impl Fn(&str, &str, &str),
 ) -> Vec<NodeResult> {
@@ -223,6 +229,7 @@ pub fn run_pipeline(
                     success: false,
                     message: format!("模块 '{}' 不存在，请检查 modules/ 目录", node.module_id),
                     output: None,
+                    delete_input: false,
                 });
                 done += 1;
                 on_progress(done, total, 0, 0, &node.module_id, "");
@@ -240,6 +247,7 @@ pub fn run_pipeline(
             node,
             &current_input,
             cancel.clone(),
+            max_tmp_dir_gb,
             &|md, mt| {
                 *last_mod.lock().unwrap() = (md, mt);
                 let st = status_text.lock().unwrap().clone();
@@ -258,6 +266,18 @@ pub fn run_pipeline(
         done += 1;
         on_progress(done, total, 0, 0, &module_name, "");
 
+        // 若模块请求删除其输入文件，由主程序执行删除（同时清理对应的 meta 文件）
+        // If the module requested deletion of its input file, the host performs the deletion
+        // (also cleaning up the corresponding meta file)
+        if result.delete_input {
+            if let Err(e) = std::fs::remove_file(&current_input) {
+                tracing::warn!("DELETE_INPUT: failed to remove {:?}: {}", current_input, e);
+            } else {
+                tracing::info!("DELETE_INPUT: removed {:?}", current_input);
+                crate::recording::meta::delete_meta(&current_input);
+            }
+        }
+
         match &result.output {
             Some(out) => {
                 // 节点有输出，继续执行下一个节点 / Node has output, continue to next node
@@ -265,8 +285,8 @@ pub fn run_pipeline(
                 results.push(result);
             }
             None if result.success => {
-                // 节点成功但无输出（如文件被删除），终止流水线
-                // Node succeeded but has no output (e.g., file deleted), terminate pipeline
+                // 节点成功但无输出（模块已请求删除输入），终止流水线
+                // Node succeeded but has no output (module requested input deletion), terminate pipeline
                 results.push(result);
                 break;
             }
@@ -289,6 +309,7 @@ pub fn run_pipeline(
 /// - `node`: 节点配置（含参数）/ Node configuration (including parameters)
 /// - `input`: 输入文件路径 / Input file path
 /// - `cancel`: 可选的取消标志 / Optional cancel flag
+/// - `max_tmp_dir_gb`: tmp 目录最大占用（GB，0 = 不限制）/ Max tmp dir size in GB (0 = unlimited)
 /// - `on_module_progress`: 模块内进度回调 / Module-level progress callback
 /// - `on_log`: 日志行回调 / Log line callback
 /// - `on_status`: 状态文字回调（来自 `STATUS:` 前缀行）/ Status text callback (from `STATUS:` prefix lines)
@@ -297,6 +318,7 @@ fn run_node(
     node: &PipelineNode,
     input: &std::path::Path,
     cancel: Option<Arc<AtomicBool>>,
+    max_tmp_dir_gb: f64,
     on_module_progress: &dyn Fn(u32, u32),
     on_log: &dyn Fn(&str, &str),
     on_status: &dyn Fn(&str),
@@ -315,8 +337,12 @@ fn run_node(
     }
 
     let mut cmd = std::process::Command::new(&module.exe_path);
+    // PP_MAX_TMP_MB 以 MB 为单位传给模块（GB * 1024，向下取整）
+    // Pass PP_MAX_TMP_MB to the module in MB (GB * 1024, truncated)
+    let max_tmp_mb = (max_tmp_dir_gb * 1024.0) as u64;
     cmd.env("PP_INPUT", input)
         .env("PP_EXE_DIR", exe_dir())
+        .env("PP_MAX_TMP_MB", max_tmp_mb.to_string())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
@@ -339,6 +365,7 @@ fn run_node(
                 success: false,
                 message: format!("Failed to spawn: {}", e),
                 output: None,
+                delete_input: false,
             }
         }
     };
@@ -347,6 +374,7 @@ fn run_node(
     let mut stderr_msg = String::new();
     let mut panic_msg = String::new();
     let mut output_path: Option<PathBuf> = None;
+    let mut delete_input = false;
     let mut cancelled = false;
 
     let module_id = &node.module_id;
@@ -423,6 +451,9 @@ fn run_node(
                 } else if let Some(path) = trimmed.strip_prefix("OUTPUT:") {
                     // 解析 OUTPUT:{path} 格式 / Parse OUTPUT:{path} format
                     output_path = Some(PathBuf::from(path.trim()));
+                } else if trimmed == "DELETE_INPUT" {
+                    // 模块请求主程序删除其输入文件 / Module requests host to delete its input file
+                    delete_input = true;
                 } else if !trimmed.is_empty() {
                     tracing::info!("[{}] {}", module_id, trimmed);
                     on_log("stdout", trimmed);
@@ -467,6 +498,7 @@ fn run_node(
             success: false,
             message: "cancelled".to_string(),
             output: None,
+            delete_input: false,
         };
     }
 
@@ -484,6 +516,7 @@ fn run_node(
                 success: false,
                 message: format!("wait failed: {}", e),
                 output: None,
+                delete_input: false,
             }
         }
     };
@@ -511,5 +544,6 @@ fn run_node(
         success,
         message,
         output: if success { output_path } else { None },
+        delete_input: success && delete_input,
     }
 }

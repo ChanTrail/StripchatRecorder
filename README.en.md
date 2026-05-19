@@ -20,13 +20,15 @@ A self-hosted Stripchat live stream recorder with a web-based management UI. Sup
   - Launch a similar-face search from any streamer card
 - Supports split network proxies: configure Stripchat API proxy and CDN chunk proxy separately
 - Supports configurable Stripchat mirror site (replaces `stripchat.com` in requests with your mirror domain)
+- **Mouflon HLS decryption**: manage `pkey → pdkey` key pairs for decrypting Stripchat's encrypted HLS segment filenames
 - Configurable post-processing pipeline with pluggable modules:
   - **contact_sheet** — generates a tiled preview image with timestamps
   - **filter_short** — deletes recordings below a minimum duration
   - **notify_discord** — sends recording info and cover image to a Discord Webhook
   - **notify_telegram** — sends recording info, cover image, and video via MTProto (supports files >2 GB, HTTP/SOCKS5 proxy)
+- Disk space monitoring on the recordings page, with a warning highlight when less than 5 GB remains
 - Dual runtime: Tauri desktop app or headless server accessible via browser
-- Real-time UI updates via Server-Sent Events
+- Real-time UI updates via Server-Sent Events with multi-client sync
 - Dark/light mode following system theme
 - Custom UI language support, see [Custom Locale Guide](docs/custom-locale.en.md)
 
@@ -63,15 +65,31 @@ Then open `http://localhost:3030` in your browser.
 
 The Docker image runs in Server mode by default (port 3030). Configuration is written to the mounted `config/settings.json`.
 
+### Key Settings
+
+The following options are available in the Web UI under Settings:
+
+| Setting              | Description                                                                 |
+| -------------------- | --------------------------------------------------------------------------- |
+| Output directory     | Path where recordings are saved                                             |
+| Max concurrent       | Maximum number of simultaneous recordings; `0` means unlimited             |
+| Poll interval        | How often to check if a streamer is live (seconds), range 10–300           |
+| Merge format         | Format for auto-merging segments after recording: `mp4` (default), `mkv`, `ts` |
+| Auto-record          | Whether newly added streamers have auto-record enabled by default           |
+
 ### Network Proxies and Mirror
 
-In the settings page under "Network Proxies", you can configure:
+In the settings page under "Network", you can configure:
 
 Stripchat mirror project: <https://github.com/ChanTrail/StripchatMirror>
 
 1. API Proxy: used for Stripchat API access; if a mirror is also set, mirror requests go through this proxy.
 2. CDN Proxy: used for downloading live stream chunks; can be configured independently from the API proxy.
 3. Stripchat Mirror: replaces `stripchat.com` in requests with your mirror domain.
+
+### Mouflon HLS Decryption Keys
+
+Stripchat encrypts HLS segment filenames (the Mouflon system). If recordings fail to download segments, add the corresponding `pkey → pdkey` key pairs in Settings under "Mouflon Decryption Keys". Keys can be obtained from community channels.
 
 ### docker run
 

@@ -13,12 +13,16 @@
 	import { useStreamersStore } from "../stores/streamers";
 	import type { StreamerEntry } from "../stores/streamers";
 	import { useNotify } from "../composables/useNotify";
+	import { useMergingStore } from "../stores/merging";
+	import { usePpStatusStore } from "../stores/ppStatus";
 	import StreamerCard from "../components/StreamerCard.vue";
 	import AddStreamerDialog from "../components/AddStreamerDialog.vue";
 	import { Button } from "@/components/ui/button";
 	import { useI18n } from "vue-i18n";
 
 	const store = useStreamersStore();
+	const mergingStore = useMergingStore();
+	const ppStatusStore = usePpStatusStore();
 	const { toast, confirm } = useNotify();
 	const { t } = useI18n();
 	/** 是否显示添加主播对话框 / Whether to show the add streamer dialog */
@@ -31,7 +35,10 @@
 
 	/**
 	 * 处理移除主播操作，先弹出确认对话框。
+	 * 删除前取消该主播所有正在进行的后处理任务，并清理合并队列状态。
+	 *
 	 * Handle remove streamer action with confirmation dialog.
+	 * Cancels all in-progress post-processing tasks and clears merge queue state before removal.
 	 *
 	 * @param username - 主播用户名 / Streamer username
 	 */
@@ -44,6 +51,10 @@
 		});
 		if (!ok) return;
 		try {
+			// 取消并清理该主播的后处理任务 / Cancel and clear post-processing tasks for this streamer
+			await ppStatusStore.cancelAndClearForUsername(username);
+			// 清理该主播的合并队列状态 / Clear merge queue state for this streamer
+			mergingStore.clearMergingForUsername(username);
 			await store.removeStreamer(username);
 			toast(t("home.remove.done", { username }), "success");
 		} catch (e) {

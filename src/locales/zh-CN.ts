@@ -22,13 +22,15 @@ export default {
 		missingStreamers: {
 			title: "发现不存在的主播",
 			message: "以下主播账号不存在，将从列表中删除\n\n{list}",
-			confirm: "已知晓并删除",
+			confirm: "删除",
+			ignore: "忽略",
 			done: "已删除 {count} 个不存在的主播",
 		},
 		missingPpResults: {
 			title: "发现已删除文件的后处理记录",
 			message: "以下文件已不存在，但仍有后处理记录，将进行清理\n\n{list}",
-			confirm: "已知晓并清理",
+			confirm: "清理",
+			ignore: "忽略",
 			done: "已清理 {count} 条后处理记录",
 		},
 	},
@@ -259,6 +261,10 @@ export default {
 		mergeFormat: {
 			label: "合并格式",
 			hint: "录制结束后自动合并分片为单一文件的格式",
+		},
+		maxTmpDirGb: {
+			label: "后处理临时目录最大占用（GB）",
+			hint: "后处理模块运行时产生的临时文件上限，超出后自动删除最旧的文件。0 表示不限制，默认 50 GB",
 		},
 		apiProxy: {
 			label: "API 代理（访问 stripchat.com，留空不使用）",

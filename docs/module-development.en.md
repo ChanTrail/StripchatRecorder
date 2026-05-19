@@ -21,8 +21,6 @@ This document describes how to write custom post-processing modules for Stripcha
 11. [Built-in Modules](#built-in-modules)
 12. [Notes](#notes)
 
----
-
 ## Overview
 
 Post-processing modules are **standalone executables** invoked sequentially by the host application after a recording completes. Each module receives its input via environment variables and communicates with the host via stdout. Modules can be written in any language as long as they follow the protocol defined in this document.
@@ -61,6 +59,7 @@ The module communicates with the host by writing lines with specific prefixes to
 | Output line               | Description                                                                                                                                                                         |
 | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `OUTPUT:<path>`           | **Must be emitted once.** Passes `<path>` as input to the next module. If the module deletes the file (e.g. `filter_short`), omit this line and subsequent modules will be skipped. |
+| `DELETE_INPUT`            | Requests the host to delete the `PP_INPUT` file. The module must **not** emit `OUTPUT:` after this line; the pipeline will be aborted.                                              |
 | `PROGRESS:<done>/<total>` | Progress report; both values are integers, `total` is always `10000` (i.e. `done=5000` means 50%).                                                                                  |
 | `STATUS:<text>`           | Optional status text (e.g. upload speed), shown next to the progress bar in the UI.                                                                                                 |
 | `SKIP:<reason>`           | Optional. Notifies the host that processing was skipped (e.g. output already exists). Still requires an `OUTPUT:` line.                                                             |
@@ -306,6 +305,32 @@ let cover: Option<PathBuf> = find_cover(Path::new("/recordings/alice_20240101_12
 // Returns e.g. /recordings/alice_20240101_120000.webp if it exists
 ```
 
+### Image and Video Metadata
+
+```rust
+use pp_utils::{image_dimensions, video_meta};
+use std::path::Path;
+
+// Get image width and height via ffprobe
+let dims: Option<(u32, u32)> = image_dimensions(Path::new("/recordings/cover.webp"));
+// Returns Some((1280, 720)) or None
+
+// Get video duration, width, and height in one call
+let meta: Option<(f64, i32, i32)> = video_meta(Path::new("/recordings/alice_20240101_120000.ts"));
+// Returns Some((duration_secs, width, height)) or None
+```
+
+### Temporary Directory
+
+Returns a writable `tmp/` subdirectory under `PP_EXE_DIR` (or next to the module binary if `PP_EXE_DIR` is not set). The directory is created automatically.
+
+```rust
+use pp_utils::tmp_dir;
+
+let tmp: PathBuf = tmp_dir();
+// e.g. /app/stripchat-recorder/modules/tmp/
+```
+
 ### Progress Reporting
 
 ```rust
@@ -453,7 +478,7 @@ The project ships four modules under `modules/`, which are automatically copied 
 
 | Module ID         | Description                                                                              |
 | ----------------- | ---------------------------------------------------------------------------------------- |
-| `filter_short`    | Deletes videos shorter than a threshold; supports `dry_run` preview mode                 |
+| `filter_short`    | Requests the host to delete videos shorter than a threshold; supports `dry_run` preview mode |
 | `contact_sheet`   | Extracts frames at a set interval and tiles them into a timestamped preview image        |
 | `notify_discord`  | Sends recording info and cover image to Discord via Webhook; supports HTTP/SOCKS5 proxy  |
 | `notify_telegram` | Sends recording info, cover image, and video to Telegram via MTProto; auto-splits files over 2 GB |

@@ -61,6 +61,7 @@ PP_INPUT=<path>  PP_PARAM_<KEY>=<value> ...  ./<module_binary>
 | 输出行                    | 说明                                                                                                                                  |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | `OUTPUT:<path>`           | **必须输出一次**。将 `<path>` 作为下一个模块的输入传递。若模块删除了文件（如 `filter_short`），则不输出此行，流水线后续模块将被跳过。 |
+| `DELETE_INPUT`            | 请求主程序删除 `PP_INPUT` 文件。输出此行后**不得**再输出 `OUTPUT:` 行，流水线将被中止。                                               |
 | `PROGRESS:<done>/<total>` | 进度上报，`done` 和 `total` 均为整数，`total` 固定为 `10000`（即 `done=5000` 表示 50%）。                                             |
 | `STATUS:<text>`           | 可选的状态文字（如上传速度），显示在 UI 的进度条旁。                                                                                  |
 | `SKIP:<reason>`           | 可选。通知主程序本模块已跳过处理（如输出文件已存在），仍需输出 `OUTPUT:` 行。                                                         |
@@ -306,6 +307,32 @@ let cover: Option<PathBuf> = find_cover(Path::new("/recordings/alice_20240101_12
 // 若存在则返回 /recordings/alice_20240101_120000.webp 等
 ```
 
+### 图片与视频元数据
+
+```rust
+use pp_utils::{image_dimensions, video_meta};
+use std::path::Path;
+
+// 通过 ffprobe 获取图片宽高
+let dims: Option<(u32, u32)> = image_dimensions(Path::new("/recordings/cover.webp"));
+// 返回 Some((1280, 720)) 或 None
+
+// 一次调用获取视频时长、宽度和高度
+let meta: Option<(f64, i32, i32)> = video_meta(Path::new("/recordings/alice_20240101_120000.ts"));
+// 返回 Some((时长秒数, 宽度, 高度)) 或 None
+```
+
+### 临时目录
+
+返回 `PP_EXE_DIR` 下的 `tmp/` 子目录（若未设置 `PP_EXE_DIR` 则使用模块二进制文件所在目录）。目录会自动创建。
+
+```rust
+use pp_utils::tmp_dir;
+
+let tmp: PathBuf = tmp_dir();
+// 例如 /app/stripchat-recorder/modules/tmp/
+```
+
 ### 进度上报
 
 ```rust
@@ -425,7 +452,7 @@ fn main() {
 ### 构建
 
 ```bash
-cargo build --release
+cargo build --release --bins
 # 产物位于 target/release/copy_to_dir
 ```
 
@@ -453,7 +480,7 @@ chmod +x ./data/modules/copy_to_dir
 
 | 模块 ID           | 说明                                                                 |
 | ----------------- | -------------------------------------------------------------------- |
-| `filter_short`    | 删除时长低于阈值的视频，支持 `dry_run` 预览模式                      |
+| `filter_short`    | 请求主程序删除时长低于阈值的视频，支持 `dry_run` 预览模式            |
 | `contact_sheet`   | 按指定间隔截帧，拼合成带时间戳水印的预览图，保存到视频同目录         |
 | `notify_discord`  | 将录制信息和封面图通过 Webhook 发送到 Discord，支持 HTTP/SOCKS5 代理 |
 | `notify_telegram` | 通过 MTProto 将录制信息、封面图和视频发送到 Telegram，支持超过 2GB 的大文件自动分割 |

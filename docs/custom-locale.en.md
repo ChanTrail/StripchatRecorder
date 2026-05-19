@@ -69,7 +69,23 @@ export default i18n;
 
 ### 3. Add the option in the Settings page
 
-Find the language selector in the settings page (usually in `src/views/SettingsView.vue` or similar). Search for `zh-CN` / `en-US` to locate it and add the new option.
+The language selector is in `src/views/SettingsView.vue`, inside the `setLocale` function and the `RadioGroup` component. Search for `lang-zh` / `lang-en` to locate it and add a new entry following the same pattern:
+
+```vue
+<div class="flex items-center gap-2">
+  <RadioGroupItem id="lang-ja" value="ja-JP" />
+  <Label for="lang-ja" class="cursor-pointer">日本語</Label>
+</div>
+```
+
+Also update the type assertion in the `setLocale` function to include the new locale:
+
+```ts
+function setLocale(lang: string) {
+  locale.value = lang as "zh-CN" | "en-US" | "ja-JP";
+  localStorage.setItem("locale", lang);
+}
+```
 
 ### 4. Add the option in the first-launch TUI
 
@@ -99,7 +115,7 @@ let (lang_code, lang_en) = match lang_idx {
 | `addStreamer`    | Add streamer dialog                   |
 | `recordings`     | Recordings page                       |
 | `postprocess`    | Post-processing pipeline page         |
-| `finder`         | Streamer finder page                  |
+| `finder`         | Streamer finder page (includes `gender` sub-key) |
 | `settings`       | Settings page                         |
 | `usePostprocess` | Post-processing task status messages  |
 

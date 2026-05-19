@@ -109,6 +109,9 @@ pub async fn run_postprocess_cmd(
     state.pp_task_enqueue(&path);
     emitter.emit("postprocess-waiting", &serde_json::json!({ "path": path }));
 
+    // 更新 meta status = "pp_waiting" / Update meta status = "pp_waiting"
+    crate::recording::meta::set_status(&video_path, "pp_waiting");
+
     // 在阻塞线程池中执行，避免阻塞 Tokio 异步运行时
     // Execute in blocking thread pool to avoid blocking the Tokio async runtime
     tokio::task::spawn_blocking(move || {
@@ -136,6 +139,9 @@ pub fn run_postprocess_for_path(
         "postprocess-waiting",
         &serde_json::json!({ "path": path_str }),
     );
+
+    // 更新元数据文件中的后处理状态 / Update post-processing status in metadata file
+    crate::recording::meta::set_status(video_path, "pp_waiting");
 
     run_postprocess_for_path_inner(video_path, pipeline, emitter, state);
 }
@@ -172,9 +178,42 @@ pub fn run_postprocess_for_path_inner(
 
     let modules = discover_modules();
 
+    // 从 meta 读取上次的后处理结果，用于跳过已成功的模块（重新后处理时复用）
+    // Read previous pp_results from meta to skip already-succeeded modules on re-run
+    let meta_snapshot = crate::recording::meta::read_meta(video_path);
+    tracing::info!(
+        "pp re-run: video={:?}, meta_status={:?}, meta_pp_results_count={}",
+        video_path,
+        meta_snapshot.as_ref().map(|m| &m.status),
+        meta_snapshot.as_ref().and_then(|m| m.pp_results.as_ref()).map(|r| r.len()).unwrap_or(0),
+    );
+    let prev_results: Vec<crate::recording::meta::PpModuleResult> = meta_snapshot
+        .and_then(|m| m.pp_results)
+        .unwrap_or_default();
+
+    tracing::info!(
+        "pp re-run: prev_results={:?}",
+        prev_results.iter().map(|r| format!("{}={}", r.module_id, r.success)).collect::<Vec<_>>()
+    );
+
+    // 构建实际需要执行的节点列表：跳过上次已成功的模块
+    // Build the list of nodes to actually run: skip modules that succeeded last time
+    let effective_pipeline = {
+        let mut p = pipeline.clone();
+        p.nodes.retain(|n| {
+            if !n.enabled {
+                return true; // 保留禁用节点（run_pipeline 会自动跳过）/ Keep disabled nodes (run_pipeline skips them)
+            }
+            let skip = prev_results.iter().any(|r| r.module_id == n.module_id && r.success);
+            tracing::info!("pp re-run: node module_id={} enabled={} skip={}", n.module_id, n.enabled, skip);
+            !skip
+        });
+        p
+    };
+
     // 预检：确认所有启用节点的模块都存在，缺失则直接报错
     // Pre-check: verify all enabled nodes have their modules available, fail fast if not
-    let missing: Vec<&str> = pipeline
+    let missing: Vec<&str> = effective_pipeline
         .nodes
         .iter()
         .filter(|n| n.enabled)
@@ -201,7 +240,7 @@ pub fn run_postprocess_for_path_inner(
         return;
     }
 
-    let total = pipeline.nodes.iter().filter(|n| n.enabled).count();
+    let total = effective_pipeline.nodes.iter().filter(|n| n.enabled).count();
 
     state.pp_task_start(&path_str, total);
     let cancel_flag = state.pp_task_make_cancel_flag(&path_str);
@@ -210,11 +249,17 @@ pub fn run_postprocess_for_path_inner(
         &serde_json::json!({ "path": path_str }),
     );
 
-    let results: Vec<NodeResult> = run_pipeline(
+    // 更新元数据文件：标记为运行中 / Update metadata file: mark as running
+    crate::recording::meta::set_status(video_path, "pp_running");
+
+    let max_tmp_dir_gb = state.get_settings().max_tmp_dir_gb;
+
+    let new_results: Vec<NodeResult> = run_pipeline(
         video_path,
-        pipeline,
+        &effective_pipeline,
         &modules,
         Some(cancel_flag),
+        max_tmp_dir_gb,
         // 进度回调：更新状态并向前端发送进度事件
         // Progress callback: update state and emit progress event to frontend
         |node_done: usize, node_total: usize, mod_done: u32, mod_total: u32, module_name: &str, status_text: &str| {
@@ -278,15 +323,89 @@ pub fn run_postprocess_for_path_inner(
 
     state.pp_task_clear_cancel_flag(&path_str);
 
-    let all_ok = results.iter().all(|r| r.success);
-    state.pp_task_finish(&path_str, all_ok);
+    // 合并本次结果与上次已成功的结果，按原始 pipeline 节点顺序排列
+    // Merge new results with previously succeeded results, ordered by original pipeline node order
+    let results: Vec<NodeResult> = {
+        let mut merged: Vec<NodeResult> = Vec::new();
+        for node in pipeline.nodes.iter().filter(|n| n.enabled) {
+            // 优先使用本次执行结果
+            // Prefer result from this run
+            if let Some(r) = new_results.iter().find(|r| r.module_id == node.module_id) {
+                merged.push(r.clone());
+            } else if let Some(prev) = prev_results.iter().find(|r| r.module_id == node.module_id && r.success) {
+                // 复用上次成功的结果（构造一个虚拟 NodeResult）
+                // Reuse previously succeeded result (construct a synthetic NodeResult)
+                merged.push(NodeResult {
+                    node_id: node.node_id.clone(),
+                    module_id: prev.module_id.clone(),
+                    success: true,
+                    message: prev.message.clone(),
+                    output: None,
+                    delete_input: false,
+                });
+            }
+        }
+        merged
+    };
 
-    // 若视频文件已被模块删除（如 filter_short），清理相关记录
-    // If the video file was deleted by a module (e.g., filter_short), clean up related records
-    if all_ok && !video_path.exists() {
-        state.data.write().pp_results.remove(&path_str);
+    let all_ok = results.iter().all(|r| r.success);
+
+    // 若视频文件已不存在（被删除命令删除，或被模块如 filter_short 删除），
+    // 跳过 meta 写入并清理 meta 文件，避免写入孤立的 meta。
+    //
+    // If the video file no longer exists (deleted by delete command or by a module like filter_short),
+    // skip meta write and clean up the meta file to avoid leaving an orphaned meta.
+    if !video_path.exists() {
+        crate::recording::meta::delete_meta(video_path);
+        // 从 pp_results 目录文件中移除该路径 / Remove path from pp_results directory file
+        {
+            let mut data = state.data.write();
+            data.pp_results.retain(|p| p != &path_str);
+        }
         let _ = state.save();
         state.pp_tasks.write().remove(&path_str);
+        emitter.emit(
+            "postprocess-done",
+            &serde_json::json!({ "path": path_str, "results": results }),
+        );
+        return;
+    }
+
+    state.pp_task_finish(&path_str, all_ok);
+
+    // 更新元数据文件：写入后处理结果 / Update metadata file: write post-processing results
+    {
+        let final_status = if all_ok { "finish" } else { "pp_error" };
+        let pp_module_results: Vec<crate::recording::meta::PpModuleResult> = results
+            .iter()
+            .map(|r| crate::recording::meta::PpModuleResult {
+                module_id: r.module_id.clone(),
+                success: r.success,
+                message: r.message.clone(),
+            })
+            .collect();
+        let mut module_outputs = std::collections::HashMap::new();
+        // 先继承上次 meta 中已有的模块输出路径
+        // First inherit existing module output paths from previous meta
+        if let Some(prev_meta) = crate::recording::meta::read_meta(video_path) {
+            if let Some(prev_outputs) = prev_meta.module_outputs {
+                module_outputs.extend(prev_outputs);
+            }
+        }
+        // 本次执行结果覆盖（优先级更高）
+        // Override with results from this run (higher priority)
+        for r in &results {
+            if r.success && r.message.starts_with("OUTPUT:") {
+                let out_path = r.message.trim_start_matches("OUTPUT:").trim().to_string();
+                module_outputs.insert(r.module_id.clone(), out_path);
+            }
+        }
+        crate::recording::meta::set_pp_done(
+            video_path,
+            final_status,
+            pp_module_results,
+            module_outputs,
+        );
     }
 
     emitter.emit(

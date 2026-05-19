@@ -11,6 +11,7 @@
 //! - 环境变量 `PP_INPUT`: 输入视频文件路径 / Input video file path via env var
 //! - 环境变量 `PP_PARAM_*`: 模块参数 / Module parameters via env vars
 //! - 标准输出 `OUTPUT:{path}`: 视频通过过滤时输出路径 / Output path when video passes filter
+//! - 标准输出 `DELETE_INPUT`: 请求主程序删除输入文件（视频时长低于阈值时）/ Request host to delete input file (when duration is below threshold)
 //! - 标准输出 `PROGRESS:{done}/{total}`: 进度上报 / Progress reporting
 
 use pp_utils::{param_bool, param_f64, video_duration, PROGRESS_SCALE};
@@ -75,7 +76,7 @@ fn run() -> Result<(), String> {
     println!("PROGRESS:{}/{}", PROGRESS_SCALE, PROGRESS_SCALE);
 
     if duration < min_duration {
-        // 视频时长低于阈值：删除或预览 / Video duration below threshold: delete or preview
+        // 视频时长低于阈值：请求主程序删除或预览 / Video duration below threshold: request host deletion or preview
         if dry_run {
             eprintln!(
                 "DRY_RUN: would delete '{}' (duration {:.1}s < {:.1}s)",
@@ -84,17 +85,18 @@ fn run() -> Result<(), String> {
                 min_duration
             );
         } else {
-            std::fs::remove_file(&input)
-                .map_err(|e| format!("Failed to delete '{}': {}", input.display(), e))?;
+            // 输出 DELETE_INPUT 协议行，由主程序负责删除文件
+            // Output DELETE_INPUT protocol line; the host is responsible for deleting the file
+            println!("DELETE_INPUT");
             eprintln!(
-                "Deleted '{}' (duration {:.1}s < {:.1}s)",
+                "Requesting deletion of '{}' (duration {:.1}s < {:.1}s)",
                 input.display(),
                 duration,
                 min_duration
             );
         }
-        // 视频被删除时不输出 OUTPUT，流水线后续模块将跳过
-        // No OUTPUT when video is deleted; subsequent pipeline modules will be skipped
+        // 视频将被删除时不输出 OUTPUT，流水线后续模块将跳过
+        // No OUTPUT when video will be deleted; subsequent pipeline modules will be skipped
     } else {
         // 视频时长满足要求，传递给下一个模块 / Video duration meets requirement, pass to next module
         println!("OUTPUT:{}", input.display());

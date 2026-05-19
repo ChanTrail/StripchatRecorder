@@ -79,30 +79,34 @@
 		};
 
 		if (w.missing_streamers.length > 0) {
-			await confirm({
+			const ok = await confirm({
 				title: t("notify.missingStreamers.title"),
 				message: t("notify.missingStreamers.message", { list: w.missing_streamers.join("\n") }),
 				confirmText: t("notify.missingStreamers.confirm"),
+				cancelText: t("notify.missingStreamers.ignore"),
 				danger: true,
-				hideCancelButton: true,
 			});
-			for (const username of w.missing_streamers) {
-				await streamersStore.removeStreamer(username).catch(() => {});
+			if (ok) {
+				for (const username of w.missing_streamers) {
+					await streamersStore.removeStreamer(username).catch(() => {});
+				}
+				toast(t("notify.missingStreamers.done", { count: w.missing_streamers.length }), "success");
 			}
-			toast(t("notify.missingStreamers.done", { count: w.missing_streamers.length }), "success");
 		}
 
 		if (w.missing_pp_results.length > 0) {
-			await confirm({
+			const ok = await confirm({
 				title: t("notify.missingPpResults.title"),
 				message: t("notify.missingPpResults.message", { list: w.missing_pp_results.map((p) => p.split(/[\\/]/).pop()).join("\n") }),
 				confirmText: t("notify.missingPpResults.confirm"),
-				hideCancelButton: true,
+				cancelText: t("notify.missingPpResults.ignore"),
 			});
-			await call("remove_missing_pp_results", {
-				paths: w.missing_pp_results,
-			}).catch(() => {});
-			toast(t("notify.missingPpResults.done", { count: w.missing_pp_results.length }), "success");
+			if (ok) {
+				await call("remove_missing_pp_results", {
+					paths: w.missing_pp_results,
+				}).catch(() => {});
+				toast(t("notify.missingPpResults.done", { count: w.missing_pp_results.length }), "success");
+			}
 		}
 	}
 

@@ -172,7 +172,10 @@ pub fn find_cover(video: &Path) -> Option<PathBuf> {
 }
 
 /// 获取临时文件目录（优先使用 `PP_EXE_DIR` 环境变量指定目录下的 `tmp` 子目录）。
+/// 若设置了 `PP_MAX_TMP_MB` 环境变量，会在返回前自动清理超出限制的旧文件。
+///
 /// Get the temporary file directory (prefers a `tmp` subdirectory under `PP_EXE_DIR` env var).
+/// If `PP_MAX_TMP_MB` is set, automatically prunes old files that exceed the size limit before returning.
 pub fn tmp_dir() -> PathBuf {
     let base = env::var("PP_EXE_DIR")
         .map(PathBuf::from)
@@ -184,7 +187,64 @@ pub fn tmp_dir() -> PathBuf {
         });
     let tmp = base.join("tmp");
     std::fs::create_dir_all(&tmp).ok();
+
+    // 若设置了最大大小限制，清理超出的旧文件
+    // If a max size limit is set, prune old files that exceed it
+    if let Ok(max_mb_str) = env::var("PP_MAX_TMP_MB") {
+        if let Ok(max_mb) = max_mb_str.trim().parse::<u64>() {
+            if max_mb > 0 {
+                cleanup_tmp_dir(&tmp, max_mb);
+            }
+        }
+    }
+
     tmp
+}
+
+/// 清理 tmp 目录，按最后修改时间从旧到新删除文件，直到目录总大小低于 `max_mb`。
+/// 只删除直接子文件，不递归删除子目录（子目录由各模块自行管理）。
+///
+/// Prune the tmp directory by deleting files from oldest to newest until the total
+/// directory size is below `max_mb`. Only direct child files are deleted; subdirectories
+/// are left for modules to manage themselves.
+pub fn cleanup_tmp_dir(tmp: &Path, max_mb: u64) {
+    let max_bytes = max_mb * 1024 * 1024;
+
+    // 收集所有直接子文件及其元数据 / Collect all direct child files with metadata
+    let mut entries: Vec<(PathBuf, u64, std::time::SystemTime)> = std::fs::read_dir(tmp)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let path = e.path();
+            if !path.is_file() {
+                return None;
+            }
+            let meta = std::fs::metadata(&path).ok()?;
+            let size = meta.len();
+            let modified = meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            Some((path, size, modified))
+        })
+        .collect();
+
+    // 计算当前总大小 / Calculate current total size
+    let total: u64 = entries.iter().map(|(_, s, _)| s).sum();
+    if total <= max_bytes {
+        return;
+    }
+
+    // 按修改时间升序排列（最旧的在前）/ Sort by modification time ascending (oldest first)
+    entries.sort_by_key(|(_, _, t)| *t);
+
+    let mut remaining = total;
+    for (path, size, _) in &entries {
+        if remaining <= max_bytes {
+            break;
+        }
+        if std::fs::remove_file(path).is_ok() {
+            remaining = remaining.saturating_sub(*size);
+        }
+    }
 }
 
 /// 使用 ffprobe 获取图片的宽度和高度。

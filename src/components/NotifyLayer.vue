@@ -36,10 +36,12 @@
 		<DialogContent class="sm:max-w-95">
 			<DialogHeader>
 				<DialogTitle>{{ dialog?.title }}</DialogTitle>
+			</DialogHeader>
+			<div class="overflow-y-auto max-h-[50vh] pr-1">
 				<DialogDescription class="whitespace-pre-line">
 					{{ dialog?.message }}
 				</DialogDescription>
-			</DialogHeader>
+			</div>
 			<DialogFooter>
 				<Button
 					v-if="!dialog?.hideCancelButton"

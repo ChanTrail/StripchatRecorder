@@ -32,6 +32,8 @@ export interface Settings {
 	max_concurrent: number;
 	/** 录制片段合并格式（"mp4" 或 "mkv"）/ Recording segment merge format ("mp4" or "mkv") */
 	merge_format: string;
+	/** 后处理 tmp 目录最大占用（GB，0 = 不限制）/ Max tmp dir size in GB (0 = unlimited) */
+	max_tmp_dir_gb: number;
 }
 
 export const useSettingsStore = defineStore("settings", () => {
@@ -45,6 +47,7 @@ export const useSettingsStore = defineStore("settings", () => {
 		sc_mirror_url: null,
 		max_concurrent: 0,
 		merge_format: "mp4",
+		max_tmp_dir_gb: 50,
 	});
 	/** 是否正在加载 / Whether loading */
 	const loading = ref(false);

@@ -113,8 +113,8 @@ pub async fn get_startup_warnings(state: State<'_, Arc<AppState>>) -> Result<Sta
 
         let missing_pp_results: Vec<String> = data
             .pp_results
-            .keys()
-            .filter(|path| !std::path::Path::new(path).exists())
+            .iter()
+            .filter(|path| !std::path::Path::new(path.as_str()).exists())
             .cloned()
             .collect();
 
@@ -135,9 +135,7 @@ pub async fn remove_missing_pp_results(
     state: State<'_, Arc<AppState>>,
 ) -> Result<()> {
     let mut data = state.data.write();
-    for path in &paths {
-        data.pp_results.remove(path);
-    }
+    data.pp_results.retain(|p| !paths.contains(p));
     drop(data);
     state.save()
 }

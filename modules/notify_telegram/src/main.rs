@@ -451,7 +451,7 @@ async fn upload_with_progress(
     // 单个分块的最大重试次数 / Max retries per chunk
     const MAX_CHUNK_RETRIES: u32 = 20;
     // 重试延迟序列（秒）/ Retry delay sequence (seconds)
-    const RETRY_DELAYS: [u64; 6] = [5, 10, 20, 30, 60, 120];
+    const RETRY_DELAYS: [u64; 6] = [10, 20, 30, 40, 50, 60];
 
     let name = path.file_name().unwrap().to_string_lossy().to_string();
 

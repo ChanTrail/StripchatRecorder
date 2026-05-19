@@ -310,12 +310,17 @@ fn run_desktop() {
                 let output_dir = std::path::PathBuf::from(&settings.output_dir);
                 let merge_format = settings.merge_format.clone();
                 let recorder_clone = Arc::clone(&recorder);
+                let state_clone = Arc::clone(&state);
                 let app_handle_clone = app_handle.clone();
                 tauri::async_runtime::spawn_blocking(move || {
                     let emitter: Arc<dyn crate::core::emitter::Emitter> =
                         Arc::new(crate::core::emitter::TauriEmitter(app_handle_clone.clone()));
                     recording::recorder::startup_merge_leftover_segments(&output_dir, &merge_format, &emitter, &recorder_clone);
                     recording::recorder::startup_remove_empty_dirs(&output_dir);
+                    // 扫描并补写缺失的 meta 文件（兼容旧录制文件，或 meta 被意外删除的情况）
+                    // Scan and write missing meta files (for legacy recordings or accidentally deleted meta)
+                    let pp_results = state_clone.data.read().pp_results.clone();
+                    crate::recording::meta::startup_ensure_meta_files(&output_dir, &merge_format, &pp_results);
                 });
             }
 
@@ -335,6 +340,15 @@ fn run_desktop() {
                     Arc::new(crate::core::emitter::TauriEmitter(app_handle.clone()));
                 tauri::async_runtime::spawn(async move {
                     config::settings::schedule_config_checks(state_clone, emitter).await;
+                });
+            }
+
+            // 启动孤立 meta 文件清理调度器（启动时立即执行一次，之后每小时一次）
+            // Start orphaned meta cleanup scheduler (once on startup, then every hour)
+            {
+                let output_dir = std::path::PathBuf::from(&state.get_settings().output_dir);
+                tauri::async_runtime::spawn(async move {
+                    recording::meta::schedule_meta_cleanup(output_dir).await;
                 });
             }
 

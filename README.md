@@ -20,13 +20,15 @@
   - 对任意主播发起相似人脸搜索
 - 支持分离式网络代理：可分别配置 Stripchat API 代理与 CDN 分片代理
 - 支持配置 Stripchat 镜像站（将请求中的 `stripchat.com` 替换为镜像域名）
+- **Mouflon HLS 解密**：支持管理 `pkey → pdkey` 密钥对，用于解密 Stripchat 加密的 HLS 分片文件名
 - 可配置的后处理流水线，支持插件化模块：
   - **contact_sheet** — 生成带时间戳的缩略图预览图
   - **filter_short** — 删除低于最短时长的录制文件
   - **notify_discord** — 通过 Discord Webhook 发送录制信息和封面图
   - **notify_telegram** — 通过 MTProto 发送录制信息、封面图和视频（支持超过 2 GB 的大文件，支持 HTTP/SOCKS5 代理）
+- 录制文件页磁盘空间监控，剩余空间不足 5 GB 时高亮提示
 - 双运行模式：可作为 Tauri 桌面应用或无头服务器通过浏览器访问
-- 基于 SSE 的实时 UI 更新
+- 基于 SSE 的实时 UI 更新，支持多客户端同步
 - 跟随系统主题的深色/浅色模式
 - 支持自定义界面语言，详见[自定义语言文档](docs/custom-locale.md)
 
@@ -63,15 +65,31 @@ docker compose up -d
 
 Docker 镜像默认以 Server 模式运行（端口 3030），配置写入挂载的 `config/settings.json`。
 
+### 主要设置项
+
+在 Web UI 的「设置」页面可配置以下选项：
+
+| 设置项         | 说明                                                                 |
+| -------------- | -------------------------------------------------------------------- |
+| 输出目录       | 录制文件保存路径                                                     |
+| 最大并发录制数 | 同时录制的最大主播数，`0` 表示不限制                                 |
+| 轮询间隔       | 检查主播是否上线的间隔（秒），范围 10–300                            |
+| 合并格式       | 录制结束后自动合并分片的格式：`mp4`（默认）、`mkv`、`ts`            |
+| 上线自动录制   | 新添加的主播是否默认开启自动录制                                     |
+
 ### 网络代理与镜像站
 
-在设置页的「网络代理」中可分别配置：
+在设置页的「网络」中可分别配置：
 
 Stripchat 镜像站项目：<https://github.com/ChanTrail/StripchatMirror>
 
 1. API 代理：用于访问 Stripchat API；若同时填写镜像站，则通过该代理访问镜像站。
 2. CDN 代理：用于下载直播分片流，可与 API 代理分开设置。
 3. Stripchat 镜像站：用于替换请求中的 `stripchat.com` 域名。
+
+### Mouflon HLS 解密密钥
+
+Stripchat 对 HLS 分片文件名进行了加密（Mouflon 系统）。若录制时遇到无法下载分片的情况，需在设置页的「Mouflon 解密密钥」中填入对应的 `pkey → pdkey` 密钥对。密钥可从社区渠道获取。
 
 ### docker run
 

@@ -1,17 +1,16 @@
 //! 录制文件管理 Tauri 命令 / Recording File Management Tauri Commands
 //!
 //! 提供录制文件列表查询、合并状态查询、文件打开/删除、输出目录打开等命令。
-//! 文件列表查询使用并发 ffprobe 探测视频时长，并通过缓存避免重复探测。
+//! 文件列表查询完全基于 meta 文件（`.{stem}.json`），无需 ffprobe 或目录遍历视频文件。
 //!
 //! Provides commands for querying recording file lists, merge status, opening/deleting files,
 //! and opening the output directory.
-//! File list queries use concurrent ffprobe to probe video duration with caching to avoid re-probing.
+//! File list queries are entirely based on meta files (`.{stem}.json`),
+//! requiring no ffprobe calls or video file directory traversal.
 
 use crate::core::error::Result;
-use crate::recording::recorder::{dir_size_bytes, get_video_duration, RecorderManager};
+use crate::recording::recorder::RecorderManager;
 use crate::config::settings::AppState;
-use chrono::TimeZone;
-use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -32,8 +31,18 @@ pub struct RecordingFile {
     pub is_recording: bool,
     /// 已录制时长（秒）/ Recorded duration (seconds)
     pub record_duration_secs: Option<u64>,
-    /// 视频实际时长（秒，由 ffprobe 获取）/ Actual video duration (seconds, from ffprobe)
+    /// 视频实际时长（秒，由 ffprobe 获取并写入 meta）/ Actual video duration (seconds, from ffprobe via meta)
     pub video_duration_secs: Option<u64>,
+    /// 当前处理状态（来自 meta 文件）/ Current processing status (from meta file)
+    /// recording / merging_waiting / merging / pp_waiting / pp_running / pp_error / finish
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    /// 各模块后处理结果（来自 meta 文件）/ Per-module post-processing results (from meta file)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pp_results: Option<Vec<crate::recording::meta::PpModuleResult>>,
+    /// 模块输出路径（来自 meta 文件）/ Module output paths (from meta file)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub module_outputs: Option<std::collections::HashMap<String, String>>,
 }
 
 /// 列出所有录制文件（在阻塞线程池中执行，避免阻塞异步运行时）。
@@ -105,10 +114,14 @@ pub async fn get_merging_dirs(
 }
 
 /// 录制文件列表查询的核心实现（同步，在阻塞线程中调用）。
-/// 遍历输出目录，收集所有录制文件，并并发探测视频时长（带缓存）。
+///
+/// 完全基于 meta 文件（`.{stem}.json`）构建文件列表，不扫描视频文件本身，不调用 ffprobe。
+/// ffprobe 仅在合并完成时写入 meta，此处直接读取结果。
 ///
 /// Core implementation of recording file list query (synchronous, called in a blocking thread).
-/// Traverses the output directory, collects all recording files, and concurrently probes video duration (with caching).
+///
+/// Builds the file list entirely from meta files (`.{stem}.json`), without scanning video files
+/// or calling ffprobe. ffprobe is only called when writing meta after merge; here we just read it.
 pub fn list_recordings_inner(
     state: &Arc<AppState>,
     recorder: &Arc<RecorderManager>,
@@ -127,237 +140,165 @@ pub fn list_recordings_inner(
         merging.union(&waiting_merging).cloned().collect();
 
     let mut files: Vec<RecordingFile> = Vec::new();
-    // 需要 ffprobe 探测的文件列表：(文件索引, 路径, 大小, 修改时间)
-    // Files that need ffprobe probing: (file index, path, size, mtime)
-    let mut needs_probe: Vec<(usize, PathBuf, u64, u64)> = Vec::new();
-    let mut new_cache: HashMap<(String, u64, u64), Option<u64>> = HashMap::new();
 
-    {
-        let old_cache = state.duration_cache.read();
-        collect_recordings(
-            output_dir,
-            &mut files,
-            &sessions,
-            &all_merging,
-            &old_cache,
-            &mut new_cache,
-            &mut needs_probe,
-        )?;
-    }
+    collect_from_meta(
+        output_dir,
+        &mut files,
+        &sessions,
+        &all_merging,
+        &settings.merge_format,
+    )?;
 
-    // 并发探测视频时长（按 CPU 核心数分块）/ Concurrently probe video duration (chunked by CPU count)
-    if !needs_probe.is_empty() {
-        let concurrency = num_cpus().min(needs_probe.len());
-        let chunk_size = (needs_probe.len() + concurrency - 1) / concurrency;
-
-        let mut probe_results: Vec<(usize, Option<u64>, PathBuf, u64, u64)> =
-            Vec::with_capacity(needs_probe.len());
-
-        std::thread::scope(|s| {
-            let chunks: Vec<_> = needs_probe.chunks(chunk_size).collect();
-            let handles: Vec<_> = chunks
-                .into_iter()
-                .map(|chunk| {
-                    let chunk: Vec<_> = chunk.to_vec();
-                    s.spawn(move || -> Vec<(usize, Option<u64>, PathBuf, u64, u64)> {
-                        chunk
-                            .into_iter()
-                            .map(|(idx, path, size, mtime)| {
-                                let dur = get_video_duration(&path);
-                                (idx, dur, path, size, mtime)
-                            })
-                            .collect()
-                    })
-                })
-                .collect();
-
-            for handle in handles {
-                if let Ok(results) = handle.join() {
-                    probe_results.extend(results);
-                }
-            }
-        });
-
-        for (file_idx, dur, path, size, mtime) in probe_results {
-            files[file_idx].video_duration_secs = dur;
-            let key = (path.to_string_lossy().to_string(), size, mtime);
-            new_cache.insert(key, dur);
-        }
-    }
-
-    // 更新时长缓存 / Update duration cache
-    *state.duration_cache.write() = new_cache;
     files.sort_by(|a, b| b.started_at.cmp(&a.started_at));
-
     Ok(files)
 }
 
-/// 获取可用的 CPU 核心数，用于并发探测。
-/// Get the number of available CPU cores for concurrent probing.
-fn num_cpus() -> usize {
-    std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4)
-}
-
-/// 递归遍历目录，收集录制文件和会话目录，填充 `files`、`new_cache` 和 `needs_probe`。
-/// Recursively traverse the directory, collecting recording files and session directories,
-/// populating `files`, `new_cache`, and `needs_probe`.
-fn collect_recordings(
+/// 递归遍历目录，仅扫描 meta 文件（`.{stem}.json`）构建录制文件列表。
+///
+/// 对每个 meta 文件：
+/// - 推断对应的视频文件路径
+/// - 若视频文件存在：检查实际大小是否与 meta 记录一致，不一致则更新 meta
+/// - 若视频文件不存在且对应会话目录正在录制：生成录制中的占位记录
+/// - 若视频文件不存在且无活跃会话（合并中/等待合并）：跳过（由前端通过 merging 状态显示）
+///
+/// Recursively traverse the directory, scanning only meta files (`.{stem}.json`) to build
+/// the recording file list.
+///
+/// For each meta file:
+/// - Infer the corresponding video file path
+/// - If video exists: check if actual size matches meta; update meta if different
+/// - If video doesn't exist and session is recording: generate an in-progress placeholder record
+/// - If video doesn't exist and no active session (merging/waiting): skip (frontend shows via merging state)
+fn collect_from_meta(
     dir: &std::path::Path,
     files: &mut Vec<RecordingFile>,
     sessions: &[(PathBuf, chrono::DateTime<chrono::Utc>)],
     merging: &std::collections::HashSet<PathBuf>,
-    old_cache: &HashMap<(String, u64, u64), Option<u64>>,
-    new_cache: &mut HashMap<(String, u64, u64), Option<u64>>,
-    needs_probe: &mut Vec<(usize, PathBuf, u64, u64)>,
+    merge_format: &str,
 ) -> std::io::Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
 
         if path.is_dir() {
-            // 跳过正在合并的会话目录 / Skip session directories currently being merged
-            if merging.contains(&path) {
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            // 跳过隐藏目录和正在合并的会话目录
+            // Skip hidden directories and session directories currently being merged
+            if name.starts_with('.') || merging.contains(&path) {
+                continue;
+            }
+            collect_from_meta(&path, files, sessions, merging, merge_format)?;
+        } else if path.is_file() {
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            // 只处理 meta 文件：以 '.' 开头，以 '.json' 结尾
+            // Only process meta files: start with '.' and end with '.json'
+            if !name.starts_with('.') || !name.ends_with(".json") {
                 continue;
             }
 
-            let segments = count_ts_segments(&path)?;
-            let is_active_session = sessions.iter().any(|(sp, _)| sp == &path);
+            // 从 meta 文件名提取 stem：去掉前导 '.' 和 '.json' 后缀
+            // Extract stem from meta filename: strip leading '.' and '.json' suffix
+            let stem = match name.strip_prefix('.').and_then(|s| s.strip_suffix(".json")) {
+                Some(s) if !s.is_empty() => s,
+                _ => continue,
+            };
 
-            if segments > 0 || is_active_session {
-                // 这是一个录制会话目录 / This is a recording session directory
-                let total_size = dir_size_bytes(&path).unwrap_or(0);
-                let is_recording = is_active_session;
+            // 读取 meta 内容
+            // Read meta content
+            let meta = match crate::recording::meta::read_meta(
+                &path.parent().unwrap_or(dir).join(format!("{}.{}", stem, merge_format)),
+            ) {
+                Some(m) => m,
+                None => continue,
+            };
 
-                let (started_at, record_duration_secs) =
-                    if let Some((_, dt)) = sessions.iter().find(|(sp, _)| sp == &path) {
-                        let local: chrono::DateTime<chrono::Local> = (*dt).into();
-                        let elapsed = chrono::Utc::now()
-                            .signed_duration_since(*dt)
-                            .num_seconds()
-                            .max(0) as u64;
-                        (local.to_rfc3339(), Some(elapsed))
-                    } else {
-                        // 从目录名解析时间戳 / Parse timestamp from directory name
-                        let stem = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-                        let ts = parse_timestamp_from_stem(stem).unwrap_or_else(|| {
-                            fs::metadata(&path)
-                                .ok()
-                                .and_then(|m| m.modified().ok())
-                                .map(|t| {
-                                    let dt: chrono::DateTime<chrono::Local> = t.into();
-                                    dt.to_rfc3339()
-                                })
-                                .unwrap_or_default()
-                        });
-                        (ts, None)
-                    };
+            let video_path = path
+                .parent()
+                .unwrap_or(dir)
+                .join(format!("{}.{}", stem, merge_format));
 
-                files.push(RecordingFile {
-                    name: path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .to_string(),
-                    path: path.to_string_lossy().to_string(),
-                    size_bytes: total_size,
-                    started_at,
-                    is_recording,
-                    record_duration_secs,
-                    video_duration_secs: None,
-                });
-            } else {
-                // 普通子目录（主播目录），递归遍历 / Regular subdirectory (streamer dir), recurse
-                collect_recordings(
-                    &path,
-                    files,
-                    sessions,
-                    merging,
-                    old_cache,
-                    new_cache,
-                    needs_probe,
-                )?;
-            }
-        } else if path.is_file() {
-            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            if matches!(ext, "mp4" | "mkv" | "ts") {
-                let size_bytes = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-                let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-                let started_at = parse_timestamp_from_stem(stem).unwrap_or_else(|| {
-                    fs::metadata(&path)
-                        .ok()
-                        .and_then(|m| m.modified().ok())
-                        .map(|t| {
-                            let dt: chrono::DateTime<chrono::Local> = t.into();
-                            dt.to_rfc3339()
-                        })
-                        .unwrap_or_default()
-                });
-
-                let meta = fs::metadata(&path).ok();
-                let mtime = meta
-                    .as_ref()
-                    .and_then(|m| m.modified().ok())
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
-                let key = (path.to_string_lossy().to_string(), size_bytes, mtime);
-
-                // 优先使用缓存的时长，否则加入待探测列表
-                // Prefer cached duration; otherwise add to the probe list
-                let video_duration_secs = if let Some(&cached) = old_cache.get(&key) {
-                    new_cache.insert(key, cached);
-                    cached
+            if video_path.exists() {
+                // 视频文件已存在：检查大小是否变化（如后处理替换了文件）
+                // Video file exists: check if size changed (e.g., post-processing replaced it)
+                let actual_size = fs::metadata(&video_path).map(|m| m.len()).unwrap_or(0);
+                let effective_size = if meta.size_bytes != actual_size && actual_size > 0 {
+                    let mut updated = meta.clone();
+                    updated.size_bytes = actual_size;
+                    crate::recording::meta::write_meta(&video_path, &updated);
+                    actual_size
                 } else {
-                    let idx = files.len();
-                    needs_probe.push((idx, path.clone(), size_bytes, mtime));
-                    None
+                    meta.size_bytes
                 };
 
                 files.push(RecordingFile {
-                    name: path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .to_string(),
-                    path: path.to_string_lossy().to_string(),
-                    size_bytes,
-                    started_at,
+                    name: format!("{}.{}", stem, merge_format),
+                    path: video_path.to_string_lossy().to_string(),
+                    size_bytes: effective_size,
+                    started_at: meta.started_at,
                     is_recording: false,
                     record_duration_secs: None,
-                    video_duration_secs,
+                    video_duration_secs: meta.video_duration_secs,
+                    status: Some(meta.status),
+                    pp_results: meta.pp_results,
+                    module_outputs: meta.module_outputs,
                 });
+            } else {
+                // 视频文件不存在：根据 meta 的 status 决定如何生成记录
+                // Video file doesn't exist: decide how to generate a record based on meta status
+                let session_dir = path.parent().unwrap_or(dir).join(stem);
+
+                if let Some((_, dt)) = sessions.iter().find(|(sp, _)| sp == &session_dir) {
+                    // 有活跃录制会话：生成录制中的占位记录，使用实时时长和目录大小
+                    // Active recording session: generate in-progress placeholder with live duration and dir size
+                    let local: chrono::DateTime<chrono::Local> = (*dt).into();
+                    let elapsed = chrono::Utc::now()
+                        .signed_duration_since(*dt)
+                        .num_seconds()
+                        .max(0) as u64;
+                    let size_bytes = crate::recording::recorder::dir_size_bytes(&session_dir)
+                        .unwrap_or(0);
+
+                    files.push(RecordingFile {
+                        name: format!("{}.{}", stem, merge_format),
+                        path: video_path.to_string_lossy().to_string(),
+                        size_bytes,
+                        started_at: local.to_rfc3339(),
+                        is_recording: true,
+                        record_duration_secs: Some(elapsed),
+                        video_duration_secs: None,
+                        status: Some("recording".to_string()),
+                        pp_results: None,
+                        module_outputs: None,
+                    });
+                } else {
+                    // 无活跃会话（merging_waiting / merging 等过渡态）：
+                    // 直接用 meta 中的信息生成记录，让前端根据 status 显示对应状态
+                    //
+                    // No active session (merging_waiting / merging transient states):
+                    // Generate a record from meta info; frontend displays based on status field
+                    files.push(RecordingFile {
+                        name: format!("{}.{}", stem, merge_format),
+                        path: video_path.to_string_lossy().to_string(),
+                        size_bytes: meta.size_bytes,
+                        started_at: meta.started_at,
+                        is_recording: false,
+                        record_duration_secs: None,
+                        video_duration_secs: None,
+                        status: Some(meta.status),
+                        pp_results: meta.pp_results,
+                        module_outputs: meta.module_outputs,
+                    });
+                }
             }
         }
     }
     Ok(())
 }
 
-/// 统计目录中 .ts 分片文件的数量。
-/// Count the number of .ts segment files in a directory.
-fn count_ts_segments(dir: &std::path::Path) -> std::io::Result<usize> {
-    let mut count = 0;
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_file() {
-            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            if ext == "ts" {
-                count += 1;
-            }
-        }
-    }
-    Ok(count)
-}
-
 /// 从文件名 stem（格式：`{name}_{YYYYMMDD}_{HHmmss}`）中解析录制开始时间。
 /// Parse the recording start time from a filename stem (format: `{name}_{YYYYMMDD}_{HHmmss}`).
-///
-/// # 返回值 / Returns
-/// RFC 3339 格式的时间字符串，解析失败时返回 `None`。
-/// RFC 3339 time string, or `None` if parsing fails.
-fn parse_timestamp_from_stem(stem: &str) -> Option<String> {
+pub fn parse_timestamp_from_stem_pub(stem: &str) -> Option<String> {
+    use chrono::TimeZone;
     let parts: Vec<&str> = stem.rsplitn(3, '_').collect();
     if parts.len() < 2 {
         return None;
@@ -381,8 +322,9 @@ pub async fn open_recording(path: String) -> Result<()> {
     opener::open(&path).map_err(|e| crate::core::error::AppError::Other(e.to_string()))
 }
 
-/// 删除指定录制文件或会话目录，同时清理相关的后处理状态和旁路文件（封面图等）。
-/// Delete the specified recording file or session directory, cleaning up related post-processing state and sidecar files (cover images, etc.).
+/// 删除指定录制文件或会话目录，同时清理相关的后处理状态和旁路文件（封面图、meta 等）。
+/// Delete the specified recording file or session directory, cleaning up related
+/// post-processing state and sidecar files (cover images, meta, etc.).
 #[tauri::command]
 pub async fn delete_recording(
     path: String,
@@ -424,12 +366,13 @@ pub fn delete_recording_inner(
 
     match task_status.as_deref() {
         Some("running") => {
-            // 等待后处理锁释放（确保后处理已停止）/ Wait for pp_lock to be released (ensures post-processing has stopped)
-            let _guard = state.pp_lock.lock().unwrap_or_else(|e| e.into_inner());
-            drop(_guard);
+            // 已设置取消标志，后处理子进程会在 100ms 内被终止。
+            // 不等待 pp_lock，直接继续删除文件，避免阻塞用户操作。
+            // Cancel flag is set; the post-processing subprocess will be killed within 100ms.
+            // Do not wait for pp_lock — proceed with deletion immediately to avoid blocking the user.
+            state.pp_tasks.write().remove(path);
         }
         Some("waiting") => {
-            // 直接从队列中移除等待中的任务 / Remove waiting task directly from the queue
             state.pp_tasks.write().remove(path);
         }
         _ => {}
@@ -438,8 +381,8 @@ pub fn delete_recording_inner(
     if p.is_dir() {
         fs::remove_dir_all(p)?;
     } else {
-        // 对文件删除进行重试（最多 20 次，间隔 200ms），处理文件被短暂锁定的情况
-        // Retry file deletion up to 20 times with 200ms intervals to handle brief file locks
+        // 对文件删除进行重试（最多 20 次，间隔 200ms）
+        // Retry file deletion up to 20 times with 200ms intervals
         let mut last_err = None;
         for _ in 0..20 {
             match fs::remove_file(p) {
@@ -456,7 +399,7 @@ pub fn delete_recording_inner(
         if let Some(e) = last_err {
             return Err(crate::core::error::AppError::Other(e.to_string()));
         }
-        // 同时删除同名的封面图旁路文件 / Also delete sidecar cover image files with the same stem
+        // 删除同名的封面图旁路文件 / Delete sidecar cover image files with the same stem
         if let Some(parent) = p.parent() {
             if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
                 for ext in &["webp", "jpg", "jpeg", "png"] {
@@ -467,11 +410,16 @@ pub fn delete_recording_inner(
                 }
             }
         }
+        // 删除 meta 文件 / Delete meta file
+        crate::recording::meta::delete_meta(p);
     }
+
     // 清理后处理记录和任务状态 / Clean up post-processing records and task status
     {
         let mut data = state.data.write();
-        if data.pp_results.remove(path).is_some() {
+        let before = data.pp_results.len();
+        data.pp_results.retain(|p| p != path);
+        if data.pp_results.len() != before {
             drop(data);
             let _ = state.save();
         }
@@ -485,5 +433,6 @@ pub fn delete_recording_inner(
 #[tauri::command]
 pub async fn open_output_dir(state: State<'_, Arc<AppState>>) -> Result<()> {
     let settings = state.get_settings();
-    opener::open(&settings.output_dir).map_err(|e| crate::core::error::AppError::Other(e.to_string()))
+    opener::open(&settings.output_dir)
+        .map_err(|e| crate::core::error::AppError::Other(e.to_string()))
 }

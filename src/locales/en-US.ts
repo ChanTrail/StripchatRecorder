@@ -22,13 +22,15 @@ export default {
 		missingStreamers: {
 			title: "Missing Streamers Found",
 			message: "The following streamer accounts do not exist and will be removed\n\n{list}",
-			confirm: "Acknowledge & Remove",
+			confirm: "Remove",
+			ignore: "Ignore",
 			done: "Removed {count} missing streamer(s)",
 		},
 		missingPpResults: {
 			title: "Orphaned Post-processing Records Found",
 			message: "The following files no longer exist but still have post-processing records and will be cleaned up\n\n{list}",
-			confirm: "Acknowledge & Clean Up",
+			confirm: "Clean Up",
+			ignore: "Ignore",
 			done: "Cleaned up {count} post-processing record(s)",
 		},
 	},
@@ -260,6 +262,10 @@ export default {
 		mergeFormat: {
 			label: "Merge Format",
 			hint: "Format for automatically merging segments after recording ends",
+		},
+		maxTmpDirGb: {
+			label: "Max Tmp Directory Size (GB)",
+			hint: "Size limit for temporary files created by post-processing modules. Oldest files are deleted when the limit is exceeded. 0 means unlimited. Default: 50 GB.",
 		},
 		apiProxy: {
 			label: "API Proxy (for stripchat.com, leave empty to disable)",

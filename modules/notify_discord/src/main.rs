@@ -666,8 +666,7 @@ fn run() -> Result<(), String> {
         None
     };
 
-    const MAX_ATTEMPTS: u32 = 5;
-    const RETRY_DELAYS: [u64; 4] = [30, 60, 90, 120];
+    const RETRY_DELAYS: [u64; 6] = [10, 20, 30, 40, 50, 60];
 
     let mut attempt = 0u32;
     loop {
@@ -682,13 +681,16 @@ fn run() -> Result<(), String> {
             Ok(()) => break,
             Err(e) => {
                 attempt += 1;
-                if attempt >= MAX_ATTEMPTS {
+                if attempt >= RETRY_DELAYS.len() as u32 {
                     return Err(e);
                 }
                 let delay = RETRY_DELAYS[(attempt as usize - 1).min(RETRY_DELAYS.len() - 1)];
                 eprintln!(
                     "Discord request failed (attempt {}/{}): {}. retrying in {}s…",
-                    attempt, MAX_ATTEMPTS, e, delay
+                    attempt,
+                    RETRY_DELAYS.len() as u32,
+                    e,
+                    delay
                 );
                 std::thread::sleep(Duration::from_secs(delay));
             }

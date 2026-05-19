@@ -69,7 +69,23 @@ export default i18n;
 
 ### 3. 在设置页添加选项
 
-找到设置页的语言选择组件，添加新选项。通常在 `src/views/SettingsView.vue` 或类似文件中，搜索 `zh-CN` / `en-US` 即可定位。
+找到设置页的语言选择组件，添加新选项。语言选择器位于 `src/views/SettingsView.vue` 的 `setLocale` 函数和 `RadioGroup` 组件中，搜索 `lang-zh` / `lang-en` 即可定位，仿照现有选项添加新条目：
+
+```vue
+<div class="flex items-center gap-2">
+  <RadioGroupItem id="lang-ja" value="ja-JP" />
+  <Label for="lang-ja" class="cursor-pointer">日本語</Label>
+</div>
+```
+
+同时更新 `setLocale` 函数的类型断言，将 `"ja-JP"` 加入联合类型：
+
+```ts
+function setLocale(lang: string) {
+  locale.value = lang as "zh-CN" | "en-US" | "ja-JP";
+  localStorage.setItem("locale", lang);
+}
+```
 
 ### 4. 在首次启动 TUI 中添加选项
 
@@ -99,7 +115,7 @@ let (lang_code, lang_en) = match lang_idx {
 | `addStreamer`    | 添加主播对话框               |
 | `recordings`     | 录制文件页                   |
 | `postprocess`    | 后处理流水线页               |
-| `finder`         | 主播查找页                   |
+| `finder`         | 主播查找页（含 `gender` 子键）|
 | `settings`       | 设置页                       |
 | `usePostprocess` | 后处理任务状态提示           |
 

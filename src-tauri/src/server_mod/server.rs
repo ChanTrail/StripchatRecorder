@@ -400,8 +400,8 @@ async fn get_startup_warnings_handler(
         let data = state.data.read();
         let missing_pp_results: Vec<String> = data
             .pp_results
-            .keys()
-            .filter(|path| !std::path::Path::new(path).exists())
+            .iter()
+            .filter(|path| !std::path::Path::new(path.as_str()).exists())
             .cloned()
             .collect();
         serde_json::json!({
@@ -424,9 +424,7 @@ async fn remove_missing_pp_results_handler(
     Json(body): Json<RemovePpResultsBody>,
 ) -> ApiResult<serde_json::Value> {
     let mut data = s.app_state.data.write();
-    for path in &body.paths {
-        data.pp_results.remove(path);
-    }
+    data.pp_results.retain(|p| !body.paths.contains(p));
     drop(data);
     s.app_state.save().map_err(ApiError::from)?;
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -750,6 +748,7 @@ pub async fn run_server(port: u16) {
         let merge_format = settings.merge_format.clone();
         let emitter_clone = Arc::clone(&emitter);
         let recorder_clone = Arc::clone(&recorder);
+        let app_state_for_meta = Arc::clone(&app_state);
         tokio::task::spawn_blocking(move || {
             crate::recording::recorder::startup_merge_leftover_segments(
                 &output_dir,
@@ -758,6 +757,10 @@ pub async fn run_server(port: u16) {
                 &recorder_clone,
             );
             crate::recording::recorder::startup_remove_empty_dirs(&output_dir);
+            // 扫描并补写缺失的 meta 文件
+            // Scan and write missing meta files
+            let pp_results = app_state_for_meta.data.read().pp_results.clone();
+            crate::recording::meta::startup_ensure_meta_files(&output_dir, &merge_format, &pp_results);
         });
     }
 
@@ -772,6 +775,15 @@ pub async fn run_server(port: u16) {
     tokio::spawn(async move {
         crate::config::settings::schedule_config_checks(app_state_clone, emitter_clone2).await;
     });
+
+    // 启动孤立 meta 文件清理调度器（启动时立即执行一次，之后每小时一次）
+    // Start orphaned meta cleanup scheduler (once on startup, then every hour)
+    {
+        let output_dir = std::path::PathBuf::from(&app_state.get_settings().output_dir);
+        tokio::spawn(async move {
+            crate::recording::meta::schedule_meta_cleanup(output_dir).await;
+        });
+    }
 
     let server_state = ServerState {
         app_state,

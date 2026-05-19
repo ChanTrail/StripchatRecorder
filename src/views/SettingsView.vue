@@ -58,6 +58,7 @@
 		sc_mirror_url: null,
 		max_concurrent: 0,
 		merge_format: "mp4",
+		max_tmp_dir_gb: 50,
 	});
 
 	// 保存各代理字段的原始值，用于检测是否有实际变更
@@ -104,6 +105,7 @@
 			auto_record: form.auto_record,
 			max_concurrent: form.max_concurrent,
 			merge_format: form.merge_format,
+			max_tmp_dir_gb: form.max_tmp_dir_gb,
 		}),
 		async () => {
 			if (!initialized) return;
@@ -362,6 +364,26 @@
 					<p class="text-xs text-muted-foreground">
 						{{ t("settings.mergeFormat.hint") }}
 					</p>
+				</div>
+
+				<div class="flex flex-col gap-1.5">
+					<Label>{{ t("settings.maxTmpDirGb.label") }}</Label>
+					<NumberField
+						:model-value="form.max_tmp_dir_gb"
+						:min="0"
+						:step="0.5"
+						class="w-36"
+						@update:model-value="
+							(v) => v !== undefined && (form.max_tmp_dir_gb = v)
+						"
+					>
+						<NumberFieldContent>
+							<NumberFieldDecrement />
+							<NumberFieldInput />
+							<NumberFieldIncrement />
+						</NumberFieldContent>
+					</NumberField>
+					<p class="text-xs text-muted-foreground">{{ t("settings.maxTmpDirGb.hint") }}</p>
 				</div>
 			</section>
 

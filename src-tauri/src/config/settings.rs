@@ -61,6 +61,10 @@ pub struct Settings {
     /// 录制片段合并格式（默认 "mp4"）/ Recording segment merge format (default "mp4")
     #[serde(default = "default_merge_format")]
     pub merge_format: String,
+    /// 后处理临时目录最大占用（GB，0 = 不限制，默认 50 GB）
+    /// Max size of the post-processing tmp directory in GB (0 = unlimited, default 50 GB)
+    #[serde(default = "default_max_tmp_dir_gb")]
+    pub max_tmp_dir_gb: f64,
     /// 界面语言（"zh-CN" 或 "en-US"）/ UI language ("zh-CN" or "en-US")
     #[serde(default = "default_language")]
     pub language: String,
@@ -75,6 +79,11 @@ pub struct Settings {
 /// 合并格式的默认值 / Default value for merge format
 fn default_merge_format() -> String {
     "mp4".to_string()
+}
+
+/// tmp 目录最大占用的默认值（50 GB）/ Default value for max tmp dir size (50 GB)
+fn default_max_tmp_dir_gb() -> f64 {
+    50.0
 }
 
 /// 语言的默认值 / Default value for language
@@ -116,6 +125,7 @@ impl Default for Settings {
             sc_mirror_url: None,
             max_concurrent: 0,
             merge_format: default_merge_format(),
+            max_tmp_dir_gb: default_max_tmp_dir_gb(),
             language: default_language(),
             run_mode: default_run_mode(),
             server_port: default_server_port(),
@@ -136,9 +146,10 @@ pub struct AppData {
     /// 后处理流水线配置 / Post-processing pipeline configuration
     #[serde(default)]
     pub pipeline: PipelineConfig,
-    /// 后处理结果记录（文件路径 -> 是否成功）/ Post-processing results (file path -> success)
+    /// 已执行过后处理的视频路径列表（目录文件，true/false 由对应 meta JSON 确认）
+    /// List of video paths that have been post-processed (directory file; success/failure confirmed by reading the corresponding meta JSON)
     #[serde(default)]
-    pub pp_results: HashMap<String, bool>,
+    pub pp_results: Vec<String>,
 }
 
 /// 单个主播的持久化数据 / Persisted data for a single streamer
@@ -152,10 +163,6 @@ pub struct StreamerData {
     pub added_at: String,
 }
 
-/// 视频时长缓存的键：(文件路径, 文件大小, 修改时间戳)
-/// Cache key for video duration: (file path, file size, modification timestamp)
-type DurationCacheKey = (String, u64, u64);
-
 /// 应用运行时全局状态，通过 `Arc<AppState>` 在各模块间共享。
 /// Global application runtime state, shared across modules via `Arc<AppState>`.
 pub struct AppState {
@@ -167,8 +174,6 @@ pub struct AppState {
     pub pp_tasks: RwLock<HashMap<String, PpTaskStatus>>,
     /// 后处理取消标志（文件路径 -> 原子布尔）/ Post-processing cancel flags (file path -> atomic bool)
     pub pp_cancel_flags: RwLock<HashMap<String, Arc<AtomicBool>>>,
-    /// 视频时长缓存，避免重复调用 ffprobe / Video duration cache to avoid repeated ffprobe calls
-    pub duration_cache: RwLock<HashMap<DurationCacheKey, Option<u64>>>,
     /// 后处理串行锁，确保同一时刻只有一个后处理任务运行 / Serial lock ensuring only one post-processing task runs at a time
     pub pp_lock: std::sync::Mutex<()>,
     /// 启动合并锁，防止启动时的合并与正常录制并发 / Startup merge lock preventing concurrent startup merge and normal recording
@@ -205,8 +210,18 @@ impl AppState {
         let pipeline: PipelineConfig = load_json("pipeline.json")
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
-        let pp_results: HashMap<String, bool> = load_json("pp_results.json")
-            .and_then(|s| serde_json::from_str(&s).ok())
+        // pp_results.json 存储已执行过后处理的视频路径列表（Vec<String>）
+        // 兼容旧格式（HashMap<String, bool>）：若解析为 Vec 失败，尝试解析为旧格式并提取 keys
+        // pp_results.json stores a list of video paths that have been post-processed (Vec<String>)
+        // Compatibility with old format (HashMap<String, bool>): if Vec parse fails, try old format and extract keys
+        let pp_results: Vec<String> = load_json("pp_results.json")
+            .and_then(|s| {
+                serde_json::from_str::<Vec<String>>(&s).ok().or_else(|| {
+                    serde_json::from_str::<HashMap<String, bool>>(&s)
+                        .ok()
+                        .map(|m| m.into_keys().collect())
+                })
+            })
             .unwrap_or_default();
 
         let data = AppData { settings, streamers, mouflon_keys, pipeline, pp_results };
@@ -218,7 +233,6 @@ impl AppState {
             config_dir,
             pp_tasks: RwLock::new(HashMap::new()),
             pp_cancel_flags: RwLock::new(HashMap::new()),
-            duration_cache: RwLock::new(HashMap::new()),
             pp_lock: std::sync::Mutex::new(()),
             startup_lock: std::sync::Mutex::new(()),
         }))
@@ -429,37 +443,54 @@ impl AppState {
         }
     }
 
-    /// 将后处理任务标记为完成或失败，并将结果持久化到 pp_results.json。
-    /// Mark the post-processing task as done or failed, and persist the result to pp_results.json.
+    /// 将后处理任务标记为完成或失败。成功/失败状态由对应 meta JSON 的 status 字段确认，
+    /// 此处仅将路径记录到 pp_results 目录文件中（用于快速判断是否已执行过后处理）。
+    ///
+    /// Mark the post-processing task as done or failed. Success/failure is confirmed by the
+    /// corresponding meta JSON's status field; here we only record the path in the pp_results
+    /// directory file (for quick lookup of whether post-processing has been run).
     pub fn pp_task_finish(&self, path: &str, success: bool) {
         if let Some(t) = self.pp_tasks.write().get_mut(path) {
             t.status = if success { "done" } else { "error" }.to_string();
             t.pct = if success { 100.0 } else { t.pct };
         }
-        self.data
-            .write()
-            .pp_results
-            .insert(path.to_string(), success);
+        // 将路径加入目录列表（去重）/ Add path to directory list (deduplicated)
+        {
+            let mut data = self.data.write();
+            if !data.pp_results.contains(&path.to_string()) {
+                data.pp_results.push(path.to_string());
+            }
+        }
         let _ = self.save();
     }
 
     /// 获取所有后处理任务状态的列表，合并内存中的运行时状态和持久化的历史结果。
+    /// 历史结果通过读取对应 meta JSON 的 status 字段确认成功/失败。
+    ///
     /// Get a list of all post-processing task statuses, merging in-memory runtime state with persisted historical results.
+    /// Historical results are confirmed by reading the status field from the corresponding meta JSON.
     pub fn get_pp_tasks(&self) -> Vec<PpTaskStatus> {
         let mut tasks: HashMap<String, PpTaskStatus> = self.pp_tasks.read().clone();
 
-        // 将持久化结果中不在内存任务表里的条目补充进来
-        // Add persisted results that are not already in the in-memory task map
-        for (path, success) in self.data.read().pp_results.iter() {
-            tasks.entry(path.clone()).or_insert_with(|| PpTaskStatus {
+        // 从 pp_results 目录文件补充历史任务，通过 meta 确认 success/failure
+        // Supplement historical tasks from pp_results directory, confirming success/failure via meta
+        for path in self.data.read().pp_results.iter() {
+            if tasks.contains_key(path) {
+                continue;
+            }
+            let video_path = std::path::Path::new(path);
+            let success = crate::recording::meta::read_meta(video_path)
+                .map(|m| m.status == "finish")
+                .unwrap_or(false);
+            tasks.insert(path.clone(), PpTaskStatus {
                 path: path.clone(),
-                pct: if *success { 100.0 } else { 0.0 },
+                pct: if success { 100.0 } else { 0.0 },
                 mod_done: 0,
                 mod_total: 0,
                 module_name: String::new(),
                 done: 0,
                 total: 0,
-                status: if *success { "done" } else { "error" }.to_string(),
+                status: if success { "done" } else { "error" }.to_string(),
                 from_memory: false,
             });
         }
@@ -528,8 +559,8 @@ pub async fn run_config_check(state: &Arc<AppState>, emitter: &Arc<dyn crate::co
         .data
         .read()
         .pp_results
-        .keys()
-        .filter(|p| !std::path::Path::new(p).exists())
+        .iter()
+        .filter(|p| !std::path::Path::new(p.as_str()).exists())
         .cloned()
         .collect();
 
