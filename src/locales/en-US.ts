@@ -3,6 +3,7 @@ export default {
 		streamers: "Streamers",
 		recordings: "Recordings",
 		postprocess: "Post-process",
+		relay: "Relay",
 		finder: "Finder",
 		settings: "Settings",
 	},
@@ -57,6 +58,10 @@ export default {
 			confirm: "Stop",
 			done: "Stopped recording {username}",
 		},
+		relay: {
+			started: "Started relaying {username}'s stream",
+			stopped: "Stopped relaying {username}",
+		},
 	},
 	streamerCard: {
 		offline: "Offline",
@@ -66,6 +71,9 @@ export default {
 		autoRecord: "Auto",
 		autoRecordTitle: "Auto-record when online",
 		removeTitle: "Remove streamer",
+		streamUrl: "Stream URL",
+		streamUrlHint: "Open this URL directly in any player to watch",
+		copyStreamUrl: "Copy stream URL",
 	},
 	addStreamer: {
 		title: "Add Streamer",
@@ -300,5 +308,21 @@ export default {
 		fetchTasksFailed: "Failed to fetch post-processing tasks",
 		done: "Post-processing done: {modules}",
 		failed: "Post-processing failed [{moduleId}]: {message}",
+	},
+	relay: {
+		title: "Relay Streams",
+		subtitle: "{streams} stream(s), {connections} active connection(s)",
+		hint: "Open the URL below directly in any player — no manual setup needed. Connects to upstream automatically on first access.",
+		noSessions: "No active relay streams",
+		noSessionsHint: "Open /stream/{modelname} in a player to auto-start",
+		connections: "{n} connection(s)",
+		uptime: "Up {t}",
+		copyUrl: "Copy URL",
+		state: {
+			live: "Live",
+			offline: "Offline",
+			connecting: "Connecting",
+			error: "Error",
+		},
 	},
 };

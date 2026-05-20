@@ -37,6 +37,7 @@
 		{ to: "/", labelKey: "nav.streamers" },
 		{ to: "/recordings", labelKey: "nav.recordings" },
 		{ to: "/postprocess", labelKey: "nav.postprocess" },
+		{ to: "/relay", labelKey: "nav.relay" },
 		{ to: "/finder", labelKey: "nav.finder" },
 		{ to: "/settings", labelKey: "nav.settings" },
 	];

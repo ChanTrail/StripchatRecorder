@@ -25,7 +25,7 @@
 	import { Label } from "@/components/ui/label";
 	import { ref, watch, computed } from "vue";
 	import { useFastThumbnail } from "@/composables/useFastThumbnail";
-	import { X, Circle, Eye } from "lucide-vue-next";
+	import { X, Circle, Eye, Copy, Check } from "lucide-vue-next";
 	import { useI18n } from "vue-i18n";
 
 	const props = defineProps<{ streamer: StreamerEntry }>();
@@ -38,40 +38,38 @@
 	}>();
 	const { t } = useI18n();
 
-	// 本地维护 autoRecord 状态，避免直接修改 props
-	// Maintain local autoRecord state to avoid directly mutating props
 	const autoRecord = ref(props.streamer.auto_record);
 	watch(
 		() => props.streamer.auto_record,
-		(val) => {
-			autoRecord.value = val;
-		},
+		(val) => { autoRecord.value = val; },
 	);
 
-	// 将缩略图 URL 转为响应式引用，传入 useFastThumbnail 进行 CDN 竞速
-	// Convert thumbnail URL to reactive ref for CDN racing via useFastThumbnail
 	const thumbnailSrc = computed(() => props.streamer.thumbnail_url ?? null);
 	const fastThumbnail = useFastThumbnail(thumbnailSrc);
 
-	/**
-	 * 处理自动录制开关变更，同步本地状态并向父组件发出事件。
-	 * Handle auto-record toggle change, sync local state and emit to parent.
-	 */
+	const copied = ref(false);
+
+	// 转发流地址 / Stream relay URL
+	const streamUrl = computed(
+		() => `${window.location.origin}/stream/${props.streamer.username}`,
+	);
+
+	async function copyStreamUrl() {
+		try {
+			await navigator.clipboard.writeText(streamUrl.value);
+			copied.value = true;
+			setTimeout(() => { copied.value = false; }, 2000);
+		} catch {}
+	}
+
 	function onAutoChange(val: boolean) {
 		autoRecord.value = val;
 		emit("toggle-auto", val);
 	}
 
-	/**
-	 * 根据主播在线状态和直播间类型返回对应的 Badge 样式类。
-	 * Return Badge style classes based on streamer online status and stream type.
-	 *
-	 * @param s - 主播数据 / Streamer data
-	 */
 	function statusClass(s: StreamerEntry): string {
 		if (!s.is_online) return "bg-zinc-800 text-zinc-400 border-transparent";
-		if (s.status === "公开秀")
-			return "bg-green-900 text-green-300 border-transparent";
+		if (s.status === "公开秀") return "bg-green-900 text-green-300 border-transparent";
 		return "bg-amber-900 text-amber-300 border-transparent";
 	}
 </script>
@@ -105,9 +103,7 @@
 
 		<CardContent class="p-3 flex flex-col gap-2">
 			<div class="flex items-center justify-between">
-				<span class="font-semibold text-sm truncate">{{
-					streamer.username
-				}}</span>
+				<span class="font-semibold text-sm truncate">{{ streamer.username }}</span>
 				<Button
 					variant="ghost"
 					size="icon"
@@ -166,6 +162,26 @@
 						{{ t("streamerCard.autoRecord") }}
 					</Label>
 				</div>
+			</div>
+
+			<!-- 转发流地址（始终显示）/ Stream URL (always shown) -->
+			<div class="flex items-center gap-2">
+				<div
+					class="flex-1 text-xs font-mono text-blue-400/60 bg-blue-950/10 rounded px-2 py-1 truncate select-all"
+					:title="t('streamerCard.streamUrlHint')"
+				>
+					{{ streamUrl }}
+				</div>
+				<Button
+					size="sm"
+					variant="ghost"
+					class="shrink-0 px-2 h-6 text-muted-foreground hover:text-blue-300"
+					:title="t('streamerCard.copyStreamUrl')"
+					@click="copyStreamUrl"
+				>
+					<Check v-if="copied" class="size-3 text-green-400" />
+					<Copy v-else class="size-3" />
+				</Button>
 			</div>
 		</CardContent>
 	</Card>

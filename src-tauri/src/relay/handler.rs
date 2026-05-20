@@ -1,0 +1,103 @@
+//! 转发路由处理器 / Relay Route Handlers
+//!
+//! 端点：
+//! - GET  /stream/{modelname}       → 持续输出 MPEG-TS 流（按需启动 worker）
+//! - GET  /api/relay/sessions       → 查询所有活跃转发会话状态
+//!
+//! 转发流永远可访问，无需手动启动：
+//! - 有请求时自动启动 worker
+//! - 上游在线时转发直播流
+//! - 上游离线时输出黑屏+状态文字画面
+
+use super::state::RelayManager;
+use super::streamer::start_streamer;
+use crate::config::settings::AppState;
+use axum::{
+    Json,
+    body::Body,
+    extract::{Path, State as AxumState},
+    http::{StatusCode, header},
+    response::{IntoResponse, Response},
+};
+use std::sync::Arc;
+
+/// Axum 路由共享状态（转发专用）/ Axum shared state for relay routes
+#[derive(Clone)]
+pub struct RelayState {
+    pub app_state: Arc<AppState>,
+    pub relay_manager: Arc<RelayManager>,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// GET /stream/{modelname}
+///
+/// 按需启动转发 worker，持续输出 MPEG-TS 字节流。
+/// 播放器直接打开此 URL 即可播放，无需任何预先配置。
+///
+/// Starts relay worker on demand, continuously outputs MPEG-TS byte stream.
+/// Players open this URL directly without any prior configuration.
+pub async fn stream_handler(
+    AxumState(s): AxumState<RelayState>,
+    Path(modelname): Path<String>,
+) -> Response {
+    // 若没有活跃会话，自动启动 worker / Auto-start worker if no active session
+    if !s.relay_manager.has_session(&modelname) {
+        let (stop_tx, ts_tx) = start_streamer(
+            modelname.clone(),
+            Arc::clone(&s.app_state),
+            Arc::clone(&s.relay_manager),
+        );
+        s.relay_manager.create_session(&modelname, stop_tx, ts_tx);
+    }
+
+    let rx = match s.relay_manager.subscribe(&modelname) {
+        Some(rx) => rx,
+        None => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to subscribe to stream")
+                .into_response();
+        }
+    };
+
+    let relay_manager = Arc::clone(&s.relay_manager);
+    let modelname_clone = modelname.clone();
+
+    // 连接断开时减少计数 / Decrement connection count on disconnect
+    let stream = async_stream::stream! {
+        let mut rx = rx;
+        loop {
+            match rx.recv().await {
+                Ok(chunk) => {
+                    yield Ok::<axum::body::Bytes, std::convert::Infallible>(
+                        axum::body::Bytes::from(chunk.as_ref().clone())
+                    );
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+        relay_manager.unsubscribe(&modelname_clone);
+    };
+
+    (
+        [
+            (header::CONTENT_TYPE, "video/mp2t"),
+            (header::CACHE_CONTROL, "no-cache, no-store"),
+            (header::ACCESS_CONTROL_ALLOW_ORIGIN, "*"),
+            (header::TRANSFER_ENCODING, "chunked"),
+        ],
+        Body::from_stream(stream),
+    )
+        .into_response()
+}
+
+/// GET /api/relay/sessions
+///
+/// 返回所有活跃转发会话的状态列表。
+/// Returns the status list of all active relay sessions.
+pub async fn relay_sessions(
+    AxumState(s): AxumState<RelayState>,
+) -> impl IntoResponse {
+    let sessions = s.relay_manager.get_all_status();
+    Json(sessions)
+}

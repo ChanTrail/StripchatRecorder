@@ -244,6 +244,22 @@ const COMMAND_MAP: Record<
 		method: "GET",
 		url: () => "/api/settings/pick-output-dir",
 	},
+	start_relay: {
+		method: "POST",
+		url: (a) => `/relay/${a.username}/start`,
+	},
+	stop_relay: {
+		method: "POST",
+		url: (a) => `/relay/${a.username}/stop`,
+	},
+	get_relay_status: {
+		method: "GET",
+		url: (a) => `/relay/${a.username}/status`,
+	},
+	list_relay_sessions: {
+		method: "GET",
+		url: () => "/api/relay/sessions",
+	},
 };
 
 /**

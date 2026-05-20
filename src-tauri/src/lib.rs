@@ -9,6 +9,7 @@ mod config;
 mod core;
 mod postprocess;
 mod recording;
+mod relay;
 mod server_mod;
 mod streaming;
 mod watcher;

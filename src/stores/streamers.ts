@@ -29,6 +29,8 @@ export interface StreamerEntry {
 	/** 直播间状态文字（如"公开秀"）/ Stream status text (e.g. "公开秀") */
 	status: string;
 	thumbnail_url: string | null;
+	/** 是否正在转发流 / Whether the stream is being relayed */
+	is_relaying?: boolean;
 }
 
 /** 状态更新事件载荷 / Status update event payload */
@@ -149,6 +151,30 @@ export const useStreamersStore = defineStore("streamers", () => {
 	}
 
 	/**
+	 * 启动指定主播的流转发。
+	 * Start stream relay for the given streamer.
+	 *
+	 * @param username - 主播用户名 / Streamer username
+	 */
+	async function startRelay(username: string) {
+		await call("start_relay", { username });
+		const s = streamers.value.find((s) => s.username === username);
+		if (s) s.is_relaying = true;
+	}
+
+	/**
+	 * 停止指定主播的流转发。
+	 * Stop stream relay for the given streamer.
+	 *
+	 * @param username - 主播用户名 / Streamer username
+	 */
+	async function stopRelay(username: string) {
+		await call("stop_relay", { username });
+		const s = streamers.value.find((s) => s.username === username);
+		if (s) s.is_relaying = false;
+	}
+
+	/**
 	 * 初始化后端事件监听器（只执行一次）。
 	 * 监听主播添加/移除、状态更新、录制开始/停止、自动录制变更等事件。
 	 *
@@ -234,6 +260,8 @@ export const useStreamersStore = defineStore("streamers", () => {
 		setAutoRecord,
 		startRecording,
 		stopRecording,
+		startRelay,
+		stopRelay,
 		initListeners,
 	};
 });

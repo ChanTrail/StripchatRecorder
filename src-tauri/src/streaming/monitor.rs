@@ -303,7 +303,18 @@ impl StatusMonitor {
             username: username.clone(),
             is_online: info.is_online,
             is_recording,
-            is_recordable: info.playlist_url.is_some(),
+            // 正在录制时不获取 playlist_url，保留上次缓存的 is_recordable 值，避免按钮被错误禁用
+            // When recording, playlist_url is not fetched; preserve the last cached is_recordable
+            // to avoid incorrectly disabling buttons
+            is_recordable: if is_recording {
+                self.statuses
+                    .read()
+                    .get(&username)
+                    .map(|s| s.is_recordable)
+                    .unwrap_or(info.playlist_url.is_some())
+            } else {
+                info.playlist_url.is_some()
+            },
             viewers: info.viewers,
             status: info.status.clone(),
             thumbnail_url: info.thumbnail_url.clone(),

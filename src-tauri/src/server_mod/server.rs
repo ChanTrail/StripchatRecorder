@@ -10,6 +10,8 @@
 use crate::config::settings::AppState;
 use crate::core::emitter::{BroadcastEmitter, EmitterExt, Event};
 use crate::recording::recorder::RecorderManager;
+use crate::relay::handler::{RelayState, relay_sessions, stream_handler};
+use crate::relay::state::RelayManager;
 use crate::streaming::monitor::StatusMonitor;
 use axum::extract::Query;
 use axum::{
@@ -64,6 +66,8 @@ pub struct ServerState {
     pub emitter: Arc<dyn crate::core::emitter::Emitter>,
     /// SSE 广播发送端 / SSE broadcast sender
     pub broadcast_tx: broadcast::Sender<Event>,
+    /// 转发管理器 / Relay manager
+    pub relay_manager: Arc<RelayManager>,
 }
 
 struct ApiError(String);
@@ -90,7 +94,22 @@ pub fn build_router(state: ServerState) -> Router {
         .allow_methods(Any)
         .allow_headers(Any);
 
-    Router::new()
+    let relay_state = RelayState {
+        app_state: Arc::clone(&state.app_state),
+        relay_manager: Arc::clone(&state.relay_manager),
+    };
+    // /stream/{modelname} 路由（独立 state）/ /stream/{modelname} route (independent state)
+    let stream_router: Router<()> = Router::new()
+        .route("/{modelname}", get(stream_handler))
+        .with_state(relay_state.clone());
+    // /api/relay/sessions 路由 / /api/relay/sessions route
+    let relay_api_router: Router<()> = Router::new()
+        .route("/sessions", get(relay_sessions))
+        .with_state(relay_state);
+
+    // 主路由器先固化 state，再合并转发路由
+    // Finalize main router state first, then merge relay router
+    let main_router: Router<()> = Router::new()
         .route("/api/streamers", get(list_streamers).post(add_streamer))
         .route("/api/streamers/{name}", delete(remove_streamer))
         .route("/api/streamers/{name}/auto-record", post(set_auto_record))
@@ -129,9 +148,15 @@ pub fn build_router(state: ServerState) -> Router {
         .route("/api/recordings/module-outputs", post(get_module_outputs))
         .route("/api/files", get(serve_output_file))
         .route("/api/events", get(sse_handler))
-        .layer(cors)
         .with_state(state)
-        .fallback(static_handler)
+        .fallback(static_handler);
+
+    // 合并转发路由（两者都是 Router<()>，可以直接 merge）
+    // Merge relay routes (both are Router<()>, can merge directly)
+    main_router
+        .nest("/stream", stream_router)
+        .nest("/api/relay", relay_api_router)
+        .layer(cors)
 }
 
 async fn sse_handler(
@@ -791,6 +816,7 @@ pub async fn run_server(port: u16) {
         monitor,
         emitter,
         broadcast_tx: tx,
+        relay_manager: RelayManager::new(),
     };
 
     let app = build_router(server_state);

@@ -3,6 +3,7 @@ export default {
 		streamers: "主播列表",
 		recordings: "录制文件",
 		postprocess: "后处理",
+		relay: "转发流",
 		finder: "主播查找",
 		settings: "设置",
 	},
@@ -57,6 +58,10 @@ export default {
 			confirm: "停止",
 			done: "已停止录制 {username}",
 		},
+		relay: {
+			started: "已开始转发 {username} 的直播流",
+			stopped: "已停止转发 {username}",
+		},
 	},
 	streamerCard: {
 		offline: "离线",
@@ -66,6 +71,9 @@ export default {
 		autoRecord: "自动",
 		autoRecordTitle: "上线自动录制",
 		removeTitle: "移除主播",
+		streamUrl: "转发流地址",
+		streamUrlHint: "直接用播放器打开此地址即可播放",
+		copyStreamUrl: "复制转发地址",
 	},
 	addStreamer: {
 		title: "添加主播",
@@ -299,5 +307,21 @@ export default {
 		fetchTasksFailed: "获取后处理任务失败",
 		done: "后处理完成：{modules}",
 		failed: "后处理失败 [{moduleId}]：{message}",
+	},
+	relay: {
+		title: "转发流",
+		subtitle: "{streams} 个转发流，{connections} 个活跃连接",
+		hint: "直接用播放器打开以下地址即可播放，无需手动启动。首次访问时自动连接上游。",
+		noSessions: "暂无活跃转发流",
+		noSessionsHint: "用播放器打开 /stream/{modelname} 即可自动启动",
+		connections: "{n} 个连接",
+		uptime: "运行 {t}",
+		copyUrl: "复制地址",
+		state: {
+			live: "直播中",
+			offline: "离线",
+			connecting: "连接中",
+			error: "错误",
+		},
 	},
 };
