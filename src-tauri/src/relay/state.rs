@@ -3,7 +3,7 @@
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{broadcast, mpsc};
 
 /// 转发流的当前状态 / Current state of a relay stream
@@ -28,8 +28,10 @@ pub struct RelaySession {
     pub stream_state: RelayStreamState,
     /// 活跃连接数 / Number of active connections
     pub active_connections: u32,
-    /// 会话创建时间 / Session creation time
+    /// 会话创建时间（用于计算运行时长）/ Session creation time (for uptime calculation)
     pub created_at: Instant,
+    /// 会话创建的 Unix 时间戳（毫秒，供前端本地计时）/ Session creation Unix timestamp in ms (for client-side timer)
+    pub created_at_ms: u64,
     /// 最后活跃时间 / Last active time
     pub last_active: Instant,
     /// 停止 worker 的信号 / Signal to stop worker
@@ -57,14 +59,20 @@ impl RelayManager {
         stop_tx: mpsc::Sender<()>,
         ts_tx: broadcast::Sender<Arc<Vec<u8>>>,
     ) {
+        let now_instant = Instant::now();
+        let created_at_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
         self.sessions.write().insert(
             username.to_string(),
             RelaySession {
                 playlist_url: None,
                 stream_state: RelayStreamState::Connecting,
                 active_connections: 0,
-                created_at: Instant::now(),
-                last_active: Instant::now(),
+                created_at: now_instant,
+                created_at_ms,
+                last_active: now_instant,
                 stop_tx,
                 ts_tx,
             },
@@ -82,11 +90,26 @@ impl RelayManager {
         None
     }
 
-    /// 减少连接计数。
+    /// 减少连接计数，并在连接数归零时更新最后活跃时间。
+    /// Decrement connection count and update last_active when it reaches zero.
     pub fn unsubscribe(&self, username: &str) {
         let mut sessions = self.sessions.write();
         if let Some(s) = sessions.get_mut(username) {
             s.active_connections = s.active_connections.saturating_sub(1);
+            if s.active_connections == 0 {
+                s.last_active = Instant::now();
+            }
+        }
+    }
+
+    /// 检查会话是否处于空闲状态（无连接且超过指定秒数未活跃）。
+    /// Check if a session is idle (no connections and inactive for more than the given seconds).
+    pub fn is_idle(&self, username: &str, idle_secs: u64) -> bool {
+        let sessions = self.sessions.read();
+        if let Some(s) = sessions.get(username) {
+            s.active_connections == 0 && s.last_active.elapsed().as_secs() >= idle_secs
+        } else {
+            false
         }
     }
 
@@ -135,6 +158,7 @@ impl RelayManager {
                 stream_state: s.stream_state.clone(),
                 active_connections: s.active_connections,
                 uptime_secs: s.created_at.elapsed().as_secs(),
+                created_at_ms: s.created_at_ms,
                 stream_url: format!("/stream/{}", username),
             })
             .collect()
@@ -147,6 +171,9 @@ pub struct RelaySessionStatus {
     pub username: String,
     pub stream_state: RelayStreamState,
     pub active_connections: u32,
+    /// 会话已运行秒数（服务端计算，用于初始值）/ Uptime in seconds (server-computed, used as initial value)
     pub uptime_secs: u64,
+    /// 会话创建时的 Unix 时间戳（毫秒），供前端本地计时 / Session creation Unix timestamp (ms) for client-side timer
+    pub created_at_ms: u64,
     pub stream_url: String,
 }

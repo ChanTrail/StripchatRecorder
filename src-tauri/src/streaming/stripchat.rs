@@ -12,6 +12,7 @@
 
 use crate::core::error::{AppError, Result};
 use reqwest::{Client, Response};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// 模拟浏览器的 User-Agent / Browser-mimicking User-Agent
@@ -98,6 +99,8 @@ pub struct StripchatApi {
     sc_mirror: Option<String>,
     /// 各 CDN 节点的首选 TLD 缓存（节点 ID -> TLD）/ Preferred TLD cache per CDN node (node ID -> TLD)
     preferred_tld_by_node: Arc<parking_lot::Mutex<std::collections::HashMap<String, String>>>,
+    /// Mouflon 解密密钥（pkey -> pdkey），用于 playlist URL 匹配 / Mouflon decryption keys (pkey -> pdkey) for playlist URL matching
+    mouflon_keys: HashMap<String, String>,
 }
 
 impl StripchatApi {
@@ -114,6 +117,7 @@ impl StripchatApi {
             cdn_client: build_client(cdn_proxy)?,
             sc_mirror: sc_mirror.filter(|s| !s.is_empty()).map(|s| s.to_string()),
             preferred_tld_by_node,
+            mouflon_keys: HashMap::new(),
         })
     }
 
@@ -130,6 +134,13 @@ impl StripchatApi {
             sc_mirror,
             Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
         )
+    }
+
+    /// 设置 Mouflon 解密密钥，返回 self 以支持链式调用。
+    /// Set Mouflon decryption keys, returns self for method chaining.
+    pub fn with_mouflon_keys(mut self, keys: HashMap<String, String>) -> Self {
+        self.mouflon_keys = keys;
+        self
     }
 
     /// 将 stripchat.com 域名替换为镜像站域名（若已配置）。
@@ -382,11 +393,7 @@ impl StripchatApi {
             );
             let client = client.clone();
             tasks.spawn(async move {
-                let resp = client
-                    .get(&url)
-                    .header("Referer", REFERER)
-                    .send()
-                    .await;
+                let resp = client.get(&url).header("Referer", REFERER).send().await;
                 (tld, url, resp)
             });
         }
@@ -422,22 +429,20 @@ impl StripchatApi {
         )))
     }
 
-    /// 从 master playlist 文本中解析出 BANDWIDTH 最高的流 URL。
-    /// Parse the stream URL with the highest BANDWIDTH from the master playlist text.
-    fn parse_best_stream(playlist: &str) -> Option<(String, Option<String>, Option<String>)> {
+    /// 从 master playlist 文本中解析出 BANDWIDTH 最高的流 URL，以及所有 Mouflon PSCH 参数对。
+    /// Parse the stream URL with the highest BANDWIDTH from the master playlist text,
+    /// along with all Mouflon PSCH parameter pairs.
+    fn parse_best_stream(playlist: &str) -> Option<(String, Vec<(String, String)>)> {
         // 先把 \r\n 统一成 \n，再按 \n 分割
         let normalized = playlist.replace("\r\n", "\n").replace('\r', "\n");
         let lines: Vec<&str> = normalized.split('\n').map(|l| l.trim()).collect();
 
-        // 收集第一个 Mouflon PSCH 参数
-        let mut psch: Option<String> = None;
-        let mut pkey: Option<String> = None;
+        // 收集所有 Mouflon PSCH 参数对 (psch, pkey)
+        let mut mouflon_pairs: Vec<(String, String)> = Vec::new();
         for &line in &lines {
             if let Some(rest) = line.strip_prefix("#EXT-X-MOUFLON:PSCH:") {
                 if let Some((scheme, key)) = rest.split_once(':') {
-                    psch = Some(scheme.to_string());
-                    pkey = Some(key.to_string());
-                    break;
+                    mouflon_pairs.push((scheme.to_string(), key.to_string()));
                 }
             }
         }
@@ -468,14 +473,18 @@ impl StripchatApi {
             }
         }
 
-        best_url.map(|url| (url, psch, pkey))
+        best_url.map(|url| (url, mouflon_pairs))
     }
 
     /// 获取主播的 HLS 播放列表 URL。
     /// 直接对所有 CDN TLD 竞速请求 `{model_id}_auto.m3u8`，解析最高清晰度流。
+    /// 若 playlist 包含 Mouflon 加密参数，则按用户配置的 Mouflon Keys 顺序逐一比对，
+    /// 取第一个匹配的 pkey 对应的 psch 拼入 URL。
     ///
     /// Get the HLS playlist URL for a streamer.
     /// Races all CDN TLDs for `{model_id}_auto.m3u8` and picks the highest-quality stream.
+    /// If the playlist contains Mouflon encryption parameters, iterates through the user-configured
+    /// Mouflon Keys in order and uses the first matching pkey's psch in the URL.
     async fn get_playlist_url(
         &self,
         username: &str,
@@ -489,17 +498,36 @@ impl StripchatApi {
 
         let parsed = Self::parse_best_stream(&playlist_text);
 
-        let (url, psch, pkey) = parsed
-            .ok_or_else(|| AppError::StreamOffline(username.to_string()))?;
+        let (url, mouflon_pairs) =
+            parsed.ok_or_else(|| AppError::StreamOffline(username.to_string()))?;
 
-        let final_url = match (psch, pkey) {
-            (Some(psch), Some(pkey)) => {
-                // 若 URL 已含 query string 则用 & 追加，否则用 ? 开头
-                let sep = if url.contains('?') { "&" } else { "?" };
-                format!("{}{}psch={}&pkey={}", url, sep, psch, pkey)
+        // 若存在 Mouflon 加密参数，则遍历用户配置的 keys，取第一个匹配的
+        // If Mouflon encryption parameters exist, iterate user-configured keys and use the first match
+        let final_url = if mouflon_pairs.is_empty() {
+            url
+        } else {
+            // 按 mouflon_pairs 顺序遍历，找到第一个在用户 keys 中存在的 pkey
+            // Iterate mouflon_pairs in order, find the first pkey present in user keys
+            let matched = mouflon_pairs
+                .iter()
+                .find(|(_, pkey)| self.mouflon_keys.contains_key(pkey.as_str()));
+
+            match matched {
+                Some((psch, pkey)) => {
+                    let sep = if url.contains('?') { "&" } else { "?" };
+                    format!("{}{}psch={}&pkey={}", url, sep, psch, pkey)
+                }
+                None => {
+                    // 没有匹配的 key，回退到第一个 pair（无解密密钥）
+                    // No matching key found, fall back to the first pair (no decryption key)
+                    let (psch, pkey) = &mouflon_pairs[0];
+                    let sep = if url.contains('?') { "&" } else { "?" };
+                    format!("{}{}psch={}&pkey={}", url, sep, psch, pkey)
+                }
             }
-            _ => url,
         };
+
+        tracing::info!("Using the URL: {}", final_url);
 
         Ok(final_url)
     }

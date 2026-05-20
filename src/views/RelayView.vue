@@ -19,8 +19,46 @@
 	import { Card, CardContent } from "@/components/ui/card";
 	import { Copy, Check, Radio, Wifi, WifiOff, AlertCircle, Loader } from "lucide-vue-next";
 	import { useI18n } from "vue-i18n";
+	import { useStreamersStore } from "@/stores/streamers";
 
 	const { t } = useI18n();
+	const streamersStore = useStreamersStore();
+
+	/** 是否运行在 Tauri 桌面模式（relay 功能仅 server 模式可用）*/
+	const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
+	// 按用户名查找主播条目 / Find streamer entry by username
+	function findStreamer(username: string) {
+		return streamersStore.streamers.find(s => s.username === username) ?? null;
+	}
+
+	// 主播状态文字：在线显示状态，离线显示"离线" / Streamer status label
+	function streamerStatusLabel(username: string): string {
+		const s = findStreamer(username);
+		if (!s) return t("streamerCard.offline");
+		return s.is_online ? s.status : t("streamerCard.offline");
+	}
+
+	// 主播状态 Badge 内联样式 / Streamer status badge inline style
+	function streamerStatusStyle(username: string): Record<string, string> {
+		const s = findStreamer(username);
+		if (!s?.is_online) {
+			return { backgroundColor: "rgb(39 39 42)", color: "rgb(161 161 170)", borderColor: "transparent" };
+		}
+		if (s.status === "公开秀") {
+			return { backgroundColor: "rgb(20 83 45)", color: "rgb(134 239 172)", borderColor: "transparent" };
+		}
+		return { backgroundColor: "rgb(120 53 15)", color: "rgb(252 211 77)", borderColor: "transparent" };
+	}
+
+	// Rust serde snake_case enum 序列化格式：
+	// 无字段 variant → 字符串，如 "live" | "connecting"
+	// 有字段 variant → 对象，如 { "offline": { "status": "..." } } | { "error": { "message": "..." } }
+	type RawStreamState =
+		| "connecting"
+		| "live"
+		| { offline: { status: string } }
+		| { error: { message: string } };
 
 	interface StreamState {
 		type: "connecting" | "live" | "offline" | "error";
@@ -28,27 +66,55 @@
 		message?: string;
 	}
 
+	function parseStreamState(raw: RawStreamState): StreamState {
+		if (raw === "connecting") return { type: "connecting" };
+		if (raw === "live") return { type: "live" };
+		if (typeof raw === "object" && "offline" in raw) return { type: "offline", status: raw.offline.status };
+		if (typeof raw === "object" && "error" in raw) return { type: "error", message: raw.error.message };
+		return { type: "offline" };
+	}
+
 	interface RelaySession {
 		username: string;
-		stream_state: StreamState;
+		stream_state: RawStreamState;
 		active_connections: number;
 		uptime_secs: number;
+		created_at_ms: number;
 		stream_url: string;
 	}
 
-	const sessions = ref<RelaySession[]>([]);
+	// 解析后的会话（stream_state 已转换为统一格式）/ Parsed session with normalized stream_state
+	type ParsedSession = Omit<RelaySession, "stream_state"> & { stream_state: StreamState };
+
+	// 解析后的会话列表（stream_state 已转换为统一格式）
+	const sessions = ref<ParsedSession[]>([]);
 	const loading = ref(true);
 	const copiedMap = ref<Record<string, boolean>>({});
+	// 本地时钟 tick，每秒递增，用于驱动运行时间的响应式更新
+	// Local clock tick, increments every second to drive reactive uptime updates
+	const nowMs = ref(Date.now());
 	let pollTimer: ReturnType<typeof setInterval> | null = null;
+	let tickTimer: ReturnType<typeof setInterval> | null = null;
 
 	async function fetchSessions() {
 		try {
-			sessions.value = await call<RelaySession[]>("list_relay_sessions");
+			const raw = await call<RelaySession[]>("list_relay_sessions");
+			sessions.value = raw.map(s => ({ ...s, stream_state: parseStreamState(s.stream_state) }));
 		} catch {
 			// 静默失败 / Fail silently
 		} finally {
 			loading.value = false;
 		}
+	}
+
+	// 根据 created_at_ms 实时计算运行时长（秒），每秒更新
+	// Compute live uptime in seconds from created_at_ms, updated every second
+	function liveUptime(session: ParsedSession): number {
+		if (session.created_at_ms > 0) {
+			return Math.max(0, Math.floor((nowMs.value - session.created_at_ms) / 1000));
+		}
+		// 回退到服务端值（兼容旧数据）/ Fall back to server value (backward compat)
+		return session.uptime_secs;
 	}
 
 	function formatUptime(secs: number): string {
@@ -59,7 +125,7 @@
 		return `${h}h ${m}m`;
 	}
 
-	function getStreamUrl(session: RelaySession): string {
+	function getStreamUrl(session: ParsedSession): string {
 		return `${window.location.origin}${session.stream_url}`;
 	}
 
@@ -73,20 +139,19 @@
 		} catch {}
 	}
 
-	function stateVariant(state: StreamState): string {
+	function stateVariant(state: StreamState): Record<string, string> {
 		switch (state.type) {
-			case "live": return "bg-green-900 text-green-300 border-transparent";
-			case "offline": return "bg-zinc-800 text-zinc-400 border-transparent";
-			case "connecting": return "bg-blue-900 text-blue-300 border-transparent";
-			case "error": return "bg-red-900 text-red-300 border-transparent";
-			default: return "bg-zinc-800 text-zinc-400 border-transparent";
+			case "live":       return { backgroundColor: "rgb(20 83 45)",   color: "rgb(134 239 172)", borderColor: "transparent" };
+			case "connecting": return { backgroundColor: "rgb(23 37 84)",   color: "rgb(147 197 253)", borderColor: "transparent" };
+			case "error":      return { backgroundColor: "rgb(127 29 29)",  color: "rgb(252 165 165)", borderColor: "transparent" };
+			default:           return { backgroundColor: "rgb(39 39 42)",   color: "rgb(161 161 170)", borderColor: "transparent" };
 		}
 	}
 
 	function stateLabel(state: StreamState): string {
 		switch (state.type) {
 			case "live": return t("relay.state.live");
-			case "offline": return state.status ? `${t("relay.state.offline")} · ${state.status}` : t("relay.state.offline");
+			case "offline": return state.status || t("relay.state.offline");
 			case "connecting": return t("relay.state.connecting");
 			case "error": return t("relay.state.error");
 			default: return state.type;
@@ -99,13 +164,24 @@
 	const exampleUrl = computed(() => `${window.location.origin}/stream/{modelname}`);
 
 	onMounted(() => {
+		if (isTauri) return; // desktop 模式无 relay 功能，不启动轮询
 		fetchSessions();
-		// 每 3 秒刷新一次 / Refresh every 3 seconds
-		pollTimer = setInterval(fetchSessions, 3000);
+		// 确保主播列表数据已加载（用于显示主播真实状态）
+		// Ensure streamer list is loaded (for displaying real streamer status)
+		if (streamersStore.streamers.length === 0) {
+			void streamersStore.fetchStreamers();
+		}
+		// 每 5 秒轮询一次会话列表（仅更新状态/连接数，运行时间由本地计时器驱动）
+		// Poll session list every 5s (only updates state/connections; uptime driven by local timer)
+		pollTimer = setInterval(fetchSessions, 5000);
+		// 每秒更新本地时钟，驱动运行时间实时刷新
+		// Update local clock every second to drive live uptime refresh
+		tickTimer = setInterval(() => { nowMs.value = Date.now(); }, 1000);
 	});
 
 	onUnmounted(() => {
 		if (pollTimer) clearInterval(pollTimer);
+		if (tickTimer) clearInterval(tickTimer);
 	});
 </script>
 
@@ -120,7 +196,16 @@
 			</div>
 		</header>
 
-		<!-- 说明卡片 / Info card -->
+		<!-- Desktop 模式不支持转发流 / Relay not available in desktop mode -->
+		<div
+			v-if="isTauri"
+			class="rounded-lg border border-zinc-800 bg-zinc-900/40 px-4 py-8 text-center flex flex-col items-center gap-2"
+		>
+			<Radio class="size-8 opacity-20" />
+			<p class="text-sm text-muted-foreground">{{ t("relay.desktopUnsupported") }}</p>
+		</div>
+
+		<template v-else>
 		<div class="rounded-lg border border-blue-900/40 bg-blue-950/20 px-4 py-3 text-sm text-blue-300/80">
 			<p>{{ t("relay.hint") }}</p>
 			<p class="mt-1 font-mono text-xs text-blue-400/60">
@@ -175,9 +260,21 @@
 							/>
 							<span class="font-semibold text-sm truncate">{{ session.username }}</span>
 						</div>
-						<Badge :class="stateVariant(session.stream_state)" class="shrink-0 text-xs">
-							{{ stateLabel(session.stream_state) }}
-						</Badge>
+						<div class="flex items-center gap-1.5 shrink-0">
+							<!-- 主播真实状态（来自主播列表）/ Streamer real status (from streamer list) -->
+							<Badge
+								v-if="findStreamer(session.username)"
+								variant="outline"
+								:style="streamerStatusStyle(session.username)"
+								class="text-xs"
+							>
+								{{ streamerStatusLabel(session.username) }}
+							</Badge>
+							<!-- 转发流内部状态 / Relay stream internal state -->
+							<Badge variant="outline" :style="stateVariant(session.stream_state)" class="text-xs">
+								{{ stateLabel(session.stream_state) }}
+							</Badge>
+						</div>
 					</div>
 
 					<!-- 统计信息 / Stats -->
@@ -186,7 +283,7 @@
 							<Radio class="size-3" />
 							{{ t("relay.connections", { n: session.active_connections }) }}
 						</span>
-						<span>{{ t("relay.uptime", { t: formatUptime(session.uptime_secs) }) }}</span>
+						<span>{{ t("relay.uptime", { t: formatUptime(liveUptime(session)) }) }}</span>
 					</div>
 
 					<!-- 流地址 + 复制按钮 / Stream URL + copy button -->
@@ -211,5 +308,6 @@
 				</CardContent>
 			</Card>
 		</div>
+		</template><!-- end v-else (server mode) -->
 	</div>
 </template>

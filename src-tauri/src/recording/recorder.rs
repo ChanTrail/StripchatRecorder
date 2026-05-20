@@ -339,13 +339,14 @@ impl RecorderManager {
                     .write()
                     .remove(&session_dir_clone);
 
+                let parent = session_dir_clone.parent().unwrap_or(&session_dir_clone);
+                let stem = session_dir_clone
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("unknown");
+                let merged_path = parent.join(format!("{}.{}", stem, merge_format_clone));
+
                 if duration.is_some() {
-                    let parent = session_dir_clone.parent().unwrap_or(&session_dir_clone);
-                    let stem = session_dir_clone
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("unknown");
-                    let merged_path = parent.join(format!("{}.{}", stem, merge_format_clone));
                     if merged_path.exists() {
                         let pipeline = state_clone.get_pipeline();
                         if !pipeline.nodes.is_empty() {
@@ -361,6 +362,25 @@ impl RecorderManager {
                             // 无后处理流水线：直接标记为 finish
                             // No pipeline: mark as finish directly
                             crate::recording::meta::set_status(&merged_path, "finish");
+                        }
+                    }
+                } else {
+                    // 合并失败（无分片或 ffmpeg 出错）：删除孤立的 meta 文件和空会话目录，
+                    // 避免 meta 永久卡在 "merging" 状态。
+                    // Merge failed (no segments or ffmpeg error): delete orphaned meta file and
+                    // empty session dir to prevent meta from being stuck at "merging" forever.
+                    crate::recording::meta::delete_meta(&merged_path);
+                    tracing::info!(
+                        "Merge produced no output for {} → deleted meta, cleaning up session dir",
+                        username_clone
+                    );
+                    if session_dir_clone.exists() {
+                        if let Err(e) = std::fs::remove_dir_all(&session_dir_clone) {
+                            tracing::warn!(
+                                "Failed to remove empty session dir {:?}: {}",
+                                session_dir_clone,
+                                e
+                            );
                         }
                     }
                 }
@@ -437,7 +457,8 @@ impl RecorderManager {
             cdn_proxy,
             sc_mirror,
             Arc::clone(&self.preferred_tld_by_node),
-        )?;
+        )?
+        .with_mouflon_keys(mouflon_keys.clone());
         let mut current_playlist_url = playlist_url.to_string();
         let mut url_prefix = get_url_prefix(&current_playlist_url);
 

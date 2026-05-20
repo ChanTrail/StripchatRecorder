@@ -311,7 +311,8 @@ async fn start_recording(
             settings.cdn_proxy_url.as_deref(),
             settings.sc_mirror_url.as_deref(),
         )
-        .map_err(ApiError::from)?;
+        .map_err(ApiError::from)?
+        .with_mouflon_keys(s.app_state.get_mouflon_keys());
         let info = api
             .get_stream_info(&name, true)
             .await

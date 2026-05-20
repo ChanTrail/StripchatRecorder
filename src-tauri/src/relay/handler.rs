@@ -62,8 +62,27 @@ pub async fn stream_handler(
     let relay_manager = Arc::clone(&s.relay_manager);
     let modelname_clone = modelname.clone();
 
+    // RAII guard：无论 stream 正常结束还是客户端强制断开，都能保证 unsubscribe 被调用。
+    // RAII guard: ensures unsubscribe is called whether the stream ends normally or the client disconnects abruptly.
+    struct UnsubscribeGuard {
+        relay_manager: Arc<RelayManager>,
+        username: String,
+    }
+    impl Drop for UnsubscribeGuard {
+        fn drop(&mut self) {
+            self.relay_manager.unsubscribe(&self.username);
+        }
+    }
+    let _guard = UnsubscribeGuard {
+        relay_manager: Arc::clone(&relay_manager),
+        username: modelname_clone.clone(),
+    };
+
     // 连接断开时减少计数 / Decrement connection count on disconnect
     let stream = async_stream::stream! {
+        // 将 guard 移入 stream 闭包，确保 stream 被 drop 时触发 unsubscribe
+        // Move guard into stream closure so unsubscribe fires when stream is dropped
+        let _guard = _guard;
         let mut rx = rx;
         loop {
             match rx.recv().await {
@@ -76,7 +95,6 @@ pub async fn stream_handler(
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             }
         }
-        relay_manager.unsubscribe(&modelname_clone);
     };
 
     (

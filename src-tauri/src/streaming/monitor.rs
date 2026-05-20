@@ -193,7 +193,7 @@ impl StatusMonitor {
             settings.sc_mirror_url.as_deref(),
             self.recorder.cdn_tld_cache(),
         ) {
-            Ok(a) => a,
+            Ok(a) => a.with_mouflon_keys(self.state.get_mouflon_keys()),
             Err(e) => {
                 tracing::error!("Failed to create API client: {}", e);
                 emitter.emit(
@@ -224,7 +224,7 @@ impl StatusMonitor {
             settings.sc_mirror_url.as_deref(),
             self.recorder.cdn_tld_cache(),
         ) {
-            Ok(a) => Arc::new(a),
+            Ok(a) => Arc::new(a.with_mouflon_keys(self.state.get_mouflon_keys())),
             Err(e) => {
                 tracing::error!("Failed to create API client: {}", e);
                 emitter.emit(

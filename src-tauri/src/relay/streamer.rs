@@ -36,6 +36,23 @@ pub fn start_streamer(
     (stop_tx, ts_tx)
 }
 
+/// 无播放器连接超过此时长（秒）后自动停止转发 worker。
+/// Auto-stop relay worker after this many seconds with no connected players.
+const IDLE_STOP_SECS: u64 = 5; // 5 秒 / 5 seconds
+
+/// 子函数退出原因 / Reason a sub-function exited
+enum WorkerExit {
+    /// 流自然结束（上游断流/离线轮询超时），应继续外层循环重新检查状态
+    /// Stream ended naturally; outer loop should continue and recheck state
+    StreamEnded,
+    /// 收到停止信号，应退出整个 worker
+    /// Stop signal received; exit the whole worker
+    Stopped,
+    /// 空闲超时，应退出整个 worker
+    /// Idle timeout; exit the whole worker
+    Idle,
+}
+
 /// Worker 主循环 / Worker main loop
 async fn worker_loop(
     username: String,
@@ -52,6 +69,17 @@ async fn worker_loop(
             break;
         }
 
+        // 检查空闲超时：无连接超过 IDLE_STOP_SECS 秒则自动停止
+        // Check idle timeout: auto-stop if no connections for IDLE_STOP_SECS seconds
+        if relay_manager.is_idle(&username, IDLE_STOP_SECS) {
+            tracing::info!(
+                "Relay worker: no connections for {}s, auto-stopping for {}",
+                IDLE_STOP_SECS,
+                username
+            );
+            break;
+        }
+
         // 尝试获取上游播放列表 URL / Try to get upstream playlist URL
         let settings = app_state.get_settings();
         let api = match StripchatApi::new_api_only(
@@ -59,7 +87,7 @@ async fn worker_loop(
             settings.cdn_proxy_url.as_deref(),
             settings.sc_mirror_url.as_deref(),
         ) {
-            Ok(a) => Arc::new(a),
+            Ok(a) => Arc::new(a.with_mouflon_keys(app_state.get_mouflon_keys())),
             Err(e) => {
                 tracing::error!("Relay worker: API client error for {}: {}", username, e);
                 relay_manager.set_state(&username, RelayStreamState::Error {
@@ -82,7 +110,7 @@ async fn worker_loop(
                     relay_manager.set_playlist_url(&username, Some(playlist_url.clone()));
                     relay_manager.set_state(&username, RelayStreamState::Live);
 
-                    let ended = run_live_relay(
+                    let exit = run_live_relay(
                         &username,
                         &playlist_url,
                         &app_state,
@@ -93,11 +121,10 @@ async fn worker_loop(
 
                     relay_manager.set_playlist_url(&username, None);
 
-                    if !ended {
-                        // 收到停止信号 / Received stop signal
-                        break;
+                    match exit {
+                        WorkerExit::StreamEnded => {} // 继续外层循环 / Continue outer loop
+                        WorkerExit::Stopped | WorkerExit::Idle => break,
                     }
-                    // 直播结束，继续循环检查状态 / Live ended, continue loop to check status
                 } else {
                     // 上游离线，输出状态画面 / Upstream offline, output status frame
                     let status_text = info.status.clone();
@@ -105,15 +132,17 @@ async fn worker_loop(
                         status: status_text.clone(),
                     });
 
-                    let ended = run_offline_relay(
+                    let exit = run_offline_relay(
                         &username,
                         &status_text,
+                        &relay_manager,
                         &ts_tx,
                         &mut stop_rx,
                     ).await;
 
-                    if !ended {
-                        break;
+                    match exit {
+                        WorkerExit::StreamEnded => {}
+                        WorkerExit::Stopped | WorkerExit::Idle => break,
                     }
                 }
             }
@@ -123,23 +152,31 @@ async fn worker_loop(
                     message: e.to_string(),
                 });
 
-                let ended = run_offline_relay(
+                let exit = run_offline_relay(
                     &username,
                     "Status Unavailable",
+                    &relay_manager,
                     &ts_tx,
                     &mut stop_rx,
                 ).await;
 
-                if !ended {
-                    break;
+                match exit {
+                    WorkerExit::StreamEnded => {}
+                    WorkerExit::Stopped | WorkerExit::Idle => break,
                 }
             }
         }
 
-        // 短暂等待后重新检查状态 / Brief wait before rechecking status
+        // 短暂等待后重新检查状态，同时响应停止信号和空闲超时
+        // Brief wait before rechecking state, also respond to stop signal and idle timeout
         tokio::select! {
             _ = stop_rx.recv() => break,
-            _ = tokio::time::sleep(tokio::time::Duration::from_secs(5)) => {}
+            _ = tokio::time::sleep(tokio::time::Duration::from_secs(5)) => {
+                if relay_manager.is_idle(&username, IDLE_STOP_SECS) {
+                    tracing::info!("Relay worker: idle after recheck wait, stopping for {}", username);
+                    break;
+                }
+            }
         }
     }
 
@@ -147,24 +184,24 @@ async fn worker_loop(
     tracing::info!("Relay worker stopped for {}", username);
 }
 
-/// 运行直播转发，返回 true 表示直播自然结束，false 表示收到停止信号。
-/// Run live relay. Returns true if stream ended naturally, false if stop signal received.
+/// 运行直播转发，返回退出原因。
+/// Run live relay. Returns the reason for exiting.
 async fn run_live_relay(
     username: &str,
     initial_playlist_url: &str,
     app_state: &AppState,
-    _relay_manager: &RelayManager,
+    relay_manager: &RelayManager,
     ts_tx: &broadcast::Sender<Arc<Vec<u8>>>,
     stop_rx: &mut mpsc::Receiver<()>,
-) -> bool {
+) -> WorkerExit {
     let settings = app_state.get_settings();
     let api = match StripchatApi::new_api_only(
         settings.api_proxy_url.as_deref(),
         settings.cdn_proxy_url.as_deref(),
         settings.sc_mirror_url.as_deref(),
     ) {
-        Ok(a) => Arc::new(a),
-        Err(_) => return true,
+        Ok(a) => Arc::new(a.with_mouflon_keys(app_state.get_mouflon_keys())),
+        Err(_) => return WorkerExit::StreamEnded,
     };
 
     // 启动持久 ffmpeg 进程 / Start persistent ffmpeg process
@@ -189,7 +226,7 @@ async fn run_live_relay(
         Ok(c) => c,
         Err(e) => {
             tracing::error!("Relay: failed to spawn ffmpeg for {}: {}", username, e);
-            return true;
+            return WorkerExit::StreamEnded;
         }
     };
 
@@ -230,7 +267,13 @@ async fn run_live_relay(
 
     let result = loop {
         if stop_rx.try_recv().is_ok() {
-            break false; // 停止信号 / Stop signal
+            break WorkerExit::Stopped;
+        }
+
+        // 空闲检查：无连接超过阈值则退出 / Idle check: exit if no connections for threshold
+        if relay_manager.is_idle(username, IDLE_STOP_SECS) {
+            tracing::info!("Relay live: idle timeout, stopping for {}", username);
+            break WorkerExit::Idle;
         }
 
         match poll_and_feed(
@@ -242,8 +285,13 @@ async fn run_live_relay(
                 consecutive_failures = 0;
                 if !had_new {
                     tokio::select! {
-                        _ = stop_rx.recv() => break false,
-                        _ = tokio::time::sleep(tokio::time::Duration::from_millis(1000)) => {}
+                        _ = stop_rx.recv() => break WorkerExit::Stopped,
+                        _ = tokio::time::sleep(tokio::time::Duration::from_millis(1000)) => {
+                            if relay_manager.is_idle(username, IDLE_STOP_SECS) {
+                                tracing::info!("Relay live: idle timeout during poll wait, stopping for {}", username);
+                                break WorkerExit::Idle;
+                            }
+                        }
                     }
                 }
             }
@@ -252,7 +300,7 @@ async fn run_live_relay(
                 tracing::warn!("Relay live: poll failed for {} ({}/{}): {}", username, consecutive_failures, MAX_FAILURES, e);
 
                 if consecutive_failures >= MAX_FAILURES {
-                    break true; // 直播结束 / Stream ended
+                    break WorkerExit::StreamEnded;
                 }
 
                 match api.get_stream_info(username, true).await {
@@ -262,15 +310,20 @@ async fn run_live_relay(
                             current_url = new_url;
                             consecutive_failures = 0;
                         } else if !info.is_recordable {
-                            break true; // 直播结束 / Stream ended
+                            break WorkerExit::StreamEnded;
                         }
                     }
                     Err(_) => {}
                 }
 
                 tokio::select! {
-                    _ = stop_rx.recv() => break false,
-                    _ = tokio::time::sleep(tokio::time::Duration::from_millis(2000)) => {}
+                    _ = stop_rx.recv() => break WorkerExit::Stopped,
+                    _ = tokio::time::sleep(tokio::time::Duration::from_millis(2000)) => {
+                        if relay_manager.is_idle(username, IDLE_STOP_SECS) {
+                            tracing::info!("Relay live: idle timeout during error wait, stopping for {}", username);
+                            break WorkerExit::Idle;
+                        }
+                    }
                 }
             }
         }
@@ -334,9 +387,10 @@ fn to_ascii_status(s: &str) -> String {
 async fn run_offline_relay(
     username: &str,
     status_text: &str,
+    relay_manager: &RelayManager,
     ts_tx: &broadcast::Sender<Arc<Vec<u8>>>,
     stop_rx: &mut mpsc::Receiver<()>,
-) -> bool {
+) -> WorkerExit {
     // 转义 drawtext 特殊字符 / Escape drawtext special characters
     let escape = |s: &str| {
         s.replace('\\', "\\\\")
@@ -399,10 +453,10 @@ async fn run_offline_relay(
             tracing::error!("Relay offline: failed to spawn ffmpeg for {}: {}", username, e);
             // ffmpeg 不可用时等待后重试 / Wait and retry if ffmpeg unavailable
             tokio::select! {
-                _ = stop_rx.recv() => return false,
+                _ = stop_rx.recv() => return WorkerExit::Stopped,
                 _ = tokio::time::sleep(tokio::time::Duration::from_secs(10)) => {}
             }
-            return true;
+            return WorkerExit::StreamEnded;
         }
     };
 
@@ -416,24 +470,36 @@ async fn run_offline_relay(
 
     let result = loop {
         if stop_rx.try_recv().is_ok() {
-            break false;
+            break WorkerExit::Stopped;
+        }
+
+        // 空闲检查 / Idle check
+        if relay_manager.is_idle(username, IDLE_STOP_SECS) {
+            tracing::info!("Relay offline: idle timeout, stopping for {}", username);
+            break WorkerExit::Idle;
         }
 
         if tokio::time::Instant::now() >= deadline {
-            break true; // 超时，重新检查 / Timeout, recheck
+            break WorkerExit::StreamEnded; // 超时，重新检查 / Timeout, recheck
         }
 
         tokio::select! {
-            _ = stop_rx.recv() => break false,
+            _ = stop_rx.recv() => break WorkerExit::Stopped,
             n = stdout.read(&mut buf) => {
                 match n {
-                    Ok(0) | Err(_) => break true,
+                    Ok(0) | Err(_) => break WorkerExit::StreamEnded,
                     Ok(n) => { let _ = ts_tx.send(Arc::new(buf[..n].to_vec())); }
                 }
             }
+            // 每 100ms 检查一次 idle 和 deadline
+            // Check idle and deadline every 100ms
             _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {
+                if relay_manager.is_idle(username, IDLE_STOP_SECS) {
+                    tracing::info!("Relay offline: idle timeout during output, stopping for {}", username);
+                    break WorkerExit::Idle;
+                }
                 if tokio::time::Instant::now() >= deadline {
-                    break true;
+                    break WorkerExit::StreamEnded;
                 }
             }
         }
