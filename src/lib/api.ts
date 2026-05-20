@@ -198,6 +198,10 @@ const COMMAND_MAP: Record<
 		method: "DELETE",
 		url: (a) => `/api/mouflon-keys/${a.pkey}`,
 	},
+	sync_mouflon_keys: {
+		method: "POST",
+		url: () => "/api/mouflon-keys/sync",
+	},
 	remove_missing_pp_results: {
 		method: "POST",
 		url: () => "/api/startup-warnings/pp-results",

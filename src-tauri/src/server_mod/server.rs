@@ -122,6 +122,7 @@ pub fn build_router(state: ServerState) -> Router {
             get(list_mouflon_keys).post(add_mouflon_key),
         )
         .route("/api/mouflon-keys/{pkey}", delete(remove_mouflon_key))
+        .route("/api/mouflon-keys/sync", post(sync_mouflon_keys))
         .route("/api/startup-warnings", get(get_startup_warnings_handler))
         .route(
             "/api/startup-warnings/pp-results",
@@ -384,7 +385,7 @@ async fn save_settings(
 
 async fn list_mouflon_keys(AxumState(s): AxumState<ServerState>) -> ApiResult<serde_json::Value> {
     Ok(Json(
-        serde_json::to_value(s.app_state.get_mouflon_keys()).unwrap(),
+        serde_json::to_value(s.app_state.get_mouflon_keys_store()).unwrap(),
     ))
 }
 
@@ -402,7 +403,7 @@ async fn add_mouflon_key(
         .add_mouflon_key(&body.pkey, &body.pdkey)
         .map_err(ApiError::from)?;
     s.emitter
-        .emit("mouflon-keys-updated", &s.app_state.get_mouflon_keys());
+        .emit("mouflon-keys-updated", &s.app_state.get_mouflon_keys_store());
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -414,8 +415,34 @@ async fn remove_mouflon_key(
         .remove_mouflon_key(&pkey)
         .map_err(ApiError::from)?;
     s.emitter
-        .emit("mouflon-keys-updated", &s.app_state.get_mouflon_keys());
+        .emit("mouflon-keys-updated", &s.app_state.get_mouflon_keys_store());
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// 手动触发一次 Mouflon Keys 从 Worker 同步（忽略时间间隔，强制比对 updated_at）。
+/// Manually trigger a Mouflon Keys sync from the Worker (bypasses interval, still compares updated_at).
+async fn sync_mouflon_keys(AxumState(s): AxumState<ServerState>) -> ApiResult<serde_json::Value> {
+    let settings = s.app_state.get_settings();
+    let url = settings
+        .mouflon_sync_url
+        .as_deref()
+        .filter(|u| !u.is_empty())
+        .ok_or_else(|| ApiError("未配置 mouflon_sync_url".into()))?
+        .to_string();
+    let token = settings.mouflon_sync_token.clone();
+
+    let updated = s
+        .app_state
+        .sync_mouflon_keys_from_worker(&url, token.as_deref())
+        .await
+        .map_err(ApiError::from)?;
+
+    if updated {
+        s.emitter
+            .emit("mouflon-keys-updated", &s.app_state.get_mouflon_keys_store());
+    }
+
+    Ok(Json(serde_json::json!({ "updated": updated })))
 }
 
 async fn get_startup_warnings_handler(
@@ -801,6 +828,16 @@ pub async fn run_server(port: u16) {
     tokio::spawn(async move {
         crate::config::settings::schedule_config_checks(app_state_clone, emitter_clone2).await;
     });
+
+    // 启动 Mouflon Keys 自动同步调度器（启动时立即同步一次，之后每小时一次）
+    // Start Mouflon Keys auto-sync scheduler (once on startup, then every hour)
+    {
+        let app_state_clone = Arc::clone(&app_state);
+        let emitter_clone = Arc::clone(&emitter);
+        tokio::spawn(async move {
+            crate::config::settings::schedule_mouflon_sync(app_state_clone, emitter_clone).await;
+        });
+    }
 
     // 启动孤立 meta 文件清理调度器（启动时立即执行一次，之后每小时一次）
     // Start orphaned meta cleanup scheduler (once on startup, then every hour)

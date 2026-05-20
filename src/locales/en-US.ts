@@ -300,6 +300,22 @@ export default {
 		keyError: {
 			empty: "Both pkey and pdkey are required",
 		},
+		mouflonSyncUrl: {
+			label: "Sync URL",
+			placeholder: "https://mouflon.chantrail.com",
+		},
+		mouflonSyncToken: {
+			label: "Sync Token (optional)",
+			placeholder: "Leave empty if not required",
+		},
+		mouflonSync: "Sync Now",
+		mouflonSyncing: "Syncing…",
+		mouflonSyncDone: "Keys synced successfully",
+		mouflonSyncUpToDate: "Keys are already up-to-date",
+		mouflonSyncFailed: "Sync failed: {error}",
+		mouflonAutoSyncedAt: "Source updated: ",
+		mouflonManualUpdatedAt: "Last manual update: ",
+		mouflonNever: "Never",
 	},
 	usePostprocess: {
 		processing: "Processing",

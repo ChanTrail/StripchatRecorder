@@ -34,6 +34,20 @@ export interface Settings {
 	merge_format: string;
 	/** 后处理 tmp 目录最大占用（GB，0 = 不限制）/ Max tmp dir size in GB (0 = unlimited) */
 	max_tmp_dir_gb: number;
+	/** Mouflon Keys 同步 Worker URL / Mouflon Keys sync Worker URL */
+	mouflon_sync_url: string | null;
+	/** Mouflon Keys 同步 Worker 鉴权 Token / Mouflon Keys sync Worker auth token */
+	mouflon_sync_token: string | null;
+}
+
+/** Mouflon 密钥存储结构（含时间戳）/ Mouflon key store (with timestamps) */
+export interface MouflonKeysStore {
+	/** pkey -> pdkey 密钥对 / pkey -> pdkey key pairs */
+	keys: Record<string, string>;
+	/** 最近一次自动同步时间（RFC 3339）/ Timestamp of last auto-sync (RFC 3339) */
+	auto_synced_at: string | null;
+	/** 最近一次手动操作时间（RFC 3339）/ Timestamp of last manual key change (RFC 3339) */
+	manual_updated_at: string | null;
 }
 
 export const useSettingsStore = defineStore("settings", () => {
@@ -48,6 +62,8 @@ export const useSettingsStore = defineStore("settings", () => {
 		max_concurrent: 0,
 		merge_format: "mp4",
 		max_tmp_dir_gb: 50,
+		mouflon_sync_url: null,
+		mouflon_sync_token: null,
 	});
 	/** 是否正在加载 / Whether loading */
 	const loading = ref(false);

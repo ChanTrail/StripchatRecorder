@@ -374,6 +374,7 @@ fn run_desktop() {
             commands::settings_cmd::list_mouflon_keys,
             commands::settings_cmd::add_mouflon_key,
             commands::settings_cmd::remove_mouflon_key,
+            commands::settings_cmd::sync_mouflon_keys,
             commands::settings_cmd::get_startup_warnings,
             commands::settings_cmd::remove_missing_pp_results,
             commands::settings_cmd::get_disk_space,

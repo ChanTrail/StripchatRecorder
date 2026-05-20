@@ -34,7 +34,6 @@ fn build_client(proxy_url: Option<&str>) -> Result<Client> {
     let mut builder = Client::builder()
         .user_agent(USER_AGENT)
         .timeout(std::time::Duration::from_secs(30))
-        .use_native_tls()
         .tcp_keepalive(std::time::Duration::from_secs(15))
         .connection_verbose(false);
 

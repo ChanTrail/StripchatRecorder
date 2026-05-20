@@ -24,7 +24,7 @@
 <script setup lang="ts">
 	import { onMounted, onUnmounted, reactive, ref, watch, nextTick } from "vue";
 	import { call, on } from "@/lib/api";
-	import { useSettingsStore, type Settings } from "../stores/settings";
+	import { useSettingsStore, type Settings, type MouflonKeysStore } from "../stores/settings";
 	import { useNotify } from "../composables/useNotify";
 	import { Button } from "@/components/ui/button";
 	import { Input } from "@/components/ui/input";
@@ -59,6 +59,8 @@
 		max_concurrent: 0,
 		merge_format: "mp4",
 		max_tmp_dir_gb: 50,
+		mouflon_sync_url: null,
+		mouflon_sync_token: null,
 	});
 
 	// 保存各代理字段的原始值，用于检测是否有实际变更
@@ -67,6 +69,8 @@
 	const originalApiProxy = ref<string | null>(null);
 	const originalCdnProxy = ref<string | null>(null);
 	const originalScMirror = ref<string | null>(null);
+	const originalMouflonSyncUrl = ref<string | null>(null);
+	const originalMouflonSyncToken = ref<string | null>(null);
 	/** 是否已完成初始化（防止初始化时触发自动保存）/ Whether initialization is complete (prevents auto-save during init) */
 	let initialized = false;
 
@@ -80,6 +84,8 @@
 		originalApiProxy.value = form.api_proxy_url;
 		originalCdnProxy.value = form.cdn_proxy_url;
 		originalScMirror.value = form.sc_mirror_url;
+		originalMouflonSyncUrl.value = form.mouflon_sync_url;
+		originalMouflonSyncToken.value = form.mouflon_sync_token;
 		await nextTick();
 		initialized = true;
 		await loadKeys();
@@ -87,7 +93,8 @@
 		// 监听其他客户端的 Mouflon 密钥更新 / Listen for Mouflon key updates from other clients
 		unlisteners.push(
 			await on("mouflon-keys-updated", (payload) => {
-				mouflonKeys.value = payload as Record<string, string>;
+				const store = payload as MouflonKeysStore;
+				mouflonStore.value = store;
 				toast(t("settings.mouflonUpdatedByOther"), "info");
 			}),
 		);
@@ -127,6 +134,8 @@
 			originalApiProxy.value = newSettings.api_proxy_url;
 			originalCdnProxy.value = newSettings.cdn_proxy_url;
 			originalScMirror.value = newSettings.sc_mirror_url;
+			originalMouflonSyncUrl.value = newSettings.mouflon_sync_url;
+			originalMouflonSyncToken.value = newSettings.mouflon_sync_token;
 			nextTick(() => {
 				initialized = true;
 			});
@@ -142,15 +151,17 @@
 	 * @param field - 要保存的设置字段名 / Settings field name to save
 	 */
 	async function saveProxy(
-		field: "api_proxy_url" | "cdn_proxy_url" | "sc_mirror_url",
+		field: "api_proxy_url" | "cdn_proxy_url" | "sc_mirror_url" | "mouflon_sync_url" | "mouflon_sync_token",
 	) {
 		if (!initialized) return;
-		const original =
-			field === "api_proxy_url"
-				? originalApiProxy
-				: field === "cdn_proxy_url"
-					? originalCdnProxy
-					: originalScMirror;
+		const originalMap = {
+			api_proxy_url: originalApiProxy,
+			cdn_proxy_url: originalCdnProxy,
+			sc_mirror_url: originalScMirror,
+			mouflon_sync_url: originalMouflonSyncUrl,
+			mouflon_sync_token: originalMouflonSyncToken,
+		};
+		const original = originalMap[field];
 		if (form[field] === original.value) return;
 		await store.saveSettings({ ...form });
 		original.value = form[field];
@@ -191,21 +202,23 @@
 		}
 	}
 
-	/** Mouflon 解密密钥列表（pkey -> pdkey）/ Mouflon decryption key list (pkey -> pdkey) */
-	const mouflonKeys = ref<Record<string, string>>({});
+	/** Mouflon 密钥存储（含时间戳）/ Mouflon key store (with timestamps) */
+	const mouflonStore = ref<MouflonKeysStore>({ keys: {}, auto_synced_at: null, manual_updated_at: null });
 	/** 新密钥表单：pkey 输入值 / New key form: pkey input value */
 	const newPkey = ref("");
 	/** 新密钥表单：pdkey 输入值 / New key form: pdkey input value */
 	const newPdkey = ref("");
 	/** 密钥添加错误信息 / Key addition error message */
 	const keyError = ref("");
+	/** 是否正在手动同步 / Whether manual sync is in progress */
+	const syncing = ref(false);
 
 	/**
 	 * 从后端加载 Mouflon 密钥列表。
 	 * Load the Mouflon key list from the backend.
 	 */
 	async function loadKeys() {
-		mouflonKeys.value = await call<Record<string, string>>("list_mouflon_keys");
+		mouflonStore.value = await call<MouflonKeysStore>("list_mouflon_keys");
 	}
 
 	/**
@@ -239,6 +252,29 @@
 	async function removeKey(pkey: string) {
 		await call("remove_mouflon_key", { pkey });
 		await loadKeys();
+	}
+
+	/**
+	 * 手动触发一次从 Worker 同步密钥。
+	 * Manually trigger a key sync from the Worker.
+	 */
+	async function syncKeys() {
+		syncing.value = true;
+		try {
+			const updated = await call<boolean>("sync_mouflon_keys");
+			await loadKeys();
+			toast(updated ? t("settings.mouflonSyncDone") : t("settings.mouflonSyncUpToDate"), "success");
+		} catch (e: any) {
+			toast(t("settings.mouflonSyncFailed", { error: String(e) }), "error");
+		} finally {
+			syncing.value = false;
+		}
+	}
+
+	/** 格式化 RFC 3339 时间戳为本地时间字符串 / Format RFC 3339 timestamp to local time string */
+	function formatTs(ts: string | null): string {
+		if (!ts) return t("settings.mouflonNever");
+		return new Date(ts).toLocaleString();
 	}
 </script>
 
@@ -453,8 +489,48 @@
 					>
 				</p>
 
+				<!-- 同步配置 / Sync configuration -->
+				<div class="flex flex-col gap-1.5">
+					<Label>{{ t("settings.mouflonSyncUrl.label") }}</Label>
+					<Input
+						:model-value="form.mouflon_sync_url ?? ''"
+						:placeholder="t('settings.mouflonSyncUrl.placeholder')"
+						@update:model-value="form.mouflon_sync_url = ($event as string) || null"
+						@keyup.enter="saveProxy('mouflon_sync_url')"
+						@blur="saveProxy('mouflon_sync_url')"
+					/>
+				</div>
+				<div class="flex flex-col gap-1.5">
+					<Label>{{ t("settings.mouflonSyncToken.label") }}</Label>
+					<Input
+						:model-value="form.mouflon_sync_token ?? ''"
+						:placeholder="t('settings.mouflonSyncToken.placeholder')"
+						type="password"
+						@update:model-value="form.mouflon_sync_token = ($event as string) || null"
+						@keyup.enter="saveProxy('mouflon_sync_token')"
+						@blur="saveProxy('mouflon_sync_token')"
+					/>
+				</div>
+
+				<!-- 同步状态 + 手动同步按钮 / Sync status + manual sync button -->
+				<div class="flex items-center justify-between gap-4 text-xs text-muted-foreground">
+					<div class="flex flex-col gap-0.5">
+						<span>{{ t("settings.mouflonAutoSyncedAt") }}{{ formatTs(mouflonStore.auto_synced_at) }}</span>
+						<span>{{ t("settings.mouflonManualUpdatedAt") }}{{ formatTs(mouflonStore.manual_updated_at) }}</span>
+					</div>
+					<Button
+						type="button"
+						variant="outline"
+						size="sm"
+						:disabled="syncing || !form.mouflon_sync_url"
+						@click="syncKeys"
+					>
+						{{ syncing ? t("settings.mouflonSyncing") : t("settings.mouflonSync") }}
+					</Button>
+				</div>
+
 				<table
-					v-if="Object.keys(mouflonKeys).length"
+					v-if="Object.keys(mouflonStore.keys).length"
 					class="w-full text-xs border-collapse"
 				>
 					<thead>
@@ -473,7 +549,7 @@
 						</tr>
 					</thead>
 					<tbody>
-						<tr v-for="(pdkey, pkey) in mouflonKeys" :key="pkey">
+						<tr v-for="(pdkey, pkey) in mouflonStore.keys" :key="pkey">
 							<td class="px-2 py-1.5 border-b font-mono">{{ pkey }}</td>
 							<td class="px-2 py-1.5 border-b font-mono max-w-60 truncate">
 								{{ pdkey }}

@@ -299,6 +299,22 @@ export default {
 		keyError: {
 			empty: "pkey 和 pdkey 均不能为空",
 		},
+		mouflonSyncUrl: {
+			label: "同步地址",
+			placeholder: "https://mouflon.chantrail.com",
+		},
+		mouflonSyncToken: {
+			label: "同步令牌（可选）",
+			placeholder: "不需要鉴权时留空",
+		},
+		mouflonSync: "立即同步",
+		mouflonSyncing: "同步中…",
+		mouflonSyncDone: "密钥同步成功",
+		mouflonSyncUpToDate: "密钥已是最新，无需更新",
+		mouflonSyncFailed: "同步失败：{error}",
+		mouflonAutoSyncedAt: "数据源更新：",
+		mouflonManualUpdatedAt: "上次手动更新：",
+		mouflonNever: "从未",
 	},
 	usePostprocess: {
 		processing: "处理中",

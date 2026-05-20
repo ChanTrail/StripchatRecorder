@@ -16,6 +16,24 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
+/// Mouflon 密钥存储结构，持久化到 mouflon_keys.json。
+/// Mouflon key store, persisted to mouflon_keys.json.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MouflonKeysStore {
+    /// pkey -> pdkey 密钥对 / pkey -> pdkey key pairs
+    #[serde(default)]
+    pub keys: HashMap<String, String>,
+    /// 数据源（Worker）的密钥更新时间（RFC 3339），同步时与 Worker 返回的 updated_at 比对，相同则跳过写入。
+    /// Key update timestamp from the data source (Worker, RFC 3339).
+    /// Compared against the Worker's `updated_at`; skip write if equal.
+    #[serde(default)]
+    pub auto_synced_at: Option<String>,
+    /// 最近一次手动添加/删除密钥的时间（RFC 3339）。
+    /// Timestamp of the last manual key add/remove (RFC 3339).
+    #[serde(default)]
+    pub manual_updated_at: Option<String>,
+}
+
 /// 后处理任务状态快照（序列化后发送给前端）。
 /// Post-processing task status snapshot (serialized and sent to the frontend).
 #[derive(Debug, Clone, Serialize)]
@@ -74,6 +92,19 @@ pub struct Settings {
     /// Server 模式监听端口 / Server mode listen port
     #[serde(default = "default_server_port")]
     pub server_port: u16,
+    /// Mouflon Keys 同步 Worker URL（为空则不启用自动同步）
+    /// Mouflon Keys sync Worker URL (empty = auto-sync disabled)
+    #[serde(default = "default_mouflon_sync_url")]
+    pub mouflon_sync_url: Option<String>,
+    /// Mouflon Keys 同步 Worker 鉴权 Token（对应 Worker 的 AUTH_TOKEN 环境变量）
+    /// Mouflon Keys sync Worker auth token (corresponds to Worker's AUTH_TOKEN env var)
+    #[serde(default)]
+    pub mouflon_sync_token: Option<String>,
+}
+
+/// Mouflon 同步地址的默认值 / Default value for Mouflon sync URL
+fn default_mouflon_sync_url() -> Option<String> {
+    Some("https://mouflon.chantrail.com".to_string())
 }
 
 /// 合并格式的默认值 / Default value for merge format
@@ -129,6 +160,8 @@ impl Default for Settings {
             language: default_language(),
             run_mode: default_run_mode(),
             server_port: default_server_port(),
+            mouflon_sync_url: default_mouflon_sync_url(),
+            mouflon_sync_token: None,
         }
     }
 }
@@ -140,9 +173,9 @@ pub struct AppData {
     pub settings: Settings,
     /// 追踪的主播列表 / List of tracked streamers
     pub streamers: Vec<StreamerData>,
-    /// Mouflon HLS 解密密钥（pkey -> pdkey）/ Mouflon HLS decryption keys (pkey -> pdkey)
+    /// Mouflon HLS 解密密钥存储（含密钥对和时间戳）/ Mouflon HLS decryption key store (keys + timestamps)
     #[serde(default)]
-    pub mouflon_keys: HashMap<String, String>,
+    pub mouflon_keys: MouflonKeysStore,
     /// 后处理流水线配置 / Post-processing pipeline configuration
     #[serde(default)]
     pub pipeline: PipelineConfig,
@@ -204,7 +237,7 @@ impl AppState {
         let streamers: Vec<StreamerData> = load_json("streamers.json")
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
-        let mouflon_keys: HashMap<String, String> = load_json("mouflon_keys.json")
+        let mouflon_keys: MouflonKeysStore = load_json("mouflon_keys.json")
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
         let pipeline: PipelineConfig = load_json("pipeline.json")
@@ -314,29 +347,142 @@ impl AppState {
         self.save()
     }
 
-    /// 获取所有 Mouflon 解密密钥的克隆副本。
-    /// Get a cloned copy of all Mouflon decryption keys.
+    /// 获取所有 Mouflon 解密密钥的克隆副本（仅 keys 部分，供录制/转发使用）。
+    /// Get a cloned copy of all Mouflon decryption keys (keys map only, for recording/relay use).
     pub fn get_mouflon_keys(&self) -> HashMap<String, String> {
+        self.data.read().mouflon_keys.keys.clone()
+    }
+
+    /// 获取完整的 Mouflon 密钥存储（含时间戳），供前端展示。
+    /// Get the full Mouflon key store (including timestamps), for frontend display.
+    pub fn get_mouflon_keys_store(&self) -> MouflonKeysStore {
         self.data.read().mouflon_keys.clone()
     }
 
-    /// 添加或更新一个 Mouflon 密钥对并保存。
-    /// Add or update a Mouflon key pair and save.
+    /// 添加或更新一个 Mouflon 密钥对，更新 manual_updated_at 并保存。
+    /// Add or update a Mouflon key pair, update manual_updated_at, and save.
     pub fn add_mouflon_key(&self, pkey: &str, pdkey: &str) -> Result<()> {
         let mut data = self.data.write();
-        data.mouflon_keys
-            .insert(pkey.to_string(), pdkey.to_string());
+        data.mouflon_keys.keys.insert(pkey.to_string(), pdkey.to_string());
+        data.mouflon_keys.manual_updated_at = Some(chrono::Utc::now().to_rfc3339());
         drop(data);
         self.save()
     }
 
-    /// 删除指定 pkey 的 Mouflon 密钥并保存。
-    /// Remove the Mouflon key with the given pkey and save.
+    /// 删除指定 pkey 的 Mouflon 密钥，更新 manual_updated_at 并保存。
+    /// Remove the Mouflon key with the given pkey, update manual_updated_at, and save.
     pub fn remove_mouflon_key(&self, pkey: &str) -> Result<()> {
         let mut data = self.data.write();
-        data.mouflon_keys.remove(pkey);
+        data.mouflon_keys.keys.remove(pkey);
+        data.mouflon_keys.manual_updated_at = Some(chrono::Utc::now().to_rfc3339());
         drop(data);
         self.save()
+    }
+
+    /// 从 Cloudflare Worker 同步 Mouflon 密钥。
+    /// 比对 Worker 返回的 updated_at 与本地 auto_synced_at：
+    ///   - 相同 → 跳过，返回 false（无需更新）
+    ///   - 不同 → 覆盖 keys、更新 auto_synced_at，返回 true（已更新）
+    ///
+    /// Sync Mouflon keys from the Cloudflare Worker.
+    /// Compares Worker's `updated_at` against local `auto_synced_at`:
+    ///   - Equal   → skip, return false (no update needed)
+    ///   - Different → overwrite keys, update auto_synced_at, return true (updated)
+    pub async fn sync_mouflon_keys_from_worker(
+        &self,
+        worker_url: &str,
+        auth_token: Option<&str>,
+    ) -> Result<bool> {
+        #[derive(Deserialize)]
+        struct WorkerResponse {
+            keys: HashMap<String, String>,
+            updated_at: String,
+        }
+
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .build()
+            .map_err(|e| AppError::Other(e.to_string()))?;
+
+        let mut req = client.get(worker_url);
+        if let Some(token) = auth_token {
+            req = req.header("Authorization", format!("Bearer {}", token));
+        }
+
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| AppError::Other(format!("Worker 请求失败: {}", e)))?;
+
+        if !resp.status().is_success() {
+            return Err(AppError::Other(format!(
+                "Worker 返回错误状态: {}",
+                resp.status()
+            )));
+        }
+
+        let body: WorkerResponse = resp
+            .json()
+            .await
+            .map_err(|e| AppError::Other(format!("Worker 响应解析失败: {}", e)))?;
+
+        // 比对 updated_at：解析为时间点后比较，避免格式差异导致误判
+        // Compare updated_at by parsing to a time point, avoiding false mismatches due to format differences
+        let worker_ts = chrono::DateTime::parse_from_rfc3339(&body.updated_at)
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .ok();
+
+        let same_timestamp = {
+            let data = self.data.read();
+            match (&worker_ts, &data.mouflon_keys.auto_synced_at) {
+                (Some(wt), Some(local)) => {
+                    chrono::DateTime::parse_from_rfc3339(local)
+                        .map(|lt| lt.with_timezone(&chrono::Utc) == *wt)
+                        .unwrap_or(false)
+                }
+                _ => false,
+            }
+        };
+
+        if same_timestamp {
+            // 时间戳相同，检查是否有本地缺失的 key / Same timestamp, check for locally missing keys
+            let missing: Vec<(String, String)> = {
+                let data = self.data.read();
+                body.keys
+                    .iter()
+                    .filter(|(pkey, _)| !data.mouflon_keys.keys.contains_key(pkey.as_str()))
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect()
+            };
+            if missing.is_empty() {
+                return Ok(false);
+            }
+            // 补充缺失的 key / Insert missing keys
+            let mut data = self.data.write();
+            for (pkey, pdkey) in missing {
+                data.mouflon_keys.keys.insert(pkey, pdkey);
+            }
+            drop(data);
+            self.save()?;
+            return Ok(true);
+        }
+
+        // 时间戳不同，插入本地不存在的键对，更新 auto_synced_at
+        // Different timestamp: insert missing key pairs, update auto_synced_at
+        {
+            // 将 Worker 返回的时间戳规范化为 chrono RFC 3339 格式，与 manual_updated_at 保持一致
+            // Normalize Worker timestamp to chrono RFC 3339 format, consistent with manual_updated_at
+            let normalized_at = chrono::DateTime::parse_from_rfc3339(&body.updated_at)
+                .map(|dt| dt.with_timezone(&chrono::Utc).to_rfc3339())
+                .unwrap_or(body.updated_at);
+            let mut data = self.data.write();
+            for (pkey, pdkey) in body.keys {
+                data.mouflon_keys.keys.entry(pkey).or_insert(pdkey);
+            }
+            data.mouflon_keys.auto_synced_at = Some(normalized_at);
+        }
+        self.save()?;
+        Ok(true)
     }
 
     /// 获取当前流水线配置的克隆副本。
@@ -594,5 +740,41 @@ pub async fn schedule_config_checks(state: Arc<AppState>, emitter: Arc<dyn crate
         };
         tokio::time::sleep(tokio::time::Duration::from_secs(secs_until)).await;
         run_config_check(&state, &emitter).await;
+    }
+}
+
+/// 启动 Mouflon Keys 自动同步调度器：启动时立即同步一次，之后每小时同步一次。
+/// 若 Settings 中未配置 mouflon_sync_url，则静默跳过。
+///
+/// Start the Mouflon Keys auto-sync scheduler: sync once on startup, then every hour.
+/// Silently skips if mouflon_sync_url is not configured in Settings.
+pub async fn schedule_mouflon_sync(
+    state: Arc<AppState>,
+    emitter: Arc<dyn crate::core::emitter::Emitter>,
+) {
+    use crate::core::emitter::EmitterExt;
+    const INTERVAL: tokio::time::Duration = tokio::time::Duration::from_secs(3600);
+
+    loop {
+        let settings = state.get_settings();
+        if let Some(url) = settings.mouflon_sync_url.as_deref().filter(|u| !u.is_empty()) {
+            let token = settings.mouflon_sync_token.as_deref();
+            match state.sync_mouflon_keys_from_worker(url, token).await {
+                Ok(true) => {
+                    tracing::info!("Mouflon keys synced from {}", url);
+                    emitter.emit(
+                        "mouflon-keys-updated",
+                        &state.get_mouflon_keys_store(),
+                    );
+                }
+                Ok(false) => {
+                    tracing::debug!("Mouflon keys up-to-date, skipped");
+                }
+                Err(e) => {
+                    tracing::warn!("Mouflon keys sync failed: {}", e);
+                }
+            }
+        }
+        tokio::time::sleep(INTERVAL).await;
     }
 }
