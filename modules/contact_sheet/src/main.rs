@@ -208,7 +208,7 @@ fn run() -> Result<(), String> {
             "SKIP: contact sheet already exists: {}",
             output_path.display()
         );
-        println!("OUTPUT:{}", input.display());
+        println!("OUTPUT:{}", output_path.display());
         return Ok(());
     }
 
@@ -412,9 +412,9 @@ fn run() -> Result<(), String> {
 
     // 清理临时帧文件 / Clean up temporary frame files
     cleanup();
-    // 输出视频路径（contact sheet 路径由前端根据视频路径推断）
-    // Output video path (contact sheet path is inferred by frontend from video path)
-    println!("OUTPUT:{}", input.display());
+    // 输出 contact sheet 图片路径，供后端写入 meta 的 module_outputs
+    // Output the contact sheet image path so the backend can store it in meta's module_outputs
+    println!("OUTPUT:{}", output_path.display());
     Ok(())
 }
 

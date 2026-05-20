@@ -392,12 +392,17 @@ pub fn run_postprocess_for_path_inner(
                 module_outputs.extend(prev_outputs);
             }
         }
-        // 本次执行结果覆盖（优先级更高）
-        // Override with results from this run (higher priority)
+        // 本次执行结果覆盖（优先级更高）：使用 NodeResult.output 字段（已从 OUTPUT: 行解析）
+        // Override with results from this run (higher priority): use NodeResult.output field
+        // (already parsed from the OUTPUT: protocol line, not from message)
         for r in &results {
-            if r.success && r.message.starts_with("OUTPUT:") {
-                let out_path = r.message.trim_start_matches("OUTPUT:").trim().to_string();
-                module_outputs.insert(r.module_id.clone(), out_path);
+            if r.success {
+                if let Some(ref out_path) = r.output {
+                    module_outputs.insert(
+                        r.module_id.clone(),
+                        out_path.to_string_lossy().to_string(),
+                    );
+                }
             }
         }
         crate::recording::meta::set_pp_done(

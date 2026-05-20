@@ -347,22 +347,16 @@ export function usePostprocess() {
 				const names = payload.results.map((r) => r.moduleId).join(" → ");
 				toast(t("usePostprocess.done", { modules: names }), "success");
 			}
-			// 从模块返回的 OUTPUT: 前缀消息中提取输出路径
-			// Extract output paths from module messages prefixed with "OUTPUT:"
-			const outputs: Record<string, string> = {};
-			for (const r of payload.results) {
-				if (r.success && r.message.startsWith("OUTPUT:")) {
-					outputs[r.moduleId] = r.message.slice("OUTPUT:".length).trim();
-				}
-			}
-			// 合并推断路径和实际输出路径，实际路径优先
-			// Merge inferred and actual output paths, actual paths take precedence
+			// NodeResult.output 字段在序列化时被 #[serde(skip)] 跳过，前端无法直接获取。
+			// 使用 inferModuleOutputs 根据流水线配置推断输出路径（如 contact_sheet 图片路径）。
+			// NodeResult.output is skipped during serialization (#[serde(skip)]), so the frontend
+			// cannot access it directly. Use inferModuleOutputs to derive output paths from the
+			// pipeline config (e.g., the contact_sheet image path).
 			const inferred = inferModuleOutputs(payload.path);
-			const merged = { ...inferred, ...outputs };
-			if (Object.keys(merged).length > 0) {
+			if (Object.keys(inferred).length > 0) {
 				moduleOutputs.value = {
 					...moduleOutputs.value,
-					[payload.path]: merged,
+					[payload.path]: inferred,
 				};
 			} else {
 				fetchModuleOutputs(payload.path);
