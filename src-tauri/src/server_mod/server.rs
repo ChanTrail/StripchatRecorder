@@ -797,7 +797,7 @@ pub async fn run_server(port: u16) {
     let addr = format!("0.0.0.0:{}", port);
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
-        .unwrap_or_else(|e| panic!("Failed to bind {}:{} — {}", addr, port, e));
+        .unwrap_or_else(|e| panic!("Failed to bind {} — {}", addr, e));
 
     println!("Server mode: listening on http://{}", addr);
     println!("API docs: GET /api/events → SSE stream");

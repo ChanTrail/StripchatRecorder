@@ -669,7 +669,7 @@ impl RecorderManager {
 
                         match convert_to_ts(fmp4, &ts_path).await {
                             Ok(_) => {
-                                append_to_filelist(session_dir, &ts_path);
+                                append_to_m3u8(session_dir, &ts_path);
                                 downloaded_sequences.insert(segment.sequence);
                                 written += 1;
                             }
@@ -750,21 +750,42 @@ async fn convert_to_ts(fmp4_data: Vec<u8>, ts_path: &PathBuf) -> Result<()> {
     Ok(())
 }
 
-/// 将 TS 分片文件名追加到会话目录的 filelist.txt（供 ffmpeg concat 使用）。
-/// Append a TS segment filename to the session directory's filelist.txt (for ffmpeg concat).
-fn append_to_filelist(session_dir: &PathBuf, ts_path: &PathBuf) {
-    let filelist_path = session_dir.join("filelist.txt");
+/// 将 TS 分片文件名追加到会话目录的 playlist.m3u8（标准 HLS 格式）。
+/// Append a TS segment filename to the session directory's playlist.m3u8 (standard HLS format).
+///
+/// 首次写入时自动添加 M3U8 文件头（`#EXTM3U` 和 `#EXT-X-VERSION:3`）。
+/// Automatically writes the M3U8 header (`#EXTM3U` and `#EXT-X-VERSION:3`) on first write.
+fn append_to_m3u8(session_dir: &PathBuf, ts_path: &PathBuf) {
+    let m3u8_path = session_dir.join("playlist.m3u8");
     let Some(filename) = ts_path.file_name().and_then(|n| n.to_str()) else {
         return;
     };
-    let line = format!("file '{}'\n", filename);
-    if let Err(e) = fs::OpenOptions::new()
+
+    // 首次创建时写入 M3U8 文件头 / Write M3U8 header on first creation
+    let needs_header = !m3u8_path.exists();
+    let mut file = match fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(&filelist_path)
-        .and_then(|mut f| f.write_all(line.as_bytes()))
+        .open(&m3u8_path)
     {
-        tracing::error!("Failed to update filelist.txt: {}", e);
+        Ok(f) => f,
+        Err(e) => {
+            tracing::error!("Failed to open playlist.m3u8: {}", e);
+            return;
+        }
+    };
+
+    if needs_header {
+        if let Err(e) = file.write_all(b"#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-MEDIA-SEQUENCE:0\n") {
+            tracing::error!("Failed to write M3U8 header: {}", e);
+            return;
+        }
+    }
+
+    // 写入分片条目（时长占位为 0，实际时长未知）/ Write segment entry (duration placeholder 0, actual duration unknown)
+    let line = format!("#EXTINF:0,\n{}\n", filename);
+    if let Err(e) = file.write_all(line.as_bytes()) {
+        tracing::error!("Failed to update playlist.m3u8: {}", e);
     }
 }
 
@@ -798,13 +819,23 @@ fn merge_segments(
     emitter: &Arc<dyn Emitter>,
     session_dir_str: &str,
 ) -> Option<u64> {
-    let filelist_path = session_dir.join("filelist.txt");
-    if !filelist_path.exists() {
+    let m3u8_path = session_dir.join("playlist.m3u8");
+    if !m3u8_path.exists() {
         tracing::warn!(
-            "filelist.txt not found in {:?}, skipping merge",
+            "playlist.m3u8 not found in {:?}, skipping merge",
             session_dir
         );
         return None;
+    }
+
+    // 在合并前写入 #EXT-X-ENDLIST 标记，使 M3U8 成为完整的 VOD 播放列表
+    // Write #EXT-X-ENDLIST before merging to finalize the M3U8 as a complete VOD playlist
+    if let Err(e) = fs::OpenOptions::new()
+        .append(true)
+        .open(&m3u8_path)
+        .and_then(|mut f| f.write_all(b"#EXT-X-ENDLIST\n"))
+    {
+        tracing::warn!("Failed to write #EXT-X-ENDLIST: {}", e);
     }
 
     let parent = match session_dir.parent() {
@@ -840,8 +871,8 @@ fn merge_segments(
         .expect("ffmpeg semaphore closed");
 
     let mut child = match Command::new("ffmpeg")
-        .args(["-y", "-f", "concat", "-safe", "0", "-i"])
-        .arg(&filelist_path)
+        .args(["-y", "-allowed_extensions", "ALL", "-i"])
+        .arg(&m3u8_path)
         .args(["-c", "copy"])
         .arg(&output_path)
         .stdout(Stdio::null())
