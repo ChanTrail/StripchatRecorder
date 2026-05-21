@@ -664,6 +664,7 @@ async fn upload_and_send(
 
     // 处理视频文件：非 mp4/mkv 格式需先重封装，重封装失败则转码
     // Handle video files: non-mp4/mkv formats need remuxing, falls back to transcoding
+    let mut converted_parts: Vec<PathBuf> = Vec::new();
     let effective_parts: Vec<PathBuf> = if send_video {
         let mut parts_out: Vec<PathBuf> = Vec::new();
         for part in video_parts {
