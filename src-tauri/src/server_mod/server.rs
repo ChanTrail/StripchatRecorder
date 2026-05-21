@@ -801,7 +801,6 @@ pub async fn run_server(port: u16) {
         let merge_format = settings.merge_format.clone();
         let emitter_clone = Arc::clone(&emitter);
         let recorder_clone = Arc::clone(&recorder);
-        let app_state_for_meta = Arc::clone(&app_state);
         tokio::task::spawn_blocking(move || {
             crate::recording::recorder::startup_merge_leftover_segments(
                 &output_dir,
@@ -812,8 +811,7 @@ pub async fn run_server(port: u16) {
             crate::recording::recorder::startup_remove_empty_dirs(&output_dir);
             // 扫描并补写缺失的 meta 文件
             // Scan and write missing meta files
-            let pp_results = app_state_for_meta.data.read().pp_results.clone();
-            crate::recording::meta::startup_ensure_meta_files(&output_dir, &merge_format, &pp_results);
+            crate::recording::meta::startup_ensure_meta_files(&output_dir, &merge_format);
         });
     }
 

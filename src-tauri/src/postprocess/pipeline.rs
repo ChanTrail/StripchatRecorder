@@ -528,14 +528,12 @@ fn run_node(
         } else {
             last_message
         }
+    } else if !stderr_msg.is_empty() {
+        stderr_msg
+    } else if !last_message.is_empty() {
+        last_message
     } else {
-        if !stderr_msg.is_empty() {
-            stderr_msg
-        } else if !last_message.is_empty() {
-            last_message
-        } else {
-            format!("exit {}", status)
-        }
+        format!("exit {}", status)
     };
 
     NodeResult {

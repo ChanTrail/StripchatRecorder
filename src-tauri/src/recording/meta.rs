@@ -228,7 +228,6 @@ pub fn ensure_meta(video_path: &Path, started_at: &str) {
 pub fn startup_ensure_meta_files(
     output_dir: &Path,
     merge_format: &str,
-    pp_results: &[String],
 ) {
     if !output_dir.exists() {
         return;
@@ -238,7 +237,6 @@ pub fn startup_ensure_meta_files(
     scan_and_ensure_meta(
         output_dir,
         merge_format,
-        pp_results,
         &mut count_created,
         &mut count_updated,
     );
@@ -254,7 +252,6 @@ pub fn startup_ensure_meta_files(
 fn scan_and_ensure_meta(
     dir: &Path,
     merge_format: &str,
-    pp_results: &[String],
     count_created: &mut usize,
     count_updated: &mut usize,
 ) {
@@ -270,7 +267,7 @@ fn scan_and_ensure_meta(
             if name.starts_with('.') {
                 continue;
             }
-            scan_and_ensure_meta(&path, merge_format, pp_results, count_created, count_updated);
+            scan_and_ensure_meta(&path, merge_format, count_created, count_updated);
         } else if path.is_file() {
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
@@ -278,7 +275,6 @@ fn scan_and_ensure_meta(
                 continue;
             }
 
-            let path_str = path.to_string_lossy().to_string();
 
             match read_meta(&path) {
                 None => {

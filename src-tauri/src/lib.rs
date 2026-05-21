@@ -307,7 +307,6 @@ fn run_desktop() {
                 let output_dir = std::path::PathBuf::from(&settings.output_dir);
                 let merge_format = settings.merge_format.clone();
                 let recorder_clone = Arc::clone(&recorder);
-                let state_clone = Arc::clone(&state);
                 let app_handle_clone = app_handle.clone();
                 tauri::async_runtime::spawn_blocking(move || {
                     let emitter: Arc<dyn crate::core::emitter::Emitter> =
@@ -316,8 +315,7 @@ fn run_desktop() {
                     recording::recorder::startup_remove_empty_dirs(&output_dir);
                     // 扫描并补写缺失的 meta 文件（兼容旧录制文件，或 meta 被意外删除的情况）
                     // Scan and write missing meta files (for legacy recordings or accidentally deleted meta)
-                    let pp_results = state_clone.data.read().pp_results.clone();
-                    crate::recording::meta::startup_ensure_meta_files(&output_dir, &merge_format, &pp_results);
+                    crate::recording::meta::startup_ensure_meta_files(&output_dir, &merge_format);
                 });
             }
 
