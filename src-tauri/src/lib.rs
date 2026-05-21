@@ -329,9 +329,11 @@ fn run_desktop() {
             // Start the streamer status polling monitor loop
             let monitor_clone = Arc::clone(&monitor);
             let app_handle_clone = app_handle.clone();
-            tauri::async_runtime::spawn(async move {
-                monitor_clone.start(app_handle_clone);
-            });
+            monitor_clone.start(app_handle_clone);
+
+            // 将监控器的 restart_tx 注入 AppState，供 save_settings_cmd 使用
+            // Inject monitor's restart_tx into AppState for use by save_settings_cmd
+            *state.poll_interval_notify_tx.write() = monitor.restart_tx.read().clone();
 
             // 启动每日配置检查（验证主播账号是否仍然存在）
             // Start daily config checks (verify streamer accounts still exist)

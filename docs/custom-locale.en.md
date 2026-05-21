@@ -115,6 +115,7 @@ let (lang_code, lang_en) = match lang_idx {
 | `addStreamer`    | Add streamer dialog                   |
 | `recordings`     | Recordings page                       |
 | `postprocess`    | Post-processing pipeline page         |
+| `relay`          | Relay streams page                    |
 | `finder`         | Streamer finder page (includes `gender` sub-key) |
 | `settings`       | Settings page                         |
 | `usePostprocess` | Post-processing task status messages  |

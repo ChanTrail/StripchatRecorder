@@ -255,8 +255,8 @@
 	}
 
 	/**
-	 * 手动触发一次从 Worker 同步密钥。
-	 * Manually trigger a key sync from the Worker.
+	 * 手动触发一次从同步 URL 拉取密钥。
+	 * Manually trigger a key sync from the configured URL.
 	 */
 	async function syncKeys() {
 		syncing.value = true;

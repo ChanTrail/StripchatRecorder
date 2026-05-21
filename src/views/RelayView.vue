@@ -223,7 +223,7 @@
 		>
 			<Radio class="size-8 opacity-20" />
 			<p>{{ t("relay.noSessions") }}</p>
-			<p class="text-xs">{{ t("relay.noSessionsHint") }}</p>
+			<p class="text-xs">{{ t("relay.noSessionsHint", { modelname: "{modelname}" }) }}</p>
 		</div>
 
 		<div

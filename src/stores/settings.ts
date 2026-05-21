@@ -34,9 +34,9 @@ export interface Settings {
 	merge_format: string;
 	/** 后处理 tmp 目录最大占用（GB，0 = 不限制）/ Max tmp dir size in GB (0 = unlimited) */
 	max_tmp_dir_gb: number;
-	/** Mouflon Keys 同步 Worker URL / Mouflon Keys sync Worker URL */
+	/** Mouflon Keys 同步 URL / Mouflon Keys sync URL */
 	mouflon_sync_url: string | null;
-	/** Mouflon Keys 同步 Worker 鉴权 Token / Mouflon Keys sync Worker auth token */
+	/** Mouflon Keys 同步鉴权 Token / Mouflon Keys sync auth token */
 	mouflon_sync_token: string | null;
 }
 

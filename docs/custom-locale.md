@@ -115,6 +115,7 @@ let (lang_code, lang_en) = match lang_idx {
 | `addStreamer`    | 添加主播对话框               |
 | `recordings`     | 录制文件页                   |
 | `postprocess`    | 后处理流水线页               |
+| `relay`          | 转发流页                     |
 | `finder`         | 主播查找页（含 `gender` 子键）|
 | `settings`       | 设置页                       |
 | `usePostprocess` | 后处理任务状态提示           |

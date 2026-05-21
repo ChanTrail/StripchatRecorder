@@ -211,6 +211,12 @@ pub struct AppState {
     pub pp_lock: std::sync::Mutex<()>,
     /// 启动合并锁，防止启动时的合并与正常录制并发 / Startup merge lock preventing concurrent startup merge and normal recording
     pub startup_lock: std::sync::Mutex<()>,
+    /// 通知监控器 poll_interval_secs 已变更的发送端（可选，启动后注入）
+    /// Sender to notify the monitor that poll_interval_secs has changed (optional, injected after startup)
+    pub poll_interval_notify_tx: RwLock<Option<tokio::sync::mpsc::Sender<()>>>,
+    /// 通知 Mouflon 同步调度器立即触发同步的发送端（可选，启动后注入）
+    /// Sender to notify the Mouflon sync scheduler to trigger an immediate sync (optional, injected after startup)
+    pub mouflon_sync_notify_tx: RwLock<Option<tokio::sync::mpsc::Sender<()>>>,
 }
 
 impl AppState {
@@ -268,6 +274,8 @@ impl AppState {
             pp_cancel_flags: RwLock::new(HashMap::new()),
             pp_lock: std::sync::Mutex::new(()),
             startup_lock: std::sync::Mutex::new(()),
+            poll_interval_notify_tx: RwLock::new(None),
+            mouflon_sync_notify_tx: RwLock::new(None),
         }))
     }
 
@@ -297,11 +305,31 @@ impl AppState {
     }
 
     /// 更新设置并保存到磁盘，同时确保新输出目录存在。
+    /// 若 poll_interval_secs 发生变化，通知监控器立即以新间隔重新计时。
+    /// 若 mouflon_sync_url 或 mouflon_sync_token 发生变化，通知同步调度器立即触发一次同步。
+    ///
     /// Update settings and save to disk, also ensuring the new output directory exists.
+    /// If poll_interval_secs changed, notify the monitor to restart its timer with the new interval.
+    /// If mouflon_sync_url or mouflon_sync_token changed, notify the sync scheduler to trigger immediately.
     pub fn update_settings(&self, settings: Settings) -> Result<()> {
         fs::create_dir_all(&settings.output_dir)?;
+        let old = self.data.read().settings.clone();
+        let poll_interval_changed = old.poll_interval_secs != settings.poll_interval_secs;
+        let mouflon_sync_changed = old.mouflon_sync_url != settings.mouflon_sync_url
+            || old.mouflon_sync_token != settings.mouflon_sync_token;
         self.data.write().settings = settings;
-        self.save()
+        self.save()?;
+        if poll_interval_changed {
+            if let Some(tx) = self.poll_interval_notify_tx.read().as_ref() {
+                let _ = tx.try_send(());
+            }
+        }
+        if mouflon_sync_changed {
+            if let Some(tx) = self.mouflon_sync_notify_tx.read().as_ref() {
+                let _ = tx.try_send(());
+            }
+        }
+        Ok(())
     }
 
     /// 获取所有追踪主播的克隆列表。
@@ -751,6 +779,7 @@ pub async fn schedule_config_checks(state: Arc<AppState>, emitter: Arc<dyn crate
 pub async fn schedule_mouflon_sync(
     state: Arc<AppState>,
     emitter: Arc<dyn crate::core::emitter::Emitter>,
+    mut notify_rx: tokio::sync::mpsc::Receiver<()>,
 ) {
     use crate::core::emitter::EmitterExt;
     const INTERVAL: tokio::time::Duration = tokio::time::Duration::from_secs(3600);
@@ -775,6 +804,13 @@ pub async fn schedule_mouflon_sync(
                 }
             }
         }
-        tokio::time::sleep(INTERVAL).await;
+        // 等待 1 小时，或收到立即同步通知
+        // Wait 1 hour, or until an immediate sync notification arrives
+        tokio::select! {
+            _ = tokio::time::sleep(INTERVAL) => {}
+            _ = notify_rx.recv() => {
+                tracing::info!("Mouflon sync: settings changed, triggering immediate sync");
+            }
+        }
     }
 }

@@ -142,6 +142,12 @@ impl StripchatApi {
         self
     }
 
+    /// 获取当前 Mouflon 解密密钥的引用。
+    /// Get a reference to the current Mouflon decryption keys.
+    pub fn mouflon_keys(&self) -> &HashMap<String, String> {
+        &self.mouflon_keys
+    }
+
     /// 将 stripchat.com 域名替换为镜像站域名（若已配置）。
     /// Replace the stripchat.com domain with the mirror site domain (if configured).
     fn api_url(&self, url: &str) -> String {

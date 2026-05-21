@@ -269,7 +269,7 @@ export default {
 		},
 		mergeFormat: {
 			label: "Merge Format",
-			hint: "Format for automatically merging segments after recording ends",
+			hint: "Format for automatically merging segments after recording ends. Changes apply to recordings already in progress.",
 		},
 		maxTmpDirGb: {
 			label: "Max Tmp Directory Size (GB)",
@@ -328,7 +328,7 @@ export default {
 	relay: {
 		title: "Relay Streams",
 		subtitle: "{streams} stream(s), {connections} active connection(s)",
-		hint: "Open the URL below directly in any player — no manual setup needed. Connects to upstream automatically on first access.",
+		hint: "Open the URL below directly in any player — no manual setup needed. Connects to upstream automatically on first access. Streamers not in the recording list can be relayed too.",
 		noSessions: "No active relay streams",
 		noSessionsHint: "Open /stream/{modelname} in a player to auto-start",
 		connections: "{n} connection(s)",

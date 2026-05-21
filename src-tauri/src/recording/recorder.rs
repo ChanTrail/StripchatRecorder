@@ -212,11 +212,8 @@ impl RecorderManager {
         let manager = Arc::clone(self);
         let username = username.to_string();
         let playlist_url = playlist_url.to_string();
-        let api_proxy = settings.api_proxy_url.clone();
-        let cdn_proxy = settings.cdn_proxy_url.clone();
-        let sc_mirror = settings.sc_mirror_url.clone();
-        let mouflon_keys = self.state.get_mouflon_keys();
-        let merge_format = settings.merge_format.clone();
+        // merge_format 不在此处固化，合并时从 AppState 动态读取以支持录制中修改生效
+        // merge_format is NOT captured here; read from AppState at merge time to support live changes
 
         tokio::spawn(async move {
             if let Err(e) = manager
@@ -224,10 +221,6 @@ impl RecorderManager {
                     &username,
                     &playlist_url,
                     &session_dir,
-                    api_proxy.as_deref(),
-                    cdn_proxy.as_deref(),
-                    sc_mirror.as_deref(),
-                    mouflon_keys,
                     stop_rx,
                     Arc::clone(&emitter),
                 )
@@ -249,6 +242,10 @@ impl RecorderManager {
             if !was_manual {
                 manager.naturally_stopped.write().insert(username.clone());
             }
+
+            // 录制结束时读取最新的 merge_format，确保设置变更能在本次合并中生效
+            // Read the latest merge_format when recording ends so any in-flight setting change takes effect
+            let merge_format = manager.state.get_settings().merge_format.clone();
 
             let session_dir_clone = session_dir.clone();
             let username_clone = username.clone();
@@ -438,27 +435,28 @@ impl RecorderManager {
     }
 
     /// 录制主循环：持续拉取 HLS 播放列表、下载新分片、转换为 TS 格式并写入会话目录。
+    /// 代理设置和 Mouflon 密钥在每次循环迭代时动态读取，变更后立即生效。
+    ///
     /// Recording main loop: continuously fetches HLS playlists, downloads new segments,
     /// converts to TS format, and writes to the session directory.
+    /// Proxy settings and Mouflon keys are read dynamically each iteration and take effect immediately.
     async fn recording_loop(
         &self,
         username: &str,
         playlist_url: &str,
         session_dir: &PathBuf,
-        api_proxy: Option<&str>,
-        cdn_proxy: Option<&str>,
-        sc_mirror: Option<&str>,
-        mouflon_keys: HashMap<String, String>,
         mut stop_rx: mpsc::Receiver<()>,
         emitter: Arc<dyn Emitter>,
     ) -> Result<()> {
-        let api = StripchatApi::new(
-            api_proxy,
-            cdn_proxy,
-            sc_mirror,
+        // 初始设置快照，用于检测变更 / Initial settings snapshot for change detection
+        let mut last_settings = self.state.get_settings();
+        let mut api = StripchatApi::new(
+            last_settings.api_proxy_url.as_deref(),
+            last_settings.cdn_proxy_url.as_deref(),
+            last_settings.sc_mirror_url.as_deref(),
             Arc::clone(&self.preferred_tld_by_node),
         )?
-        .with_mouflon_keys(mouflon_keys.clone());
+        .with_mouflon_keys(self.state.get_mouflon_keys());
         let mut current_playlist_url = playlist_url.to_string();
         let mut url_prefix = get_url_prefix(&current_playlist_url);
 
@@ -476,6 +474,33 @@ impl RecorderManager {
         tracing::info!("Started recording {} → {:?}", username, session_dir);
 
         loop {
+            // 检测代理/密钥设置变更，变更时重建 api 实例使其立即生效
+            // Detect proxy/key setting changes and rebuild api instance for immediate effect
+            let current_settings = self.state.get_settings();
+            let current_mouflon_keys = self.state.get_mouflon_keys();
+            let proxy_changed = current_settings.api_proxy_url != last_settings.api_proxy_url
+                || current_settings.cdn_proxy_url != last_settings.cdn_proxy_url
+                || current_settings.sc_mirror_url != last_settings.sc_mirror_url;
+            let keys_changed = current_mouflon_keys != *api.mouflon_keys();
+            if proxy_changed || keys_changed {
+                match StripchatApi::new(
+                    current_settings.api_proxy_url.as_deref(),
+                    current_settings.cdn_proxy_url.as_deref(),
+                    current_settings.sc_mirror_url.as_deref(),
+                    Arc::clone(&self.preferred_tld_by_node),
+                ) {
+                    Ok(new_api) => {
+                        api = new_api.with_mouflon_keys(current_mouflon_keys);
+                        tracing::info!("Recording {}: api client rebuilt due to settings change", username);
+                    }
+                    Err(e) => {
+                        tracing::warn!("Recording {}: failed to rebuild api client: {}", username, e);
+                    }
+                }
+                last_settings = current_settings.clone();
+            }
+            let mouflon_keys = api.mouflon_keys().clone();
+
             let mut wait_next_round = true;
             tokio::select! {
                 _ = stop_rx.recv() => {

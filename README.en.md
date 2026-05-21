@@ -18,9 +18,10 @@ A self-hosted Stripchat live stream recorder with a web-based management UI. Sup
   - Name search: search by username keyword
   - One-click add to recording list directly from result cards
   - Launch a similar-face search from any streamer card
+- **HLS Relay**: proxy a streamer's live stream to any player without recording — open `/stream/{modelname}` to start automatically; supports multiple simultaneous clients
 - Supports split network proxies: configure Stripchat API proxy and CDN chunk proxy separately
 - Supports configurable Stripchat mirror site (replaces `stripchat.com` in requests with your mirror domain)
-- **Mouflon HLS decryption**: manage `pkey → pdkey` key pairs for decrypting Stripchat's encrypted HLS segment filenames
+- **Mouflon HLS decryption**: manage `pkey → pdkey` key pairs for decrypting Stripchat's encrypted HLS segment filenames; supports automatic key sync from a configured URL
 - Configurable post-processing pipeline with pluggable modules:
   - **contact_sheet** — generates a tiled preview image with timestamps
   - **filter_short** — deletes recordings below a minimum duration
@@ -69,13 +70,14 @@ The Docker image runs in Server mode by default (port 3030). Configuration is wr
 
 The following options are available in the Web UI under Settings:
 
-| Setting              | Description                                                                 |
-| -------------------- | --------------------------------------------------------------------------- |
-| Output directory     | Path where recordings are saved                                             |
-| Max concurrent       | Maximum number of simultaneous recordings; `0` means unlimited             |
-| Poll interval        | How often to check if a streamer is live (seconds), range 10–300           |
-| Merge format         | Format for auto-merging segments after recording: `mp4` (default), `mkv`, `ts` |
-| Auto-record          | Whether newly added streamers have auto-record enabled by default           |
+| Setting                        | Description                                                                 |
+| ------------------------------ | --------------------------------------------------------------------------- |
+| Output directory               | Path where recordings are saved                                             |
+| Max concurrent                 | Maximum number of simultaneous recordings; `0` means unlimited             |
+| Poll interval                  | How often to check if a streamer is live (seconds), range 10–300           |
+| Merge format                   | Format for auto-merging segments after recording: `mp4` (default), `mkv`, `ts` |
+| Auto-record                    | Whether newly added streamers have auto-record enabled by default           |
+| Max post-process tmp dir (GB)  | Size limit for temporary files created by post-processing modules; oldest files are deleted when exceeded; `0` means unlimited, default 50 GB |
 
 ### Network Proxies and Mirror
 
@@ -90,6 +92,18 @@ Stripchat mirror project: <https://github.com/ChanTrail/StripchatMirror>
 ### Mouflon HLS Decryption Keys
 
 Stripchat encrypts HLS segment filenames (the Mouflon system). If recordings fail to download segments, add the corresponding `pkey → pdkey` key pairs in Settings under "Mouflon Decryption Keys". Keys can be obtained from community channels.
+
+You can also configure a "Sync URL" and optional "Sync Token" to automatically pull the latest keys from a specified URL.
+
+### HLS Relay
+
+In Server mode, you can stream any streamer's live broadcast directly to a player without adding them to the recording list:
+
+```
+http://localhost:3030/stream/{modelname}
+```
+
+The relay starts automatically on first access and supports multiple simultaneous clients on the same stream. The "Relay" page in the Web UI shows all active sessions with their state, connection count, and uptime.
 
 ### docker run
 

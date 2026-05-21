@@ -194,15 +194,16 @@ async fn run_live_relay(
     ts_tx: &broadcast::Sender<Arc<Vec<u8>>>,
     stop_rx: &mut mpsc::Receiver<()>,
 ) -> WorkerExit {
-    let settings = app_state.get_settings();
-    let api = match StripchatApi::new_api_only(
-        settings.api_proxy_url.as_deref(),
-        settings.cdn_proxy_url.as_deref(),
-        settings.sc_mirror_url.as_deref(),
+    let mut last_settings = app_state.get_settings();
+    let mut api = match StripchatApi::new_api_only(
+        last_settings.api_proxy_url.as_deref(),
+        last_settings.cdn_proxy_url.as_deref(),
+        last_settings.sc_mirror_url.as_deref(),
     ) {
-        Ok(a) => Arc::new(a.with_mouflon_keys(app_state.get_mouflon_keys())),
+        Ok(a) => a.with_mouflon_keys(app_state.get_mouflon_keys()),
         Err(_) => return WorkerExit::StreamEnded,
     };
+    let mut last_mouflon_keys = app_state.get_mouflon_keys();
 
     // 启动持久 ffmpeg 进程 / Start persistent ffmpeg process
     let mut child = match tokio::process::Command::new("ffmpeg")
@@ -274,6 +275,32 @@ async fn run_live_relay(
         if relay_manager.is_idle(username, IDLE_STOP_SECS) {
             tracing::info!("Relay live: idle timeout, stopping for {}", username);
             break WorkerExit::Idle;
+        }
+
+        // 检测代理/密钥设置变更，变更时重建 api 实例使其立即生效
+        // Detect proxy/key setting changes and rebuild api instance for immediate effect
+        let current_settings = app_state.get_settings();
+        let current_mouflon_keys = app_state.get_mouflon_keys();
+        let proxy_changed = current_settings.api_proxy_url != last_settings.api_proxy_url
+            || current_settings.cdn_proxy_url != last_settings.cdn_proxy_url
+            || current_settings.sc_mirror_url != last_settings.sc_mirror_url;
+        let keys_changed = current_mouflon_keys != last_mouflon_keys;
+        if proxy_changed || keys_changed {
+            match StripchatApi::new_api_only(
+                current_settings.api_proxy_url.as_deref(),
+                current_settings.cdn_proxy_url.as_deref(),
+                current_settings.sc_mirror_url.as_deref(),
+            ) {
+                Ok(new_api) => {
+                    api = new_api.with_mouflon_keys(current_mouflon_keys.clone());
+                    tracing::info!("Relay live {}: api client rebuilt due to settings change", username);
+                }
+                Err(e) => {
+                    tracing::warn!("Relay live {}: failed to rebuild api client: {}", username, e);
+                }
+            }
+            last_settings = current_settings;
+            last_mouflon_keys = current_mouflon_keys;
         }
 
         match poll_and_feed(
@@ -516,18 +543,20 @@ async fn poll_and_feed(
     username: &str,
     playlist_url: &str,
     url_prefix: &str,
-    app_state: &AppState,
+    _app_state: &AppState,
     fmp4_tx: &mpsc::Sender<Vec<u8>>,
     downloaded: &mut HashSet<u32>,
     init_data: &mut Option<Vec<u8>>,
     cached_init_url: &mut Option<String>,
 ) -> Result<bool, String> {
-    let mouflon_keys = app_state.get_mouflon_keys();
+    // 直接使用 api 实例中已更新的 mouflon_keys（由外层循环动态重建保证最新）
+    // Use mouflon_keys from the api instance (kept up-to-date by the outer loop's dynamic rebuild)
+    let mouflon_keys = api.mouflon_keys();
 
     let playlist_text = api.fetch_playlist(playlist_url).await
         .map_err(|e| e.to_string())?;
 
-    let (segments, new_init_url) = parse_playlist(&playlist_text, url_prefix, &mouflon_keys)
+    let (segments, new_init_url) = parse_playlist(&playlist_text, url_prefix, mouflon_keys)
         .map_err(|e| e.to_string())?;
 
     let init_url_path = |u: &str| u.split('?').next().unwrap_or(u).to_string();

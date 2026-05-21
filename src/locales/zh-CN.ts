@@ -268,7 +268,7 @@ export default {
 		},
 		mergeFormat: {
 			label: "合并格式",
-			hint: "录制结束后自动合并分片为单一文件的格式",
+			hint: "录制结束后自动合并分片为单一文件的格式，修改后对当前录制同样生效",
 		},
 		maxTmpDirGb: {
 			label: "后处理临时目录最大占用（GB）",
@@ -327,7 +327,7 @@ export default {
 	relay: {
 		title: "转发流",
 		subtitle: "{streams} 个转发流，{connections} 个活跃连接",
-		hint: "直接用播放器打开以下地址即可播放，无需手动启动。首次访问时自动连接上游。",
+		hint: "直接用播放器打开以下地址即可播放，无需手动启动。首次访问时自动连接上游。未在录制列表中的主播同样可以转发。",
 		noSessions: "暂无活跃转发流",
 		noSessionsHint: "用播放器打开 /stream/{modelname} 即可自动启动",
 		connections: "{n} 个连接",

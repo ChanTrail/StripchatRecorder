@@ -817,11 +817,18 @@ pub async fn run_server(port: u16) {
         });
     }
 
-    let monitor_clone = Arc::clone(&monitor);
-    let emitter_clone = Arc::clone(&emitter);
-    tokio::spawn(async move {
-        monitor_clone.start_with_emitter(emitter_clone).await;
-    });
+    // 提前创建 restart channel，确保 poll_interval_notify_tx 在 spawn 前就已注入
+    // Pre-create restart channel so poll_interval_notify_tx is available before spawning
+    {
+        let (restart_tx, restart_rx) = tokio::sync::mpsc::channel::<()>(1);
+        *app_state.poll_interval_notify_tx.write() = Some(restart_tx.clone());
+        *monitor.restart_tx.write() = Some(restart_tx);
+        let monitor_clone = Arc::clone(&monitor);
+        let emitter_clone = Arc::clone(&emitter);
+        tokio::spawn(async move {
+            monitor_clone.start_with_emitter_inner(emitter_clone, restart_rx).await;
+        });
+    }
 
     let app_state_clone = Arc::clone(&app_state);
     let emitter_clone2 = Arc::clone(&emitter);
@@ -834,8 +841,10 @@ pub async fn run_server(port: u16) {
     {
         let app_state_clone = Arc::clone(&app_state);
         let emitter_clone = Arc::clone(&emitter);
+        let (mouflon_notify_tx, mouflon_notify_rx) = tokio::sync::mpsc::channel::<()>(1);
+        *app_state_clone.mouflon_sync_notify_tx.write() = Some(mouflon_notify_tx);
         tokio::spawn(async move {
-            crate::config::settings::schedule_mouflon_sync(app_state_clone, emitter_clone).await;
+            crate::config::settings::schedule_mouflon_sync(app_state_clone, emitter_clone, mouflon_notify_rx).await;
         });
     }
 

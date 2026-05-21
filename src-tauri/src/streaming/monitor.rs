@@ -43,8 +43,9 @@ pub struct StatusMonitor {
     recorder: Arc<RecorderManager>,
     /// 各主播的最新状态缓存 / Latest status cache per streamer
     statuses: RwLock<HashMap<String, StreamerStatus>>,
-    /// 停止轮询循环的发送端 / Sender to stop the polling loop
-    stop_tx: RwLock<Option<mpsc::Sender<()>>>,
+    /// 重启轮询循环的通知发送端（发送后立即中断当前 sleep，以新间隔重新开始）
+    /// Sender to notify the polling loop to restart (interrupts current sleep, restarts with new interval)
+    pub restart_tx: RwLock<Option<mpsc::Sender<()>>>,
 }
 
 impl StatusMonitor {
@@ -55,7 +56,7 @@ impl StatusMonitor {
             state,
             recorder,
             statuses: RwLock::new(HashMap::new()),
-            stop_tx: RwLock::new(None),
+            restart_tx: RwLock::new(None),
         })
     }
 
@@ -79,8 +80,12 @@ impl StatusMonitor {
     pub fn start(self: &Arc<Self>, app_handle: tauri::AppHandle) {
         let emitter: Arc<dyn Emitter> = Arc::new(crate::core::emitter::TauriEmitter(app_handle));
         let monitor = Arc::clone(self);
+        // 提前创建 channel，确保 restart_tx 在 spawn 前就已注入
+        // Create channel before spawning so restart_tx is available immediately
+        let (restart_tx, restart_rx) = mpsc::channel(1);
+        *self.restart_tx.write() = Some(restart_tx);
         tokio::spawn(async move {
-            monitor.start_with_emitter(emitter).await;
+            monitor.start_with_emitter_inner(emitter, restart_rx).await;
         });
     }
 
@@ -100,10 +105,26 @@ impl StatusMonitor {
 
     /// 启动监控循环（通用版本，接受任意 emitter）。
     /// Start the monitoring loop (generic version, accepts any emitter).
+    #[allow(dead_code)]
     pub async fn start_with_emitter(self: Arc<Self>, emitter: Arc<dyn Emitter>) {
-        let (stop_tx, stop_rx) = mpsc::channel(1);
-        *self.stop_tx.write() = Some(stop_tx);
-        self.monitor_loop(emitter, stop_rx).await;
+        let (restart_tx, restart_rx) = mpsc::channel(1);
+        *self.restart_tx.write() = Some(restart_tx);
+        self.monitor_loop(emitter, restart_rx).await;
+    }
+
+    /// 内部版本：直接接受已创建的 restart_rx（供 start() 和 server 模式使用）。
+    /// Internal version: accepts a pre-created restart_rx (used by start() and server mode).
+    pub async fn start_with_emitter_inner(self: Arc<Self>, emitter: Arc<dyn Emitter>, restart_rx: mpsc::Receiver<()>) {
+        self.monitor_loop(emitter, restart_rx).await;
+    }
+
+    /// 通知监控循环立即中断当前等待，以最新的 poll_interval_secs 重新开始计时。
+    /// Notify the monitor loop to interrupt the current sleep and restart with the latest poll_interval_secs.
+    #[allow(dead_code)]
+    pub fn notify_interval_changed(&self) {
+        if let Some(tx) = self.restart_tx.read().as_ref() {
+            let _ = tx.try_send(());
+        }
     }
 
     /// 监控主循环：立即轮询一次，然后按配置的间隔周期性轮询。
@@ -111,7 +132,7 @@ impl StatusMonitor {
     async fn monitor_loop(
         self: Arc<Self>,
         emitter: Arc<dyn Emitter>,
-        mut stop_rx: mpsc::Receiver<()>,
+        mut restart_rx: mpsc::Receiver<()>,
     ) {
         self.poll_all_with_emitter(&emitter).await;
 
@@ -120,9 +141,11 @@ impl StatusMonitor {
                 tokio::time::Duration::from_secs(self.state.get_settings().poll_interval_secs);
 
             tokio::select! {
-                _ = stop_rx.recv() => {
-                    tracing::info!("Monitor stopped");
-                    break;
+                _ = restart_rx.recv() => {
+                    // poll_interval_secs 已变更，立即以新间隔重新开始计时（不立即轮询）
+                    // poll_interval_secs changed; restart timer with new interval (no immediate poll)
+                    tracing::info!("Monitor: poll interval changed, restarting timer");
+                    continue;
                 }
                 _ = tokio::time::sleep(poll_interval) => {
                     self.poll_all_with_emitter(&emitter).await;
