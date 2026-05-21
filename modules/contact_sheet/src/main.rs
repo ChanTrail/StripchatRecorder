@@ -222,7 +222,7 @@ fn run() -> Result<(), String> {
         forced_rows
     } else {
         // 向上取整确保所有帧都能放入网格 / Ceiling division to fit all frames in the grid
-        (frame_count + cols - 1) / cols
+        frame_count.div_ceil(cols)
     };
 
     // 创建临时目录存放截取的帧 / Create temp directory for extracted frames
@@ -308,18 +308,18 @@ fn run() -> Result<(), String> {
         let total_us = (duration * 1_000_000.0) as u64;
         let mut last_reported = 0u32;
         for line in reader.lines().map_while(Result::ok) {
-            if let Some(val) = line.strip_prefix("out_time_us=") {
-                if let Ok(us) = val.trim().parse::<u64>() {
-                    let progress = if total_us > 0 {
-                        ((us as f64 / total_us as f64) * frame_count as f64) as u32
-                    } else {
-                        0
-                    };
-                    let clamped = progress.min(frame_count);
-                    if clamped != last_reported {
-                        emit_progress(clamped, frame_count);
-                        last_reported = clamped;
-                    }
+            if let Some(val) = line.strip_prefix("out_time_us=")
+                && let Ok(us) = val.trim().parse::<u64>()
+            {
+                let progress = if total_us > 0 {
+                    ((us as f64 / total_us as f64) * frame_count as f64) as u32
+                } else {
+                    0
+                };
+                let clamped = progress.min(frame_count);
+                if clamped != last_reported {
+                    emit_progress(clamped, frame_count);
+                    last_reported = clamped;
                 }
             }
         }
