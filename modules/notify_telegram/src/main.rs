@@ -214,7 +214,9 @@ fn extract_video_thumbnail(input: &Path) -> Result<PathBuf, String> {
 /// # 参数 / Parameters
 /// - `input`: 输入视频路径 / Input video path
 /// - `max_bytes`: 每个片段的最大字节数 / Maximum bytes per segment
+///
 /// 用 ffprobe 获取视频的平均比特率（bps），失败时返回 None。
+///
 /// Get the average bitrate of a video via ffprobe (bps), returns None on failure.
 fn probe_bitrate(input: &Path) -> Option<u64> {
     let out = Command::new("ffprobe")
@@ -467,7 +469,7 @@ async fn upload_with_progress(
     const BIG_FILE_THRESHOLD: usize = 10 * 1024 * 1024;
     let is_big = size > BIG_FILE_THRESHOLD;
 
-    let total_parts = ((size + CHUNK_SIZE - 1) / CHUNK_SIZE) as i32;
+    let total_parts = size.div_ceil(CHUNK_SIZE) as i32;
     // 生成一次性 file_id，整个上传过程保持不变 / Generate file_id once; keep it for the entire upload
     let file_id = {
         use std::time::{SystemTime, UNIX_EPOCH};
@@ -542,14 +544,14 @@ async fn upload_with_progress(
             speed_bytes += read;
             let scaled = ((new_done as u128) * (PROGRESS_SCALE as u128) / (total as u128))
                 .min(PROGRESS_SCALE as u128) as usize;
-            print!("PROGRESS:{}/{}\n", scaled, PROGRESS_SCALE);
+            println!("PROGRESS:{}/{}", scaled, PROGRESS_SCALE);
             use std::io::Write;
             let _ = std::io::stdout().flush();
 
             let elapsed = speed_last.elapsed();
             if elapsed >= Duration::from_secs(1) {
                 let bps = speed_bytes as f64 / elapsed.as_secs_f64();
-                print!("STATUS:{}\n", format_speed(bps));
+                println!("STATUS:{}", format_speed(bps));
                 let _ = std::io::stdout().flush();
                 speed_bytes = 0;
                 speed_last = Instant::now();
@@ -662,9 +664,7 @@ async fn upload_and_send(
 
     // 处理视频文件：非 mp4/mkv 格式需先重封装，重封装失败则转码
     // Handle video files: non-mp4/mkv formats need remuxing, falls back to transcoding
-    let mut converted_parts: Vec<PathBuf> = Vec::new();
-    let effective_parts: Vec<PathBuf>;
-    if send_video {
+    let effective_parts: Vec<PathBuf> = if send_video {
         let mut parts_out: Vec<PathBuf> = Vec::new();
         for part in video_parts {
             let ext = part.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
@@ -695,10 +695,10 @@ async fn upload_and_send(
                 parts_out.push(tmp);
             }
         }
-        effective_parts = parts_out;
+        parts_out
     } else {
-        effective_parts = vec![input.to_path_buf()];
-    }
+        vec![input.to_path_buf()]
+    };
 
     // 提取每个视频片段的缩略图和元数据 / Extract thumbnail and metadata for each video part
     struct PartMeta { thumb_path: Option<PathBuf>, duration: f64, w: i32, h: i32 }
@@ -748,7 +748,7 @@ async fn upload_and_send(
             loop {
                 match client.invoke(&tl::functions::messages::UploadMedia {
                     business_connection_id: None,
-                    peer: peer.clone().into(),
+                    peer: (*peer).into(),
                     media: raw_media.clone(),
                 }).await {
                     Ok(committed) => {
@@ -884,7 +884,7 @@ async fn upload_and_send(
                 loop {
                     let batch: Vec<InputMedia> = build_items(&committed_cover, &committed_parts)
                         .into_iter().skip(start).take(MAX_ALBUM).collect();
-                    match client.send_album(peer.clone(), batch).await {
+                    match client.send_album(peer, batch).await {
                         Ok(_) => break,
                         Err(e) => {
                             let msg = format!("send_album (batch {}) failed: {}", batch_idx + 1, e);
@@ -927,7 +927,7 @@ async fn upload_and_send(
                 .photo(uploaded.clone())
                 .fmt_entities(base_caption_entities.clone())
                 .text(base_caption_text.clone());
-            match client.send_message(peer.clone(), msg).await {
+            match client.send_message(peer, msg).await {
                 Ok(_) => break,
                 Err(e) => {
                     send_attempt += 1;
@@ -949,7 +949,7 @@ async fn upload_and_send(
             let msg = InputMessage::new()
                 .fmt_entities(base_caption_entities.clone())
                 .text(base_caption_text.clone());
-            match client.send_message(peer.clone(), msg).await {
+            match client.send_message(peer, msg).await {
                 Ok(_) => break,
                 Err(e) => {
                     send_attempt += 1;
