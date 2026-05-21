@@ -15,6 +15,27 @@ export default defineConfig(async () => ({
       "@": fileURLToPath(new URL("./src", import.meta.url)),
     },
   },
+
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          // Vue 核心
+          "vendor-vue": ["vue", "vue-router", "pinia"],
+          // i18n
+          "vendor-i18n": ["vue-i18n"],
+          // UI 组件库
+          "vendor-reka": ["reka-ui"],
+          // 工具库
+          "vendor-utils": ["@vueuse/core", "clsx", "tailwind-merge", "class-variance-authority"],
+          // 图标库
+          "vendor-icons": ["lucide-vue-next", "@lucide/vue"],
+          // 通知
+          "vendor-sonner": ["vue-sonner"],
+        },
+      },
+    },
+  },
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors

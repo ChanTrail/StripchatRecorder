@@ -6,21 +6,15 @@
  */
 
 import { createRouter, createWebHistory } from "vue-router";
-import HomeView from "../views/HomeView.vue";
-import RecordingsView from "../views/RecordingsView.vue";
-import SettingsView from "../views/SettingsView.vue";
-import PostprocessView from "../views/PostprocessView.vue";
-import FinderView from "../views/FinderView.vue";
-import RelayView from "../views/RelayView.vue";
 
 export default createRouter({
 	history: createWebHistory(),
 	routes: [
-		{ path: "/", component: HomeView },
-		{ path: "/recordings", component: RecordingsView },
-		{ path: "/postprocess", component: PostprocessView },
-		{ path: "/settings", component: SettingsView },
-		{ path: "/finder", component: FinderView },
-		{ path: "/relay", component: RelayView },
+		{ path: "/", component: () => import("../views/HomeView.vue") },
+		{ path: "/recordings", component: () => import("../views/RecordingsView.vue") },
+		{ path: "/postprocess", component: () => import("../views/PostprocessView.vue") },
+		{ path: "/settings", component: () => import("../views/SettingsView.vue") },
+		{ path: "/finder", component: () => import("../views/FinderView.vue") },
+		{ path: "/relay", component: () => import("../views/RelayView.vue") },
 	],
 });

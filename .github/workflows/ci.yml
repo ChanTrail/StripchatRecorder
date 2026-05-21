@@ -1,0 +1,129 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master, dev]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.gitignore'
+      - 'docker-compose.yml'
+  pull_request:
+    branches: [main, master]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ─────────────────────────────────────────────
+  # Frontend type-check & build
+  # ─────────────────────────────────────────────
+  frontend:
+    name: Frontend (type-check + build)
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check & build
+        run: npm run build
+
+  # ─────────────────────────────────────────────
+  # Main Rust binary (Linux only for speed)
+  # ─────────────────────────────────────────────
+  build-main:
+    name: Build main binary (Linux)
+    runs-on: ubuntu-22.04
+    needs: frontend
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev librsvg2-dev libpango1.0-dev \
+            libcairo2-dev libgdk-pixbuf-xlib-2.0-dev libsoup-3.0-dev \
+            pkg-config build-essential libssl-dev
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Build Tauri binary
+        run: npx tauri build --no-bundle
+
+  # ─────────────────────────────────────────────
+  # Modules: check + clippy
+  # ─────────────────────────────────────────────
+  check-modules:
+    name: Check modules
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev pkg-config build-essential
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            modules/contact_sheet
+            modules/filter_short
+            modules/notify_discord
+            modules/notify_telegram
+            modules/pp_utils
+          key: modules-ci
+
+      - name: Check all modules
+        run: |
+          for module_dir in modules/contact_sheet modules/filter_short modules/notify_discord modules/notify_telegram; do
+            if [ -f "$module_dir/Cargo.toml" ]; then
+              echo "=== Checking $module_dir ==="
+              cargo check --manifest-path "$module_dir/Cargo.toml"
+              cargo clippy --manifest-path "$module_dir/Cargo.toml" -- -D warnings
+            fi
+          done
+

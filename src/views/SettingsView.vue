@@ -323,6 +323,7 @@
 						<Input
 							v-model="form.output_dir"
 							:placeholder="t('settings.outputDir.placeholder')"
+							autocomplete="off"
 							@keyup.enter="saveOutputDir"
 							@blur="saveOutputDir"
 						/>
@@ -434,6 +435,7 @@
 					<Input
 						:model-value="form.api_proxy_url ?? ''"
 						:placeholder="t('settings.apiProxy.placeholder')"
+						autocomplete="url"
 						@update:model-value="
 							form.api_proxy_url = ($event as string) || null
 						"
@@ -449,6 +451,7 @@
 					<Input
 						:model-value="form.sc_mirror_url ?? ''"
 						:placeholder="t('settings.scMirror.placeholder')"
+						autocomplete="url"
 						@update:model-value="
 							form.sc_mirror_url = ($event as string) || null
 						"
@@ -464,6 +467,7 @@
 					<Input
 						:model-value="form.cdn_proxy_url ?? ''"
 						:placeholder="t('settings.cdnProxy.placeholder')"
+						autocomplete="url"
 						@update:model-value="
 							form.cdn_proxy_url = ($event as string) || null
 						"
@@ -495,6 +499,7 @@
 					<Input
 						:model-value="form.mouflon_sync_url ?? ''"
 						:placeholder="t('settings.mouflonSyncUrl.placeholder')"
+						autocomplete="url"
 						@update:model-value="form.mouflon_sync_url = ($event as string) || null"
 						@keyup.enter="saveProxy('mouflon_sync_url')"
 						@blur="saveProxy('mouflon_sync_url')"
@@ -506,6 +511,7 @@
 						:model-value="form.mouflon_sync_token ?? ''"
 						:placeholder="t('settings.mouflonSyncToken.placeholder')"
 						type="password"
+						autocomplete="current-password"
 						@update:model-value="form.mouflon_sync_token = ($event as string) || null"
 						@keyup.enter="saveProxy('mouflon_sync_token')"
 						@blur="saveProxy('mouflon_sync_token')"
@@ -574,11 +580,13 @@
 					<Input
 						v-model="newPkey"
 						placeholder="pkey"
+						autocomplete="off"
 						class="flex-1 font-mono text-xs"
 					/>
 					<Input
 						v-model="newPdkey"
 						placeholder="pdkey"
+						autocomplete="off"
 						class="flex-2 font-mono text-xs"
 					/>
 					<Button type="button" variant="outline" @click="addKey">{{ t("settings.addKey") }}</Button>
