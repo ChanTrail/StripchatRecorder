@@ -47,7 +47,7 @@ jobs:
   build-main:
     name: Build main binary (Linux)
     runs-on: ubuntu-22.04
-    needs: frontend
+    needs: [frontend, check-modules]
 
     steps:
       - name: Checkout
