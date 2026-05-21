@@ -20,14 +20,12 @@ use std::time::{Duration, Instant};
 /// Check if a path is a "noisy" path (.ts/.tmp/.part/.partial files) that change frequently
 /// and should not trigger a refresh.
 fn is_noisy_path(path: &Path) -> bool {
-    match path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|s| s.to_ascii_lowercase())
-    {
-        Some(ext) if ext == "ts" || ext == "tmp" || ext == "part" || ext == "partial" => true,
-        _ => false,
-    }
+    matches!(
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(|s| s.to_ascii_lowercase()),
+        Some(ext) if ext == "ts" || ext == "tmp" || ext == "part" || ext == "partial"
+    )
 }
 
 /// 判断文件系统事件是否应该触发前端刷新。

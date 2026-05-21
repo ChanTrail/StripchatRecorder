@@ -125,15 +125,11 @@ fn ask_mode_interactive() -> (RunMode, String) {
                     continue;
                 }
                 match key.code {
-                    KeyCode::Up => {
-                        if selected > 0 {
-                            selected -= 1;
-                        }
+                    KeyCode::Up if selected > 0 => {
+                        selected = selected.saturating_sub(1);
                     }
-                    KeyCode::Down => {
-                        if selected + 1 < items.len() {
-                            selected += 1;
-                        }
+                    KeyCode::Down if selected + 1 < items.len() => {
+                        selected += 1;
                     }
                     KeyCode::Enter => break,
                     _ => {}

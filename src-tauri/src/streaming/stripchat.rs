@@ -37,13 +37,10 @@ fn build_client(proxy_url: Option<&str>) -> Result<Client> {
         .tcp_keepalive(std::time::Duration::from_secs(15))
         .connection_verbose(false);
 
-    if let Some(proxy) = proxy_url {
-        if !proxy.is_empty() {
-            builder = builder
-                .proxy(reqwest::Proxy::all(proxy).map_err(|e| AppError::Other(e.to_string()))?);
-        } else {
-            builder = builder.no_proxy();
-        }
+    if let Some(proxy) = proxy_url
+        && !proxy.is_empty() {
+        builder = builder
+            .proxy(reqwest::Proxy::all(proxy).map_err(|e| AppError::Other(e.to_string()))?);
     } else {
         builder = builder.no_proxy();
     }
@@ -58,12 +55,11 @@ fn build_api_client(proxy_url: Option<&str>) -> Result<Client> {
         .user_agent(USER_AGENT)
         .timeout(std::time::Duration::from_secs(30));
 
-    if let Some(proxy) = proxy_url {
-        if !proxy.is_empty() {
-            builder = builder
-                .proxy(reqwest::Proxy::all(proxy).map_err(|e| AppError::Other(e.to_string()))?);
-            return Ok(builder.build()?);
-        }
+    if let Some(proxy) = proxy_url
+        && !proxy.is_empty() {
+        builder = builder
+            .proxy(reqwest::Proxy::all(proxy).map_err(|e| AppError::Other(e.to_string()))?);
+        return Ok(builder.build()?);
     }
     builder = builder.no_proxy();
     Ok(builder.build()?)
@@ -445,10 +441,9 @@ impl StripchatApi {
         // 收集所有 Mouflon PSCH 参数对 (psch, pkey)
         let mut mouflon_pairs: Vec<(String, String)> = Vec::new();
         for &line in &lines {
-            if let Some(rest) = line.strip_prefix("#EXT-X-MOUFLON:PSCH:") {
-                if let Some((scheme, key)) = rest.split_once(':') {
-                    mouflon_pairs.push((scheme.to_string(), key.to_string()));
-                }
+            if let Some(rest) = line.strip_prefix("#EXT-X-MOUFLON:PSCH:")
+                && let Some((scheme, key)) = rest.split_once(':') {
+                mouflon_pairs.push((scheme.to_string(), key.to_string()));
             }
         }
 
@@ -458,20 +453,18 @@ impl StripchatApi {
         let mut pending_bandwidth: Option<u64> = None;
 
         for &line in &lines {
-            if line.starts_with("#EXT-X-STREAM-INF:") {
+            if let Some(attrs) = line.strip_prefix("#EXT-X-STREAM-INF:") {
                 // 去掉标签前缀后再按逗号分割，避免标签名干扰 BANDWIDTH= 匹配
-                let attrs = &line["#EXT-X-STREAM-INF:".len()..];
                 pending_bandwidth = attrs
                     .split(',')
                     .find(|seg| seg.trim_start().starts_with("BANDWIDTH="))
                     .and_then(|seg| seg.trim_start().strip_prefix("BANDWIDTH="))
                     .and_then(|v| v.parse::<u64>().ok());
             } else if !line.is_empty() && !line.starts_with('#') {
-                if let Some(bw) = pending_bandwidth.take() {
-                    if bw > best_bandwidth {
-                        best_bandwidth = bw;
-                        best_url = Some(line.to_string());
-                    }
+                if let Some(bw) = pending_bandwidth.take()
+                    && bw > best_bandwidth {
+                    best_bandwidth = bw;
+                    best_url = Some(line.to_string());
                 }
             } else {
                 pending_bandwidth = None;

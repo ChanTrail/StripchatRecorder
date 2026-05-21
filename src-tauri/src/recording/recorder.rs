@@ -371,14 +371,14 @@ impl RecorderManager {
                         "Merge produced no output for {} → deleted meta, cleaning up session dir",
                         username_clone
                     );
-                    if session_dir_clone.exists() {
-                        if let Err(e) = std::fs::remove_dir_all(&session_dir_clone) {
-                            tracing::warn!(
-                                "Failed to remove empty session dir {:?}: {}",
-                                session_dir_clone,
-                                e
-                            );
-                        }
+                    if session_dir_clone.exists()
+                        && let Err(e) = std::fs::remove_dir_all(&session_dir_clone)
+                    {
+                        tracing::warn!(
+                            "Failed to remove empty session dir {:?}: {}",
+                            session_dir_clone,
+                            e
+                        );
                     }
                 }
 
@@ -549,11 +549,11 @@ impl RecorderManager {
 
                                 // 将实时文件大小写入 meta JSON
                                 // Write real-time file size to meta JSON
-                                if let Some(mut meta) = crate::recording::meta::read_meta(&video_path) {
-                                    if meta.size_bytes != size_bytes {
-                                        meta.size_bytes = size_bytes;
-                                        crate::recording::meta::write_meta(&video_path, &meta);
-                                    }
+                                if let Some(mut meta) = crate::recording::meta::read_meta(&video_path)
+                                    && meta.size_bytes != size_bytes
+                                {
+                                    meta.size_bytes = size_bytes;
+                                    crate::recording::meta::write_meta(&video_path, &meta);
                                 }
 
                                 let mut payload = serde_json::json!({
@@ -652,12 +652,13 @@ impl RecorderManager {
     ///
     /// Fetch the playlist once and download all new segments.
     /// Returns `(number of segments written, number of CDN failures)`.
+    #[allow(clippy::too_many_arguments)]
     async fn fetch_segments(
         api: &StripchatApi,
         playlist_url: &str,
         url_prefix: &str,
         mouflon_keys: &HashMap<String, String>,
-        session_dir: &PathBuf,
+        session_dir: &std::path::Path,
         username: &str,
         downloaded_sequences: &mut HashSet<u32>,
         mp4_header: &mut Option<Vec<u8>>,
@@ -668,21 +669,21 @@ impl RecorderManager {
         let init_url_path = |u: &str| u.split('?').next().unwrap_or(u).to_string();
         let new_init_path = init_url.as_deref().map(init_url_path);
         let cached_init_path = cached_init_url.as_deref().map(init_url_path);
-        if new_init_path.is_some() && new_init_path != cached_init_path {
-            if let Some(ref url) = init_url {
-                match api.download_segment(url).await {
-                    Ok(data) => {
-                        tracing::info!("Cached init segment → {} ({} bytes)", username, data.len());
-                        *mp4_header = Some(data);
-                        *cached_init_url = Some(url.clone());
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            "Failed to download init segment: {}, skipping this round",
-                            e
-                        );
-                        return Ok((0, 0));
-                    }
+        if new_init_path.is_some() && new_init_path != cached_init_path
+            && let Some(ref url) = init_url
+        {
+            match api.download_segment(url).await {
+                Ok(data) => {
+                    tracing::info!("Cached init segment → {} ({} bytes)", username, data.len());
+                    *mp4_header = Some(data);
+                    *cached_init_url = Some(url.clone());
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "Failed to download init segment: {}, skipping this round",
+                        e
+                    );
+                    return Ok((0, 0));
                 }
             }
         }
@@ -801,7 +802,7 @@ async fn convert_to_ts(fmp4_data: Vec<u8>, ts_path: &PathBuf) -> Result<()> {
 ///
 /// 首次写入时自动添加 M3U8 文件头（`#EXTM3U` 和 `#EXT-X-VERSION:3`）。
 /// Automatically writes the M3U8 header (`#EXTM3U` and `#EXT-X-VERSION:3`) on first write.
-fn append_to_m3u8(session_dir: &PathBuf, ts_path: &PathBuf) {
+fn append_to_m3u8(session_dir: &std::path::Path, ts_path: &std::path::Path) {
     let m3u8_path = session_dir.join("playlist.m3u8");
     let Some(filename) = ts_path.file_name().and_then(|n| n.to_str()) else {
         return;
@@ -821,11 +822,11 @@ fn append_to_m3u8(session_dir: &PathBuf, ts_path: &PathBuf) {
         }
     };
 
-    if needs_header {
-        if let Err(e) = file.write_all(b"#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-MEDIA-SEQUENCE:0\n") {
-            tracing::error!("Failed to write M3U8 header: {}", e);
-            return;
-        }
+    if needs_header
+        && let Err(e) = file.write_all(b"#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-MEDIA-SEQUENCE:0\n")
+    {
+        tracing::error!("Failed to write M3U8 header: {}", e);
+        return;
     }
 
     // 写入分片条目（时长占位为 0，实际时长未知）/ Write segment entry (duration placeholder 0, actual duration unknown)
@@ -884,14 +885,8 @@ fn merge_segments(
         tracing::warn!("Failed to write #EXT-X-ENDLIST: {}", e);
     }
 
-    let parent = match session_dir.parent() {
-        Some(p) => p,
-        None => return None,
-    };
-    let stem = match session_dir.file_name().and_then(|n| n.to_str()) {
-        Some(s) => s,
-        None => return None,
-    };
+    let parent = session_dir.parent()?;
+    let stem = session_dir.file_name().and_then(|n| n.to_str())?;
     let output_path = parent.join(format!("{}.{}", stem, merge_format));
 
     tracing::info!("Merging {} → {:?}", username, output_path);

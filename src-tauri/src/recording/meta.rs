@@ -120,10 +120,9 @@ pub fn write_meta(video_path: &Path, meta: &VideoMeta) {
 /// 删除视频文件对应的元数据文件（若存在）。
 /// Delete the metadata file for a video file (if it exists).
 pub fn delete_meta(video_path: &Path) {
-    if let Some(meta_path) = meta_path_for(video_path) {
-        if meta_path.exists() {
-            let _ = std::fs::remove_file(&meta_path);
-        }
+    if let Some(meta_path) = meta_path_for(video_path)
+        && meta_path.exists() {
+        let _ = std::fs::remove_file(&meta_path);
     }
 }
 
@@ -207,10 +206,9 @@ pub fn set_pp_done(
 /// Does not overwrite if the meta file already exists; otherwise creates an initial meta
 /// (used as a safety net for leftover segments on startup).
 pub fn ensure_meta(video_path: &Path, started_at: &str) {
-    if let Some(meta_path) = meta_path_for(video_path) {
-        if meta_path.exists() {
-            return;
-        }
+    if let Some(meta_path) = meta_path_for(video_path)
+        && meta_path.exists() {
+        return;
     }
     let size_bytes = std::fs::metadata(video_path).map(|m| m.len()).unwrap_or(0);
     let meta = VideoMeta {
@@ -301,11 +299,7 @@ fn scan_and_ensure_meta(
                     // 无论是否在 pp_results 中，缺失 meta 的视频一律标记为 finish（兜底）
                     // If path is in pp_results, post-processing was run; status is confirmed by meta.
                     // For videos missing meta, always mark as finish (fallback).
-                    let status = if pp_results.contains(&path_str) {
-                        "finish" // 执行过后处理，具体结果由 meta 确认，此处兜底为 finish
-                    } else {
-                        "finish" // 无后处理记录，视为已完成
-                    };
+                    let status = "finish"; // 执行过后处理或无后处理记录，均视为已完成
                     let meta = VideoMeta {
                         status: status.to_string(),
                         started_at,

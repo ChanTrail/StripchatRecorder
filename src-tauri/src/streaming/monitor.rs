@@ -366,14 +366,13 @@ impl StatusMonitor {
             && streamer.auto_record
             && auto_record_global
             && !is_recording
+            && let Some(ref playlist_url) = info.playlist_url
         {
-            if let Some(ref playlist_url) = info.playlist_url {
-                tracing::info!("Auto-starting recording → {} (just_online={}, dropped={}, natural_stop={}, should_be={})", username, just_came_online, recording_dropped, naturally_stopped, should_be_recording);
-                let _ = self
-                    .recorder
-                    .start_recording_with_emitter(&username, playlist_url, Arc::clone(emitter))
-                    .await;
-            }
+            tracing::info!("Auto-starting recording → {} (just_online={}, dropped={}, natural_stop={}, should_be={})", username, just_came_online, recording_dropped, naturally_stopped, should_be_recording);
+            let _ = self
+                .recorder
+                .start_recording_with_emitter(&username, playlist_url, Arc::clone(emitter))
+                .await;
         }
     }
 }

@@ -215,7 +215,7 @@ pub fn run_pipeline(
         }
 
         // 检查取消标志 / Check cancel flag
-        if cancel.as_ref().map_or(false, |c| c.load(Ordering::Relaxed)) {
+        if cancel.as_ref().is_some_and(|c| c.load(Ordering::Relaxed)) {
             break;
         }
 
@@ -313,6 +313,7 @@ pub fn run_pipeline(
 /// - `on_module_progress`: 模块内进度回调 / Module-level progress callback
 /// - `on_log`: 日志行回调 / Log line callback
 /// - `on_status`: 状态文字回调（来自 `STATUS:` 前缀行）/ Status text callback (from `STATUS:` prefix lines)
+#[allow(clippy::too_many_arguments)]
 fn run_node(
     module: &ModuleInfo,
     node: &PipelineNode,
@@ -415,7 +416,7 @@ fn run_node(
 
     while !(stdout_done && stderr_done) {
         // 每 100ms 检查一次取消标志 / Check cancel flag every 100ms
-        if cancel.as_ref().map_or(false, |c| c.load(Ordering::Relaxed)) {
+        if cancel.as_ref().is_some_and(|c| c.load(Ordering::Relaxed)) {
             // Windows 上使用 taskkill 强制终止进程树 / Use taskkill on Windows to force-kill the process tree
             #[cfg(target_os = "windows")]
             {
@@ -437,12 +438,11 @@ fn run_node(
                 if let Some(rest) = trimmed.strip_prefix("PROGRESS:") {
                     // 解析 PROGRESS:{done}/{total} 格式 / Parse PROGRESS:{done}/{total} format
                     let mut parts = rest.splitn(2, '/');
-                    if let (Some(d), Some(t)) = (parts.next(), parts.next()) {
-                        if let (Ok(done), Ok(total)) =
+                    if let (Some(d), Some(t)) = (parts.next(), parts.next())
+                        && let (Ok(done), Ok(total)) =
                             (d.trim().parse::<u32>(), t.trim().parse::<u32>())
-                        {
-                            on_module_progress(done, total);
-                        }
+                    {
+                        on_module_progress(done, total);
                     }
                 } else if let Some(status_text) = trimmed.strip_prefix("STATUS:") {
                     // 解析 STATUS:{text} 格式（上传速度等）/ Parse STATUS:{text} format (upload speed, etc.)

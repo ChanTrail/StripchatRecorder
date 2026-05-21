@@ -319,15 +319,13 @@ impl AppState {
             || old.mouflon_sync_token != settings.mouflon_sync_token;
         self.data.write().settings = settings;
         self.save()?;
-        if poll_interval_changed {
-            if let Some(tx) = self.poll_interval_notify_tx.read().as_ref() {
-                let _ = tx.try_send(());
-            }
+        if poll_interval_changed
+            && let Some(tx) = self.poll_interval_notify_tx.read().as_ref() {
+            let _ = tx.try_send(());
         }
-        if mouflon_sync_changed {
-            if let Some(tx) = self.mouflon_sync_notify_tx.read().as_ref() {
-                let _ = tx.try_send(());
-            }
+        if mouflon_sync_changed
+            && let Some(tx) = self.mouflon_sync_notify_tx.read().as_ref() {
+            let _ = tx.try_send(());
         }
         Ok(())
     }
@@ -597,6 +595,7 @@ impl AppState {
 
     /// 更新指定文件路径的后处理进度信息。
     /// Update the post-processing progress for the given file path.
+    #[allow(clippy::too_many_arguments)]
     pub fn pp_task_progress(
         &self,
         path: &str,

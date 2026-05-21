@@ -400,13 +400,12 @@ pub fn delete_recording_inner(
             return Err(crate::core::error::AppError::Other(e.to_string()));
         }
         // 删除同名的封面图旁路文件 / Delete sidecar cover image files with the same stem
-        if let Some(parent) = p.parent() {
-            if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
-                for ext in &["webp", "jpg", "jpeg", "png"] {
-                    let sidecar = parent.join(format!("{}.{}", stem, ext));
-                    if sidecar.exists() {
-                        let _ = fs::remove_file(&sidecar);
-                    }
+        if let Some(parent) = p.parent()
+            && let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+            for ext in &["webp", "jpg", "jpeg", "png"] {
+                let sidecar = parent.join(format!("{}.{}", stem, ext));
+                if sidecar.exists() {
+                    let _ = fs::remove_file(&sidecar);
                 }
             }
         }

@@ -387,22 +387,20 @@ pub fn run_postprocess_for_path_inner(
         let mut module_outputs = std::collections::HashMap::new();
         // 先继承上次 meta 中已有的模块输出路径
         // First inherit existing module output paths from previous meta
-        if let Some(prev_meta) = crate::recording::meta::read_meta(video_path) {
-            if let Some(prev_outputs) = prev_meta.module_outputs {
-                module_outputs.extend(prev_outputs);
-            }
+        if let Some(prev_meta) = crate::recording::meta::read_meta(video_path)
+            && let Some(prev_outputs) = prev_meta.module_outputs {
+            module_outputs.extend(prev_outputs);
         }
         // 本次执行结果覆盖（优先级更高）：使用 NodeResult.output 字段（已从 OUTPUT: 行解析）
         // Override with results from this run (higher priority): use NodeResult.output field
         // (already parsed from the OUTPUT: protocol line, not from message)
         for r in &results {
-            if r.success {
-                if let Some(ref out_path) = r.output {
-                    module_outputs.insert(
-                        r.module_id.clone(),
-                        out_path.to_string_lossy().to_string(),
-                    );
-                }
+            if r.success
+                && let Some(ref out_path) = r.output {
+                module_outputs.insert(
+                    r.module_id.clone(),
+                    out_path.to_string_lossy().to_string(),
+                );
             }
         }
         crate::recording::meta::set_pp_done(

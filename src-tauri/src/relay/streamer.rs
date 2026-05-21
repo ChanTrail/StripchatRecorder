@@ -330,17 +330,14 @@ async fn run_live_relay(
                     break WorkerExit::StreamEnded;
                 }
 
-                match api.get_stream_info(username, true).await {
-                    Ok(info) => {
-                        if let Some(new_url) = info.playlist_url {
-                            url_prefix = get_url_prefix(&new_url);
-                            current_url = new_url;
-                            consecutive_failures = 0;
-                        } else if !info.is_recordable {
-                            break WorkerExit::StreamEnded;
-                        }
+                if let Ok(info) = api.get_stream_info(username, true).await {
+                    if let Some(new_url) = info.playlist_url {
+                        url_prefix = get_url_prefix(&new_url);
+                        current_url = new_url;
+                        consecutive_failures = 0;
+                    } else if !info.is_recordable {
+                        break WorkerExit::StreamEnded;
                     }
-                    Err(_) => {}
                 }
 
                 tokio::select! {
@@ -538,6 +535,7 @@ async fn run_offline_relay(
 }
 
 /// 拉取一次播放列表，下载新分片，将 fMP4 数据发送给 ffmpeg stdin。
+#[allow(clippy::too_many_arguments)]
 async fn poll_and_feed(
     api: &StripchatApi,
     username: &str,
@@ -563,15 +561,15 @@ async fn poll_and_feed(
     let new_init_path = new_init_url.as_deref().map(init_url_path);
     let cached_path = cached_init_url.as_deref().map(init_url_path);
 
-    if new_init_path.is_some() && new_init_path != cached_path {
-        if let Some(ref url) = new_init_url {
-            match api.download_segment(url).await {
-                Ok(data) => {
-                    *init_data = Some(data);
-                    *cached_init_url = Some(url.clone());
-                }
-                Err(e) => return Err(format!("Failed to download init segment: {}", e)),
+    if new_init_path.is_some() && new_init_path != cached_path
+        && let Some(ref url) = new_init_url
+    {
+        match api.download_segment(url).await {
+            Ok(data) => {
+                *init_data = Some(data);
+                *cached_init_url = Some(url.clone());
             }
+            Err(e) => return Err(format!("Failed to download init segment: {}", e)),
         }
     }
 

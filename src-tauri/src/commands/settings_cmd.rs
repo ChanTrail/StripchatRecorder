@@ -249,9 +249,9 @@ pub fn get_disk_space_inner(output_dir: &str) -> Result<DiskSpace> {
         let ret = unsafe { libc::statvfs(path_cstr.as_ptr(), stat.as_mut_ptr()) };
         if ret == 0 {
             let stat = unsafe { stat.assume_init() };
-            let block = stat.f_frsize as u64;
-            let total = stat.f_blocks as u64 * block;
-            let avail = stat.f_bavail as u64 * block;
+            let block = stat.f_frsize;
+            let total = stat.f_blocks * block;
+            let avail = stat.f_bavail * block;
             return Ok(DiskSpace {
                 total_bytes: total,
                 available_bytes: avail,

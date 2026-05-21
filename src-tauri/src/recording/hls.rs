@@ -61,17 +61,16 @@ pub fn parse_playlist(
 
         // 解析 fMP4 初始化段 URL（EXT-X-MAP）
         // Parse fMP4 init segment URL (EXT-X-MAP)
-        if line.contains("EXT-X-MAP:URI") {
-            if let Some(start) = line.find('"') {
-                if let Some(end) = line[start + 1..].find('"') {
-                    let header_path = &line[start + 1..start + 1 + end];
-                    mp4_header_url = Some(if header_path.starts_with("http") {
-                        header_path.to_string()
-                    } else {
-                        format!("{}/{}", url_prefix, header_path)
-                    });
-                }
-            }
+        if line.contains("EXT-X-MAP:URI")
+            && let Some(start) = line.find('"')
+            && let Some(end) = line[start + 1..].find('"')
+        {
+            let header_path = &line[start + 1..start + 1 + end];
+            mp4_header_url = Some(if header_path.starts_with("http") {
+                header_path.to_string()
+            } else {
+                format!("{}/{}", url_prefix, header_path)
+            });
         }
 
         if line.is_empty() || line.starts_with('#') {
@@ -141,7 +140,7 @@ fn decrypt_segment_url(encoded_url: &str, key: &str) -> Result<String> {
 
     // 反转字符串并补齐 Base64 填充 / Reverse string and pad for Base64
     let mut reversed: String = encrypted_str.chars().rev().collect();
-    while reversed.len() % 4 != 0 {
+    while !reversed.len().is_multiple_of(4) {
         reversed.push('=');
     }
 
@@ -167,7 +166,7 @@ fn decrypt_segment_url(encoded_url: &str, key: &str) -> Result<String> {
 /// 从分片 URL 的文件名中提取序号（最后一个 `_` 后、`.` 前的数字）。
 /// Extract the sequence number from a segment URL's filename (number after the last `_`, before `.`).
 fn extract_sequence(url: &str) -> Option<u32> {
-    let filename = url.split('/').last()?;
+    let filename = url.split('/').next_back()?;
     let parts: Vec<&str> = filename.split('_').collect();
     let last = parts.last()?;
     let num_str = last.split('.').next()?;
