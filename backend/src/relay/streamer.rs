@@ -150,6 +150,7 @@ async fn worker_loop(
                 tracing::info!("Relay worker [{}]: upstream live", username);
                 relay_manager.set_playlist_url(&username, Some(playlist_url.clone()));
                 relay_manager.set_state(&username, RelayStreamState::Live);
+                relay_manager.set_streamer_status(&username, info.is_online, info.status);
 
                 let cont = feed_live(
                     &username, &playlist_url, &app_state, &relay_manager, &ts_tx, &mut stop_rx,
@@ -162,6 +163,7 @@ async fn worker_loop(
                 let status_text = info.status.clone();
                 tracing::info!("Relay worker [{}]: upstream offline ({})", username, status_text);
                 relay_manager.set_state(&username, RelayStreamState::Offline { status: status_text.clone() });
+                relay_manager.set_streamer_status(&username, info.is_online, info.status);
 
                 let cont = feed_offline(
                     &username, &status_text, &relay_manager, &ts_tx, &mut stop_rx,
@@ -268,8 +270,10 @@ async fn feed_offline(
                                 tracing::info!("Relay offline [{}]: status={} playlist={}", username, info.status, info.playlist_url.is_some());
                                 if info.playlist_url.is_some() {
                                     tracing::info!("Relay offline [{}]: upstream live → switching", username);
+                                    relay_manager.set_streamer_status(username, info.is_online, info.status);
                                     break true;
                                 }
+                                relay_manager.set_streamer_status(username, info.is_online, info.status.clone());
                                 relay_manager.set_state(username, RelayStreamState::Offline { status: info.status });
                             }
                             Err(e) => tracing::warn!("Relay offline [{}]: check failed: {}", username, e),

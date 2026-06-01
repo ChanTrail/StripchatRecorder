@@ -26,6 +26,10 @@ pub struct RelaySession {
     pub playlist_url: Option<String>,
     /// 当前流状态 / Current stream state
     pub stream_state: RelayStreamState,
+    /// 主播真实在线状态（由 worker 实时更新）/ Streamer real online status (updated by worker in real time)
+    pub streamer_is_online: bool,
+    /// 主播真实直播间状态文字（由 worker 实时更新）/ Streamer real status text (updated by worker in real time)
+    pub streamer_status: String,
     /// 活跃连接数 / Number of active connections
     pub active_connections: u32,
     /// 会话创建时间（用于计算运行时长）/ Session creation time (for uptime calculation)
@@ -69,6 +73,8 @@ impl RelayManager {
             RelaySession {
                 playlist_url: None,
                 stream_state: RelayStreamState::Connecting,
+                streamer_is_online: false,
+                streamer_status: String::new(),
                 active_connections: 0,
                 created_at: now_instant,
                 created_at_ms,
@@ -122,6 +128,16 @@ impl RelayManager {
         }
     }
 
+    /// 更新主播真实状态（由 worker 在每次 API 查询后调用）。
+    /// Update the streamer's real status (called by worker after each API query).
+    pub fn set_streamer_status(&self, username: &str, is_online: bool, status: String) {
+        let mut sessions = self.sessions.write();
+        if let Some(s) = sessions.get_mut(username) {
+            s.streamer_is_online = is_online;
+            s.streamer_status = status;
+        }
+    }
+
     /// 更新播放列表 URL。
     pub fn set_playlist_url(&self, username: &str, url: Option<String>) {
         let mut sessions = self.sessions.write();
@@ -156,6 +172,8 @@ impl RelayManager {
             .map(|(username, s)| RelaySessionStatus {
                 username: username.clone(),
                 stream_state: s.stream_state.clone(),
+                streamer_is_online: s.streamer_is_online,
+                streamer_status: s.streamer_status.clone(),
                 active_connections: s.active_connections,
                 uptime_secs: s.created_at.elapsed().as_secs(),
                 created_at_ms: s.created_at_ms,
@@ -170,6 +188,10 @@ impl RelayManager {
 pub struct RelaySessionStatus {
     pub username: String,
     pub stream_state: RelayStreamState,
+    /// 主播真实在线状态 / Streamer real online status
+    pub streamer_is_online: bool,
+    /// 主播真实直播间状态文字 / Streamer real status text
+    pub streamer_status: String,
     pub active_connections: u32,
     /// 会话已运行秒数（服务端计算，用于初始值）/ Uptime in seconds (server-computed, used as initial value)
     pub uptime_secs: u64,

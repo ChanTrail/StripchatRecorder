@@ -19,34 +19,26 @@
 	import { Card, CardContent } from "@/components/ui/card";
 	import { Copy, Check, Radio, Wifi, WifiOff, AlertCircle, Loader, Square } from "lucide-vue-next";
 	import { useI18n } from "vue-i18n";
-	import { useStreamersStore } from "@/stores/streamers";
 	import { copyToClipboard } from "@/lib/utils";
 
 	const { t } = useI18n();
-	const streamersStore = useStreamersStore();
 
-	// 按用户名查找主播条目 / Find streamer entry by username
-	function findStreamer(username: string) {
-		return streamersStore.streamers.find(s => s.username === username) ?? null;
-	}
-
-	// 主播状态文字：在线显示状态，离线显示"离线" / Streamer status label
-	function streamerStatusLabel(username: string): string {
-		const s = findStreamer(username);
-		if (!s) return t("streamerCard.offline");
-		return s.is_online ? s.status : t("streamerCard.offline");
-	}
-
-	// 主播状态 Badge 内联样式 / Streamer status badge inline style
-	function streamerStatusStyle(username: string): Record<string, string> {
-		const s = findStreamer(username);
-		if (!s?.is_online) {
+	// 主播真实状态 Badge 内联样式（基于 session 里的实时数据）
+	// Streamer real status badge inline style (based on real-time data from session)
+	function streamerStatusStyle(isOnline: boolean, status: string): Record<string, string> {
+		if (!isOnline) {
 			return { backgroundColor: "rgb(39 39 42)", color: "rgb(161 161 170)", borderColor: "transparent" };
 		}
-		if (s.status === "公开秀") {
+		if (status === "公开秀") {
 			return { backgroundColor: "rgb(20 83 45)", color: "rgb(134 239 172)", borderColor: "transparent" };
 		}
 		return { backgroundColor: "rgb(120 53 15)", color: "rgb(252 211 77)", borderColor: "transparent" };
+	}
+
+	// 主播真实状态文字
+	function streamerStatusLabel(isOnline: boolean, status: string): string {
+		if (!isOnline) return t("streamerCard.offline");
+		return status || t("streamerCard.offline");
 	}
 
 	// Rust serde snake_case enum 序列化格式：
@@ -75,6 +67,8 @@
 	interface RelaySession {
 		username: string;
 		stream_state: RawStreamState;
+		streamer_is_online: boolean;
+		streamer_status: string;
 		active_connections: number;
 		uptime_secs: number;
 		created_at_ms: number;
@@ -179,11 +173,6 @@
 
 	onMounted(() => {
 		fetchSessions();
-		// 确保主播列表数据已加载（用于显示主播真实状态）
-		// Ensure streamer list is loaded (for displaying real streamer status)
-		if (streamersStore.streamers.length === 0) {
-			void streamersStore.fetchStreamers();
-		}
 		// 每 5 秒轮询一次会话列表（仅更新状态/连接数，运行时间由本地计时器驱动）
 		// Poll session list every 5s (only updates state/connections; uptime driven by local timer)
 		pollTimer = setInterval(fetchSessions, 5000);
@@ -265,14 +254,13 @@
 							<span class="font-semibold text-sm truncate">{{ session.username }}</span>
 						</div>
 						<div class="flex items-center gap-1.5 shrink-0">
-							<!-- 主播真实状态（来自主播列表）/ Streamer real status (from streamer list) -->
+							<!-- 主播真实状态（后端实时查询）/ Streamer real status (real-time from backend) -->
 							<Badge
-								v-if="findStreamer(session.username)"
 								variant="outline"
-								:style="streamerStatusStyle(session.username)"
+								:style="streamerStatusStyle(session.streamer_is_online, session.streamer_status)"
 								class="text-xs"
 							>
-								{{ streamerStatusLabel(session.username) }}
+								{{ streamerStatusLabel(session.streamer_is_online, session.streamer_status) }}
 							</Badge>
 							<!-- 转发流内部状态 / Relay stream internal state -->
 							<Badge variant="outline" :style="stateVariant(session.stream_state)" class="text-xs">
