@@ -177,18 +177,18 @@
 </script>
 
 <template>
-	<div class="flex flex-col gap-6 max-w-2xl mx-auto">
-		<div class="flex items-center justify-between">
+	<div class="flex flex-col gap-6">
+		<header class="flex items-start justify-between">
 			<div>
-				<h1 class="text-lg font-semibold">{{ t("postprocess.title") }}</h1>
-				<p class="text-sm text-muted-foreground mt-0.5">
+				<h1 class="text-xl font-bold mb-0.5">{{ t("postprocess.title") }}</h1>
+				<p class="text-sm text-muted-foreground">
 					{{ t("postprocess.description") }}
 				</p>
 			</div>
-			<span class="text-xs text-muted-foreground">
+			<span class="text-sm text-muted-foreground mt-0.5">
 				{{ store.saving ? t("postprocess.saving") : t("postprocess.saved") }}
 			</span>
-		</div>
+		</header>
 
 		<div class="relative">
 			<PipelineNodeBox :label="t('postprocess.input.label')" :description="t('postprocess.input.description')" fixed />

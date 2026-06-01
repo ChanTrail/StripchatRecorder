@@ -160,6 +160,7 @@
 		previewViewportRef,
 		previewImageRef,
 		isDragging,
+		viewportSize,
 		resetPreviewTransform,
 		onPreviewImageLoad,
 		onPreviewWheel,
@@ -609,11 +610,11 @@
 </script>
 
 <template>
-	<div class="flex flex-col h-full">
+	<div class="flex flex-col">
 		<Dialog :open="previewOpen" @update:open="previewOpen = $event">
 			<DialogContent
-				class="p-0 overflow-hidden flex flex-col"
-				style="width: 90vw; max-width: 90vw; max-height: 90vh; height: 90vh"
+				class="p-0 overflow-hidden flex flex-col w-fit"
+				style="max-width: 90vw; max-height: 90vh"
 			>
 				<DialogHeader class="px-4 pt-4 pb-2 shrink-0">
 					<DialogTitle class="text-sm font-mono truncate">{{
@@ -622,8 +623,10 @@
 				</DialogHeader>
 				<div
 					ref="previewViewportRef"
-					class="relative flex-1 overflow-hidden flex items-center justify-center bg-black/5 px-4 pb-4 min-h-0"
+					class="relative overflow-hidden flex items-center justify-center bg-black/5 px-4 pb-4"
 					:style="{
+						width: viewportSize.width,
+						height: viewportSize.height,
 						cursor: isDragging
 							? 'grabbing'
 							: previewScale > 1
@@ -668,7 +671,7 @@
 
 		<header
 			ref="headerEl"
-			class="flex items-start justify-between gap-4 shrink-0 px-6 pt-6 pb-4 bg-background"
+			class="flex items-start justify-between gap-4 shrink-0 pb-4 bg-background sticky top-0 z-20"
 		>
 			<div class="flex-1 min-w-0">
 				<h1 class="text-xl font-bold mb-0.5">{{ t("recordings.title") }}</h1>
@@ -735,7 +738,7 @@
 			</div>
 		</header>
 
-		<div class="px-6 pb-6 overflow-auto flex-1">
+		<div class="pb-6">
 			<div
 				v-if="loading && files.length === 0"
 				class="text-center text-muted-foreground py-16"
@@ -752,7 +755,7 @@
 			<Table v-else>
 				<TableHeader
 					class="sticky z-10 bg-background"
-					:style="{ top: '0' }"
+					:style="{ top: `${headerHeight}px` }"
 				>
 					<TableRow>
 						<TableHead class="w-8">

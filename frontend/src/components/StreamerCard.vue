@@ -25,6 +25,7 @@
 	import { Label } from "@/components/ui/label";
 	import { ref, watch, computed } from "vue";
 	import { useFastThumbnail } from "@/composables/useFastThumbnail";
+	import { copyToClipboard } from "@/lib/utils";
 	import { X, Circle, Eye, Copy, Check } from "lucide-vue-next";
 	import { useI18n } from "vue-i18n";
 
@@ -56,7 +57,7 @@
 
 	async function copyStreamUrl() {
 		try {
-			await navigator.clipboard.writeText(streamUrl.value);
+			await copyToClipboard(streamUrl.value);
 			copied.value = true;
 			setTimeout(() => { copied.value = false; }, 2000);
 		} catch {}

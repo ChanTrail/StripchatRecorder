@@ -33,6 +33,15 @@ export function useImagePreview() {
 	/** 是否正在拖拽 / Whether currently dragging */
 	const isDragging = ref(false);
 
+	/**
+	 * 根据图片自然尺寸计算图片容器的自适应尺寸（弹窗通过 w-fit/h-fit 跟随）。
+	 * 以图片宽高比为基准，在 90vw × (90vh - header) 范围内尽量贴合图片尺寸。
+	 *
+	 * Computed viewport size that adapts to the image's natural aspect ratio,
+	 * fitting within 90vw × (90vh - header). The dialog uses w-fit/h-fit to follow.
+	 */
+	const viewportSize = ref({ width: "min(90vw, 90vh)", height: "min(90vh, 90vw)" });
+
 	// 拖拽起始状态：鼠标位置和平移偏移量快照
 	// Drag start state: mouse position and translation offset snapshot
 	let dragStart = { x: 0, y: 0, tx: 0, ty: 0 };
@@ -109,11 +118,35 @@ export function useImagePreview() {
 	}
 
 	/**
-	 * 图片加载完成时重置变换。
-	 * Reset transform when image finishes loading.
+	 * 图片加载完成时重置变换并计算图片容器自适应尺寸。
+	 * Reset transform and compute adaptive viewport size when image finishes loading.
 	 */
 	function onPreviewImageLoad() {
 		resetPreviewTransform();
+
+		const img = previewImageRef.value;
+		if (!img || img.naturalWidth <= 0 || img.naturalHeight <= 0) return;
+
+		// header 高度约 52px（px-4 pt-4 pb-2 + DialogTitle 行高）
+		// Approximate header height: 52px (px-4 pt-4 pb-2 + DialogTitle line height)
+		const HEADER_H = 52;
+		const maxW = window.innerWidth * 0.9;
+		const maxH = window.innerHeight * 0.9 - HEADER_H;
+		const ratio = img.naturalWidth / img.naturalHeight;
+
+		// 先按最大宽度计算高度，再检查是否超出最大高度
+		// Try fitting by width first, then clamp by height
+		let w = Math.min(img.naturalWidth, maxW);
+		let h = w / ratio;
+		if (h > maxH) {
+			h = maxH;
+			w = h * ratio;
+		}
+
+		viewportSize.value = {
+			width: `${Math.round(w)}px`,
+			height: `${Math.round(h)}px`,
+		};
 	}
 
 	/**
@@ -211,6 +244,12 @@ export function useImagePreview() {
 		previewUrl.value = url;
 		previewTitle.value = title;
 		resetPreviewTransform();
+		// 打开时先用最大尺寸占位，图片加载后再自适应
+		// Use max size as placeholder until image loads and adapts
+		viewportSize.value = {
+			width: `${Math.round(window.innerWidth * 0.9)}px`,
+			height: `${Math.round(window.innerHeight * 0.9 - 52)}px`,
+		};
 		previewOpen.value = true;
 	}
 
@@ -223,6 +262,7 @@ export function useImagePreview() {
 		previewViewportRef,
 		previewImageRef,
 		isDragging,
+		viewportSize,
 		resetPreviewTransform,
 		onPreviewImageLoad,
 		onPreviewWheel,

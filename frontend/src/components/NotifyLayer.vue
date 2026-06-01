@@ -10,7 +10,9 @@
     2. Modal confirmation dialogs (driven by shared state from useNotify)
 -->
 <script setup lang="ts">
+	import { ref } from "vue";
 	import { useNotify } from "../composables/useNotify";
+	import { useScrollbar } from "@/composables/useScrollbar";
 	import { Toaster } from "@/components/ui/sonner";
 	import {
 		Dialog,
@@ -27,6 +29,9 @@
 	// Get dialog state and resolve function from useNotify
 	const { dialog, _resolveDialog } = useNotify();
 	const { t } = useI18n();
+
+	const dialogScrollEl = ref<HTMLElement | null>(null);
+	useScrollbar(dialogScrollEl);
 </script>
 
 <template>
@@ -37,7 +42,7 @@
 			<DialogHeader>
 				<DialogTitle>{{ dialog?.title }}</DialogTitle>
 			</DialogHeader>
-			<div class="overflow-y-auto max-h-[50vh] pr-1">
+			<div class="overflow-y-auto max-h-[50vh] pr-1 scrollbar-overlay" ref="dialogScrollEl">
 				<DialogDescription class="whitespace-pre-line">
 					{{ dialog?.message }}
 				</DialogDescription>

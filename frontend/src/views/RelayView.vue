@@ -20,6 +20,7 @@
 	import { Copy, Check, Radio, Wifi, WifiOff, AlertCircle, Loader, Square } from "lucide-vue-next";
 	import { useI18n } from "vue-i18n";
 	import { useStreamersStore } from "@/stores/streamers";
+	import { copyToClipboard } from "@/lib/utils";
 
 	const { t } = useI18n();
 	const streamersStore = useStreamersStore();
@@ -128,7 +129,7 @@
 
 	async function copyUrl(username: string, url: string) {
 		try {
-			await navigator.clipboard.writeText(url);
+			await copyToClipboard(url);
 			copiedMap.value[username] = true;
 			setTimeout(() => {
 				copiedMap.value[username] = false;

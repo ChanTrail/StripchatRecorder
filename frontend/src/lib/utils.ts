@@ -21,3 +21,38 @@ import { twMerge } from "tailwind-merge";
 export function cn(...inputs: ClassValue[]) {
 	return twMerge(clsx(inputs));
 }
+
+/**
+ * 将文本写入剪贴板，自动降级兼容非安全上下文（如 http://0.0.0.0）。
+ * Writes text to clipboard with fallback for non-secure contexts (e.g. http://0.0.0.0).
+ *
+ * @param text - 要复制的文本 / Text to copy
+ * @returns 是否成功 / Whether it succeeded
+ */
+export async function copyToClipboard(text: string): Promise<boolean> {
+	// 优先使用现代 Clipboard API（需要安全上下文）
+	// Prefer modern Clipboard API (requires secure context)
+	if (navigator.clipboard?.writeText) {
+		try {
+			await navigator.clipboard.writeText(text);
+			return true;
+		} catch {
+			// 权限被拒绝时降级 / Fall through to legacy fallback on permission denial
+		}
+	}
+	// 降级方案：通过临时 textarea + execCommand 实现
+	// Legacy fallback: use temporary textarea + execCommand
+	try {
+		const el = document.createElement("textarea");
+		el.value = text;
+		el.style.cssText = "position:fixed;top:-9999px;left:-9999px;opacity:0";
+		document.body.appendChild(el);
+		el.focus();
+		el.select();
+		const ok = document.execCommand("copy");
+		document.body.removeChild(el);
+		return ok;
+	} catch {
+		return false;
+	}
+}

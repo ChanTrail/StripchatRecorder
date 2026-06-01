@@ -10,6 +10,7 @@ import { ref, onMounted } from "vue";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ImageIcon, Loader2, Search, X } from "lucide-vue-next";
+import { useScrollbar } from "@/composables/useScrollbar";
 import {
   Dialog,
   DialogContent,
@@ -373,6 +374,9 @@ const dialogLoading = ref(false);
 const dialogError = ref<string | null>(null);
 const dialogFaceImage = ref<string | null>(null);
 
+const dialogScrollEl = ref<HTMLElement | null>(null);
+useScrollbar(dialogScrollEl);
+
 async function openSimilarDialog(m: ModelResult) {
   const faceUrl = m.persons[0]?.urls.faceImage;
   if (!faceUrl) return;
@@ -696,7 +700,7 @@ async function openSimilarDialog(m: ModelResult) {
               <div class="px-4 pt-3 pb-2 text-xs text-muted-foreground shrink-0">
                 {{ t("finder.dialog.results", { count: dialogResults.length }) }}
               </div>
-              <div class="overflow-y-auto flex-1 px-4 pb-4">
+              <div ref="dialogScrollEl" class="overflow-y-auto flex-1 px-4 pb-4 scrollbar-overlay">
                 <div class="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-2">
                   <div
                     v-for="(p, i) in dialogResults"

@@ -16,7 +16,7 @@
     - Listening for startup-warnings to handle non-existent streamers and orphaned post-processing records
 -->
 <script setup lang="ts">
-	import { onMounted, onUnmounted } from "vue";
+	import { onMounted, onUnmounted, ref } from "vue";
 	import { RouterView, useRouter, useRoute } from "vue-router";
 	import NotifyLayer from "./components/NotifyLayer.vue";
 	import { Button } from "@/components/ui/button";
@@ -25,12 +25,16 @@
 	import { toast as sonnerToast } from "vue-sonner";
 	import { useStreamersStore } from "@/stores/streamers";
 	import { useI18n } from "vue-i18n";
+	import { useScrollbar } from "@/composables/useScrollbar";
 
 	const router = useRouter();
 	const route = useRoute();
 	const { toast, confirm } = useNotify();
 	const streamersStore = useStreamersStore();
 	const { t, locale } = useI18n();
+
+	const mainScrollEl = ref<HTMLElement | null>(null);
+	useScrollbar(mainScrollEl);
 
 	/** 侧边栏导航项配置 / Sidebar navigation items configuration */
 	const navItems = [
@@ -219,10 +223,7 @@
 				</nav>
 			</aside>
 			<main class="flex-1 overflow-hidden">
-				<div
-					class="h-full overflow-y-auto"
-					:class="route.path !== '/recordings' ? 'p-6' : ''"
-				>
+				<div ref="mainScrollEl" class="h-full overflow-y-scroll p-6 scrollbar-overlay">
 					<RouterView v-slot="{ Component }">
 						<Transition name="page" mode="out-in">
 							<component :is="Component" :key="route.path" />
