@@ -235,13 +235,14 @@ export function useRecordings() {
 		}
 	}
 
-	function scheduleDirRefresh() {
+	function scheduleDirRefresh(afterLoad?: () => void) {
 		if (dirRefreshTimer) clearTimeout(dirRefreshTimer);
 		dirRefreshTimer = setTimeout(async () => {
 			dirRefreshTimer = null;
 			await load();
 			if (files.value.some((f) => f.is_recording)) startTick();
 			else stopTick();
+			afterLoad?.();
 		}, 300);
 	}
 

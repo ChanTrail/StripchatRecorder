@@ -127,6 +127,29 @@
 		removeFile: ppRemoveFile,
 	} = pp;
 
+	/**
+	 * 从当前 files.value 列表中同步模块输出路径到 moduleOutputs。
+	 * 仅补充缺失的条目，不覆盖已有的（如推断值或实时更新值）。
+	 * 用于 load() 之后确保 contact_sheet 等预览图按钮能正确显示。
+	 *
+	 * Sync module output paths from the current files.value list into moduleOutputs.
+	 * Only fills in missing entries; does not overwrite existing ones (e.g. inferred or live-updated values).
+	 * Called after load() to ensure preview buttons (e.g. contact_sheet) are correctly shown.
+	 */
+	function syncModuleOutputsFromFiles() {
+		for (const f of files.value) {
+			if (f.is_recording) continue;
+			if (f.module_outputs && Object.keys(f.module_outputs).length > 0) {
+				// meta 是持久化真相来源，直接覆盖写入（与 onMounted 初始化行为一致）
+				// Meta is the persistent source of truth; overwrite directly (consistent with onMounted init)
+				moduleOutputs.value[f.path] = {
+					...moduleOutputs.value[f.path],
+					...f.module_outputs,
+				};
+			}
+		}
+	}
+
 	const preview = useImagePreview();
 	const {
 		previewOpen,
@@ -361,7 +384,7 @@
 		}
 
 		unlisteners.push(
-			await on("recordings-dir-changed", () => scheduleDirRefresh()),
+			await on("recordings-dir-changed", () => scheduleDirRefresh(syncModuleOutputsFromFiles)),
 		);
 
 		unlisteners.push(
@@ -447,6 +470,7 @@
 				} else {
 					await load();
 					startTick();
+					syncModuleOutputsFromFiles();
 				}
 			}),
 		);
@@ -455,6 +479,7 @@
 			await on("recording-started", async () => {
 				await load();
 				startTick();
+				syncModuleOutputsFromFiles();
 			}),
 		);
 
@@ -462,6 +487,13 @@
 			await on("recording-stopped", async (payload) => {
 				const p = payload as { video_path?: string };
 				await load();
+				syncModuleOutputsFromFiles();
+				// 录制结束时清理速度数据 / Clean up recording speed when recording stops
+				if (p.video_path) {
+					const nextSpeed = { ...recordingSpeed.value };
+					delete nextSpeed[p.video_path];
+					recordingSpeed.value = nextSpeed;
+				}
 				// 合并完成后清理进度数据 / Clean up merge progress after merge completes
 				if (p.video_path) {
 					const next = { ...mergeProgress.value };
@@ -544,7 +576,10 @@
 				ppCancelledByDelete.delete(p.path);
 				handlePostprocessDone(
 					p,
-					() => load(),
+					async () => {
+						await load();
+						syncModuleOutputsFromFiles();
+					},
 					() => wasCancelledByDelete,
 				);
 			}),

@@ -398,7 +398,7 @@
 						v-for="mod in availableModules"
 						:key="mod.id"
 						variant="ghost"
-						class="flex flex-col items-start px-3 py-2.5 rounded-lg text-left h-auto w-full"
+						class="flex flex-col items-start px-3 py-2.5 rounded-lg text-left h-auto w-full whitespace-normal"
 						@click="addModule(mod.id)"
 					>
 						<span class="text-sm font-medium">{{ mod.name }}</span>
