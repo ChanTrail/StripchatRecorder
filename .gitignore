@@ -23,4 +23,6 @@ dist-ssr
 *.sln
 *.sw?
 
-modules/*/target
+# Build output
+build/
+build_tmp/

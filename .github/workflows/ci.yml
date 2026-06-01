@@ -34,12 +34,15 @@ jobs:
         with:
           node-version: lts/*
           cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Install dependencies
         run: npm ci
+        working-directory: frontend
 
       - name: Type-check & build
         run: npm run build
+        working-directory: frontend
 
   # ─────────────────────────────────────────────
   # Main Rust binary: check + clippy
@@ -55,11 +58,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev \
-            libayatana-appindicator3-dev librsvg2-dev libpango1.0-dev \
-            libcairo2-dev libgdk-pixbuf-xlib-2.0-dev libsoup-3.0-dev \
-            pkg-config build-essential libssl-dev
+          sudo apt-get install -y pkg-config build-essential libssl-dev
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -69,14 +68,17 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          workspaces: backend -> ../build_tmp/backend/target
           key: main-ci
 
+      - name: Ensure build_tmp/frontend/dist exists (required by RustEmbed)
+        run: mkdir -p build_tmp/frontend/dist
+
       - name: Check
-        run: cargo check --manifest-path src-tauri/Cargo.toml
+        run: CARGO_TARGET_DIR=build_tmp/backend/target cargo check --manifest-path backend/Cargo.toml
 
       - name: Clippy
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
+        run: CARGO_TARGET_DIR=build_tmp/backend/target cargo clippy --manifest-path backend/Cargo.toml -- -D warnings
 
   # ─────────────────────────────────────────────
   # Build main binary (Linux only for speed)
@@ -95,21 +97,16 @@ jobs:
         with:
           node-version: lts/*
           cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Install frontend dependencies
         run: npm ci
-
-      - name: Build frontend
-        run: npm run build
+        working-directory: frontend
 
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev \
-            libayatana-appindicator3-dev librsvg2-dev libpango1.0-dev \
-            libcairo2-dev libgdk-pixbuf-xlib-2.0-dev libsoup-3.0-dev \
-            pkg-config build-essential libssl-dev
+          sudo apt-get install -y pkg-config build-essential libssl-dev
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -117,10 +114,10 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          workspaces: backend -> ../build_tmp/backend/target
 
-      - name: Build Tauri binary
-        run: npx tauri build --no-bundle
+      - name: Full release build
+        run: node scripts/release.js
 
   # ─────────────────────────────────────────────
   # Modules: check + clippy
@@ -163,4 +160,3 @@ jobs:
               cargo clippy --manifest-path "$module_dir/Cargo.toml" -- -D warnings
             fi
           done
-

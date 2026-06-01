@@ -1,4 +1,5 @@
 node_modules/
+frontend/node_modules/
 .git/
-dist/
-src-tauri/target/
+build/
+build_tmp/
