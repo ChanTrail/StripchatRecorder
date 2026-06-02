@@ -86,10 +86,7 @@ pub struct Settings {
     /// 界面语言（"zh-CN" 或 "en-US"）/ UI language ("zh-CN" or "en-US")
     #[serde(default = "default_language")]
     pub language: String,
-    /// 运行模式（"desktop" 或 "server"）/ Run mode ("desktop" or "server")
-    #[serde(default = "default_run_mode")]
-    pub run_mode: String,
-    /// Server 模式监听端口 / Server mode listen port
+    /// 监听端口 / Listen port
     #[serde(default = "default_server_port")]
     pub server_port: u16,
     /// Mouflon Keys 同步 Worker URL（为空则不启用自动同步）
@@ -126,11 +123,6 @@ fn default_language() -> String {
     "zh-CN".to_string()
 }
 
-/// 运行模式的默认值 / Default value for run mode
-fn default_run_mode() -> String {
-    String::new()
-}
-
 /// Server 端口的默认值 / Default value for server port
 fn default_server_port() -> u16 {
     3030
@@ -162,7 +154,6 @@ impl Default for Settings {
             merge_format: default_merge_format(),
             max_tmp_dir_gb: default_max_tmp_dir_gb(),
             language: default_language(),
-            run_mode: default_run_mode(),
             server_port: default_server_port(),
             mouflon_sync_url: default_mouflon_sync_url(),
             mouflon_sync_token: None,
