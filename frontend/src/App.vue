@@ -129,7 +129,6 @@
 			const settings = await call<{ language?: string }>("get_settings");
 			if (settings?.language) {
 				locale.value = settings.language;
-				localStorage.setItem("locale", settings.language);
 			}
 		} catch {}
 

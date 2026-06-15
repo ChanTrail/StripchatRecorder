@@ -1,7 +1,7 @@
 FROM debian:latest AS builder
 
 LABEL maintainer="chantrail@chantrail.com" \
-      version="0.2.1" \
+      version="0.3.0" \
       description="Stripchat Recorder Docker builder"
 
 RUN sed -i 's/deb.debian.org/mirrors.ustc.edu.cn/g' /etc/apt/sources.list.d/debian.sources
@@ -50,7 +50,7 @@ RUN . /root/.cargo/env && \
 FROM debian:latest
 
 LABEL maintainer="chantrail@chantrail.com" \
-      version="0.2.1" \
+      version="0.3.0" \
       description="Stripchat Recorder"
 
 RUN sed -i 's/deb.debian.org/mirrors.ustc.edu.cn/g' /etc/apt/sources.list.d/debian.sources

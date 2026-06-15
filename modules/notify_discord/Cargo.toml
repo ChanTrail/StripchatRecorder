@@ -1,10 +1,10 @@
 [package]
 name = "notify_discord"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 
 [[bin]]
-name = "notify_discord_v020"
+name = "notify_discord_v030"
 path = "src/main.rs"
 
 [dependencies]

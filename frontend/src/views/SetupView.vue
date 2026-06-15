@@ -65,7 +65,6 @@ onMounted(async () => {
 async function setLanguage(lang: string) {
 	language.value = lang;
 	locale.value = lang;
-	localStorage.setItem("locale", lang);
 	const { modules: moduleLocales, warning } = await loadLocaleFromServer(lang);
 	moduleLocaleStore.setLocales(lang, moduleLocales);
 	if (warning) {

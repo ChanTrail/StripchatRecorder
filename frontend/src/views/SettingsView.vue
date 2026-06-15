@@ -51,7 +51,10 @@
 
 	async function setLocale(lang: string) {
 		locale.value = lang;
-		localStorage.setItem("locale", lang);
+		// 将语言写入 settings 持久化 / Persist language to settings
+		form.language = lang;
+		await store.saveSettings({ ...form, language: lang });
+		toast(t("settings.saved"), "success");
 		const { modules: moduleLocales, warning } = await loadLocaleFromServer(lang);
 		moduleLocaleStore.setLocales(lang, moduleLocales);
 		if (warning) {

@@ -1,6 +1,6 @@
 [package]
 name = "stripchat-recorder"
-version = "0.2.1"
+version = "0.3.0"
 description = "Stripchat Stream Recorder"
 authors = ["ChanTrail"]
 edition = "2024"
@@ -16,7 +16,7 @@ tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.13", features = ["json", "socks", "rustls"], default-features = false }
 chrono = { version = "0.4", features = ["serde"] }
 regex = "1"
-sha2 = "0.10"
+sha2 = "0.11"
 base64 = "0.22"
 parking_lot = "0.12"
 dirs = "6"
