@@ -22,10 +22,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { loadLocaleFromServer, fetchAvailableLocales, type LocaleEntry } from "@/i18n";
+import { useModuleLocaleStore } from "@/stores/moduleLocale";
 
 const router = useRouter();
 const { t, locale } = useI18n();
 const store = useSettingsStore();
+const moduleLocaleStore = useModuleLocaleStore();
 
 // ── 步骤控制 / Step control ──────────────────────────────────────────────────
 const TOTAL_STEPS = 3;
@@ -37,16 +40,20 @@ const error = ref("");
 const stepTransition = ref("step-forward");
 
 // ── 表单字段 / Form fields ───────────────────────────────────────────────────
-const language = ref<"zh-CN" | "en-US">("zh-CN");
+const language = ref("zh-CN");
 const outputDir = ref("");
 const apiProxy = ref("");
 const scMirror = ref("");
 const cdnProxy = ref("");
 
+/** 从服务器获取的可用语言列表 / Available locales fetched from server */
+const availableLocales = ref<LocaleEntry[]>([]);
+
 onMounted(async () => {
+	availableLocales.value = await fetchAvailableLocales();
 	await store.fetchSettings();
 	const s = store.settings;
-	language.value = (s.language as "zh-CN" | "en-US") || "zh-CN";
+	language.value = s.language || "zh-CN";
 	locale.value = language.value;
 	outputDir.value = s.output_dir || "";
 	apiProxy.value = s.api_proxy_url || "";
@@ -55,10 +62,16 @@ onMounted(async () => {
 });
 
 // ── 语言切换 / Language switch ───────────────────────────────────────────────
-function setLanguage(lang: "zh-CN" | "en-US") {
+async function setLanguage(lang: string) {
 	language.value = lang;
 	locale.value = lang;
 	localStorage.setItem("locale", lang);
+	const { modules: moduleLocales, warning } = await loadLocaleFromServer(lang);
+	moduleLocaleStore.setLocales(lang, moduleLocales);
+	if (warning) {
+		// SetupView 没有 toast，用 error ref 展示
+		error.value = t("settings.localeFileInvalid", { file: `${lang}.json` }) + ": " + warning;
+	}
 }
 
 // ── 步骤校验 / Step validation ───────────────────────────────────────────────
@@ -166,16 +179,16 @@ async function finish() {
 							<RadioGroup
 								:model-value="language"
 								class="flex flex-col gap-3"
-								@update:model-value="(v) => v && setLanguage(v as 'zh-CN' | 'en-US')"
+								@update:model-value="(v) => v && setLanguage(String(v))"
 							>
 								<label
-									v-for="opt in [{ value: 'zh-CN', label: '中文（简体）' }, { value: 'en-US', label: 'English' }]"
-									:key="opt.value"
+									v-for="loc in availableLocales"
+									:key="loc.code"
 									class="flex items-center gap-3 rounded-lg border p-4 cursor-pointer transition-colors"
-									:class="language === opt.value ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50'"
+									:class="language === loc.code ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50'"
 								>
-									<RadioGroupItem :value="opt.value" />
-									<span class="font-medium">{{ opt.label }}</span>
+									<RadioGroupItem :value="loc.code" />
+									<span class="font-medium">{{ loc.name }}</span>
 								</label>
 							</RadioGroup>
 						</template>

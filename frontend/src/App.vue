@@ -26,12 +26,15 @@
 	import { useStreamersStore } from "@/stores/streamers";
 	import { useI18n } from "vue-i18n";
 	import { useScrollbar } from "@/composables/useScrollbar";
+	import { loadLocaleFromServer } from "@/i18n";
+	import { useModuleLocaleStore } from "@/stores/moduleLocale";
 
 	const router = useRouter();
 	const route = useRoute();
 	const { toast, confirm } = useNotify();
 	const streamersStore = useStreamersStore();
 	const { t, locale } = useI18n();
+	const moduleLocaleStore = useModuleLocaleStore();
 
 	const mainScrollEl = ref<HTMLElement | null>(null);
 	useScrollbar(mainScrollEl);
@@ -67,6 +70,7 @@
 	let unlistenReconnect: (() => void) | null = null;
 	let unlistenDisconnect: (() => void) | null = null;
 	let unlistenWarnings: (() => void) | null = null;
+	let unlistenLocaleWarnings: (() => void) | null = null;
 
 	/**
 	 * 处理启动时的警告事件：
@@ -124,10 +128,15 @@
 		try {
 			const settings = await call<{ language?: string }>("get_settings");
 			if (settings?.language) {
-				locale.value = settings.language as "zh-CN" | "en-US";
+				locale.value = settings.language;
 				localStorage.setItem("locale", settings.language);
 			}
 		} catch {}
+
+		// 从服务器加载 locale JSON（覆盖内置翻译 + 获取模块翻译）
+		// Load locale JSON from server (overrides built-in translations + fetches module translations)
+		const { modules: moduleLocales } = await loadLocaleFromServer(locale.value);
+		moduleLocaleStore.setLocales(locale.value, moduleLocales);
 
 		// 监听 ffmpeg 缺失警告 / Listen for ffmpeg missing warning
 		unlistenFfmpeg = await on("ffmpeg-missing", (payload) => {
@@ -166,6 +175,18 @@
 
 		// 监听启动警告 / Listen for startup warnings
 		unlistenWarnings = await on("startup-warnings", handleStartupWarnings);
+
+		// 监听自定义语言文件校验警告 / Listen for custom locale file validation warnings
+		unlistenLocaleWarnings = await on(
+			"locale-warnings",
+			(payload) => {
+				const items = payload as Array<{ path: string; reason: string }>;
+				for (const item of items) {
+					const file = item.path.replace(/\\/g, "/").split("/").pop() ?? item.path;
+					toast(`${t("settings.localeFileInvalid", { file })}: ${item.reason}`, "warning");
+				}
+			},
+		);
 	});
 
 	onUnmounted(() => {
@@ -175,6 +196,7 @@
 		unlistenReconnect?.();
 		unlistenDisconnect?.();
 		unlistenWarnings?.();
+		unlistenLocaleWarnings?.();
 	});
 </script>
 

@@ -147,6 +147,8 @@ pub fn build_router(state: ServerState) -> Router {
         .route("/api/modules", get(list_modules))
         .route("/api/postprocess-tasks", get(get_postprocess_tasks))
         .route("/api/recordings/module-outputs", post(get_module_outputs))
+        .route("/api/locale/{locale_code}", get(get_locale_handler))
+        .route("/api/locales", get(list_locales_handler))
         .route("/api/files", get(serve_output_file))
         .route("/api/events", get(sse_handler))
         .with_state(state)
@@ -773,6 +775,58 @@ async fn get_module_outputs(
     Ok(Json(serde_json::to_value(outputs).unwrap()))
 }
 
+/// 返回指定语言代码的完整 locale 数据（主程序翻译 + 所有模块翻译覆盖）。
+/// 若语言文件存在但校验失败，响应中附带 `warning` 字段。
+///
+/// Return the full locale data for the given locale code (app translations + all module overrides).
+/// If the locale file exists but fails validation, the response includes a `warning` field.
+async fn get_locale_handler(Path(locale_code): Path<String>) -> ApiResult<serde_json::Value> {
+    let lc = locale_code.clone();
+    let (locale, warning) = tokio::task::spawn_blocking(move || {
+        let data = crate::locale::manager::get_full_locale(&lc);
+        let warning = crate::locale::manager::validate_locale_file(&lc);
+        (data, warning)
+    })
+    .await
+    .map_err(|e| ApiError(e.to_string()))?;
+
+    let mut result = locale;
+    if let Some(w) = warning {
+        result["warning"] = serde_json::Value::String(w);
+    }
+    Ok(Json(result))
+}
+
+/// 扫描所有用户自定义语言文件，将校验失败的文件通过 SSE 推送给前端。
+/// 在服务器启动、emitter 就绪后调用一次。
+///
+/// Scan all user-defined locale files and push validation failures to the frontend via SSE.
+/// Called once after server startup when the emitter is ready.
+pub fn emit_locale_warnings(emitter: &Arc<dyn crate::core::emitter::Emitter>) {
+    use crate::core::emitter::EmitterExt;
+    let warnings = crate::locale::manager::check_custom_locale_files();
+    if warnings.is_empty() {
+        return;
+    }
+    let payload: Vec<serde_json::Value> = warnings
+        .into_iter()
+        .map(|(path, reason)| serde_json::json!({ "path": path, "reason": reason }))
+        .collect();
+    tracing::warn!("Custom locale file validation warnings: {:?}", payload);
+    emitter.emit("locale-warnings", &payload);
+}
+
+/// 返回可用语言列表（扫描 locale/app/ 目录）。
+/// Return the list of available locales (scanned from locale/app/ directory).
+async fn list_locales_handler() -> ApiResult<serde_json::Value> {
+    let locales = tokio::task::spawn_blocking(
+        crate::locale::manager::list_available_locales,
+    )
+    .await
+    .map_err(|e| ApiError(e.to_string()))?;
+    Ok(Json(serde_json::to_value(locales).unwrap()))
+}
+
 /// 初始化并启动 HTTP 服务器模式。
 /// Initialize and start the HTTP server mode.
 pub async fn run_server(port: u16) {
@@ -782,6 +836,11 @@ pub async fn run_server(port: u16) {
     }
 
     let app_state = AppState::new().expect("Failed to initialize app state");
+
+    // 初始化 locale 目录（首次运行时创建默认语言 JSON 文件）
+    // Initialize locale directories (create default locale JSON files on first run)
+    crate::locale::manager::init_locale_dirs();
+
     let recorder = RecorderManager::new(Arc::clone(&app_state));
     let (tx, _) = broadcast::channel::<Event>(4096);
     let emitter: Arc<dyn crate::core::emitter::Emitter> = Arc::new(BroadcastEmitter(tx.clone()));
@@ -791,6 +850,15 @@ pub async fn run_server(port: u16) {
         Arc::clone(&emitter),
     );
     crate::watcher::fs_watch::start_modules_dir_watcher(Arc::clone(&emitter));
+
+    // 扫描用户自定义语言文件，将校验警告推送给前端
+    // Scan user-defined locale files and push validation warnings to the frontend
+    {
+        let emitter_clone = Arc::clone(&emitter);
+        tokio::task::spawn_blocking(move || {
+            emit_locale_warnings(&emitter_clone);
+        });
+    }
 
     if !crate::recording::recorder::ffmpeg_available() {
         tracing::warn!("ffmpeg not found on PATH");

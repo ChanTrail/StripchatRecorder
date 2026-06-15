@@ -1,0 +1,14 @@
+{
+  "name": "Contact Sheet 0.2.0",
+  "description": "每隔指定秒数截帧，拼合成一张带时间戳的预览图保存到视频同目录",
+  "params": {
+    "interval": { "label": "截帧间隔（秒）" },
+    "thumb_width": { "label": "单帧宽度（px）" },
+    "format": { "label": "图片格式" },
+    "quality": { "label": "图片质量（1-100，jpg/webp 有效）" },
+    "cols": { "label": "列数（0=自动）" },
+    "rows": { "label": "行数（0=自动）" },
+    "fontfile": { "label": "字体文件路径（留空自动检测）" },
+    "fontsize": { "label": "时间戳字号" }
+  }
+}

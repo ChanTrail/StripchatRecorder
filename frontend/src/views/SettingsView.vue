@@ -38,14 +38,25 @@
 	} from "@/components/ui/number-field";
 	import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 	import { useI18n } from "vue-i18n";
+	import { loadLocaleFromServer, fetchAvailableLocales, type LocaleEntry } from "@/i18n";
+	import { useModuleLocaleStore } from "@/stores/moduleLocale";
 
 	const store = useSettingsStore();
 	const { toast, confirm } = useNotify();
 	const { t, locale } = useI18n();
+	const moduleLocaleStore = useModuleLocaleStore();
 
-	function setLocale(lang: string) {
-		locale.value = lang as "zh-CN" | "en-US";
+	/** 从服务器获取的可用语言列表 / Available locales fetched from server */
+	const availableLocales = ref<LocaleEntry[]>([]);
+
+	async function setLocale(lang: string) {
+		locale.value = lang;
 		localStorage.setItem("locale", lang);
+		const { modules: moduleLocales, warning } = await loadLocaleFromServer(lang);
+		moduleLocaleStore.setLocales(lang, moduleLocales);
+		if (warning) {
+			toast(t("settings.localeFileInvalid", { file: `${lang}.json` }) + ": " + warning, "warning");
+		}
 	}
 
 	/** 表单响应式数据（与 store.settings 保持同步）/ Reactive form data (synced with store.settings) */
@@ -79,6 +90,7 @@
 	const unlisteners: (() => void)[] = [];
 
 	onMounted(async () => {
+		availableLocales.value = await fetchAvailableLocales();
 		await store.initListeners();
 		await store.fetchSettings();
 		Object.assign(form, store.settings);
@@ -288,13 +300,13 @@
 						class="flex flex-row gap-4"
 						@update:model-value="(v) => v && setLocale(String(v))"
 					>
-						<div class="flex items-center gap-2">
-							<RadioGroupItem id="lang-zh" value="zh-CN" />
-							<Label for="lang-zh" class="cursor-pointer">{{ t("settings.language.zhCN") }}</Label>
-						</div>
-						<div class="flex items-center gap-2">
-							<RadioGroupItem id="lang-en" value="en-US" />
-							<Label for="lang-en" class="cursor-pointer">{{ t("settings.language.enUS") }}</Label>
+						<div
+							v-for="loc in availableLocales"
+							:key="loc.code"
+							class="flex items-center gap-2"
+						>
+							<RadioGroupItem :id="`lang-${loc.code}`" :value="loc.code" />
+							<Label :for="`lang-${loc.code}`" class="cursor-pointer">{{ loc.name }}</Label>
 						</div>
 					</RadioGroup>
 				</div>

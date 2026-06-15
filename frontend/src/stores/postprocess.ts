@@ -13,6 +13,7 @@ import { defineStore } from "pinia";
 import { ref, watch } from "vue";
 import { call, on } from "@/lib/api";
 import { useI18n } from "vue-i18n";
+import { useModuleLocaleStore } from "@/stores/moduleLocale";
 
 /**
  * 生成一个随机 ID，优先使用 crypto.randomUUID()，
@@ -121,25 +122,41 @@ export const usePostprocessStore = defineStore("postprocess", () => {
 	let _saveTimer: ReturnType<typeof setTimeout> | null = null;
 
 	const { locale } = useI18n();
+	const moduleLocaleStore = useModuleLocaleStore();
 
 	/**
 	 * 根据当前语言对模块的 name/description/params[].label 应用 i18n 翻译。
+	 * 优先使用服务器端 locale JSON（moduleLocaleStore），回退到模块 --describe 中的 i18n 字段。
+	 *
 	 * Apply i18n translations to module name/description/params[].label based on current locale.
+	 * Prefers server-side locale JSON (moduleLocaleStore), falls back to --describe i18n field.
 	 */
 	function applyModuleI18n(raw: ModuleInfo[]): ModuleInfo[] {
 		const lang = locale.value;
 		return raw.map((mod) => {
-			const tr = mod.i18n?.[lang];
-			if (!tr) return mod;
-			return {
-				...mod,
-				name: tr.name ?? mod.name,
-				description: tr.description ?? mod.description,
-				params: mod.params.map((p) => ({
-					...p,
-					label: tr.params?.[p.key]?.label ?? p.label,
-				})),
-			};
+			// 优先使用服务器端 locale JSON / Prefer server-side locale JSON
+			const serverTr = moduleLocaleStore.getModuleLocale(mod.id);
+			// 回退到 --describe 中的 i18n 字段 / Fall back to --describe i18n field
+			const describeTr = mod.i18n?.[lang] as
+				| { name?: string; description?: string; params?: Record<string, { label?: string }> }
+				| undefined;
+
+			// 合并：服务器端优先，--describe 作为补充
+			// Merge: server-side takes priority, --describe fills the gaps
+			const name =
+				serverTr?.name ?? describeTr?.name ?? mod.name;
+			const description =
+				serverTr?.description ?? describeTr?.description ?? mod.description;
+			const params = mod.params.map((p) => ({
+				...p,
+				label:
+					serverTr?.params?.[p.key]?.label ??
+					describeTr?.params?.[p.key]?.label ??
+					p.label,
+			}));
+
+			if (!serverTr && !describeTr) return mod;
+			return { ...mod, name, description, params };
 		});
 	}
 
@@ -157,7 +174,7 @@ export const usePostprocessStore = defineStore("postprocess", () => {
 	}
 
 	// 语言切换时重新应用模块翻译 / Re-apply module translations on locale change
-	watch(locale, () => {
+	watch([locale, () => moduleLocaleStore.locales], () => {
 		if (_rawModules.value.length > 0) {
 			modules.value = applyModuleI18n(_rawModules.value);
 		}

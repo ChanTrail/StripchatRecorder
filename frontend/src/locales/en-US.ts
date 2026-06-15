@@ -316,6 +316,7 @@ export default {
 		mouflonAutoSyncedAt: "Source updated: ",
 		mouflonManualUpdatedAt: "Last manual update: ",
 		mouflonNever: "Never",
+		localeFileInvalid: "Locale file {file} failed validation",
 	},
 	usePostprocess: {
 		processing: "Processing",

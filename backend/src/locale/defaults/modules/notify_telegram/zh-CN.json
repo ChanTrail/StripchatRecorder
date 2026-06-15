@@ -1,0 +1,13 @@
+{
+  "name": "Telegram 通知 0.2.0",
+  "description": "将录制信息、封面图和视频通过 MTProto 发送到 Telegram（支持超过 50MB 的大文件，支持 HTTP/SOCKS5 代理）",
+  "params": {
+    "api_id": { "label": "API ID（从 my.telegram.org 获取）" },
+    "api_hash": { "label": "API Hash" },
+    "bot_token": { "label": "Bot Token（从 @BotFather 获取）" },
+    "chat_id": { "label": "Chat ID（超级群组填 -100xxxxxxxxxx 格式）" },
+    "username": { "label": "群组 Username（超级群组必填，如 mygroupname，不含 @）" },
+    "proxy": { "label": "代理地址（支持 http://、socks5://）" },
+    "send_video": { "label": "同时发送视频文件" }
+  }
+}

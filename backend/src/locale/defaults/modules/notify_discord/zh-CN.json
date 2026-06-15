@@ -1,0 +1,9 @@
+{
+  "name": "Discord 通知 0.2.0",
+  "description": "将录制信息和封面图发送到 Discord Webhook",
+  "params": {
+    "webhook_url": { "label": "Webhook URL" },
+    "proxy": { "label": "代理地址（支持 http://、socks5://）" },
+    "username": { "label": "Bot 显示名称" }
+  }
+}

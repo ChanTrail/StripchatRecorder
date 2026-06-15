@@ -6,6 +6,7 @@
 pub mod commands;
 pub mod config;
 pub mod core;
+pub mod locale;
 pub mod postprocess;
 pub mod recording;
 pub mod relay;

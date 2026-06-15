@@ -1,0 +1,8 @@
+{
+  "name": "Filter Short Videos 0.2.0",
+  "description": "Delete video files shorter than the specified duration threshold",
+  "params": {
+    "min_duration": { "label": "Minimum duration (seconds)" },
+    "dry_run": { "label": "Dry run (preview only, no deletion)" }
+  }
+}

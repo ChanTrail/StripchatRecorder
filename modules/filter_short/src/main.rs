@@ -37,17 +37,7 @@ const DESCRIBE: &str = r#"{
         "type": "boolean",
         "default": false
         }
-    ],
-    "i18n": {
-        "en-US": {
-        "name": "Filter Short Videos 0.1.0",
-        "description": "Delete video files shorter than the specified duration threshold",
-        "params": {
-            "min_duration": { "label": "Minimum duration (seconds)" },
-            "dry_run": { "label": "Dry run (preview only, no deletion)" }
-        }
-        }
-    }
+    ]
 }"#;
 
 /// 模块主逻辑：读取参数、检查视频时长、决定是否删除。

@@ -73,23 +73,7 @@ const DESCRIBE: &str = r#"{
         "type": "number",
         "default": 18
         }
-    ],
-    "i18n": {
-        "en-US": {
-        "name": "Contact Sheet 0.1.0",
-        "description": "Extract frames at specified intervals and tile them into a timestamped preview image saved next to the video",
-        "params": {
-            "interval": { "label": "Frame interval (seconds)" },
-            "thumb_width": { "label": "Thumbnail width (px)" },
-            "format": { "label": "Image format" },
-            "quality": { "label": "Image quality (1-100, jpg/webp only)" },
-            "cols": { "label": "Columns (0 = auto)" },
-            "rows": { "label": "Rows (0 = auto)" },
-            "fontfile": { "label": "Font file path (leave empty for auto-detect)" },
-            "fontsize": { "label": "Timestamp font size" }
-        }
-        }
-    }
+    ]
 }"#;
 
 /// 根据帧数计算最优列数

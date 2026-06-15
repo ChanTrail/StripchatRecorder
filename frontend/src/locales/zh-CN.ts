@@ -315,6 +315,7 @@ export default {
 		mouflonAutoSyncedAt: "数据源更新：",
 		mouflonManualUpdatedAt: "上次手动更新：",
 		mouflonNever: "从未",
+		localeFileInvalid: "语言文件 {file} 校验失败",
 	},
 	usePostprocess: {
 		processing: "处理中",

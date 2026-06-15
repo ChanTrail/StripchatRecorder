@@ -46,17 +46,7 @@ const DESCRIBE: &str = r#"{
         "type": "string",
         "default": "Recorder Bot"
         }
-    ],
-    "i18n": {
-        "en-US": {
-        "name": "Discord Notification 0.1.3",
-        "description": "Send recording info and cover image to a Discord Webhook",
-        "params": {
-            "proxy": { "label": "Proxy (http:// or socks5://)" },
-            "username": { "label": "Bot display name" }
-        }
-        }
-    }
+    ]
 }"#;
 
 /// 若封面图超过 Discord 的 10MB 限制，用 ffmpeg 逐步降低质量压缩到限制以内。

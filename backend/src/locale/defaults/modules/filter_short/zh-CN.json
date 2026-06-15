@@ -1,0 +1,8 @@
+{
+  "name": "过滤短视频 0.2.0",
+  "description": "删除时长低于指定阈值的视频文件",
+  "params": {
+    "min_duration": { "label": "最短时长（秒）" },
+    "dry_run": { "label": "仅预览，不实际删除" }
+  }
+}

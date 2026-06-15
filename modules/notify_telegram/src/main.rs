@@ -85,21 +85,7 @@ const DESCRIBE: &str = r#"{
         "type": "boolean",
         "default": true
         }
-    ],
-    "i18n": {
-        "en-US": {
-        "name": "Telegram Notification 0.2.0",
-        "description": "Send recording info, cover image and video to Telegram via MTProto (supports files over 50 MB and HTTP/SOCKS5 proxies)",
-        "params": {
-            "api_id": { "label": "API ID (from my.telegram.org)" },
-            "bot_token": { "label": "Bot Token (from @BotFather)" },
-            "chat_id": { "label": "Chat ID (supergroup format: -100xxxxxxxxxx)" },
-            "username": { "label": "Group username (required for supergroups, e.g. mygroupname, without @)" },
-            "proxy": { "label": "Proxy (http:// or socks5://)" },
-            "send_video": { "label": "Also send video file" }
-        }
-        }
-    }
+    ]
 }"#;
 
 /// 若封面图不满足 Telegram 限制（宽+高 < 10000 且宽高比 < 20:1），则等比缩放。
