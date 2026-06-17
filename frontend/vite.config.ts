@@ -19,14 +19,20 @@ export default defineConfig({
     outDir: "../build_tmp/frontend/dist",
     emptyOutDir: true,
     rollupOptions: {
+      onwarn(warning, warn) {
+        // @vueuse/core 的产物中有不符合 rolldown 规范的 #__PURE__ 注释位置，忽略这类警告
+        // Suppress invalid #__PURE__ annotation warnings from @vueuse/core until upstream fixes it
+        if (warning.code === "INVALID_ANNOTATION") return;
+        warn(warning);
+      },
       output: {
-        manualChunks: {
-          "vendor-vue": ["vue", "vue-router", "pinia"],
-          "vendor-i18n": ["vue-i18n"],
-          "vendor-reka": ["reka-ui"],
-          "vendor-utils": ["@vueuse/core", "clsx", "tailwind-merge", "class-variance-authority"],
-          "vendor-icons": ["lucide-vue-next", "@lucide/vue"],
-          "vendor-sonner": ["vue-sonner"],
+        manualChunks(id) {
+          if (["vue", "vue-router", "pinia"].some(p => id.includes(`/node_modules/${p}/`))) return "vendor-vue";
+          if (id.includes("/node_modules/vue-i18n/") || id.includes("/node_modules/@intlify/")) return "vendor-i18n";
+          if (id.includes("/node_modules/reka-ui/")) return "vendor-reka";
+          if (["@vueuse/core", "clsx", "tailwind-merge", "class-variance-authority"].some(p => id.includes(`/node_modules/${p}/`))) return "vendor-utils";
+          if (id.includes("/node_modules/lucide-vue-next/") || id.includes("/node_modules/@lucide/")) return "vendor-icons";
+          if (id.includes("/node_modules/vue-sonner/")) return "vendor-sonner";
         },
       },
     },
