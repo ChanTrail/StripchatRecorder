@@ -28,6 +28,7 @@
 	import { useScrollbar } from "@/composables/useScrollbar";
 	import { loadLocaleFromServer } from "@/i18n";
 	import { useModuleLocaleStore } from "@/stores/moduleLocale";
+	import { useLocalesStore } from "@/stores/locales";
 
 	const router = useRouter();
 	const route = useRoute();
@@ -35,6 +36,7 @@
 	const streamersStore = useStreamersStore();
 	const { t, locale } = useI18n();
 	const moduleLocaleStore = useModuleLocaleStore();
+	const localesStore = useLocalesStore();
 
 	const mainScrollEl = ref<HTMLElement | null>(null);
 	useScrollbar(mainScrollEl);
@@ -124,18 +126,29 @@
 		applyTheme(mq.matches);
 		mq.addEventListener("change", onThemeChange);
 
-		// 从后端同步语言设置 / Sync language from backend settings
+		// 从后端同步语言设置，先加载消息再切换 locale
+		// Sync language from backend, load messages before switching locale
 		try {
 			const settings = await call<{ language?: string }>("get_settings");
 			if (settings?.language) {
+				// 先加载该语言的消息，再切换 locale，保证首屏就用正确语言渲染
+				// Load messages for the language first, then switch locale,
+				// so the first render already uses the correct language
+				const { modules: moduleLocales } = await loadLocaleFromServer(settings.language);
 				locale.value = settings.language;
+				moduleLocaleStore.setLocales(settings.language, moduleLocales);
+			} else {
+				// 无自定义语言，仍加载默认 locale 的服务器覆盖（模块翻译等）
+				// No custom language, still load server overrides for the default locale
+				const { modules: moduleLocales } = await loadLocaleFromServer(locale.value);
+				moduleLocaleStore.setLocales(locale.value, moduleLocales);
 			}
-		} catch {}
-
-		// 从服务器加载 locale JSON（覆盖内置翻译 + 获取模块翻译）
-		// Load locale JSON from server (overrides built-in translations + fetches module translations)
-		const { modules: moduleLocales } = await loadLocaleFromServer(locale.value);
-		moduleLocaleStore.setLocales(locale.value, moduleLocales);
+		} catch {
+			// 后端未就绪时加载当前 locale 的消息作为 fallback
+			// Backend not ready: load current locale messages as fallback
+			const { modules: moduleLocales } = await loadLocaleFromServer(locale.value);
+			moduleLocaleStore.setLocales(locale.value, moduleLocales);
+		}
 
 		// 监听 ffmpeg 缺失警告 / Listen for ffmpeg missing warning
 		unlistenFfmpeg = await on("ffmpeg-missing", (payload) => {
@@ -186,6 +199,12 @@
 				}
 			},
 		);
+
+		// 初始加载可用语言列表 / Initial load of available locales
+		await localesStore.refresh();
+
+		// locale-files-changed 事件已在 localesStore 内部监听，无需在此重复注册
+		// locale-files-changed is already listened inside localesStore; no need to register here
 	});
 
 	onUnmounted(() => {

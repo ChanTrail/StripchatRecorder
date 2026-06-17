@@ -1,0 +1,15 @@
+{
+  "identifier": "default",
+  "description": "Default capabilities for StripchatRecorder desktop",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:event:allow-emit",
+    "shell:allow-open",
+    "dialog:default",
+    "fs:default",
+    "opener:default"
+  ]
+}

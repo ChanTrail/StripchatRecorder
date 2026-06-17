@@ -151,18 +151,6 @@ export const useStreamersStore = defineStore("streamers", () => {
 	}
 
 	/**
-	 * 启动指定主播的流转发。
-	 * Start stream relay for the given streamer.
-	 *
-	 * @param username - 主播用户名 / Streamer username
-	 */
-	async function startRelay(username: string) {
-		await call("start_relay", { username });
-		const s = streamers.value.find((s) => s.username === username);
-		if (s) s.is_relaying = true;
-	}
-
-	/**
 	 * 停止指定主播的流转发。
 	 * Stop stream relay for the given streamer.
 	 *
@@ -260,7 +248,6 @@ export const useStreamersStore = defineStore("streamers", () => {
 		setAutoRecord,
 		startRecording,
 		stopRecording,
-		startRelay,
 		stopRelay,
 		initListeners,
 	};

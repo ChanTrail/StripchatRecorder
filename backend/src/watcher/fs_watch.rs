@@ -114,6 +114,70 @@ pub fn start_recordings_dir_watcher(state: Arc<AppState>, emitter: Arc<dyn Emitt
     });
 }
 
+/// 启动 locale 目录监控器（在独立线程中运行）。
+/// 监控 `locale/app/` 目录中 JSON 文件的增删，发送 `locale-files-changed` 事件。
+/// 防抖 800ms，避免写入多个文件时重复触发。
+///
+/// Start the locale directory watcher (runs in a dedicated thread).
+/// Watches for JSON file additions/removals in `locale/app/` and emits `locale-files-changed` events.
+/// Debounced at 800ms to avoid multiple triggers when several files are written at once.
+pub fn start_locale_dir_watcher(emitter: Arc<dyn Emitter>) {
+    std::thread::spawn(move || {
+        let locale_dir = crate::locale::manager::app_locale_dir();
+        let _ = std::fs::create_dir_all(&locale_dir);
+
+        let (tx, rx) = mpsc::channel::<notify::Result<Event>>();
+        let mut last_emit = Instant::now()
+            .checked_sub(Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
+
+        let mut watcher = match RecommendedWatcher::new(tx, Config::default()) {
+            Ok(mut w) => {
+                // 只监控 locale/app/ 目录本身，不递归（只关心顶层 .json 文件的增删）
+                // Watch only the locale/app/ dir itself, non-recursive (only top-level .json changes matter)
+                if let Err(e) = w.watch(&locale_dir, RecursiveMode::NonRecursive) {
+                    tracing::error!("Failed to watch locale dir {:?}: {}", locale_dir, e);
+                } else {
+                    tracing::info!("Watching locale dir: {:?}", locale_dir);
+                }
+                w
+            }
+            Err(e) => {
+                tracing::error!("Failed to create locale dir watcher: {}", e);
+                return;
+            }
+        };
+        let _watcher = &mut watcher;
+
+        loop {
+            match rx.recv_timeout(Duration::from_secs(5)) {
+                Ok(Ok(event)) => {
+                    // 只关心 .json 文件的创建和删除事件
+                    // Only care about Create/Remove events for .json files
+                    if matches!(event.kind, EventKind::Access(_)) {
+                        continue;
+                    }
+                    let has_json = event.paths.iter().any(|p| {
+                        p.extension().and_then(|e| e.to_str()) == Some("json")
+                    });
+                    if !has_json {
+                        continue;
+                    }
+                    // 防抖：800ms 内的多次事件只触发一次 / Debounce: only emit once within 800ms
+                    if last_emit.elapsed() < Duration::from_millis(800) {
+                        continue;
+                    }
+                    last_emit = Instant::now();
+                    emitter.emit("locale-files-changed", &serde_json::json!({}));
+                }
+                Ok(Err(e)) => tracing::error!("locale watcher error: {}", e),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+    });
+}
+
 /// 启动模块目录监控器（在独立线程中运行）。
 /// 检测 modules/ 目录中可执行文件的增删，发送 `modules-changed` 事件。
 ///

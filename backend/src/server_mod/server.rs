@@ -850,6 +850,7 @@ pub async fn run_server(port: u16) {
         Arc::clone(&emitter),
     );
     crate::watcher::fs_watch::start_modules_dir_watcher(Arc::clone(&emitter));
+    crate::watcher::fs_watch::start_locale_dir_watcher(Arc::clone(&emitter));
 
     // 扫描用户自定义语言文件，将校验警告推送给前端
     // Scan user-defined locale files and push validation warnings to the frontend
