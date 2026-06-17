@@ -20,7 +20,7 @@
 	import { usePostprocessStore, type PipelineNode } from "@/stores/postprocess";
 	import { useNotify } from "@/composables/useNotify";
 	import { Button } from "@/components/ui/button";
-	import { GripVertical, ChevronUp, ChevronDown, X } from "lucide-vue-next";
+	import { GripVertical, ChevronUp, ChevronDown, X } from "@lucide/vue";
 	import { Switch } from "@/components/ui/switch";
 	import { Input } from "@/components/ui/input";
 	import { Label } from "@/components/ui/label";

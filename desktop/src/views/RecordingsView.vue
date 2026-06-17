@@ -30,7 +30,7 @@
 	import { Button } from "@/components/ui/button";
 	import { Badge } from "@/components/ui/badge";
 	import { Checkbox } from "@/components/ui/checkbox";
-	import { Loader2, Image } from "lucide-vue-next";
+	import { Loader2, Image } from "@lucide/vue";
 	import { Progress } from "@/components/ui/progress";
 	import {
 		Dialog,

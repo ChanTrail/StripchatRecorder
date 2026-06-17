@@ -25,9 +25,9 @@ const path = require("path");
 const fs   = require("fs");
 
 const {
-  ROOT, BUILD_TMP, BUILD_OUT, MODULES_DIR,
-  BACKEND_MANIFEST, BACKEND_TARGET, moduleTarget,
-  listModules, step, header, run, collectBinaries, listDir, installFrontend,
+  ROOT, BUILD_TMP, BUILD_OUT,
+  BACKEND_MANIFEST, BACKEND_TARGET,
+  step, header, run, collectBinaries, listDir, buildModules, installFrontend,
 } = require("./common");
 
 const TOTAL = 6;
@@ -47,29 +47,19 @@ run("npm run build --prefix frontend", { cwd: ROOT });
 
 // ── Step 3: 后端 / Backend ───────────────────────────────────────────────────
 step(3, TOTAL, "Building backend (release)");
+if (fs.existsSync(BUILD_OUT)) fs.rmSync(BUILD_OUT, { recursive: true, force: true });
 run(`cargo build --manifest-path "${BACKEND_MANIFEST}" --release`, {
   env: { ...process.env, CARGO_TARGET_DIR: BACKEND_TARGET },
 });
 
 // ── Step 4: 模块 / Modules ───────────────────────────────────────────────────
-step(4, TOTAL, "Building modules (release)");
-for (const name of listModules()) {
-  console.log(`  → ${name}`);
-  run(
-    `cargo build --manifest-path "${path.join(MODULES_DIR, name, "Cargo.toml")}" --bins --release`,
-    { env: { ...process.env, CARGO_TARGET_DIR: moduleTarget(name) } }
-  );
-  console.log(`  ✓ ${name}\n`);
-}
-
-// ── Step 5: 收集产物 / Collect artifacts ────────────────────────────────────
-step(5, TOTAL, "Collecting artifacts → build/");
-
-if (fs.existsSync(BUILD_OUT)) fs.rmSync(BUILD_OUT, { recursive: true, force: true });
+step(4, TOTAL, "Building modules (release) → build/modules/");
 const BUILD_MODULES_OUT = path.join(BUILD_OUT, "modules");
-fs.mkdirSync(BUILD_MODULES_OUT, { recursive: true });
+buildModules("release", BUILD_MODULES_OUT);
 
-// 收集后端主程序 / Collect backend binary
+// ── Step 5: 收集后端主程序 / Collect backend binary ──────────────────────────
+step(5, TOTAL, "Collecting backend binary → build/");
+
 const backendReleaseDir = path.join(BACKEND_TARGET, "release");
 const backendBins = collectBinaries(backendReleaseDir);
 if (backendBins.length === 0) {
@@ -81,22 +71,6 @@ for (const name of backendBins) {
   fs.copyFileSync(path.join(backendReleaseDir, name), dst);
   if (process.platform !== "win32") fs.chmodSync(dst, 0o755);
   console.log(`  ✓ build/${name}`);
-}
-
-// 收集模块二进制 / Collect module binaries
-for (const name of listModules()) {
-  const releaseDir = path.join(moduleTarget(name), "release");
-  const bins = collectBinaries(releaseDir);
-  if (bins.length === 0) {
-    console.warn(`  ⚠ No binaries found for module: ${name}`);
-    continue;
-  }
-  for (const bin of bins) {
-    const dst = path.join(BUILD_MODULES_OUT, bin);
-    fs.copyFileSync(path.join(releaseDir, bin), dst);
-    if (process.platform !== "win32") fs.chmodSync(dst, 0o755);
-    console.log(`  ✓ build/modules/${bin}`);
-  }
 }
 
 // ── Step 6: 清理 / Cleanup ───────────────────────────────────────────────────

@@ -12,12 +12,10 @@
 
 "use strict";
 
-const path = require("path");
-
 const {
-  FRONTEND, MODULES_DIR, NESTED,
-  BACKEND_MANIFEST, BACKEND_TARGET, moduleTarget,
-  listModules, step, header, run, installFrontend,
+  FRONTEND, NESTED,
+  BACKEND_MANIFEST, BACKEND_TARGET,
+  step, header, run, checkModules, installFrontend,
 } = require("./common");
 
 const TOTAL = 4;
@@ -39,12 +37,7 @@ run(`cargo check --manifest-path "${BACKEND_MANIFEST}"`, {
 
 // ── Step 4: 模块 / Modules ───────────────────────────────────────────────────
 step(4, TOTAL, "Checking modules");
-for (const name of listModules()) {
-  run(
-    `cargo check --manifest-path "${path.join(MODULES_DIR, name, "Cargo.toml")}"`,
-    { env: { ...process.env, CARGO_TARGET_DIR: moduleTarget(name) } }
-  );
-}
+checkModules();
 
 // ── 完成 / Done ──────────────────────────────────────────────────────────────
 const indent = NESTED ? "    " : "";

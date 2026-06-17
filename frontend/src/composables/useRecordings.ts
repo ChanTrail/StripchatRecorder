@@ -14,7 +14,7 @@
 import { ref, computed } from "vue";
 import { call } from "@/lib/api";
 import type { RecordingFile } from "@/types/recordings";
-import { ArrowUpDown, ArrowUp, ArrowDown } from "lucide-vue-next";
+import { ArrowUpDown, ArrowUp, ArrowDown } from "@lucide/vue";
 
 /** 支持的排序字段 / Supported sort keys */
 export type SortKey = "started_at" | "size_bytes" | "video_duration_secs";

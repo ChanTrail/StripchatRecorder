@@ -16,12 +16,10 @@
 "use strict";
 
 const path = require("path");
-const fs   = require("fs");
 
 const {
-  ROOT, FRONTEND, MODULES_DIR, BACKEND_MANIFEST, BACKEND_TARGET,
-  moduleTarget, listModules,
-  step, header, run, collectBinaries, installFrontend,
+  ROOT, FRONTEND, BACKEND_MANIFEST, BACKEND_TARGET,
+  step, header, run, buildModules, installFrontend,
 } = require("./common");
 
 /** 模块二进制的目标目录（后端运行时从此处加载）
@@ -45,23 +43,7 @@ run("npm run build", { cwd: FRONTEND });
 
 // ── Step 3: 构建模块并复制 / Build modules & copy binaries ───────────────────
 step(3, TOTAL, "Building modules (debug) → build_tmp/backend/target/debug/modules/");
-fs.mkdirSync(MODULES_OUT, { recursive: true });
-
-for (const name of listModules()) {
-  console.log(`  → ${name}`);
-  run(
-    `cargo build --manifest-path "${path.join(MODULES_DIR, name, "Cargo.toml")}" --bins`,
-    { env: { ...process.env, CARGO_TARGET_DIR: moduleTarget(name) } }
-  );
-  // 复制 debug 二进制到 modules 目录 / Copy debug binaries to modules directory
-  const bins = collectBinaries(path.join(moduleTarget(name), "debug"));
-  for (const bin of bins) {
-    const dst = path.join(MODULES_OUT, bin);
-    fs.copyFileSync(path.join(moduleTarget(name), "debug", bin), dst);
-    if (process.platform !== "win32") fs.chmodSync(dst, 0o755);
-  }
-  console.log(`  ✓ ${name}\n`);
-}
+buildModules("debug", MODULES_OUT);
 
 // ── Step 4: 启动后端 / Start backend ─────────────────────────────────────────
 step(4, TOTAL, "Starting backend (debug)");

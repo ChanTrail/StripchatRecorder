@@ -17,7 +17,7 @@
 	import { Badge } from "@/components/ui/badge";
 	import { Button } from "@/components/ui/button";
 	import { Card, CardContent } from "@/components/ui/card";
-	import { Copy, Check, Radio, Wifi, WifiOff, AlertCircle, Loader, Square } from "lucide-vue-next";
+	import { Copy, Check, Radio, Wifi, WifiOff, AlertCircle, Loader, Square } from "@lucide/vue";
 	import { useI18n } from "vue-i18n";
 	import { copyToClipboard } from "@/lib/utils";
 

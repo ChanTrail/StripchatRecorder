@@ -3,50 +3,41 @@
  * Desktop 开发模式 / Desktop dev mode
  *
  * 1. 安装 desktop 依赖
- * 2. 启动 Vite 开发服务器（vite）
+ * 2. 构建所有模块（debug），复制二进制到 build_tmp/desktop/target/debug/modules/
+ * 3. 启动 Tauri 开发服务器（tauri dev）
+ *    - 前端 Vite 开发服务器由 Tauri 的 beforeDevCommand 自动启动
+ *    - Rust 编译产物重定向到 build_tmp/desktop/target/
  *
- * Usage: npm run desktop:dev
+ * Usage: npm run dev:desktop
  */
 
 "use strict";
 
 const path = require("path");
-const { execSync } = require("child_process");
 
-const ROOT    = path.resolve(__dirname, "..");
-const DESKTOP = path.join(ROOT, "desktop");
+const {
+  DESKTOP, DESKTOP_TARGET,
+  step, header, run, buildModules, installDesktop,
+} = require("./common");
 
-const C = {
-  reset:  "\x1b[0m",
-  cyan:   "\x1b[36m",
-  yellow: "\x1b[33m",
-  bold:   "\x1b[1m",
-};
+/** 模块二进制的目标目录（Tauri 运行时从此处加载）
+ *  Target directory for module binaries (loaded by Tauri at runtime) */
+const MODULES_OUT = path.join(DESKTOP_TARGET, "debug", "modules");
 
-function header(title, desc) {
-  console.log(`\n${C.cyan}${"═".repeat(60)}${C.reset}`);
-  console.log(`${C.bold}  ${title}${C.reset}`);
-  if (desc) console.log(`  ${desc}`);
-  console.log(`${C.cyan}${"═".repeat(60)}${C.reset}`);
-}
-
-function step(current, total, msg) {
-  console.log(`\n${C.yellow}${"─".repeat(60)}${C.reset}`);
-  console.log(`  ${C.bold}[${current}/${total}]${C.reset}  ${msg}`);
-  console.log(`${C.yellow}${"─".repeat(60)}${C.reset}`);
-}
-
-function run(cmd, opts = {}) {
-  execSync(cmd, { stdio: "inherit", ...opts });
-}
-
-const TOTAL = 2;
-header("Desktop Dev", "install → vite dev server");
+const TOTAL = 3;
+header("Desktop Dev", "install → modules → tauri dev");
 
 // ── Step 1: 安装依赖 / Install dependencies ──────────────────────────────────
 step(1, TOTAL, "Installing desktop dependencies");
-run("npm install", { cwd: DESKTOP });
+installDesktop();
 
-// ── Step 2: 启动开发服务器 / Start dev server ────────────────────────────────
-step(2, TOTAL, "Starting Vite dev server");
-run("npm run dev", { cwd: DESKTOP });
+// ── Step 2: 构建模块并复制 / Build modules & copy binaries ───────────────────
+step(2, TOTAL, "Building modules (debug) → build_tmp/desktop/target/debug/modules/");
+buildModules("debug", MODULES_OUT);
+
+// ── Step 3: 启动 Tauri 开发服务器 / Start Tauri dev ──────────────────────────
+step(3, TOTAL, "Starting Tauri dev (build_tmp/desktop/target/)");
+run("npx tauri dev", {
+  cwd: DESKTOP,
+  env: { ...process.env, CARGO_TARGET_DIR: DESKTOP_TARGET },
+});

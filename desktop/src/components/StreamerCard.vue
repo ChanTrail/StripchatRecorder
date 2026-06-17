@@ -25,7 +25,7 @@
 	import { Label } from "@/components/ui/label";
 	import { ref, watch, computed } from "vue";
 	import { useFastThumbnail } from "@/composables/useFastThumbnail";
-	import { X, Circle, Eye } from "lucide-vue-next";
+	import { X, Circle, Eye } from "@lucide/vue";
 	import { useI18n } from "vue-i18n";
 
 	const props = defineProps<{ streamer: StreamerEntry }>();

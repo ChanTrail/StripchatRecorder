@@ -26,7 +26,7 @@
 	import { ref, watch, computed } from "vue";
 	import { useFastThumbnail } from "@/composables/useFastThumbnail";
 	import { copyToClipboard } from "@/lib/utils";
-	import { X, Circle, Eye, Copy, Check } from "lucide-vue-next";
+	import { X, Circle, Eye, Copy, Check } from "@lucide/vue";
 	import { useI18n } from "vue-i18n";
 
 	const props = defineProps<{ streamer: StreamerEntry }>();

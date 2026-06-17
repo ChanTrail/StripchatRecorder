@@ -15,6 +15,7 @@ const fs   = require("fs");
 
 const ROOT        = path.resolve(__dirname, "..");
 const FRONTEND    = path.join(ROOT, "frontend");
+const DESKTOP     = path.join(ROOT, "desktop");
 const MODULES_DIR = path.join(ROOT, "modules");
 const BUILD_TMP   = path.join(ROOT, "build_tmp");
 const BUILD_OUT   = path.join(ROOT, "build");
@@ -24,6 +25,9 @@ const BACKEND_MANIFEST = path.join(ROOT, "backend", "Cargo.toml");
 
 /** 后端编译产物目录 / Backend target directory */
 const BACKEND_TARGET = path.join(BUILD_TMP, "backend", "target");
+
+/** Desktop (Tauri) 编译产物目录 / Desktop (Tauri) target directory */
+const DESKTOP_TARGET = path.join(BUILD_TMP, "desktop", "target");
 
 /** 指定模块的编译产物目录 / Target directory for a given module */
 function moduleTarget(name) {
@@ -142,6 +146,71 @@ function listDir(dir, prefix = "") {
   }
 }
 
+// ── 模块构建与检查 / Module build & check ───────────────────────────────────
+
+/**
+ * 对所有模块执行 cargo check。
+ * Run `cargo check` for all modules.
+ */
+function checkModules() {
+  for (const name of listModules()) {
+    run(
+      `cargo check --manifest-path "${path.join(MODULES_DIR, name, "Cargo.toml")}"`,
+      { env: { ...process.env, CARGO_TARGET_DIR: moduleTarget(name) } }
+    );
+  }
+}
+
+/**
+ * 构建所有模块并将产物二进制复制到指定目录。
+ * Build all modules and copy output binaries to the given directory.
+ *
+ * @param {"debug"|"release"} profile  Cargo 构建模式 / Cargo build profile
+ * @param {string} outDir              二进制复制目标目录 / Target directory for copied binaries
+ */
+function buildModules(profile, outDir) {
+  const releaseFlag = profile === "release" ? " --release" : "";
+  fs.mkdirSync(outDir, { recursive: true });
+  for (const name of listModules()) {
+    console.log(`  → ${name}`);
+    run(
+      `cargo build --manifest-path "${path.join(MODULES_DIR, name, "Cargo.toml")}" --bins${releaseFlag}`,
+      { env: { ...process.env, CARGO_TARGET_DIR: moduleTarget(name) } }
+    );
+    const bins = collectBinaries(path.join(moduleTarget(name), profile));
+    for (const bin of bins) {
+      const dst = path.join(outDir, bin);
+      fs.copyFileSync(path.join(moduleTarget(name), profile, bin), dst);
+      if (process.platform !== "win32") fs.chmodSync(dst, 0o755);
+    }
+    console.log(`  ✓ ${name}\n`);
+  }
+}
+
+/**
+ * 递归复制目录（构建完成后收集产物用）。
+ * Recursively copy a directory (used for collecting build artifacts).
+ *
+ * @param {string} src       源目录 / Source directory
+ * @param {string} dst       目标目录 / Destination directory
+ * @param {string} [logBase] 用于日志输出的基准路径前缀 / Base path prefix for log output
+ */
+function copyDir(src, dst, logBase) {
+  fs.mkdirSync(dst, { recursive: true });
+  for (const entry of fs.readdirSync(src)) {
+    const srcPath = path.join(src, entry);
+    const dstPath = path.join(dst, entry);
+    if (fs.statSync(srcPath).isDirectory()) {
+      copyDir(srcPath, dstPath, logBase);
+    } else {
+      fs.copyFileSync(srcPath, dstPath);
+      if (logBase !== undefined) {
+        console.log(`  ✓ ${logBase}${path.relative(dst, dstPath).replace(/\\/g, "/")}`);
+      }
+    }
+  }
+}
+
 // ── 前端依赖安装 / Frontend dependency install ──────────────────────────────
 
 /**
@@ -153,16 +222,27 @@ function installFrontend() {
   run("npm install", { cwd: FRONTEND });
 }
 
+/**
+ * 安装 desktop npm 依赖（每次执行 desktop 脚本前调用）。
+ * Install desktop npm dependencies (called before each desktop script runs).
+ */
+function installDesktop() {
+  console.log("Installing desktop dependencies...");
+  run("npm install", { cwd: DESKTOP });
+}
+
 // ── 导出 / Exports ───────────────────────────────────────────────────────────
 
 module.exports = {
   ROOT,
   FRONTEND,
+  DESKTOP,
   MODULES_DIR,
   BUILD_TMP,
   BUILD_OUT,
   BACKEND_MANIFEST,
   BACKEND_TARGET,
+  DESKTOP_TARGET,
   NESTED,
   moduleTarget,
   listModules,
@@ -171,5 +251,9 @@ module.exports = {
   run,
   collectBinaries,
   listDir,
+  checkModules,
+  buildModules,
+  copyDir,
   installFrontend,
+  installDesktop,
 };

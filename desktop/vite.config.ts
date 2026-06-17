@@ -27,7 +27,7 @@ export default defineConfig({
           "vendor-i18n": ["vue-i18n"],
           "vendor-reka": ["reka-ui"],
           "vendor-utils": ["@vueuse/core", "clsx", "tailwind-merge", "class-variance-authority"],
-          "vendor-icons": ["lucide-vue-next", "@lucide/vue"],
+          "vendor-icons": ["@lucide/vue"],
           "vendor-sonner": ["vue-sonner"],
         },
       },
