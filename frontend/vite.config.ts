@@ -19,12 +19,6 @@ export default defineConfig({
     outDir: "../build_tmp/frontend/dist",
     emptyOutDir: true,
     rollupOptions: {
-      onwarn(warning, warn) {
-        // @vueuse/core 的产物中有不符合 rolldown 规范的 #__PURE__ 注释位置，忽略这类警告
-        // Suppress invalid #__PURE__ annotation warnings from @vueuse/core until upstream fixes it
-        if (warning.code === "INVALID_ANNOTATION") return;
-        warn(warning);
-      },
       output: {
         manualChunks(id) {
           if (["vue", "vue-router", "pinia"].some(p => id.includes(`/node_modules/${p}/`))) return "vendor-vue";

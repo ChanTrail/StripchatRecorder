@@ -22,13 +22,13 @@ export default defineConfig({
     emptyOutDir: true,
     rollupOptions: {
       output: {
-        manualChunks: {
-          "vendor-vue": ["vue", "vue-router", "pinia"],
-          "vendor-i18n": ["vue-i18n"],
-          "vendor-reka": ["reka-ui"],
-          "vendor-utils": ["@vueuse/core", "clsx", "tailwind-merge", "class-variance-authority"],
-          "vendor-icons": ["@lucide/vue"],
-          "vendor-sonner": ["vue-sonner"],
+        manualChunks(id) {
+          if (["vue", "vue-router", "pinia"].some((m) => id.includes(`/node_modules/${m}/`))) return "vendor-vue";
+          if (id.includes("/node_modules/vue-i18n/")) return "vendor-i18n";
+          if (id.includes("/node_modules/reka-ui/")) return "vendor-reka";
+          if (["@vueuse/core", "clsx", "tailwind-merge", "class-variance-authority"].some((m) => id.includes(`/node_modules/${m}/`))) return "vendor-utils";
+          if (id.includes("/node_modules/@lucide/")) return "vendor-icons";
+          if (id.includes("/node_modules/vue-sonner/")) return "vendor-sonner";
         },
       },
     },

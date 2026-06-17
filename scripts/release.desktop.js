@@ -22,7 +22,7 @@ const fs   = require("fs");
 
 const {
   ROOT, DESKTOP, DESKTOP_TARGET, BUILD_OUT, BUILD_TMP, NESTED,
-  step, header, run, listDir, buildModules, copyDir, installDesktop,
+  step, header, run, listDir, collectBinaries, buildModules, copyDir, installDesktop,
 } = require("./common");
 
 /** Tauri bundle 产物源目录 / Tauri bundle output source */
