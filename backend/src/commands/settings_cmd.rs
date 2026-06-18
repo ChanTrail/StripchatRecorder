@@ -120,8 +120,14 @@ pub fn get_disk_space_inner(output_dir: &str) -> Result<DiskSpace> {
         if ret == 0 {
             let stat = unsafe { stat.assume_init() };
             let block = stat.f_frsize as u64;
+            #[cfg(target_os = "macos")]
             let total = stat.f_blocks as u64 * block;
+            #[cfg(not(target_os = "macos"))]
+            let total = stat.f_blocks * block;
+            #[cfg(target_os = "macos")]
             let avail = stat.f_bavail as u64 * block;
+            #[cfg(not(target_os = "macos"))]
+            let avail = stat.f_bavail * block;
             return Ok(DiskSpace {
                 total_bytes: total,
                 available_bytes: avail,
