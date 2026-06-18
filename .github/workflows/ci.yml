@@ -214,7 +214,7 @@ jobs:
 
   # ── 主程序构建 / Main server build (Linux) ───────────────────────────────────
   build-main:
-    name: Build server (Linux)
+    name: Build mian bin  (Linux)
     runs-on: ubuntu-22.04
     needs: [frontend, check-main, check-modules]
 
