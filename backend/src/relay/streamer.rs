@@ -463,6 +463,7 @@ async fn feed_live(
     should_continue
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn poll_and_feed(
     api: &StripchatApi,
     username: &str,
@@ -485,15 +486,15 @@ async fn poll_and_feed(
     let new_init_path = new_init_url.as_deref().map(init_url_path);
     let cached_path = cached_init_url.as_deref().map(init_url_path);
 
-    if new_init_path.is_some() && new_init_path != cached_path {
-        if let Some(ref url) = new_init_url {
-            match api.download_segment(url).await {
-                Ok(data) => {
-                    *init_data = Some(data);
-                    *cached_init_url = Some(url.clone());
-                }
-                Err(e) => return Err(format!("Failed to download init segment: {}", e)),
+    if new_init_path.is_some() && new_init_path != cached_path
+        && let Some(ref url) = new_init_url
+    {
+        match api.download_segment(url).await {
+            Ok(data) => {
+                *init_data = Some(data);
+                *cached_init_url = Some(url.clone());
             }
+            Err(e) => return Err(format!("Failed to download init segment: {}", e)),
         }
     }
 

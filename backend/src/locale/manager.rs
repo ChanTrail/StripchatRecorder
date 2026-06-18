@@ -488,10 +488,10 @@ pub fn get_full_locale(locale_code: &str) -> serde_json::Value {
             if !path.is_dir() {
                 continue;
             }
-            if let Some(module_id) = path.file_name().and_then(|n| n.to_str()) {
-                if let Some(tr) = read_module_locale(module_id, locale_code) {
-                    modules_obj.insert(module_id.to_string(), tr);
-                }
+            if let Some(module_id) = path.file_name().and_then(|n| n.to_str())
+                && let Some(tr) = read_module_locale(module_id, locale_code)
+            {
+                modules_obj.insert(module_id.to_string(), tr);
             }
         }
     }
