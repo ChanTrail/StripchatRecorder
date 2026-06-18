@@ -190,12 +190,11 @@ pub fn tmp_dir() -> PathBuf {
 
     // 若设置了最大大小限制，清理超出的旧文件
     // If a max size limit is set, prune old files that exceed it
-    if let Ok(max_mb_str) = env::var("PP_MAX_TMP_MB") {
-        if let Ok(max_mb) = max_mb_str.trim().parse::<u64>() {
-            if max_mb > 0 {
-                cleanup_tmp_dir(&tmp, max_mb);
-            }
-        }
+    if let Ok(max_mb_str) = env::var("PP_MAX_TMP_MB")
+        && let Ok(max_mb) = max_mb_str.trim().parse::<u64>()
+        && max_mb > 0
+    {
+        cleanup_tmp_dir(&tmp, max_mb);
     }
 
     tmp
