@@ -263,8 +263,7 @@ jobs:
     name: Auto-tag release
     runs-on: ubuntu-22.04
     needs: [build-main, build-desktop]
-    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
-    if: github.ref == 'refs/heads/beta' && github.event_name == 'push'
+    if: (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/beta') && github.event_name == 'push'
     permissions:
       contents: write
 
