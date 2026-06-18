@@ -2,14 +2,14 @@ name: CI
 
 on:
   push:
-    branches: [main, master, dev]
+    branches: [master, beta]
     paths-ignore:
       - '**.md'
       - 'docs/**'
       - '.gitignore'
       - 'docker-compose.yml'
   pull_request:
-    branches: [main, master]
+    branches: [master]
     paths-ignore:
       - '**.md'
       - 'docs/**'
@@ -45,6 +45,51 @@ jobs:
         working-directory: frontend
 
   # ─────────────────────────────────────────────
+  # Desktop type-check (vue-tsc + modules)
+  # ─────────────────────────────────────────────
+  check-desktop:
+    name: Check desktop (type-check + modules)
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install desktop dependencies
+        run: npm ci
+        working-directory: desktop
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config build-essential libssl-dev \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Rust dependencies (desktop)
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri -> ../../../build_tmp/desktop/target
+          key: desktop-ci
+
+      - name: Run desktop check
+        run: node scripts/check.desktop.js
+        env:
+          CHECK_NESTED: "1"
+          CARGO_TARGET_DIR: build_tmp/desktop/target
+
+  # ─────────────────────────────────────────────
   # Main Rust binary: check + clippy
   # ─────────────────────────────────────────────
   check-main:
@@ -75,10 +120,56 @@ jobs:
         run: mkdir -p build_tmp/frontend/dist
 
       - name: Check
-        run: CARGO_TARGET_DIR=build_tmp/backend/target cargo check --manifest-path backend/Cargo.toml
+        run: cargo check --manifest-path backend/Cargo.toml
+        env:
+          CARGO_TARGET_DIR: build_tmp/backend/target
 
       - name: Clippy
-        run: CARGO_TARGET_DIR=build_tmp/backend/target cargo clippy --manifest-path backend/Cargo.toml -- -D warnings
+        run: cargo clippy --manifest-path backend/Cargo.toml -- -D warnings
+        env:
+          CARGO_TARGET_DIR: build_tmp/backend/target
+
+  # ─────────────────────────────────────────────
+  # Modules: check + clippy
+  # ─────────────────────────────────────────────
+  check-modules:
+    name: Check modules
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev pkg-config build-essential
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            modules/contact_sheet -> ../../build_tmp/modules/contact_sheet/target
+            modules/filter_short -> ../../build_tmp/modules/filter_short/target
+            modules/notify_discord -> ../../build_tmp/modules/notify_discord/target
+            modules/notify_telegram -> ../../build_tmp/modules/notify_telegram/target
+            modules/pp_utils -> ../../build_tmp/modules/pp_utils/target
+          key: modules-ci
+
+      - name: Check all modules
+        run: |
+          for module_dir in modules/contact_sheet modules/filter_short modules/notify_discord modules/notify_telegram modules/pp_utils; do
+            if [ -f "$module_dir/Cargo.toml" ]; then
+              echo "=== Checking $module_dir ==="
+              cargo check --manifest-path "$module_dir/Cargo.toml"
+              cargo clippy --manifest-path "$module_dir/Cargo.toml" -- -D warnings
+            fi
+          done
 
   # ─────────────────────────────────────────────
   # Build main binary (Linux only for speed)
@@ -115,48 +206,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: backend -> ../build_tmp/backend/target
+          key: main-release
 
       - name: Full release build
         run: node scripts/release.js
-
-  # ─────────────────────────────────────────────
-  # Modules: check + clippy
-  # ─────────────────────────────────────────────
-  check-modules:
-    name: Check modules
-    runs-on: ubuntu-22.04
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libssl-dev pkg-config build-essential
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            modules/contact_sheet
-            modules/filter_short
-            modules/notify_discord
-            modules/notify_telegram
-            modules/pp_utils
-          key: modules-ci
-
-      - name: Check all modules
-        run: |
-          for module_dir in modules/contact_sheet modules/filter_short modules/notify_discord modules/notify_telegram; do
-            if [ -f "$module_dir/Cargo.toml" ]; then
-              echo "=== Checking $module_dir ==="
-              cargo check --manifest-path "$module_dir/Cargo.toml"
-              cargo clippy --manifest-path "$module_dir/Cargo.toml" -- -D warnings
-            fi
-          done
