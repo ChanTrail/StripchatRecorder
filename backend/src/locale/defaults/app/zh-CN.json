@@ -107,6 +107,7 @@
       "recordDuration": "录制时长",
       "videoDuration": "视频时长",
       "speed": "录制速度",
+      "segments": "分片统计",
       "postprocess": "后处理",
       "actions": "操作"
     },
@@ -142,7 +143,11 @@
       "batchDone": "已删除 {count} 个文件",
       "batchFailed": "删除完成，{count} 个文件失败"
     },
-    "otherClientDeleted": "其他客户端删除了录制文件：{name}"
+    "otherClientDeleted": "其他客户端删除了录制文件：{name}",
+    "segments": {
+      "downloaded": "成功 {count} 片",
+      "failed": "失败 {count} 片"
+    }
   },
   "postprocess": {
     "title": "后处理流水线",

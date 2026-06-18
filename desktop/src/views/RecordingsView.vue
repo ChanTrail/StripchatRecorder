@@ -91,6 +91,9 @@
 	/** 合并进度（video_path -> {out_bytes, total_bytes}）/ Merge progress per video path */
 	const mergeProgress = ref<Record<string, { out_bytes: number; total_bytes: number }>>({});
 
+	/** 分片下载统计（video_path -> {downloaded, failed}）/ Segment download stats per video path */
+	const segmentStats = ref<Record<string, { downloaded: number; failed: number }>>({});
+
 	const rec = useRecordings();
 	const {
 		files,
@@ -460,6 +463,8 @@
 					path: string;
 					size_bytes: number;
 					speed_bps?: number;
+					segments_downloaded?: number;
+					segments_failed?: number;
 				};
 				// path is the video file path (from meta)
 				const f = files.value.find((r) => r.path === p.path);
@@ -473,6 +478,16 @@
 						delete recordingSpeed.value[p.path];
 					}
 					f.size_bytes = p.size_bytes;
+					// 更新分片统计 / Update segment stats
+					if (f.is_recording && (p.segments_downloaded != null || p.segments_failed != null)) {
+						segmentStats.value = {
+							...segmentStats.value,
+							[p.path]: {
+								downloaded: p.segments_downloaded ?? segmentStats.value[p.path]?.downloaded ?? 0,
+								failed: p.segments_failed ?? segmentStats.value[p.path]?.failed ?? 0,
+							},
+						};
+					}
 				} else {
 					await load();
 					startTick();
@@ -505,6 +520,12 @@
 					const next = { ...mergeProgress.value };
 					delete next[p.video_path];
 					mergeProgress.value = next;
+				}
+				// 录制结束时清理分片统计 / Clean up segment stats when recording stops
+				if (p.video_path) {
+					const nextStats = { ...segmentStats.value };
+					delete nextStats[p.video_path];
+					segmentStats.value = nextStats;
 				}
 			}),
 		);
@@ -804,6 +825,7 @@
 							/>
 						</TableHead>
 						<TableHead>{{ t("recordings.table.speed") }}</TableHead>
+						<TableHead>{{ t("recordings.table.segments") }}</TableHead>
 						<TableHead class="min-w-45">{{
 							t("recordings.table.postprocess")
 						}}</TableHead>
@@ -822,7 +844,7 @@
 									@update:model-value="setGroupChecked(group)"
 								/>
 							</TableCell>
-							<TableCell colspan="7" class="font-semibold">
+							<TableCell colspan="8" class="font-semibold">
 								<span class="mr-2 text-muted-foreground text-xs">{{
 									collapsedGroups.has(group.username) ? "▶" : "▼"
 								}}</span>
@@ -862,7 +884,7 @@
 											}}</Badge>
 										</div>
 									</TableCell>
-									<td colspan="7" class="p-2 align-middle w-full">
+									<td colspan="8" class="p-2 align-middle w-full">
 										<div class="flex items-center gap-3 h-9 w-full">
 											<Loader2
 												class="size-4 animate-spin shrink-0 text-muted-foreground"
@@ -937,6 +959,36 @@
 										>
 											{{ formatSize(recordingSpeed[f.path]) }}/s
 										</span>
+										<span v-else class="text-muted-foreground">—</span>
+									</TableCell>
+									<TableCell class="min-w-36">
+										<template v-if="f.is_recording && segmentStats[f.path] != null">
+											<div class="flex items-center gap-1 flex-wrap">
+												<Badge variant="secondary" class="tabular-nums text-[11px] px-1.5 py-0">
+													{{ segmentStats[f.path].downloaded }}
+												</Badge>
+												<Badge
+													v-if="segmentStats[f.path].failed > 0"
+													variant="secondary"
+													class="tabular-nums text-[11px] px-1.5 py-0 bg-destructive/15 text-destructive border-0"
+												>
+													{{ segmentStats[f.path].failed }}
+												</Badge>
+												<Badge
+													variant="outline"
+													class="tabular-nums text-[11px] px-1.5 py-0"
+													:class="segmentStats[f.path].failed === 0
+														? 'border-green-500 text-green-500'
+														: 'border-destructive text-destructive'"
+												>
+													{{
+														segmentStats[f.path].downloaded + segmentStats[f.path].failed > 0
+															? Math.round(segmentStats[f.path].downloaded / (segmentStats[f.path].downloaded + segmentStats[f.path].failed) * 100)
+															: 100
+													}}%
+												</Badge>
+											</div>
+										</template>
 										<span v-else class="text-muted-foreground">—</span>
 									</TableCell>
 									<TableCell class="min-w-45">

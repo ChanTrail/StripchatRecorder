@@ -49,6 +49,15 @@ pub fn run() {
     let rt_for_setup = Arc::clone(&rt);
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            // 已有实例在运行时，把主窗口拉到前台并聚焦
+            // When another instance is launched, bring the existing window to front
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -56,8 +65,9 @@ pub fn run() {
         .setup(move |app| {
             let app_handle = app.handle().clone();
 
-            // 在 Tokio runtime 上下文中执行所有初始化逻辑。
-            // Run all initialization logic within the Tokio runtime context.
+            // 快速同步初始化（不含耗时的遗留片段合并），完成后立即显示窗口。
+            // Fast synchronous initialization (excluding time-consuming leftover segment merging),
+            // then show the window immediately.
             rt_for_setup.block_on(async move {
                 setup_app(app_handle).await;
             });
@@ -117,9 +127,16 @@ pub fn run() {
 /// 在 Tokio runtime 上下文中执行的应用初始化逻辑。
 /// 拆分为独立 async fn，使代码结构清晰，同时确保所有异步操作都在正确的上下文里运行。
 ///
+/// 初始化分为两个阶段：
+/// 1. 快速初始化（同步阻塞）：完成后立即显示主窗口，用户可立即操作。
+/// 2. 后台初始化（异步非阻塞）：耗时的遗留片段合并在后台执行，不阻塞首屏交互。
+///
 /// Application initialization logic executed within the Tokio runtime context.
-/// Extracted into a separate async fn for clarity and to ensure all async operations
-/// run in the correct context.
+///
+/// Initialization is split into two phases:
+/// 1. Fast initialization (synchronous, blocking): shows the main window immediately.
+/// 2. Background initialization (async, non-blocking): time-consuming leftover segment
+///    merging runs in the background after the window is shown.
 async fn setup_app(app_handle: tauri::AppHandle) {
     // 初始化日志 / Initialize logging
     let log_dir = AppState::log_dir();
@@ -142,8 +159,8 @@ async fn setup_app(app_handle: tauri::AppHandle) {
     // 创建状态监控器 / Create status monitor
     let monitor = StatusMonitor::new(Arc::clone(&app_state), Arc::clone(&recorder));
 
-    // 启动时清理空目录（同步，无需 Tokio）
-    // Remove empty directories on startup (sync, no Tokio needed)
+    // 启动时清理空目录（同步，快速）
+    // Remove empty directories on startup (sync, fast)
     {
         let settings = app_state.get_settings();
         let output_path_buf = std::path::PathBuf::from(&settings.output_dir);
@@ -153,30 +170,6 @@ async fn setup_app(app_handle: tauri::AppHandle) {
             output_ref,
             &settings.merge_format,
         );
-    }
-
-    // 启动时合并遗留片段：内部含 block_on(acquire semaphore)，必须在 spawn_blocking 的
-    // 阻塞线程中调用，不能直接在 async 上下文里调用（否则嵌套 block_on 会 panic）。
-    //
-    // Merge leftover segments on startup: internally calls block_on(acquire semaphore),
-    // so it MUST run in a spawn_blocking thread, not directly in an async context
-    // (nested block_on would panic).
-    {
-        let settings = app_state.get_settings();
-        let output_path_buf = std::path::PathBuf::from(&settings.output_dir);
-        let merge_format = settings.merge_format.clone();
-        let emitter_blocking = Arc::clone(&emitter);
-        let recorder_blocking = Arc::clone(&recorder);
-        tokio::task::spawn_blocking(move || {
-            stripchat_recorder_lib::recording::recorder::startup_merge_leftover_segments(
-                output_path_buf.as_path(),
-                &merge_format,
-                &emitter_blocking,
-                &recorder_blocking,
-            );
-        })
-        .await
-        .ok();
     }
 
     // 检测 ffmpeg 是否可用 / Check if ffmpeg is available
@@ -260,4 +253,38 @@ async fn setup_app(app_handle: tauri::AppHandle) {
     start_recordings_dir_watcher(Arc::clone(&app_state), Arc::clone(&emitter));
     start_modules_dir_watcher(Arc::clone(&emitter));
     stripchat_recorder_lib::watcher::fs_watch::start_locale_dir_watcher(Arc::clone(&emitter));
+
+    // ── 阶段一结束：显示主窗口，用户可立即操作 ─────────────────────────────────
+    // ── Phase 1 complete: show the main window so the user can interact immediately ──
+    if let Some(window) = app_handle.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+
+    // ── 阶段二：后台合并遗留片段（耗时，不阻塞窗口显示）─────────────────────────
+    // ── Phase 2: merge leftover segments in the background (time-consuming, non-blocking) ──
+    //
+    // startup_merge_leftover_segments 内部调用 ffmpeg，可能耗时数秒到数分钟。
+    // 将其移至后台 spawn_blocking 线程，窗口已显示后再执行，不影响首屏交互。
+    //
+    // startup_merge_leftover_segments internally calls ffmpeg, which may take seconds to minutes.
+    // Running it in a background spawn_blocking thread after the window is shown avoids
+    // blocking the first interactive frame.
+    {
+        let settings = app_state.get_settings();
+        let output_path_buf = std::path::PathBuf::from(&settings.output_dir);
+        let merge_format = settings.merge_format.clone();
+        let emitter_blocking = Arc::clone(&emitter);
+        let recorder_blocking = Arc::clone(&recorder);
+        tokio::task::spawn_blocking(move || {
+            stripchat_recorder_lib::recording::recorder::startup_merge_leftover_segments(
+                output_path_buf.as_path(),
+                &merge_format,
+                &emitter_blocking,
+                &recorder_blocking,
+            );
+        });
+        // 注意：此处不 .await，让合并在后台异步进行
+        // Note: no .await here — merging proceeds asynchronously in the background
+    }
 }

@@ -455,6 +455,10 @@ impl RecorderManager {
         let mut playlist_refresh_failures = 0;
         let mut consecutive_cdn_failures: usize = 0;
         let mut last_size_snapshot: Option<(u64, std::time::Instant)> = None;
+        // 累计成功下载的分片数 / Total successfully downloaded segments
+        let mut total_downloaded: u64 = 0;
+        // 累计下载失败的分片数 / Total failed segment downloads
+        let mut total_failed: u64 = 0;
         const MAX_RETRIES: u32 = 10;
         const MAX_PLAYLIST_REFRESH_FAILURES: u32 = 5;
         const CDN_FAILURE_REFRESH_THRESHOLD: usize = 3;
@@ -510,10 +514,12 @@ impl RecorderManager {
                         Ok((n, cdn_fail)) => {
                             if cdn_fail > 0 {
                                 consecutive_cdn_failures += cdn_fail;
+                                total_failed += cdn_fail as u64;
                             }
                             if n > 0 {
                                 consecutive_cdn_failures = 0;
                                 retry_count = 0;
+                                total_downloaded += n as u64;
                                 let size_bytes = dir_size_bytes(session_dir).unwrap_or(0);
                                 let now = std::time::Instant::now();
                                 let speed_bps = last_size_snapshot.map(|(prev_size, prev_time)| {
@@ -548,6 +554,8 @@ impl RecorderManager {
                                     "path": video_path.to_string_lossy(),
                                     "segment_count": downloaded_sequences.len(),
                                     "size_bytes": size_bytes,
+                                    "segments_downloaded": total_downloaded,
+                                    "segments_failed": total_failed,
                                 });
                                 if let Some(spd) = speed_bps {
                                     payload["speed_bps"] = serde_json::json!(spd);

@@ -54,4 +54,8 @@ export interface RecordingFile {
 	pp_results?: PpModuleResult[] | null;
 	/** 模块输出路径（来自 meta 文件）/ Module output paths (from meta file) */
 	module_outputs?: Record<string, string> | null;
+	/** 累计成功下载的分片数（录制中实时更新）/ Total successfully downloaded segments (updated in real-time while recording) */
+	segments_downloaded?: number | null;
+	/** 累计下载失败的分片数（录制中实时更新）/ Total failed segment downloads (updated in real-time while recording) */
+	segments_failed?: number | null;
 }

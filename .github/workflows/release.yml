@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag (e.g. v0.2.0)'
+        description: 'Release tag (e.g. v0.3.0)'
         required: true
 
 env:
@@ -17,8 +17,8 @@ jobs:
   # ─────────────────────────────────────────────
   # Build main binary + all modules (Linux only)
   # ─────────────────────────────────────────────
-  build:
-    name: Build (linux-x86_64)
+  build-server:
+    name: Build server (linux-x86_64)
     runs-on: ubuntu-22.04
 
     steps:
@@ -35,10 +35,6 @@ jobs:
 
       - name: Install frontend dependencies
         run: npm ci
-        working-directory: frontend
-
-      - name: Build frontend
-        run: npm run build
         working-directory: frontend
 
       # ── Rust toolchain ──
@@ -78,13 +74,9 @@ jobs:
         run: |
           PKG="stripchat-recorder-linux-x86_64"
           mkdir -p "$PKG"
-
-          # build/ already contains the clean binaries from release.js
           cp -r build/. "$PKG/"
-
           echo "=== Package contents ==="
           find "$PKG" -type f | sort
-
           tar -czf "${PKG}.tar.gz" "$PKG"
 
       - name: Upload artifact
@@ -95,11 +87,90 @@ jobs:
           retention-days: 7
 
   # ─────────────────────────────────────────────
+  # Build desktop app (multi-platform matrix)
+  # ─────────────────────────────────────────────
+  build-desktop:
+    name: Build desktop (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            os: ubuntu-22.04
+            artifact-name: StripchatRecorder-linux-x86_64
+          - platform: windows-x86_64
+            os: windows-latest
+            artifact-name: StripchatRecorder-windows-x86_64
+          - platform: macos-aarch64
+            os: macos-latest
+            artifact-name: StripchatRecorder-macos-aarch64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Node.js ──
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install desktop dependencies
+        run: npm ci
+        working-directory: desktop
+
+      # ── Rust toolchain ──
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies (desktop)
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            desktop/src-tauri -> ../../../build_tmp/desktop/target
+            modules/contact_sheet -> ../../build_tmp/modules/contact_sheet/target
+            modules/filter_short -> ../../build_tmp/modules/filter_short/target
+            modules/notify_discord -> ../../build_tmp/modules/notify_discord/target
+            modules/notify_telegram -> ../../build_tmp/modules/notify_telegram/target
+            modules/pp_utils -> ../../build_tmp/modules/pp_utils/target
+          key: desktop-${{ matrix.platform }}
+
+      # ── Platform-specific system dependencies ──
+      - name: Install Linux system dependencies
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config build-essential libssl-dev \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Install macOS system dependencies
+        if: startsWith(matrix.os, 'macos')
+        run: brew install pkg-config
+
+      # ── Build desktop via release script ──
+      - name: Full desktop release build
+        run: node scripts/release.desktop.js
+        env:
+          CARGO_TARGET_DIR: build_tmp/desktop/target
+
+      # ── Upload bundle artifacts ──
+      - name: Upload desktop artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact-name }}
+          path: build/desktop/
+          retention-days: 7
+
+  # ─────────────────────────────────────────────
   # Create GitHub Release
   # ─────────────────────────────────────────────
   release:
     name: Create Release
-    needs: build
+    needs: [build-server, build-desktop]
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -115,7 +186,7 @@ jobs:
           merge-multiple: true
 
       - name: List release assets
-        run: ls -lh artifacts/
+        run: ls -lhR artifacts/
 
       - name: Determine tag
         id: tag
@@ -134,4 +205,4 @@ jobs:
           draft: false
           prerelease: ${{ contains(steps.tag.outputs.tag, '-') }}
           generate_release_notes: true
-          files: artifacts/*
+          files: artifacts/**/*

@@ -38,13 +38,10 @@ RUN mkdir -vp ${CARGO_HOME:-$HOME/.cargo} && \
     'index = "sparse+https://mirrors.ustc.edu.cn/crates.io-index/"' \
     | tee -a ${CARGO_HOME:-$HOME/.cargo}/config.toml
 
-WORKDIR /build
-COPY . /build
+WORKDIR /app
+COPY . /app
 
-RUN . /root/.cargo/env && \
-    # Run the unified release script: builds frontend + backend + modules,
-    # collects binaries into /build/build/, then removes /build/build_tmp/
-    cd /build && node scripts/release.js
+RUN . /root/.cargo/env && npm run build
 
 # ── Runtime image ──────────────────────────────────────────────────────────────
 FROM debian:latest
@@ -65,36 +62,19 @@ RUN mkdir -p /app/stripchat-recorder/logs \
              /app/stripchat-recorder/recordings \
              /app/stripchat-recorder/modules.default \
              /app/stripchat-recorder/modules \
-             /app/stripchat-recorder/config \
-             /app/stripchat-recorder/config.default
+             /app/stripchat-recorder/config
 WORKDIR /app
 
-COPY --from=builder /build/build/stripchat-recorder /app/stripchat-recorder/
-COPY --from=builder /build/build/modules/ /app/stripchat-recorder/modules.default/
+COPY --from=builder /app/build/stripchat-recorder /app/stripchat-recorder/
+COPY --from=builder /app/build/modules/ /app/stripchat-recorder/modules.default/
 
 RUN chmod +x /app/stripchat-recorder/stripchat-recorder
-
-RUN printf '%s\n' \
-    '{' \
-    '  "output_dir": "/app/stripchat-recorder/recordings",' \
-    '  "poll_interval_secs": 30,' \
-    '  "auto_record": true,' \
-    '  "api_proxy_url": null,' \
-    '  "cdn_proxy_url": null,' \
-    '  "sc_mirror_url": null,' \
-    '  "max_concurrent": 0,' \
-    '  "merge_format": "mp4",' \
-    '  "language": "zh-CN",' \
-    '  "server_port": 3030' \
-    '}' \
-    > /app/stripchat-recorder/config.default/settings.json
 
 RUN printf '%s\n' \
     '#!/bin/sh' \
     'set -eu' \
     '' \
     'cp -an /app/stripchat-recorder/modules.default/. /app/stripchat-recorder/modules/' \
-    'cp -an /app/stripchat-recorder/config.default/settings.json /app/stripchat-recorder/config/settings.json' \
     '' \
     '# Override language from LANGUAGE env var if set (e.g. LANGUAGE=en-US)' \
     'if [ -n "${LANGUAGE:-}" ]; then' \

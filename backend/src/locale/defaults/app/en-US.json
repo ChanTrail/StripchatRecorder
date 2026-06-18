@@ -107,6 +107,7 @@
       "recordDuration": "Record Duration",
       "videoDuration": "Video Duration",
       "speed": "Speed",
+      "segments": "Segments",
       "postprocess": "Post-process",
       "actions": "Actions"
     },
@@ -142,7 +143,11 @@
       "batchDone": "Deleted {count} file(s)",
       "batchFailed": "Done, {count} file(s) failed"
     },
-    "otherClientDeleted": "Another client deleted recording: {name}"
+    "otherClientDeleted": "Another client deleted recording: {name}",
+    "segments": {
+      "downloaded": "{count} ok",
+      "failed": "{count} failed"
+    }
   },
   "postprocess": {
     "title": "Post-processing Pipeline",

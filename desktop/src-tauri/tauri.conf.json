@@ -13,12 +13,13 @@
     "windows": [
       {
         "title": "StripchatRecorder",
-        "width": 1200,
-        "height": 800,
-        "minWidth": 900,
+        "width": 1600,
+        "height": 600,
+        "minWidth": 1600,
         "minHeight": 600,
         "resizable": true,
-        "fullscreen": false
+        "fullscreen": false,
+        "visible": false
       }
     ],
     "security": {
