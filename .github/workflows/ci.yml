@@ -264,14 +264,15 @@ jobs:
     runs-on: ubuntu-22.04
     needs: [build-main, build-desktop]
     if: (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/beta') && github.event_name == 'push'
-    permissions:
-      contents: write
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # 使用 PAT checkout，确保后续 push 也携带同一凭据
+          # Checkout with PAT so the subsequent push uses the same credential
+          token: ${{ secrets.RELEASE_PAT }}
 
       # 从 package.json 读取版本号并构造 tag / Read version from package.json and build tag name
       - name: Read version
@@ -292,6 +293,8 @@ jobs:
             echo "exists=false" >> $GITHUB_OUTPUT
           fi
 
+      # 用 PAT 推送 tag，绕过 GITHUB_TOKEN 不触发下游 workflow 的限制
+      # Push tag with PAT to bypass the GITHUB_TOKEN cross-workflow trigger restriction
       - name: Create and push tag
         if: steps.tag_check.outputs.exists == 'false'
         run: |
