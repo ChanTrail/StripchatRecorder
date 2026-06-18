@@ -19,12 +19,12 @@ jobs:
         include:
           - platform: linux-x86_64
             os: ubuntu-22.04
-            artifact-name: stripchat-recorder-linux-x86_64
-            archive-name: stripchat-recorder-linux-x86_64.zip
+            artifact-name: StripchatRecorder-server-linux-x86_64
+            archive-name: StripchatRecorder-server-linux-x86_64.zip
           - platform: windows-x86_64
             os: windows-latest
-            artifact-name: stripchat-recorder-windows-x86_64
-            archive-name: stripchat-recorder-windows-x86_64.zip
+            artifact-name: StripchatRecorder-server-windows-x86_64
+            archive-name: StripchatRecorder-server-windows-x86_64.zip
 
     steps:
       - name: Checkout
@@ -109,13 +109,13 @@ jobs:
         include:
           - platform: linux-x86_64
             os: ubuntu-22.04
-            artifact-name: StripchatRecorder-linux-x86_64
+            artifact-name: StripchatRecorder-desktop-linux-x86_64
           - platform: windows-x86_64
             os: windows-latest
-            artifact-name: StripchatRecorder-windows-x86_64
+            artifact-name: StripchatRecorder-desktop-windows-x86_64
           - platform: macos-aarch64
             os: macos-latest
-            artifact-name: StripchatRecorder-macos-aarch64
+            artifact-name: StripchatRecorder-desktop-macos-aarch64
 
     steps:
       - name: Checkout
@@ -168,11 +168,53 @@ jobs:
         env:
           CARGO_TARGET_DIR: build_tmp/desktop/target
 
-      - name: Upload desktop artifact
+      # ── 打包模块 / Pack modules ──
+      - name: Pack modules (Linux/macOS)
+        if: matrix.os != 'windows-latest'
+        run: |
+          zip -j build/desktop/modules-${{ matrix.platform }}.zip build/desktop/modules/*
+
+      - name: Pack modules (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path build\desktop\modules\* `
+            -DestinationPath build\desktop\modules-${{ matrix.platform }}.zip
+
+      # ── 上传 Linux 产物 / Upload Linux artifacts ──
+      - name: Upload Linux installers
+        if: matrix.os == 'ubuntu-22.04'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact-name }}
-          path: build/desktop/
+          path: |
+            build/desktop/appimage/*.AppImage
+            build/desktop/deb/*.deb
+            build/desktop/rpm/*.rpm
+            build/desktop/modules-${{ matrix.platform }}.zip
+          retention-days: 7
+
+      # ── 上传 macOS 产物 / Upload macOS artifacts ──
+      - name: Upload macOS installers
+        if: startsWith(matrix.os, 'macos')
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact-name }}
+          path: |
+            build/desktop/dmg/*.dmg
+            build/desktop/modules-${{ matrix.platform }}.zip
+          retention-days: 7
+
+      # ── 上传 Windows 产物 / Upload Windows artifacts ──
+      - name: Upload Windows installers
+        if: matrix.os == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact-name }}
+          path: |
+            build/desktop/msi/*.msi
+            build/desktop/nsis/*.exe
+            build/desktop/modules-${{ matrix.platform }}.zip
           retention-days: 7
 
   # ── 创建 GitHub Release / Create GitHub Release ──────────────────────────────

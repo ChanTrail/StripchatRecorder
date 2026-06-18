@@ -85,9 +85,9 @@ jobs:
           CHECK_NESTED: "1"
           CARGO_TARGET_DIR: build_tmp/desktop/target
 
-  # ── 主程序检查 / Main binary check + clippy ──────────────────────────────────
-  check-main:
-    name: Check main binary
+  # ── 服务器端检查 / Server check + clippy ──────────────────────────────────
+  check-server:
+    name: Check server
     runs-on: ubuntu-22.04
 
     steps:
@@ -108,7 +108,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: backend -> ../build_tmp/backend/target
-          key: main-ci
+          key: server-ci
 
       # RustEmbed 要求 dist 目录存在 / RustEmbed requires the dist directory to exist
       - name: Ensure build_tmp/frontend/dist exists
@@ -212,11 +212,11 @@ jobs:
         env:
           CARGO_TARGET_DIR: build_tmp/desktop/target
 
-  # ── 主程序构建 / Main server build (Linux) ───────────────────────────────────
-  build-main:
-    name: Build mian binary  (Linux)
+  # ── 服务器端构建 / Server build (Linux) ───────────────────────────────────
+  build-server:
+    name: Build server  (Linux)
     runs-on: ubuntu-22.04
-    needs: [frontend, check-main, check-modules]
+    needs: [frontend, check-server, check-modules]
 
     steps:
       - name: Checkout
@@ -245,7 +245,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: backend -> ../build_tmp/backend/target
-          key: main-release
+          key: server-release
 
       - name: Full release build
         run: node scripts/release.js
@@ -262,7 +262,7 @@ jobs:
   auto-tag:
     name: Auto-tag release
     runs-on: ubuntu-22.04
-    needs: [build-main, build-desktop]
+    needs: [build-server, build-desktop]
     if: (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/beta') && github.event_name == 'push'
 
     steps:
