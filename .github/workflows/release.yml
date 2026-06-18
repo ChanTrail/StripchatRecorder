@@ -73,24 +73,24 @@ jobs:
       - name: Assemble package (Linux)
         if: matrix.os == 'ubuntu-22.04'
         run: |
-          PKG="stripchat-recorder-linux-x86_64"
+          PKG="${{ matrix.artifact-name }}"
           mkdir -p "$PKG"
           cp -r build/. "$PKG/"
           echo "=== Package contents ==="
           find "$PKG" -type f | sort
-          zip -r "${PKG}.zip" "$PKG"
+          zip -r "${{ matrix.archive-name }}" "$PKG"
 
       # ── 打包（Windows）/ Assemble package (Windows) ──
       - name: Assemble package (Windows)
         if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
-          $PKG = "stripchat-recorder-windows-x86_64"
+          $PKG = "${{ matrix.artifact-name }}"
           New-Item -ItemType Directory -Force -Path $PKG | Out-Null
           Copy-Item -Recurse build\* $PKG\
           Write-Host "=== Package contents ==="
           Get-ChildItem -Recurse $PKG | Select-Object FullName
-          Compress-Archive -Path $PKG -DestinationPath "$PKG.zip"
+          Compress-Archive -Path $PKG -DestinationPath "${{ matrix.archive-name }}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
