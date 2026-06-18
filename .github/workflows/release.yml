@@ -4,22 +4,27 @@ on:
   push:
     tags:
       - 'v*.*.*'
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Release tag (e.g. v0.3.0)'
-        required: true
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # ─────────────────────────────────────────────
-  # Build main binary + all modules (Linux only)
-  # ─────────────────────────────────────────────
+  # ── 主程序构建（多平台）/ Server build (multi-platform) ──────────────────────
   build-server:
-    name: Build server (linux-x86_64)
-    runs-on: ubuntu-22.04
+    name: Build server (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            os: ubuntu-22.04
+            artifact-name: stripchat-recorder-linux-x86_64
+            archive-name: stripchat-recorder-linux-x86_64.zip
+          - platform: windows-x86_64
+            os: windows-latest
+            artifact-name: stripchat-recorder-windows-x86_64
+            archive-name: stripchat-recorder-windows-x86_64.zip
 
     steps:
       - name: Checkout
@@ -37,7 +42,7 @@ jobs:
         run: npm i
         working-directory: frontend
 
-      # ── Rust toolchain ──
+      # ── Rust 工具链 / Rust toolchain ──
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -51,44 +56,50 @@ jobs:
             modules/notify_discord -> ../../build_tmp/modules/notify_discord/target
             modules/notify_telegram -> ../../build_tmp/modules/notify_telegram/target
             modules/pp_utils -> ../../build_tmp/modules/pp_utils/target
+          key: server-${{ matrix.platform }}
 
-      # ── System libraries ──
+      # ── 系统依赖（仅 Linux）/ System libraries (Linux only) ──
       - name: Install Linux dependencies
+        if: matrix.os == 'ubuntu-22.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y pkg-config build-essential libssl-dev
 
-      # ── Build everything via release script ──
+      # ── 构建 / Build ──
       - name: Full release build
         run: node scripts/release.js
 
-      # ── Assemble package directory ──
-      #
-      # Layout:
-      #   stripchat-recorder-linux-x86_64/
-      #   ├── stripchat-recorder
-      #   └── modules/
-      #       └── ...
-      #
-      - name: Assemble package
+      # ── 打包（Linux）/ Assemble package (Linux) ──
+      - name: Assemble package (Linux)
+        if: matrix.os == 'ubuntu-22.04'
         run: |
           PKG="stripchat-recorder-linux-x86_64"
           mkdir -p "$PKG"
           cp -r build/. "$PKG/"
           echo "=== Package contents ==="
           find "$PKG" -type f | sort
-          tar -czf "${PKG}.tar.gz" "$PKG"
+          zip -r "${PKG}.zip" "$PKG"
+
+      # ── 打包（Windows）/ Assemble package (Windows) ──
+      - name: Assemble package (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $PKG = "stripchat-recorder-windows-x86_64"
+          New-Item -ItemType Directory -Force -Path $PKG | Out-Null
+          Copy-Item -Recurse build\* $PKG\
+          Write-Host "=== Package contents ==="
+          Get-ChildItem -Recurse $PKG | Select-Object FullName
+          Compress-Archive -Path $PKG -DestinationPath "$PKG.zip"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: stripchat-recorder-linux-x86_64
-          path: stripchat-recorder-linux-x86_64.tar.gz
+          name: ${{ matrix.artifact-name }}
+          path: ${{ matrix.archive-name }}
           retention-days: 7
 
-  # ─────────────────────────────────────────────
-  # Build desktop app (multi-platform matrix)
-  # ─────────────────────────────────────────────
+  # ── 桌面端构建（多平台）/ Desktop build (multi-platform) ────────────────────
   build-desktop:
     name: Build desktop (${{ matrix.platform }})
     runs-on: ${{ matrix.os }}
@@ -122,7 +133,7 @@ jobs:
         run: npm i
         working-directory: desktop
 
-      # ── Rust toolchain ──
+      # ── Rust 工具链 / Rust toolchain ──
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -138,7 +149,7 @@ jobs:
             modules/pp_utils -> ../../build_tmp/modules/pp_utils/target
           key: desktop-${{ matrix.platform }}
 
-      # ── Platform-specific system dependencies ──
+      # ── 平台系统依赖 / Platform-specific system dependencies ──
       - name: Install Linux system dependencies
         if: matrix.os == 'ubuntu-22.04'
         run: |
@@ -151,13 +162,12 @@ jobs:
         if: startsWith(matrix.os, 'macos')
         run: brew install pkg-config
 
-      # ── Build desktop via release script ──
+      # ── 构建 / Build ──
       - name: Full desktop release build
         run: node scripts/release.desktop.js
         env:
           CARGO_TARGET_DIR: build_tmp/desktop/target
 
-      # ── Upload bundle artifacts ──
       - name: Upload desktop artifact
         uses: actions/upload-artifact@v4
         with:
@@ -165,9 +175,7 @@ jobs:
           path: build/desktop/
           retention-days: 7
 
-  # ─────────────────────────────────────────────
-  # Create GitHub Release
-  # ─────────────────────────────────────────────
+  # ── 创建 GitHub Release / Create GitHub Release ──────────────────────────────
   release:
     name: Create Release
     needs: [build-server, build-desktop]
@@ -188,14 +196,10 @@ jobs:
       - name: List release assets
         run: ls -lhR artifacts/
 
+      # tag 始终来自 push 事件 / Tag always comes from the push event
       - name: Determine tag
         id: tag
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
-          else
-            echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
-          fi
+        run: echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

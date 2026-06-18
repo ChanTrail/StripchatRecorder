@@ -18,9 +18,7 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # ─────────────────────────────────────────────
-  # Frontend type-check & build
-  # ─────────────────────────────────────────────
+  # ── 前端类型检查与构建 / Frontend type-check & build ────────────────────────
   frontend:
     name: Frontend (type-check + build)
     runs-on: ubuntu-22.04
@@ -44,9 +42,7 @@ jobs:
         run: npm run build
         working-directory: frontend
 
-  # ─────────────────────────────────────────────
-  # Desktop type-check (vue-tsc + modules)
-  # ─────────────────────────────────────────────
+  # ── 桌面端类型检查 / Desktop type-check (vue-tsc + modules) ─────────────────
   check-desktop:
     name: Check desktop (type-check + modules)
     runs-on: ubuntu-22.04
@@ -89,9 +85,7 @@ jobs:
           CHECK_NESTED: "1"
           CARGO_TARGET_DIR: build_tmp/desktop/target
 
-  # ─────────────────────────────────────────────
-  # Main Rust binary: check + clippy
-  # ─────────────────────────────────────────────
+  # ── 主程序检查 / Main binary check + clippy ──────────────────────────────────
   check-main:
     name: Check main binary
     runs-on: ubuntu-22.04
@@ -116,7 +110,8 @@ jobs:
           workspaces: backend -> ../build_tmp/backend/target
           key: main-ci
 
-      - name: Ensure build_tmp/frontend/dist exists (required by RustEmbed)
+      # RustEmbed 要求 dist 目录存在 / RustEmbed requires the dist directory to exist
+      - name: Ensure build_tmp/frontend/dist exists
         run: mkdir -p build_tmp/frontend/dist
 
       - name: Check
@@ -129,9 +124,7 @@ jobs:
         env:
           CARGO_TARGET_DIR: build_tmp/backend/target
 
-  # ─────────────────────────────────────────────
-  # Modules: check + clippy
-  # ─────────────────────────────────────────────
+  # ── 模块检查 / Modules check + clippy ───────────────────────────────────────
   check-modules:
     name: Check modules
     runs-on: ubuntu-22.04
@@ -171,9 +164,7 @@ jobs:
             fi
           done
 
-  # ─────────────────────────────────────────────
-  # Build desktop app (Linux only for speed)
-  # ─────────────────────────────────────────────
+  # ── 桌面端构建 / Desktop build (Linux) ──────────────────────────────────────
   build-desktop:
     name: Build desktop (Linux)
     runs-on: ubuntu-22.04
@@ -221,11 +212,9 @@ jobs:
         env:
           CARGO_TARGET_DIR: build_tmp/desktop/target
 
-  # ─────────────────────────────────────────────
-  # Build main binary (Linux only for speed)
-  # ─────────────────────────────────────────────
+  # ── 主程序构建 / Main server build (Linux) ───────────────────────────────────
   build-main:
-    name: Build main binary (Linux)
+    name: Build server (Linux)
     runs-on: ubuntu-22.04
     needs: [frontend, check-main, check-modules]
 
@@ -260,3 +249,53 @@ jobs:
 
       - name: Full release build
         run: node scripts/release.js
+
+  # ── 自动打 Tag / Auto-tag after CI (master only) ─────────────────────────────
+  #
+  # 仅在 master 分支且所有构建通过后运行。
+  # 从 package.json 读取版本号，若对应 tag 不存在则创建并推送，
+  # 从而自动触发 release.yml 工作流。
+  #
+  # Only runs on master after all builds pass.
+  # Reads version from package.json; creates and pushes the tag if it doesn't
+  # exist yet, which in turn triggers the release.yml workflow.
+  auto-tag:
+    name: Auto-tag release
+    runs-on: ubuntu-22.04
+    needs: [build-main, build-desktop]
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 从 package.json 读取版本号并构造 tag / Read version from package.json and build tag name
+      - name: Read version
+        id: version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=v$VERSION" >> $GITHUB_OUTPUT
+
+      # 若 tag 已存在则跳过，避免重复发布 / Skip if tag already exists to avoid duplicate releases
+      - name: Check if tag exists
+        id: tag_check
+        run: |
+          if git ls-remote --tags origin "${{ steps.version.outputs.tag }}" | grep -q .; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Tag ${{ steps.version.outputs.tag }} already exists, skipping."
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create and push tag
+        if: steps.tag_check.outputs.exists == 'false'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "${{ steps.version.outputs.tag }}"
+          git push origin "${{ steps.version.outputs.tag }}"
