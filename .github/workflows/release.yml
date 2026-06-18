@@ -34,7 +34,7 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - name: Install frontend dependencies
-        run: npm ci
+        run: npm i
         working-directory: frontend
 
       # ── Rust toolchain ──
@@ -119,7 +119,7 @@ jobs:
           cache-dependency-path: desktop/package-lock.json
 
       - name: Install desktop dependencies
-        run: npm ci
+        run: npm i
         working-directory: desktop
 
       # ── Rust toolchain ──
