@@ -63,7 +63,7 @@ jobs:
           cache-dependency-path: desktop/package-lock.json
 
       - name: Install desktop dependencies
-        run: npm ci
+        run: npm i
         working-directory: desktop
 
       - name: Install system dependencies
