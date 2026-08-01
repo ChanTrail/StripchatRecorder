@@ -156,7 +156,7 @@
     "saved": "Auto-saved",
     "input": {
       "label": "Input",
-      "description": "Merged single video file"
+      "description": "TS segment recording directory"
     },
     "node": {
       "skip": "Skip",
@@ -257,24 +257,14 @@
       "enUS": "English"
     },
     "outputDir": {
-      "label": "Output Directory",
+      "label": "TS Stream Output Directory",
       "placeholder": "/path/to/recordings",
-      "hint": "Press Enter or click elsewhere to confirm",
+      "hint": "Where TS segment streams from recordings are stored. Press Enter or click elsewhere to confirm.",
       "pick": "Browse",
-      "changeTitle": "Change Output Directory",
-      "changeMessage": "Change output directory to:\n{dir}\n\nThis will take effect on the next recording.",
+      "changeTitle": "Change TS Stream Output Directory",
+      "changeMessage": "Change TS stream output directory to:\n{dir}\n\nThis will take effect on the next recording.",
       "changeConfirm": "Confirm",
-      "changeDone": "Output directory updated, will take effect on next recording"
-    },
-    "tmpDir": {
-      "label": "Temporary Segment Directory (leave empty to use output directory)",
-      "placeholder": "/tmp/recordings_tmp",
-      "hint": "Where temporary .ts segment files are stored during recording. Can be set to a fast disk for better performance. Leave empty to use the same directory as the output. Press Enter or click elsewhere to confirm.",
-      "sameAsOutput": "(same as output directory)",
-      "changeTitle": "Change Temporary Segment Directory",
-      "changeMessage": "Change temporary segment directory to:\n{dir}\n\nThis will take effect on the next recording.",
-      "changeConfirm": "Confirm",
-      "changeDone": "Temporary segment directory updated, will take effect on next recording"
+      "changeDone": "TS stream output directory updated, will take effect on next recording"
     },
     "maxConcurrent": {
       "label": "Max Concurrent Recordings",
@@ -282,10 +272,6 @@
     },
     "pollInterval": {
       "label": "Poll Interval (seconds)"
-    },
-    "mergeFormat": {
-      "label": "Merge Format",
-      "hint": "Format for automatically merging segments after recording ends. Changes apply to recordings already in progress."
     },
     "maxTmpDirGb": {
       "label": "Max Tmp Directory Size (GB)",

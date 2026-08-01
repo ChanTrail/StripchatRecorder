@@ -20,6 +20,7 @@ import { usePpStatusStore } from "@/stores/ppStatus";
 import { storeToRefs } from "pinia";
 import { useNotify } from "./useNotify";
 import { useI18n } from "vue-i18n";
+import type { PpExecutionEntry, PpNodeProgress } from "@/types/recordings";
 
 /** 后处理任务状态 / Post-processing task status */
 export type PpStatus = "idle" | "waiting" | "running" | "done" | "error";
@@ -161,6 +162,64 @@ export function makePpProgress(
 }
 
 /**
+ * 从 meta 的 pp_execution 和 pp_progress 字段直接计算 PpProgress。
+ *
+ * 规则：
+ * - result != null 的条目 → 已完成（用于 overallDone / moduleResults）
+ * - result == null 的条目 → 正在执行（当前节点）
+ * - pp_progress → 当前节点的模块内进度
+ *
+ * Build PpProgress directly from meta's pp_execution and pp_progress fields.
+ *
+ * Rules:
+ * - Entry with result != null → completed (contributes to overallDone / moduleResults)
+ * - Entry with result == null → currently executing (current node)
+ * - pp_progress → intra-module progress of the current node
+ */
+export function ppProgressFromMeta(
+	ppExecution: PpExecutionEntry[] | null | undefined,
+	ppProgress: PpNodeProgress | null | undefined,
+	labels: PpProgressLabels = DEFAULT_LABELS,
+): PpProgress {
+	const entries = ppExecution ?? [];
+	const done = entries.filter((e) => e.result != null);
+	const running = entries.find((e) => e.result == null);
+
+	const overallDone = done.length;
+	// 总节点数 = 已完成 + 正在执行（如有）
+	// total = completed + running (if any)
+	const overallTotal = running ? overallDone + 1 : overallDone;
+
+	const moduleResults = done.map((e) => ({
+		moduleId: e.module_id,
+		success:
+			e.result?.code === "ok" ||
+			e.result?.code === "done" ||
+			e.result?.code === "skipped",
+		message: e.result?.message ?? "",
+	}));
+
+	const moduleName = running?.module_id ?? ppProgress?.module_id ?? "";
+	const modDone = ppProgress?.mod_done ?? 0;
+	const modTotal = ppProgress?.mod_total ?? 0;
+
+	return {
+		...makePpProgress(
+			overallDone,
+			overallTotal,
+			modDone,
+			modTotal,
+			moduleName,
+			overallTotal > 0 ? clampPct2((overallDone * 100) / overallTotal) : 0,
+			"",
+			0,
+			labels,
+		),
+		moduleResults,
+	};
+}
+
+/**
  * 后处理任务状态与操作。
  * Post-processing task state and operations.
  */
@@ -236,13 +295,11 @@ export function usePostprocess() {
 	 * @param path - 视频文件路径 / Video file path
 	 */
 	async function runPostprocess(path: string) {
-		ppStatus.value[path] = "running";
-		ppProgress.value[path] = makePpProgress(0, 0, 0, 0, "", 0, "", 0, ppLabels());
 		try {
 			await call("run_postprocess_cmd", { path });
+			// 状态由 SSE 事件驱动：postprocess-waiting → postprocess-started → …
+			// Status is driven by SSE events: postprocess-waiting → postprocess-started → …
 		} catch (e) {
-			ppStatus.value[path] = "error";
-			delete ppProgress.value[path];
 			toast(String(e), "error");
 		}
 	}
@@ -302,78 +359,51 @@ export function usePostprocess() {
 	/**
 	 * 处理后处理完成事件，更新状态并触发文件列表刷新。
 	 * Handle post-processing done event, update state and trigger file list reload.
-	 *
-	 * @param payload - 后端推送的完成事件数据 / Done event data from backend
-	 * @param onLoad - 文件列表刷新回调 / File list reload callback
-	 * @param isFileDeleted - 文件是否已被用户删除（为 true 时跳过 toast 提示）/ Whether the file was deleted by the user (skip toast if true)
 	 */
-	function handlePostprocessDone(
-		payload: {
-			path: string;
-			results: { moduleId: string; success: boolean; message: string }[];
-		},
+	async function handlePostprocessDone(
+		payload: { path: string; success: boolean; message?: string },
 		onLoad: () => Promise<void>,
 		isFileDeleted?: () => boolean,
 	) {
-		const allOk = payload.results.every((r) => r.success);
+		const allOk = payload.success;
 		ppStatus.value[payload.path] = allOk ? "done" : "error";
 
-		// 若文件已被用户删除，跳过所有 toast 提示，仅刷新列表
-		// If the file was deleted by the user, skip all toasts and just reload
 		const deleted = isFileDeleted?.() ?? false;
 
+		// 执行 onLoad() 刷新文件列表（meta 已是最新，进度由 postprocess-meta-update 维护）
+		// Execute onLoad() to refresh file list (meta is up-to-date; progress maintained by postprocess-meta-update)
+		await onLoad();
+
 		if (allOk) {
-			// 所有模块成功：更新进度为 100% 并收集输出路径
-			// All modules succeeded: set progress to 100% and collect output paths
-			ppProgress.value[payload.path] = {
-				...makePpProgress(
-					payload.results.length,
-					payload.results.length,
-					0,
-					0,
-					"",
-					100,
-					"",
-					0,
-					ppLabels(),
-				),
-				moduleResults: payload.results,
-			};
 			if (!deleted) {
-				const names = payload.results.map((r) => r.moduleId).join(" → ");
-				toast(t("usePostprocess.done", { modules: names }), "success");
+				const fullResults = ppProgress.value[payload.path]?.moduleResults;
+				const lines = fullResults?.length
+					? fullResults.map((r) => `${r.success ? "✓" : "✗"} ${r.moduleId}`).join("  ")
+					: "";
+				toast(
+					lines
+						? t("usePostprocess.doneWithModules", { modules: lines })
+						: t("usePostprocess.done"),
+					"success",
+				);
 			}
-			// NodeResult.output 字段在序列化时被 #[serde(skip)] 跳过，前端无法直接获取。
-			// 使用 inferModuleOutputs 根据流水线配置推断输出路径（如 contact_sheet 图片路径）。
-			// NodeResult.output is skipped during serialization (#[serde(skip)]), so the frontend
-			// cannot access it directly. Use inferModuleOutputs to derive output paths from the
-			// pipeline config (e.g., the contact_sheet image path).
 			const inferred = inferModuleOutputs(payload.path);
 			if (Object.keys(inferred).length > 0) {
-				moduleOutputs.value = {
-					...moduleOutputs.value,
-					[payload.path]: inferred,
-				};
+				moduleOutputs.value = { ...moduleOutputs.value, [payload.path]: inferred };
 			} else {
 				fetchModuleOutputs(payload.path);
 			}
 		} else {
-			ppProgress.value[payload.path] = {
-				...makePpProgress(0, payload.results.length, 0, 0, "", 0, "", 0, ppLabels()),
-				moduleResults: payload.results,
-			};
 			if (!deleted) {
-				const failed = payload.results.find((r) => !r.success);
-				toast(
-					t("usePostprocess.failed", {
-						moduleId: failed?.moduleId,
-						message: failed?.message,
-					}),
-					"error",
-				);
+				const failedModules = ppProgress.value[payload.path]?.moduleResults?.filter((r) => !r.success);
+				if (failedModules?.length) {
+					const lines = failedModules.map((r) => `✗ ${r.moduleId}: ${r.message}`).join("\n");
+					toast(lines, "error");
+				} else if (payload.message) {
+					toast(payload.message, "error");
+				}
 			}
 		}
-		return onLoad();
 	}
 
 	/**

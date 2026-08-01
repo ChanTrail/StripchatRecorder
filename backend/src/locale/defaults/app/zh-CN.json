@@ -156,7 +156,7 @@
     "saved": "已自动保存",
     "input": {
       "label": "输入",
-      "description": "合并后的单视频文件"
+      "description": "TS 分片录制目录"
     },
     "node": {
       "skip": "跳过",
@@ -257,24 +257,14 @@
       "enUS": "English"
     },
     "outputDir": {
-      "label": "输出目录",
+      "label": "TS 流输出目录",
       "placeholder": "/path/to/recordings",
-      "hint": "修改后按回车或点击其他区域确认",
+      "hint": "录制产生的 TS 分片流存放位置。修改后按回车或点击其他区域确认。",
       "pick": "选择",
-      "changeTitle": "修改输出目录",
-      "changeMessage": "将输出目录改为：\n{dir}\n\n此更改将在下次录制时生效。",
+      "changeTitle": "修改 TS 流输出目录",
+      "changeMessage": "将 TS 流输出目录改为：\n{dir}\n\n此更改将在下次录制时生效。",
       "changeConfirm": "确认",
-      "changeDone": "输出目录已更新，将在下次录制时生效"
-    },
-    "tmpDir": {
-      "label": "临时分片目录（留空则与输出目录相同）",
-      "placeholder": "/tmp/recordings_tmp",
-      "hint": "录制产生的临时 .ts 分片文件存放位置。可以指定到高速磁盘以提升录制效率，留空表示与输出目录相同。修改后按回车或点击其他区域确认。",
-      "sameAsOutput": "（与输出目录相同）",
-      "changeTitle": "修改临时分片目录",
-      "changeMessage": "将临时分片目录改为：\n{dir}\n\n此更改将在下次录制时生效。",
-      "changeConfirm": "确认",
-      "changeDone": "临时分片目录已更新，将在下次录制时生效"
+      "changeDone": "TS 流输出目录已更新，将在下次录制时生效"
     },
     "maxConcurrent": {
       "label": "最大并发录制数",
@@ -282,10 +272,6 @@
     },
     "pollInterval": {
       "label": "轮询间隔（秒）"
-    },
-    "mergeFormat": {
-      "label": "合并格式",
-      "hint": "录制结束后自动合并分片为单一文件的格式，修改后对当前录制同样生效"
     },
     "maxTmpDirGb": {
       "label": "后处理临时目录最大占用（GB）",

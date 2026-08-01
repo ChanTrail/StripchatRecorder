@@ -1,7 +1,6 @@
 //! 后处理工具库 / Post-processing Utility Library
 //!
 //! 为所有后处理模块提供共享的工具函数，包括：
-//! - 从环境变量读取模块参数
 //! - 通过 ffprobe 获取视频时长
 //! - 格式化时长、文件大小和传输速度
 //! - 解析录制文件名中的主播名和时间戳
@@ -9,7 +8,6 @@
 //! - 向标准输出发送进度信息
 //!
 //! Provides shared utility functions for all post-processing modules, including:
-//! - Reading module parameters from environment variables
 //! - Getting video duration via ffprobe
 //! - Formatting duration, file size, and transfer speed
 //! - Parsing streamer name and timestamp from recording filenames
@@ -19,43 +17,6 @@
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-
-/// 读取字符串类型的模块参数，参数通过环境变量 `PP_PARAM_{KEY}` 传入。
-/// Read a string module parameter passed via environment variable `PP_PARAM_{KEY}`.
-///
-/// # 参数 / Parameters
-/// - `key`: 参数键名（不区分大小写）/ Parameter key (case-insensitive)
-/// - `fallback`: 环境变量未设置时的默认值 / Default value when env var is not set
-pub fn param(key: &str, fallback: &str) -> String {
-    env::var(format!("PP_PARAM_{}", key.to_uppercase())).unwrap_or_else(|_| fallback.to_string())
-}
-
-/// 读取 u32 类型的模块参数，解析失败时返回默认值。
-/// Read a u32 module parameter, returns fallback on parse failure.
-pub fn param_u32(key: &str, fallback: u32) -> u32 {
-    param(key, &fallback.to_string())
-        .parse()
-        .unwrap_or(fallback)
-}
-
-/// 读取 f64 类型的模块参数，解析失败时返回默认值。
-/// Read an f64 module parameter, returns fallback on parse failure.
-pub fn param_f64(key: &str, fallback: f64) -> f64 {
-    param(key, &fallback.to_string())
-        .parse()
-        .unwrap_or(fallback)
-}
-
-/// 读取布尔类型的模块参数，"true"/"1"/"yes"（不区分大小写）均视为 true。
-/// Read a boolean module parameter; "true"/"1"/"yes" (case-insensitive) are treated as true.
-pub fn param_bool(key: &str, fallback: bool) -> bool {
-    matches!(
-        param(key, if fallback { "true" } else { "false" })
-            .to_lowercase()
-            .as_str(),
-        "true" | "1" | "yes"
-    )
-}
 
 /// 使用 ffprobe 获取视频文件的时长（秒）。
 /// Get the duration of a video file in seconds using ffprobe.
@@ -337,4 +298,141 @@ pub fn emit_progress_step(step: u32, total_steps: u32) {
             .min(PROGRESS_SCALE as u64) as u32
     };
     println!("PROGRESS:{}/{}", scaled, PROGRESS_SCALE);
+}
+
+// ─── 新 JSON 协议帮助函数 / New JSON Protocol Helpers ────────────────────────
+
+/// 模块 stdin 输入 JSON 结构 / Module stdin input JSON structure
+#[derive(Debug, serde::Deserialize)]
+pub struct ModuleInput {
+    /// 输入路径列表（文件或目录）/ Input path list (files or directories)
+    #[serde(default)]
+    pub inputs: Vec<String>,
+    /// 模块参数 / Module parameters
+    #[serde(default)]
+    pub params: serde_json::Value,
+    /// 模块可执行文件所在目录 / Module executables directory
+    #[serde(default)]
+    pub exe_dir: Option<String>,
+    /// tmp 目录最大占用（MB）/ Max tmp directory size (MB)
+    #[serde(default)]
+    pub max_tmp_mb: Option<u64>,
+    /// 录制上下文 / Recording context
+    #[serde(default)]
+    pub recording: Option<serde_json::Value>,
+}
+
+impl ModuleInput {
+    /// 从 stdin 读取并解析 JSON 输入。
+    /// 若 stdin 为空或解析失败，回退到旧协议（`PP_INPUT` 环境变量）。
+    ///
+    /// Read and parse JSON input from stdin.
+    /// Falls back to legacy protocol (`PP_INPUT` env var) if stdin is empty or parse fails.
+    pub fn read() -> Self {
+        use std::io::Read;
+        let mut buf = String::new();
+        std::io::stdin().lock().read_to_string(&mut buf).ok();
+        let trimmed = buf.trim();
+        if trimmed.is_empty() {
+            return Self::from_legacy_env();
+        }
+        serde_json::from_str(trimmed).unwrap_or_else(|_| Self::from_legacy_env())
+    }
+
+    /// 从旧协议环境变量构建输入（`PP_INPUT`、`PP_EXE_DIR`、`PP_MAX_TMP_MB`）。
+    /// Build input from legacy env vars (`PP_INPUT`, `PP_EXE_DIR`, `PP_MAX_TMP_MB`).
+    fn from_legacy_env() -> Self {
+        let inputs = env::var("PP_INPUT")
+            .map(|v| vec![v])
+            .unwrap_or_default();
+        let max_tmp_mb = env::var("PP_MAX_TMP_MB")
+            .ok()
+            .and_then(|v| v.trim().parse().ok());
+        let exe_dir = env::var("PP_EXE_DIR").ok();
+        Self { inputs, params: serde_json::Value::Null, exe_dir, max_tmp_mb, recording: None }
+    }
+
+    /// 获取第一个输入路径（单输入模块使用）/ Get the first input path (for single-input modules)
+    pub fn first_input(&self) -> Option<std::path::PathBuf> {
+        self.inputs.first().map(std::path::PathBuf::from)
+    }
+
+    /// 读取字符串参数（从 JSON params 读取，未设置时返回 fallback）。
+    /// Read a string parameter from JSON params, returning fallback if not set.
+    pub fn param_str(&self, key: &str, fallback: &str) -> String {
+        if let Some(v) = self.params.get(key).and_then(|v| v.as_str()) {
+            return v.to_string();
+        }
+        if let serde_json::Value::Object(ref map) = self.params {
+            if let Some(v) = map.get(key) {
+                if !matches!(v, serde_json::Value::Null) {
+                    return match v {
+                        serde_json::Value::String(s) => s.clone(),
+                        other => other.to_string(),
+                    };
+                }
+            }
+        }
+        fallback.to_string()
+    }
+
+    /// 读取 f64 参数 / Read an f64 parameter
+    pub fn param_f64(&self, key: &str, fallback: f64) -> f64 {
+        self.param_str(key, &fallback.to_string()).parse().unwrap_or(fallback)
+    }
+
+    /// 读取 u32 参数 / Read a u32 parameter
+    pub fn param_u32(&self, key: &str, fallback: u32) -> u32 {
+        self.param_str(key, &fallback.to_string()).parse().unwrap_or(fallback)
+    }
+
+    /// 读取 bool 参数 / Read a bool parameter
+    pub fn param_bool(&self, key: &str, fallback: bool) -> bool {
+        matches!(
+            self.param_str(key, if fallback { "true" } else { "false" })
+                .to_lowercase()
+                .as_str(),
+            "true" | "1" | "yes"
+        )
+    }
+
+    /// 获取有效的 max_tmp_mb（优先 JSON，回退环境变量）/ Get effective max_tmp_mb
+    pub fn max_tmp_mb(&self) -> Option<u64> {
+        self.max_tmp_mb.or_else(|| {
+            env::var("PP_MAX_TMP_MB").ok()?.trim().parse().ok()
+        })
+    }
+}
+
+/// 输出最终 JSON 结果（`ok` 状态，有输出路径）并写入 stdout。
+/// Print final JSON result to stdout (`ok` code with output paths).
+pub fn output_ok(outputs: &[&str], message: &str) {
+    let json = serde_json::json!({
+        "code": "ok",
+        "message": message,
+        "outputs": outputs,
+    });
+    println!("{}", json);
+}
+
+/// 输出最终 JSON 结果（`done` 状态，流水线终止）并写入 stdout。
+/// Print final JSON result to stdout (`done` code, pipeline terminates).
+pub fn output_done(message: &str) {
+    let json = serde_json::json!({
+        "code": "done",
+        "message": message,
+        "outputs": [],
+    });
+    println!("{}", json);
+}
+
+/// 输出最终 JSON 结果（`skipped` 状态，原样传递输入）并写入 stdout。
+/// Print final JSON result to stdout (`skipped` code, passes input through).
+pub fn output_skipped(input: &str, message: &str) {
+    let json = serde_json::json!({
+        "code": "skipped",
+        "message": message,
+        "outputs": [input],
+    });
+    println!("{}", json);
 }

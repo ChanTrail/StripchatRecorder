@@ -2,13 +2,20 @@
 //!
 //! 封装对 Stripchat 前端 API 的访问，包括：
 //! - 获取主播直播状态和播放列表 URL
+//! - 对主播放列表（master playlist）进行多 CDN 竞速请求
 //! - 下载 HLS 分片（支持多 CDN 竞速）
-//! - 解析 Mouflon 加密的播放列表
+//!
+//! 播放列表文本本身的解析（含 Mouflon 加密处理）委托给 `recording::hls`；
+//! 本模块只负责网络请求与竞速调度。
 //!
 //! Wraps access to the Stripchat frontend API, including:
 //! - Fetching streamer live status and playlist URLs
+//! - Racing multiple CDN TLDs for the master playlist
 //! - Downloading HLS segments (with multi-CDN racing)
-//! - Parsing Mouflon-encrypted playlists
+//!
+//! Parsing of the playlist text itself (including Mouflon encryption handling) is
+//! delegated to `recording::hls`; this module is responsible only for network
+//! requests and CDN racing.
 
 use crate::core::error::{AppError, Result};
 use reqwest::{Client, Response};
@@ -518,50 +525,6 @@ impl StripchatApi {
         )))
     }
 
-    /// 从 master playlist 文本中解析出 BANDWIDTH 最高的流 URL，以及所有 Mouflon PSCH 参数对。
-    /// Parse the stream URL with the highest BANDWIDTH from the master playlist text,
-    /// along with all Mouflon PSCH parameter pairs.
-    fn parse_best_stream(playlist: &str) -> Option<(String, Vec<(String, String)>)> {
-        // 先把 \r\n 统一成 \n，再按 \n 分割
-        let normalized = playlist.replace("\r\n", "\n").replace('\r', "\n");
-        let lines: Vec<&str> = normalized.split('\n').map(|l| l.trim()).collect();
-
-        // 收集所有 Mouflon PSCH 参数对 (psch, pkey)
-        let mut mouflon_pairs: Vec<(String, String)> = Vec::new();
-        for &line in &lines {
-            if let Some(rest) = line.strip_prefix("#EXT-X-MOUFLON:PSCH:")
-                && let Some((scheme, key)) = rest.split_once(':') {
-                mouflon_pairs.push((scheme.to_string(), key.to_string()));
-            }
-        }
-
-        // 解析 BANDWIDTH 最高的流
-        let mut best_bandwidth: u64 = 0;
-        let mut best_url: Option<String> = None;
-        let mut pending_bandwidth: Option<u64> = None;
-
-        for &line in &lines {
-            if let Some(attrs) = line.strip_prefix("#EXT-X-STREAM-INF:") {
-                // 去掉标签前缀后再按逗号分割，避免标签名干扰 BANDWIDTH= 匹配
-                pending_bandwidth = attrs
-                    .split(',')
-                    .find(|seg| seg.trim_start().starts_with("BANDWIDTH="))
-                    .and_then(|seg| seg.trim_start().strip_prefix("BANDWIDTH="))
-                    .and_then(|v| v.parse::<u64>().ok());
-            } else if !line.is_empty() && !line.starts_with('#') {
-                if let Some(bw) = pending_bandwidth.take()
-                    && bw > best_bandwidth {
-                    best_bandwidth = bw;
-                    best_url = Some(line.to_string());
-                }
-            } else {
-                pending_bandwidth = None;
-            }
-        }
-
-        best_url.map(|url| (url, mouflon_pairs))
-    }
-
     /// 获取主播的 HLS 播放列表 URL。
     /// 直接对所有 CDN TLD 竞速请求 `{model_id}_auto.m3u8`，解析最高清晰度流。
     /// 若 playlist 包含 Mouflon 加密参数，则按用户配置的 Mouflon Keys 顺序逐一比对，
@@ -582,7 +545,7 @@ impl StripchatApi {
 
         let playlist_text = self.fetch_auto_playlist(model_id).await?;
 
-        let parsed = Self::parse_best_stream(&playlist_text);
+        let parsed = crate::recording::hls::parse_master_playlist(&playlist_text);
 
         let (url, mouflon_pairs) =
             parsed.ok_or_else(|| AppError::StreamOffline(username.to_string()))?;

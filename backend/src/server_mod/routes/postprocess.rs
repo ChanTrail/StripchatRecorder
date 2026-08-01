@@ -16,19 +16,16 @@ pub async fn run_postprocess(
     Json(body): Json<PathBody>,
 ) -> ApiResult<serde_json::Value> {
     let pipeline = s.app_state.get_pipeline();
-    if pipeline.nodes.is_empty() {
+    if !pipeline.nodes.iter().any(|n| n.enabled) {
         return Err(ApiError("后处理流水线为空".into()));
     }
     let video_path = std::path::PathBuf::from(&body.path);
+    let initial_path = crate::commands::postprocess_cmd::infer_initial_path(&video_path);
     let emitter = Arc::clone(&s.emitter);
     let state = Arc::clone(&s.app_state);
-    state.pp_task_enqueue(&body.path);
-    emitter.emit(
-        "postprocess-waiting",
-        &serde_json::json!({ "path": body.path }),
-    );
     tokio::task::spawn_blocking(move || {
-        crate::commands::postprocess_cmd::run_postprocess_for_path_inner(
+        crate::commands::postprocess_cmd::run_postprocess_for_path(
+            &initial_path,
             &video_path,
             &pipeline,
             &emitter,
@@ -48,18 +45,18 @@ pub async fn run_postprocess_batch(
     Json(body): Json<BatchPathBody>,
 ) -> ApiResult<serde_json::Value> {
     let pipeline = s.app_state.get_pipeline();
-    if pipeline.nodes.is_empty() {
+    if !pipeline.nodes.iter().any(|n| n.enabled) {
         return Err(ApiError("后处理流水线为空".into()));
     }
     for path in body.paths {
         let video_path = std::path::PathBuf::from(&path);
+        let initial_path = crate::commands::postprocess_cmd::infer_initial_path(&video_path);
         let emitter = Arc::clone(&s.emitter);
         let state = Arc::clone(&s.app_state);
         let pipeline = pipeline.clone();
-        state.pp_task_enqueue(&path);
-        emitter.emit("postprocess-waiting", &serde_json::json!({ "path": path }));
         tokio::task::spawn_blocking(move || {
-            crate::commands::postprocess_cmd::run_postprocess_for_path_inner(
+            crate::commands::postprocess_cmd::run_postprocess_for_path(
+                &initial_path,
                 &video_path,
                 &pipeline,
                 &emitter,
@@ -74,7 +71,7 @@ pub async fn cancel_postprocess(
     AxumState(s): AxumState<ServerState>,
     Json(body): Json<PathBody>,
 ) -> ApiResult<serde_json::Value> {
-    s.app_state.pp_task_cancel(&body.path);
+    s.app_state.pp_queue.cancel(&body.path);
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -108,7 +105,7 @@ pub async fn get_postprocess_tasks(
     AxumState(s): AxumState<ServerState>,
 ) -> ApiResult<serde_json::Value> {
     Ok(Json(
-        serde_json::to_value(s.app_state.get_pp_tasks()).unwrap(),
+        serde_json::to_value(s.app_state.pp_queue.get_all_tasks()).unwrap(),
     ))
 }
 

@@ -33,6 +33,30 @@ function generateId(): string {
 	});
 }
 
+/** 端口类型，与后端 PortType 枚举对应 / Port type, mirrors backend PortType enum */
+export type PortType = "ts_session_dir" | "video_file" | "image_file" | "any_file" | "any_dir";
+
+/**
+ * 判断上游输出类型是否兼容下游输入类型（与后端 is_compatible_with 逻辑一致）。
+ * Check if an upstream output type is compatible with a downstream input type
+ * (mirrors backend is_compatible_with logic).
+ */
+export function isPortCompatible(from: PortType, to: PortType): boolean {
+	if (from === to) return true;
+	if (to === "any_file" && (from === "video_file" || from === "image_file")) return true;
+	if (to === "any_dir" && from === "ts_session_dir") return true;
+	return false;
+}
+
+/** 端口类型的显示颜色 / Display color per port type */
+export const PORT_TYPE_COLORS: Record<PortType, string> = {
+	ts_session_dir: "#f59e0b", // amber
+	video_file: "#3b82f6",     // blue
+	image_file: "#10b981",     // emerald
+	any_file: "#8b5cf6",       // violet
+	any_dir: "#f97316",        // orange
+};
+
 /** 模块参数定义 / Module parameter definition */
 export interface ParamDef {
 	/** 参数键名 / Parameter key */
@@ -84,6 +108,12 @@ export interface ModuleInfo {
 	description: string;
 	/** 模块参数定义列表 / Module parameter definitions */
 	params: ParamDef[];
+	/** 输入端口类型列表 / Input port types */
+	inputTypes?: PortType[];
+	/** 输出端口类型列表 / Output port types */
+	outputTypes?: PortType[];
+	/** 是否为官方模块（应置于 ts_merge 之后）/ Whether official (should follow ts_merge) */
+	official?: boolean;
 	/** 多语言翻译（可选）/ i18n translations (optional) */
 	i18n?: Record<string, ModuleI18nLocale>;
 }
@@ -98,18 +128,29 @@ export interface PipelineNode {
 	params: Record<string, string | number | boolean>;
 	/** 是否启用此节点 / Whether this node is enabled */
 	enabled: boolean;
+	/** 节点在画布中的位置 / Node position on canvas */
+	position?: { x: number; y: number };
+}
+
+/** DAG 有向边，连接上游节点的输出端口到下游节点的输入端口 / DAG directed edge */
+export interface PipelineEdge {
+	fromNodeId: string;
+	fromPort: number;
+	toNodeId: string;
+	toPort: number;
 }
 
 /** 流水线配置 / Pipeline configuration */
 export interface PipelineConfig {
 	nodes: PipelineNode[];
+	edges: PipelineEdge[];
 }
 
 export const usePostprocessStore = defineStore("postprocess", () => {
 	/** 可用的后处理模块列表 / Available post-processing modules */
 	const modules = ref<ModuleInfo[]>([]);
 	/** 当前流水线配置 / Current pipeline configuration */
-	const pipeline = ref<PipelineConfig>({ nodes: [] });
+	const pipeline = ref<PipelineConfig>({ nodes: [], edges: [] });
 	/** 是否正在加载 / Whether loading */
 	const loading = ref(false);
 	/** 是否正在保存 / Whether saving */
@@ -187,7 +228,9 @@ export const usePostprocessStore = defineStore("postprocess", () => {
 	async function fetchPipeline() {
 		loading.value = true;
 		try {
-			pipeline.value = await call<PipelineConfig>("get_pipeline");
+			const raw = await call<PipelineConfig>("get_pipeline");
+			// 兼容旧格式（无 edges 字段）/ Compat with old format (no edges field)
+			pipeline.value = { nodes: raw.nodes ?? [], edges: raw.edges ?? [] };
 		} finally {
 			loading.value = false;
 			_loaded = true;
@@ -202,7 +245,15 @@ export const usePostprocessStore = defineStore("postprocess", () => {
 		saving.value = true;
 		_isSavingLocally = true;
 		try {
-			await call("save_pipeline", { pipeline: pipeline.value });
+			// 保存时过滤掉虚拟输入节点（__recording_input__）相关的边，后端不认识该节点
+			// Filter out edges involving the virtual input node when saving — backend doesn't know it
+			const toSave: PipelineConfig = {
+				nodes: pipeline.value.nodes,
+				edges: pipeline.value.edges.filter(
+					(e) => e.fromNodeId !== "__recording_input__" && e.toNodeId !== "__recording_input__",
+				),
+			};
+			await call("save_pipeline", { pipeline: toSave });
 		} finally {
 			saving.value = false;
 			setTimeout(() => {
@@ -228,11 +279,11 @@ export const usePostprocessStore = defineStore("postprocess", () => {
 	 * Add a new node to the end of the pipeline with the module's default parameter values.
 	 *
 	 * @param moduleId - 要添加的模块 ID / Module ID to add
+	 * @param position - 节点初始位置 / Initial node position
 	 */
-	function addNode(moduleId: string) {
+	function addNode(moduleId: string, position?: { x: number; y: number }) {
 		const mod = modules.value.find((m) => m.id === moduleId);
 		if (!mod) return;
-		// 使用模块定义的默认值初始化参数 / Initialize params with module-defined defaults
 		const defaults: Record<string, string | number | boolean> = {};
 		for (const p of mod.params) {
 			defaults[p.key] = coerceDefault(p.type, p.default);
@@ -242,12 +293,56 @@ export const usePostprocessStore = defineStore("postprocess", () => {
 			moduleId,
 			params: defaults,
 			enabled: true,
+			position: position ?? { x: 200 + pipeline.value.nodes.length * 40, y: 200 },
 		});
 	}
 
 	/**
-	 * 从流水线中移除指定节点。
-	 * Remove a specific node from the pipeline.
+	 * 更新节点在画布中的位置。
+	 * Update a node's position on the canvas.
+	 */
+	function updateNodePosition(nodeId: string, pos: { x: number; y: number }) {
+		const node = pipeline.value.nodes.find((n) => n.nodeId === nodeId);
+		if (node) node.position = pos;
+	}
+
+	/**
+	 * 添加一条有向边。
+	 * Add a directed edge.
+	 */
+	function addEdge(edge: PipelineEdge) {
+		// 移除同一目标端口上的旧连接（一个输入端口只能有一个上游）
+		// Remove old connection on same target port (each input port has at most one upstream)
+		pipeline.value.edges = pipeline.value.edges.filter(
+			(e) => !(e.toNodeId === edge.toNodeId && e.toPort === edge.toPort),
+		);
+		pipeline.value.edges.push(edge);
+	}
+
+	/**
+	 * 移除连接到指定节点/端口的边。
+	 * Remove edges connected to the specified node/port.
+	 */
+	function removeEdgesForNode(nodeId: string) {
+		pipeline.value.edges = pipeline.value.edges.filter(
+			(e) => e.fromNodeId !== nodeId && e.toNodeId !== nodeId,
+		);
+	}
+
+	/**
+	 * 移除一条特定的边。
+	 * Remove a specific edge.
+	 */
+	function removeEdge(fromNodeId: string, fromPort: number, toNodeId: string, toPort: number) {
+		pipeline.value.edges = pipeline.value.edges.filter(
+			(e) => !(e.fromNodeId === fromNodeId && e.fromPort === fromPort
+				&& e.toNodeId === toNodeId && e.toPort === toPort),
+		);
+	}
+
+	/**
+	 * 从流水线中移除指定节点（同时移除关联的边）。
+	 * Remove a specific node from the pipeline (also removes connected edges).
 	 *
 	 * @param nodeId - 要移除的节点 ID / Node ID to remove
 	 */
@@ -255,6 +350,7 @@ export const usePostprocessStore = defineStore("postprocess", () => {
 		pipeline.value.nodes = pipeline.value.nodes.filter(
 			(n) => n.nodeId !== nodeId,
 		);
+		removeEdgesForNode(nodeId);
 	}
 
 	/**
@@ -291,15 +387,11 @@ export const usePostprocessStore = defineStore("postprocess", () => {
 			void fetchModules();
 		});
 		await on("pipeline-updated", (payload) => {
-			// 本地保存时忽略自身触发的事件 / Ignore self-triggered events during local save
 			if (_isSavingLocally) return;
-			// 暂时禁用自动保存，防止接收到的配置被立即重新保存
-			// Temporarily disable auto-save to prevent received config from being immediately re-saved
 			_loaded = false;
-			pipeline.value = payload as PipelineConfig;
-			setTimeout(() => {
-				_loaded = true;
-			}, 0);
+			const raw = payload as PipelineConfig;
+			pipeline.value = { nodes: raw.nodes ?? [], edges: raw.edges ?? [] };
+			setTimeout(() => { _loaded = true; }, 0);
 			_onPipelineUpdated?.();
 		});
 	}
@@ -315,6 +407,10 @@ export const usePostprocessStore = defineStore("postprocess", () => {
 		addNode,
 		removeNode,
 		moveNode,
+		updateNodePosition,
+		addEdge,
+		removeEdge,
+		removeEdgesForNode,
 		initModuleWatcher,
 	};
 });

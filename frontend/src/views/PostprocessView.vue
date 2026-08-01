@@ -1,420 +1,754 @@
 <!--
-    后处理流水线配置页面 / Post-processing Pipeline Configuration View
+    后处理流水线节点图编辑器 / Post-processing Pipeline Node Graph Editor
 
-    提供可视化的流水线编辑器，支持：
-    - 拖拽排序节点
-    - 启用/禁用节点
-    - 配置每个节点的参数（字符串、数字、布尔、下拉选择）
-    - 从模块选择器添加新节点
-    - 自动保存（防抖 600ms）
+    UE/ComfyUI 风格的节点图编辑器，支持：
+    - 节点拖拽放置
+    - 端口连线（基于类型兼容性）
+    - 画布平移和缩放
+    - 右键画布添加节点（按上下文过滤）
+    - 节点参数内联编辑
+    - ts_merge 作为官方首节点（带徽章提示）
 
-    Provides a visual pipeline editor supporting:
-    - Drag-and-drop node reordering
-    - Enable/disable nodes
-    - Configure per-node parameters (string, number, boolean, select)
-    - Add new nodes from a module picker
-    - Auto-save with 600ms debounce
+    UE/ComfyUI-style node graph editor supporting:
+    - Node drag placement
+    - Port wiring (with type compatibility)
+    - Canvas pan and zoom
+    - Right-click canvas to add nodes (context-filtered)
+    - Inline node parameter editing
+    - ts_merge as the official first node (with badge hint)
 -->
 <script setup lang="ts">
-	import { onMounted, computed, ref } from "vue";
-	import { usePostprocessStore, type PipelineNode } from "@/stores/postprocess";
-	import { useNotify } from "@/composables/useNotify";
-	import { Button } from "@/components/ui/button";
-	import { GripVertical, ChevronUp, ChevronDown, X } from "@lucide/vue";
-	import { Switch } from "@/components/ui/switch";
-	import { Input } from "@/components/ui/input";
-	import { Label } from "@/components/ui/label";
-	import { Badge } from "@/components/ui/badge";
-	import {
-		Dialog,
-		DialogContent,
-		DialogDescription,
-		DialogHeader,
-		DialogTitle,
-	} from "@/components/ui/dialog";
-	import {
-		Select,
-		SelectContent,
-		SelectItem,
-		SelectTrigger,
-		SelectValue,
-	} from "@/components/ui/select";
-	import {
-		NumberField,
-		NumberFieldContent,
-		NumberFieldDecrement,
-		NumberFieldIncrement,
-		NumberFieldInput,
-	} from "@/components/ui/number-field";
-	import PipelineNodeBox from "@/components/PipelineNodeBox.vue";
-	import { useI18n } from "vue-i18n";
+import { onMounted, computed, ref, onUnmounted, nextTick } from "vue";
+import {
+	usePostprocessStore,
+	type PortType,
+	PORT_TYPE_COLORS,
+} from "@/stores/postprocess";
+import { useNotify } from "@/composables/useNotify";
+import { useCanvasTransform } from "@/composables/useCanvasTransform";
+import { useNodeDragging, INPUT_NODE_ID } from "@/composables/useNodeDragging";
+import { usePortWiring } from "@/composables/usePortWiring";
+import { useNodeContextMenu } from "@/composables/useNodeContextMenu";
+import { Switch } from "@/components/ui/switch";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "@/components/ui/select";
+import {
+	NumberField,
+	NumberFieldContent,
+	NumberFieldDecrement,
+	NumberFieldIncrement,
+	NumberFieldInput,
+} from "@/components/ui/number-field";
+import { Maximize2, Grid2x2 } from "@lucide/vue";
+import { useI18n } from "vue-i18n";
 
-	const store = usePostprocessStore();
-	const { toast } = useNotify();
-	const { t } = useI18n();
+const store = usePostprocessStore();
+const { toast } = useNotify();
+const { t } = useI18n();
 
-	onMounted(async () => {
-		await Promise.all([store.fetchModules(), store.fetchPipeline()]);
-		// 初始化模块监听器，当其他客户端更新流水线时显示提示
-		// Initialize module watcher; show notification when another client updates the pipeline
-		store.initModuleWatcher(() =>
-			toast(t("postprocess.updatedByOther"), "info"),
-		);
+// ─── 画布变换 / Canvas Transform ─────────────────────────────────────────────
+const canvasRef = ref<HTMLElement | null>(null);
+const {
+	transform,
+	screenToCanvas,
+	isPanning,
+	startPan,
+	updatePan,
+	endPan,
+	onCanvasWheel,
+	autoLayoutNodes,
+	fitView,
+} = useCanvasTransform(canvasRef);
+
+// ─── 节点选择与拖拽 / Node Selection and Dragging ────────────────────────────
+const {
+	selectedNodeIds,
+	selectNode: selectNodeInternal,
+	inputNodePos,
+	snapToGrid,
+	snapPos,
+	isMarquee,
+	marquee,
+	startMarquee,
+	updateMarquee,
+	endMarquee,
+	startNodeDrag,
+	startInputDrag,
+	isDragging: isDraggingNode,
+	updateNodeDrag,
+	endNodeDrag,
+	deleteSelectedNodes,
+} = useNodeDragging(canvasRef, screenToCanvas, transform);
+
+// ─── 端口连线 / Port Wiring ───────────────────────────────────────────────────
+const {
+	connectingFrom,
+	pendingLine,
+	registerPortEl,
+	onPortMousedown,
+	onPortMouseup,
+	updatePendingLine,
+	endWireDrag,
+	edgePath,
+	edgePositions,
+	pendingLineFrom,
+} = usePortWiring(canvasRef, transform, screenToCanvas);
+
+// ─── 右键菜单与连线释放菜单 / Context Menu and Wire-drop Menu ───────────────
+const {
+	contextMenu,
+	openContextMenu: openContextMenuInternal,
+	closeContextMenu,
+	contextMenuModules,
+	addModuleAtCursor: addModuleAtCursorInternal,
+	wireMenu,
+	openWireMenu,
+	closeWireMenu,
+	wireMenuModules,
+	addModuleFromWire: addModuleFromWireInternal,
+} = useNodeContextMenu();
+
+onMounted(async () => {
+	await Promise.all([store.fetchModules(), store.fetchPipeline()]);
+	// 从 pipeline.inputNodePosition 恢复输入节点位置
+	// Restore input node position from pipeline.inputNodePosition
+	if (store.pipeline.inputNodePosition) {
+		inputNodePos.x = store.pipeline.inputNodePosition.x;
+		inputNodePos.y = store.pipeline.inputNodePosition.y;
+	}
+	store.initModuleWatcher(() => {
+		toast(t("postprocess.updatedByOther"), "info");
+		// 其他客户端更新流水线后，重新从 node.inputs 还原 edges
+		// Restore edges from node.inputs after pipeline is updated by another client
+		nextTick(() => restoreEdgesFromInputs());
 	});
+	// 从 node.inputs 恢复前端 edges（含虚拟输入节点的连线）
+	// Restore frontend edges from node.inputs (including virtual input node wiring)
+	restoreEdgesFromInputs();
+	autoLayoutNodes();
+	// DOM 渲染完成后自适应居中所有节点 / Fit all nodes to canvas after DOM renders
+	await nextTick();
+	fitView(inputNodePos);
+});
 
-	/** 当前可用模块 ID 集合 / Set of currently available module IDs */
-	const availableModuleIds = computed(
-		() => new Set(store.modules.map((m) => m.id)),
-	);
-
-	/**
-	 * 判断节点对应的模块是否已不存在（模块文件被删除）。
-	 * Check if a node's module is missing (module file was deleted).
-	 */
-	function isModuleMissing(node: PipelineNode) {
-		return !availableModuleIds.value.has(node.moduleId);
-	}
-
-	// 拖拽排序状态 / Drag-and-drop sorting state
-	/** 正在拖拽的节点索引 / Index of the node being dragged */
-	const dragIndex = ref<number | null>(null);
-	/** 拖拽悬停的目标节点索引 / Index of the node being dragged over */
-	const dragOverIndex = ref<number | null>(null);
-	/** 是否正在拖拽手柄（防止整个卡片触发拖拽）/ Whether dragging via handle (prevents card from triggering drag) */
-	const isDraggingHandle = ref(false);
-
-	/**
-	 * 拖拽开始：记录源节点索引。
-	 * Drag start: record source node index.
-	 */
-	function onDragStart(e: DragEvent, idx: number) {
-		e.dataTransfer?.setData("text/plain", String(idx));
-		dragIndex.value = idx;
-	}
-
-	/**
-	 * 拖拽经过：更新悬停目标索引。
-	 * Drag over: update hover target index.
-	 */
-	function onDragOver(e: DragEvent, idx: number) {
-		e.preventDefault();
-		dragOverIndex.value = idx;
-	}
-
-	/**
-	 * 放置：执行节点位置交换。
-	 * Drop: perform node position swap.
-	 */
-	function onDrop(e: DragEvent, idx: number) {
-		e.preventDefault();
-		if (dragIndex.value === null || dragIndex.value === idx) {
-			dragIndex.value = null;
-			dragOverIndex.value = null;
-			return;
+/**
+ * 从每个节点的 inputs 字段还原前端 pipeline.edges，
+ * 将 nodeId="0" 映射回虚拟输入节点 __recording_input__。
+ * 只补充 edges 中尚不存在的边，不覆盖已有边。
+ *
+ * Restore frontend pipeline.edges from each node's inputs field,
+ * mapping nodeId="0" back to the virtual input node __recording_input__.
+ * Only adds edges that don't already exist; does not overwrite.
+ */
+function restoreEdgesFromInputs() {
+	for (const node of store.pipeline.nodes) {
+		if (!node.inputs) continue;
+		for (const [portStr, ref_] of Object.entries(node.inputs)) {
+			const toPort = Number(portStr);
+			const fromNodeId = ref_.nodeId === "0" ? INPUT_NODE_ID : ref_.nodeId;
+			const fromPort = ref_.port;
+			// 检查该边是否已存在 / Check if edge already exists
+			const exists = store.pipeline.edges.some(
+				(e) => e.fromNodeId === fromNodeId && e.fromPort === fromPort
+					&& e.toNodeId === node.nodeId && e.toPort === toPort,
+			);
+			if (!exists) {
+				store.pipeline.edges.push({
+					fromNodeId,
+					fromPort,
+					toNodeId: node.nodeId,
+					toPort,
+				});
+			}
 		}
-		const nodes = [...store.pipeline.nodes];
-		const [moved] = nodes.splice(dragIndex.value, 1);
-		nodes.splice(idx, 0, moved);
-		store.pipeline.nodes = nodes;
-		dragIndex.value = null;
-		dragOverIndex.value = null;
 	}
-	/**
-	 * 拖拽结束：清理拖拽状态。
-	 * Drag end: clean up drag state.
-	 */
-	function onDragEnd() {
-		dragIndex.value = null;
-		dragOverIndex.value = null;
-		isDraggingHandle.value = false;
-	}
+}
 
-	/** 是否显示模块选择器对话框 / Whether to show the module picker dialog */
-	const showPicker = ref(false);
+/** 当前画布光标样式 / Current canvas cursor style */
+const canvasCursor = computed(() => {
+	if (isPanning.value) return "grabbing";
+	if (isMarquee.value) return "crosshair";
+	return "default";
+})
 
-	/**
-	 * 打开模块选择器（先刷新模块列表）。
-	 * Open the module picker (refresh module list first).
-	 */
-	async function openPicker() {
-		await store.fetchModules();
-		showPicker.value = true;
+function onCanvasMousedown(e: MouseEvent) {
+	if ((e.target as HTMLElement).closest(".pipeline-node")) return;
+
+	if (e.button === 2) {
+		startPan(e);
+		closeWireMenu();
+		return;
 	}
 
-	/** 已在流水线中使用的模块 ID 集合（每个模块只能添加一次）/ Set of module IDs already in the pipeline (each module can only be added once) */
-	const usedModuleIds = computed(
-		() => new Set(store.pipeline.nodes.map((n) => n.moduleId)),
-	);
+	if (e.button === 0) {
+		closeContextMenu();
+		closeWireMenu();
+		startMarquee(e);
+	}
+}
 
-	/** 尚未添加到流水线的可用模块列表 / Available modules not yet added to the pipeline */
-	const availableModules = computed(() =>
-		store.modules.filter((m) => !usedModuleIds.value.has(m.id)),
-	);
+function onCanvasMousemoveInternal(e: MouseEvent) {
+	if (isPanning.value) {
+		updatePan(e);
+		return;
+	}
+	if (isMarquee.value) {
+		updateMarquee(e);
+	}
+}
 
-	/**
-	 * 将指定模块添加到流水线并关闭选择器。
-	 * Add the specified module to the pipeline and close the picker.
-	 *
-	 * @param id - 模块 ID / Module ID
-	 */
-	function addModule(id: string) {
-		store.addNode(id);
-		showPicker.value = false;
+function onCanvasMouseupInternal(e: MouseEvent) {
+	if (isPanning.value) {
+		const { wasClick, canvasPos } = endPan(e);
+		if (wasClick) {
+			const rect = canvasRef.value?.getBoundingClientRect();
+			openContextMenuInternal(
+				e.clientX - (rect?.left ?? 0),
+				e.clientY - (rect?.top ?? 0),
+				canvasPos,
+			);
+			selectedNodeIds.clear();
+		}
+		return;
+	}
+	if (isMarquee.value) {
+		const hadMarquee = marquee.visible;
+		endMarquee();
+		if (!hadMarquee) closeContextMenu();
+	}
+}
+
+function onNodeMousedown(e: MouseEvent, nodeId: string) {
+	if (e.button !== 0) return;
+	e.stopPropagation();
+	if (connectingFrom.value) return;
+	startNodeDrag(e, nodeId);
+}
+
+function onInputNodeMousedown(e: MouseEvent) {
+	if (e.button !== 0) return;
+	e.stopPropagation();
+	if (connectingFrom.value) return;
+	startInputDrag(e);
+}
+
+function onGlobalMousemove(e: MouseEvent) {
+	if (isDraggingNode()) {
+		updateNodeDrag(e);
+	}
+	updatePendingLine(e);
+	onCanvasMousemoveInternal(e);
+}
+
+function onGlobalMouseup(e: MouseEvent) {
+	const wasDraggingNode = isDraggingNode();
+	onCanvasMouseupInternal(e);
+
+	// 拖拽结束后对所有移动过的节点执行 snap
+	// Snap all moved nodes to grid after drag ends
+	if (wasDraggingNode) {
+		endNodeDrag();
 	}
 
-	/** 已启用的节点列表（用于底部统计显示）/ List of enabled nodes (for bottom stats display) */
-	const enabledNodes = computed(() =>
-		store.pipeline.nodes.filter((n) => n.enabled),
-	);
+	// 连线释放：若未落在输入端口上，弹出模块选择菜单
+	// Wire drop: if not on an input port, show module selection menu
+	const wireDrop = endWireDrag();
+	if (wireDrop) {
+		const rect = canvasRef.value?.getBoundingClientRect();
+		openWireMenu(
+			e.clientX - (rect?.left ?? 0),
+			e.clientY - (rect?.top ?? 0),
+			wireDrop.dropPos,
+			wireDrop.fromPort,
+		);
+	}
+}
 
-	/** 节点列表附带对应模块信息（用于模板渲染）/ Node list with corresponding module info (for template rendering) */
-	const nodesWithInfo = computed(() =>
-		store.pipeline.nodes.map((node) => ({
-			node,
-			info: store.modules.find((m) => m.id === node.moduleId),
-		})),
-	);
+function selectNode(nodeId: string) {
+	selectNodeInternal(nodeId);
+	closeContextMenu();
+}
+
+function openContextMenu(e: MouseEvent) {
+	// 仅阻止浏览器默认右键菜单，实际弹出逻辑在 onCanvasMouseupInternal
+	// Only prevent browser default context menu; actual popup logic is in onCanvasMouseupInternal
+	e.preventDefault();
+}
+
+function addModuleAtCursor(moduleId: string) {
+	addModuleAtCursorInternal(moduleId, snapPos);
+}
+
+function addModuleFromWire(moduleId: string) {
+	addModuleFromWireInternal(moduleId, snapPos);
+}
+
+onMounted(() => {
+	window.addEventListener("mousemove", onGlobalMousemove);
+	window.addEventListener("mouseup", onGlobalMouseup);
+	window.addEventListener("keydown", onGlobalKeydown);
+});
+onUnmounted(() => {
+	window.removeEventListener("mousemove", onGlobalMousemove);
+	window.removeEventListener("mouseup", onGlobalMouseup);
+	window.removeEventListener("keydown", onGlobalKeydown);
+});
+
+/** Delete/Backspace 键删除当前选中节点 / Delete/Backspace key removes the selected node(s) */
+function onGlobalKeydown(e: KeyboardEvent) {
+	if (e.key !== "Delete" && e.key !== "Backspace") return;
+	const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
+	if (tag === "input" || tag === "textarea" || (e.target as HTMLElement)?.isContentEditable) return;
+	deleteSelectedNodes();
+}
+
+function getModuleInfo(moduleId: string) {
+	return store.modules.find((m) => m.id === moduleId);
+}
+
+function getNodeInputTypes(moduleId: string): PortType[] {
+	const info = getModuleInfo(moduleId);
+	return info?.inputTypes ?? ["any_file"];
+}
+
+function getNodeOutputTypes(moduleId: string): PortType[] {
+	const info = getModuleInfo(moduleId);
+	return info?.outputTypes ?? ["any_file"];
+}
 </script>
 
 <template>
-	<div class="flex flex-col gap-6">
-		<header class="flex items-start justify-between">
+	<div class="flex flex-col h-full gap-0">
+		<!-- 顶部工具栏 / Top toolbar -->
+		<header class="flex items-start justify-between gap-4 shrink-0 pb-4 bg-background sticky top-0 z-20 px-6 pt-6 border-b">
 			<div>
 				<h1 class="text-xl font-bold mb-0.5">{{ t("postprocess.title") }}</h1>
-				<p class="text-sm text-muted-foreground">
-					{{ t("postprocess.description") }}
-				</p>
+				<p class="text-sm text-muted-foreground">{{ t("postprocess.description") }}</p>
 			</div>
-			<span class="text-sm text-muted-foreground mt-0.5">
-				{{ store.saving ? t("postprocess.saving") : t("postprocess.saved") }}
-			</span>
+			<div class="flex items-center gap-2 shrink-0">
+				<button
+					class="flex items-center gap-1.5 px-2.5 py-1 text-xs border rounded-md transition-colors"
+					:class="snapToGrid
+						? 'bg-primary/15 border-primary/40 text-primary hover:bg-primary/25'
+						: 'text-muted-foreground border-border hover:bg-accent hover:text-foreground'"
+					:title="t('postprocess.snapToGrid')"
+					@click="snapToGrid = !snapToGrid"
+				>
+					<Grid2x2 class="size-3.5" />
+					{{ t("postprocess.snapToGrid") }}
+				</button>
+				<button
+					class="flex items-center gap-1.5 px-2.5 py-1 text-xs text-muted-foreground border rounded-md hover:bg-accent hover:text-foreground transition-colors"
+					:title="t('postprocess.fitView')"
+					@click="fitView(inputNodePos)"
+				>
+					<Maximize2 class="size-3.5" />
+					{{ t("postprocess.fitView") }}
+				</button>
+				<span class="text-sm text-muted-foreground">
+					{{ store.saving ? t("postprocess.saving") : t("postprocess.saved") }}
+				</span>
+			</div>
 		</header>
 
-		<div class="relative">
-			<PipelineNodeBox :label="t('postprocess.input.label')" :description="t('postprocess.input.description')" fixed />
-			<div
-				v-if="store.pipeline.nodes.length > 0"
-				class="absolute left-1/2 -translate-x-1/2 w-0.5 h-6 bg-border"
-				style="bottom: -24px"
-			/>
-		</div>
-
-		<template v-if="store.pipeline.nodes.length > 0">
-			<div
-				v-for="({ node, info }, idx) in nodesWithInfo"
-				:key="node.nodeId"
-				class="relative"
-				:draggable="isDraggingHandle"
-				@dragstart="onDragStart($event, idx)"
-				@dragover="onDragOver($event, idx)"
-				@drop="onDrop($event, idx)"
-				@dragend="onDragEnd"
-			>
-				<div
-					class="border-2 rounded-xl p-4 bg-card transition-opacity"
-					:class="[
-						!node.enabled && 'opacity-50',
-						dragIndex === idx ? 'opacity-30' : '',
-						isModuleMissing(node)
-							? 'border-destructive/70 bg-destructive/5'
-							: dragOverIndex === idx && dragIndex !== idx
-								? 'border-primary'
-								: 'border-transparent',
-					]"
-				>
-					<div class="flex items-center gap-3">
-						<GripVertical
-							class="cursor-grab text-muted-foreground select-none size-5"
-							@mousedown="isDraggingHandle = true"
-							@mouseup="isDraggingHandle = false"
-						/>
-
-						<div class="flex-1 min-w-0">
-							<div class="flex items-center gap-2">
-								<span
-									class="font-medium text-sm"
-									:class="isModuleMissing(node) && 'text-destructive'"
-									>{{ info?.name ?? node.moduleId }}</span
-								>
-								<Badge
-									v-if="isModuleMissing(node)"
-									variant="destructive"
-									class="text-xs"
-									>{{ t("postprocess.node.missing") }}</Badge
-								>
-								<Badge
-									v-else-if="!node.enabled"
-									variant="secondary"
-									class="text-xs"
-									>{{ t("postprocess.node.skipped") }}</Badge
-								>
-							</div>
-							<p class="text-xs text-muted-foreground truncate">
-								{{ info?.description ?? "" }}
-							</p>
-						</div>
-
-						<div class="flex items-center gap-2 shrink-0">
-							<Button
-								variant="ghost"
-								size="icon"
-								class="h-7 w-7"
-								:disabled="idx === 0"
-								@click="store.moveNode(node.nodeId, 'up')"
-							><ChevronUp class="size-4" /></Button
-							>
-							<Button
-								variant="ghost"
-								size="icon"
-								class="h-7 w-7"
-								:disabled="idx === store.pipeline.nodes.length - 1"
-								@click="store.moveNode(node.nodeId, 'down')"
-							><ChevronDown class="size-4" /></Button
-							>
-
-							<span class="text-xs text-muted-foreground select-none"
-								>{{ t("postprocess.node.skip") }}</span
-							>
-							<Switch
-								:model-value="!node.enabled"
-								@update:model-value="node.enabled = !$event"
-							/>
-
-							<Button
-								variant="ghost"
-								size="icon"
-								class="h-7 w-7 text-destructive hover:text-destructive"
-								@click="store.removeNode(node.nodeId)"
-							><X class="size-4" /></Button
-							>
-						</div>
-					</div>
-
-					<div
-						v-if="info?.params.length"
-						class="mt-3 grid grid-cols-2 gap-x-4 gap-y-3"
-					>
-						<template
-							v-for="param in info.params"
-							:key="`${node.nodeId}__${param.key}`"
-						>
-							<div class="flex flex-col gap-1.5">
-								<Label class="text-xs">{{ param.label }}</Label>
-
-								<Switch
-									v-if="param.type === 'boolean'"
-									:model-value="
-										node.params[param.key] === true ||
-										node.params[param.key] === 'true'
-									"
-									@update:model-value="node.params[param.key] = $event"
-								/>
-
-								<Select
-									v-else-if="param.type === 'select'"
-									:model-value="String(node.params[param.key] ?? param.default)"
-									@update:model-value="
-										node.params[param.key] = String($event ?? param.default)
-									"
-								>
-									<SelectTrigger size="sm" class="w-full">
-										<SelectValue />
-									</SelectTrigger>
-									<SelectContent>
-										<SelectItem
-											v-for="opt in param.options"
-											:key="opt"
-											:value="opt"
-										>
-											{{ opt }}
-										</SelectItem>
-									</SelectContent>
-								</Select>
-
-								<NumberField
-									v-else-if="param.type === 'number'"
-									:model-value="Number(node.params[param.key] ?? param.default)"
-									@update:model-value="node.params[param.key] = $event ?? 0"
-								>
-									<NumberFieldContent>
-										<NumberFieldDecrement />
-										<NumberFieldInput />
-										<NumberFieldIncrement />
-									</NumberFieldContent>
-								</NumberField>
-
-								<Input
-									v-else
-									:model-value="String(node.params[param.key] ?? param.default)"
-									class="h-8 text-sm"
-									@update:model-value="node.params[param.key] = String($event)"
-								/>
-							</div>
-						</template>
-					</div>
-				</div>
-
-				<div
-					v-if="idx < store.pipeline.nodes.length - 1"
-					class="absolute left-1/2 -translate-x-1/2 w-0.5 h-6 bg-border"
-					style="bottom: -24px"
-				/>
-			</div>
-		</template>
-
-		<div class="flex flex-col items-center gap-2">
-			<div
-				v-if="store.pipeline.nodes.length === 0"
-				class="text-sm text-muted-foreground"
-			>
-				{{ t("postprocess.empty") }}
-			</div>
-
-			<Button variant="outline" size="sm" @click="openPicker">
-				{{ t("postprocess.addModule") }}
-			</Button>
-		</div>
-
-		<Dialog :open="showPicker" @update:open="showPicker = $event">
-			<DialogContent class="max-w-sm">
-				<DialogHeader>
-					<DialogTitle>{{ t("postprocess.picker.title") }}</DialogTitle>
-					<DialogDescription class="sr-only">{{ t("postprocess.picker.description") }}</DialogDescription>
-				</DialogHeader>
-				<div class="flex flex-col gap-1 mt-1">
-					<div
-						v-if="availableModules.length === 0"
-						class="text-sm text-muted-foreground px-2 py-4 text-center"
-					>
-						<template v-if="store.modules.length === 0">
-							{{ t("postprocess.picker.noModules") }}<br />
-							<span class="text-xs"
-								>{{ t("postprocess.picker.noModulesHint") }}</span
-							>
-						</template>
-						<template v-else> {{ t("postprocess.picker.allAdded") }} </template>
-					</div>
-					<Button
-						v-for="mod in availableModules"
-						:key="mod.id"
-						variant="ghost"
-						class="flex flex-col items-start px-3 py-2.5 rounded-lg text-left h-auto w-full whitespace-normal"
-						@click="addModule(mod.id)"
-					>
-						<span class="text-sm font-medium">{{ mod.name }}</span>
-						<span class="text-xs text-muted-foreground">{{
-							mod.description
-						}}</span>
-					</Button>
-				</div>
-			</DialogContent>
-		</Dialog>
-
+		<!-- 画布区域 / Canvas area -->
 		<div
-			v-if="store.pipeline.nodes.length > 0"
-			class="text-xs text-muted-foreground text-center"
+			ref="canvasRef"
+			class="relative flex-1 overflow-hidden bg-[#0d0d0d] select-none"
+			:style="{
+				cursor: canvasCursor,
+				backgroundImage: 'radial-gradient(circle, #2a2a2a 1px, transparent 1px)',
+				backgroundSize: '24px 24px',
+			}"
+			@mousedown="onCanvasMousedown"
+			@wheel.prevent="onCanvasWheel"
+			@contextmenu.prevent="openContextMenu"
 		>
-			{{ t("postprocess.stats", { enabled: enabledNodes.length, total: store.pipeline.nodes.length }) }}
+			<!-- 框选矩形覆盖层（z-50 确保在节点之上）/ Marquee selection overlay (z-50 on top of nodes) -->
+			<div
+				v-if="marquee.visible"
+				class="absolute pointer-events-none z-50 border border-primary/60 bg-primary/10"
+				:style="{
+					left: `${marquee.x}px`,
+					top: `${marquee.y}px`,
+					width: `${marquee.w}px`,
+					height: `${marquee.h}px`,
+				}"
+			/>
+			<!-- 变换层 / Transform layer -->
+			<div
+				class="absolute top-0 left-0 origin-top-left"
+				:style="{
+					transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
+				}"
+			>
+				<!-- SVG 连线层 / SVG wiring layer -->
+				<svg
+					class="absolute inset-0 overflow-visible pointer-events-none"
+					style="left:0;top:0;width:1px;height:1px;"
+				>
+					<!-- 已有的边 / Existing edges -->
+					<g v-for="edge in store.pipeline.edges" :key="`${edge.fromNodeId}-${edge.fromPort}-${edge.toNodeId}-${edge.toPort}`">
+						<template v-if="edgePositions(edge).from && edgePositions(edge).to">
+							<path
+								:d="edgePath(edgePositions(edge).from!, edgePositions(edge).to!)"
+								fill="none"
+								stroke="#ffffff30"
+								stroke-width="2"
+								class="pointer-events-auto cursor-pointer hover:stroke-destructive transition-colors"
+								@click.stop="store.removeEdge(edge.fromNodeId, edge.fromPort, edge.toNodeId, edge.toPort)"
+							/>
+						</template>
+					</g>
+					<!-- 正在拖拽的连线预览 / Pending connection preview -->
+					<template v-if="connectingFrom && pendingLine">
+						<path
+							:d="edgePath(
+								pendingLineFrom() ?? pendingLine,
+								pendingLine,
+							)"
+							fill="none"
+							:stroke="PORT_TYPE_COLORS[connectingFrom.type]"
+							stroke-width="2"
+							stroke-dasharray="6 3"
+						/>
+					</template>
+				</svg>
+
+				<!-- 节点 / Nodes -->
+				<!-- 虚拟录制输入节点 / Virtual recording input node -->
+				<div
+					class="pipeline-node absolute"
+					:style="{ left: `${inputNodePos.x}px`, top: `${inputNodePos.y}px`, zIndex: 1 }"
+					@mousedown.stop
+				>
+					<div class="rounded-xl border border-amber-500/40 bg-card shadow-xl min-w-44">
+						<div class="px-3 py-2 cursor-move" @mousedown.stop="onInputNodeMousedown($event)">
+							<div class="flex items-center gap-1.5">
+								<span class="text-xs font-semibold text-amber-400">{{ t("postprocess.input.label") }}</span>
+								<Badge class="text-[9px] px-1 py-0 h-4 bg-amber-500/20 text-amber-400 border-amber-500/30">source</Badge>
+							</div>
+							<p class="text-[10px] text-muted-foreground mt-0.5">{{ t("postprocess.input.description") }}</p>
+						</div>
+						<div class="flex justify-end px-3 pb-2">
+							<div class="flex items-center gap-1.5">
+								<span class="text-[9px] text-muted-foreground">ts session dir</span>
+								<div
+									:ref="(el) => registerPortEl(el as HTMLElement | null, INPUT_NODE_ID, true, 0)"
+									class="w-3 h-3 rounded-full border-2 cursor-crosshair -mr-4.5 shrink-0 transition-transform hover:scale-125"
+									:style="{ borderColor: PORT_TYPE_COLORS['ts_session_dir'], backgroundColor: PORT_TYPE_COLORS['ts_session_dir'] + '40' }"
+									title="ts_session_dir"
+									@mousedown.stop="onPortMousedown($event, { nodeId: INPUT_NODE_ID, portIndex: 0, isOutput: true, type: 'ts_session_dir' })"
+								/>
+							</div>
+						</div>
+					</div>
+				</div>
+
+				<!-- 常规节点 / Regular nodes -->
+				<div
+					v-for="node in store.pipeline.nodes"
+					:key="node.nodeId"
+					class="pipeline-node absolute"
+					:style="{
+						left: `${node.position?.x ?? 0}px`,
+						top: `${node.position?.y ?? 0}px`,
+						zIndex: selectedNodeIds.has(node.nodeId) ? 10 : 1,
+					}"
+					@mousedown.stop
+					@click.stop="selectNode(node.nodeId)"
+				>
+					<div
+						class="rounded-xl border bg-card shadow-xl min-w-64 max-w-96 transition-colors"
+						:class="[
+							!node.enabled && 'opacity-50',
+							selectedNodeIds.has(node.nodeId) ? 'border-primary' : 'border-white/10',
+						]"
+					>
+						<!-- 节点头部 / Node header -->
+						<div class="flex items-center gap-2 px-3 py-2 border-b border-white/5 cursor-move" @mousedown.stop="onNodeMousedown($event, node.nodeId)">
+							<div class="flex-1 min-w-0">
+								<div class="flex items-center gap-1.5 flex-wrap">
+									<span class="text-xs font-semibold leading-none truncate">
+										{{ getModuleInfo(node.moduleId)?.name ?? node.moduleId }}
+									</span>
+									<Badge
+										v-if="getModuleInfo(node.moduleId)?.official"
+										class="text-[9px] px-1 py-0 h-4 bg-amber-500/20 text-amber-400 border-amber-500/30"
+									>official</Badge>
+									<Badge
+										v-if="!store.modules.some(m => m.id === node.moduleId)"
+										variant="destructive"
+										class="text-[9px] px-1 py-0 h-4"
+									>{{ t("postprocess.node.missing") }}</Badge>
+									<Badge
+										v-else-if="!node.enabled"
+										variant="secondary"
+										class="text-[9px] px-1 py-0 h-4"
+									>{{ t("postprocess.node.skipped") }}</Badge>
+								</div>
+								<p class="text-[10px] text-muted-foreground leading-none mt-0.5 truncate">
+									{{ getModuleInfo(node.moduleId)?.description }}
+								</p>
+							</div>
+							<div class="flex items-center gap-1 shrink-0">
+								<Switch
+									:id="`enable-${node.nodeId}`"
+									:model-value="node.enabled"
+									class="scale-75"
+									@update:model-value="node.enabled = !!$event"
+									@click.stop
+								/>
+							</div>
+						</div>
+
+						<!-- 端口区域 / Ports area -->
+						<div class="flex gap-2 px-3 py-2">
+							<!-- 输入端口 / Input ports -->
+							<div class="flex flex-col gap-2 items-start shrink-0">
+								<div
+									v-for="(type, i) in getNodeInputTypes(node.moduleId)"
+									:key="`in-${i}`"
+									class="flex items-center gap-1.5"
+								>
+									<div
+										:ref="(el) => registerPortEl(el as HTMLElement | null, node.nodeId, false, i)"
+										class="w-3 h-3 rounded-full border-2 cursor-crosshair -ml-4.5 shrink-0 transition-transform hover:scale-125"
+										:style="{ borderColor: PORT_TYPE_COLORS[type], backgroundColor: PORT_TYPE_COLORS[type] + '40' }"
+										:title="type"
+										@mousedown.stop
+										@mouseup.stop="onPortMouseup($event, { nodeId: node.nodeId, portIndex: i, isOutput: false, type })"
+									/>
+									<span class="text-[9px] text-muted-foreground">{{ type.replace(/_/g, ' ') }}</span>
+								</div>
+							</div>
+
+							<!-- 参数区域 / Parameters area -->
+							<div class="flex-1 min-w-0">
+								<div
+									v-if="getModuleInfo(node.moduleId)?.params.length"
+									class="flex flex-col gap-2"
+								>
+									<div
+										v-for="param in getModuleInfo(node.moduleId)!.params"
+										:key="`${node.nodeId}__${param.key}`"
+										class="flex flex-col gap-0.5"
+									>
+										<Label class="text-[10px] text-muted-foreground">{{ param.label }}</Label>
+										<Switch
+											v-if="param.type === 'boolean'"
+											:model-value="node.params[param.key] === true || node.params[param.key] === 'true'"
+											class="scale-75 origin-left"
+											@update:model-value="node.params[param.key] = $event"
+											@click.stop
+										/>
+										<Select
+											v-else-if="param.type === 'select'"
+											:model-value="String(node.params[param.key] ?? param.default)"
+											@update:model-value="node.params[param.key] = String($event ?? param.default)"
+										>
+											<SelectTrigger size="sm" class="h-6 text-xs w-full" @click.stop>
+												<SelectValue />
+											</SelectTrigger>
+											<SelectContent>
+												<SelectItem v-for="opt in param.options" :key="opt" :value="opt" class="text-xs">
+													{{ opt }}
+												</SelectItem>
+											</SelectContent>
+										</Select>
+										<NumberField
+											v-else-if="param.type === 'number'"
+											:model-value="Number(node.params[param.key] ?? param.default)"
+											@update:model-value="node.params[param.key] = $event ?? 0"
+										>
+											<NumberFieldContent>
+												<NumberFieldDecrement class="h-6" />
+												<NumberFieldInput class="h-6 text-xs" @click.stop />
+												<NumberFieldIncrement class="h-6" />
+											</NumberFieldContent>
+										</NumberField>
+										<Input
+											v-else
+											:model-value="String(node.params[param.key] ?? param.default)"
+											class="h-6 text-xs"
+											@update:model-value="node.params[param.key] = String($event)"
+											@click.stop
+										/>
+									</div>
+								</div>
+							</div>
+
+							<!-- 输出端口 / Output ports -->
+							<div class="flex flex-col gap-2 items-end shrink-0">
+								<div
+									v-for="(type, i) in getNodeOutputTypes(node.moduleId)"
+									:key="`out-${i}`"
+									class="flex items-center gap-1.5"
+								>
+									<span class="text-[9px] text-muted-foreground">{{ type.replace(/_/g, ' ') }}</span>
+									<div
+										:ref="(el) => registerPortEl(el as HTMLElement | null, node.nodeId, true, i)"
+										class="w-3 h-3 rounded-full border-2 cursor-crosshair -mr-4.5 shrink-0 transition-transform hover:scale-125"
+										:style="{ borderColor: PORT_TYPE_COLORS[type], backgroundColor: PORT_TYPE_COLORS[type] + '40' }"
+										:title="type"
+										@mousedown.stop="onPortMousedown($event, { nodeId: node.nodeId, portIndex: i, isOutput: true, type })"
+									/>
+								</div>
+							</div>
+						</div>
+
+						<!-- official 提示已移至底部信息栏 / Official hint moved to bottom info bar -->
+					</div>
+				</div>
+			</div>
+
+			<!-- 空白画布提示（仅在无用户节点时显示，不含输入节点）/ Canvas hint when no user nodes exist -->
+			<!-- 右键上下文菜单 / Context menu -->
+			<Transition name="fade">
+				<div
+					v-if="contextMenu.visible"
+					class="absolute z-50 min-w-44 rounded-lg border bg-popover shadow-xl py-1 text-sm"
+					:style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }"
+					@mousedown.stop
+					@click.stop
+				>
+					<div class="px-3 py-1 text-xs text-muted-foreground font-medium">
+						{{ t("postprocess.picker.title") }}
+					</div>
+					<div
+						v-if="contextMenuModules.length === 0"
+						class="px-3 py-2 text-xs text-muted-foreground"
+					>
+						{{ t("postprocess.picker.allAdded") }}
+					</div>
+					<button
+						v-for="mod in contextMenuModules"
+						:key="mod.id"
+						class="w-full flex items-start gap-2 px-3 py-1.5 hover:bg-accent transition-colors text-left"
+						@click="addModuleAtCursor(mod.id)"
+					>
+						<div class="flex-1 min-w-0">
+							<div class="flex items-center gap-1.5">
+								<span class="text-sm font-medium truncate">{{ mod.name }}</span>
+								<Badge
+									v-if="mod.official"
+									class="text-[9px] px-1 py-0 h-4 bg-amber-500/20 text-amber-400 border-amber-500/30 shrink-0"
+								>official</Badge>
+							</div>
+							<p class="text-xs text-muted-foreground truncate">{{ mod.description }}</p>
+						</div>
+					</button>
+					<div class="border-t my-1" />
+					<button
+						class="w-full px-3 py-1.5 text-left text-xs text-muted-foreground hover:bg-accent transition-colors"
+						@click="closeContextMenu"
+					>取消</button>
+				</div>
+			</Transition>
+
+			<!-- 连线释放模块选择菜单 / Wire-drop module selection menu -->
+			<Transition name="fade">
+				<div
+					v-if="wireMenu.visible"
+					class="absolute z-50 min-w-44 rounded-lg border bg-popover shadow-xl py-1 text-sm"
+					:style="{ left: `${wireMenu.x}px`, top: `${wireMenu.y}px` }"
+					@mousedown.stop
+					@click.stop
+				>
+					<div class="px-3 py-1 text-xs text-muted-foreground font-medium flex items-center gap-1.5">
+						<span>连接到…</span>
+						<span
+							v-if="wireMenu.fromPort"
+							class="px-1.5 py-0.5 rounded text-[10px] font-mono"
+							:style="{ background: PORT_TYPE_COLORS[wireMenu.fromPort.type] + '30', color: PORT_TYPE_COLORS[wireMenu.fromPort.type] }"
+						>{{ wireMenu.fromPort.type.replace(/_/g, ' ') }}</span>
+					</div>
+					<div
+						v-if="wireMenuModules.length === 0"
+						class="px-3 py-2 text-xs text-muted-foreground"
+					>
+						没有兼容的模块
+					</div>
+					<button
+						v-for="mod in wireMenuModules"
+						:key="mod.id"
+						class="w-full flex items-start gap-2 px-3 py-1.5 hover:bg-accent transition-colors text-left"
+						@click="addModuleFromWire(mod.id)"
+					>
+						<div class="flex-1 min-w-0">
+							<div class="flex items-center gap-1.5">
+								<span class="text-sm font-medium truncate">{{ mod.name }}</span>
+								<Badge
+									v-if="mod.official"
+									class="text-[9px] px-1 py-0 h-4 bg-amber-500/20 text-amber-400 border-amber-500/30 shrink-0"
+								>official</Badge>
+							</div>
+							<p class="text-xs text-muted-foreground truncate">{{ mod.description }}</p>
+						</div>
+					</button>
+					<div class="border-t my-1" />
+					<button
+						class="w-full px-3 py-1.5 text-left text-xs text-muted-foreground hover:bg-accent transition-colors"
+						@click="closeWireMenu"
+					>取消</button>
+				</div>
+			</Transition>
+		</div>
+
+		<!-- 底部信息栏 / Bottom info bar -->
+		<div class="px-6 py-2.5 border-t text-sm text-muted-foreground flex items-center gap-2 shrink-0 bg-background min-h-10">
+			<template v-if="selectedNodeIds.size > 0">
+				<!-- 多选时显示数量 / Show count when multiple selected -->
+				<template v-if="selectedNodeIds.size > 1">
+					<span class="text-xs">{{ t("postprocess.multiSelected", { count: selectedNodeIds.size }) }}</span>
+				</template>
+				<!-- 单选时显示节点描述 / Show node description when single selected -->
+				<template v-else-if="selectedNodeIds.has(INPUT_NODE_ID)">
+					<span class="font-medium text-amber-400 shrink-0">{{ t("postprocess.input.label") }}</span>
+					<span class="text-muted-foreground">{{ t("postprocess.input.description") }}</span>
+				</template>
+				<template v-else>
+					<template v-for="nodeId in selectedNodeIds" :key="nodeId">
+						<span
+							v-if="getModuleInfo(store.pipeline.nodes.find(n => n.nodeId === nodeId)?.moduleId ?? '')"
+							class="font-medium text-foreground shrink-0"
+						>
+							{{ getModuleInfo(store.pipeline.nodes.find(n => n.nodeId === nodeId)!.moduleId)?.name }}
+						</span>
+						<span class="truncate">
+							{{ getModuleInfo(store.pipeline.nodes.find(n => n.nodeId === nodeId)?.moduleId ?? '')?.description }}
+						</span>
+						<Badge
+							v-if="getModuleInfo(store.pipeline.nodes.find(n => n.nodeId === nodeId)?.moduleId ?? '')?.official"
+							class="text-[10px] px-1.5 py-0 h-4 bg-amber-500/20 text-amber-400 border-amber-500/30 shrink-0"
+						>official</Badge>
+					</template>
+				</template>
+			</template>
+			<template v-else>
+				<!-- 无选中时显示操作指南 / Show guide when nothing is selected -->
+				<span class="text-xs">{{ t("postprocess.guide") }}</span>
+			</template>
 		</div>
 	</div>
 </template>
+
+<style scoped>
+.fade-enter-active,
+.fade-leave-active {
+	transition: opacity 0.1s, transform 0.1s;
+}
+.fade-enter-from,
+.fade-leave-to {
+	opacity: 0;
+	transform: scale(0.97);
+}
+</style>

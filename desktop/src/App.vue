@@ -261,7 +261,7 @@
 				</nav>
 			</aside>
 			<main class="flex-1 overflow-hidden">
-				<div ref="mainScrollEl" class="h-full overflow-y-scroll p-6 scrollbar-overlay">
+				<div ref="mainScrollEl" class="h-full overflow-y-scroll scrollbar-overlay">
 					<RouterView v-slot="{ Component }">
 						<Transition name="page" mode="out-in">
 							<component :is="Component" :key="route.path" />

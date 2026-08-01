@@ -1,56 +1,10 @@
-//! 设置管理命令 / Settings Management Commands
+//! 磁盘空间查询命令 / Disk Space Query Command
 //!
-//! 提供应用设置的读取/保存、Mouflon 密钥管理、启动警告查询和磁盘空间查询等功能。
-//! Provides commands for reading/saving app settings, Mouflon key management,
-//! startup warning queries, and disk space queries.
-//! These functions are called directly by the HTTP server handlers in server_mod/server.rs.
+//! 提供跨平台的磁盘空间查询功能，供 HTTP server 的设置路由复用。
+//! Provides cross-platform disk space querying, reused by the settings HTTP route.
+//! This function is called directly by the HTTP server handler in server_mod/routes/settings.rs.
 
-use crate::config::settings::{AppState, Settings};
 use crate::core::error::Result;
-use std::sync::Arc;
-
-/// 获取当前应用设置。
-/// Get the current application settings.
-pub async fn get_settings(state: &Arc<AppState>) -> Result<Settings> {
-    Ok(state.get_settings())
-}
-
-/// 保存新的应用设置。
-/// Save new application settings.
-pub async fn save_settings(new_settings: Settings, state: &Arc<AppState>) -> Result<()> {
-    state.update_settings(new_settings)?;
-    Ok(())
-}
-
-/// 启动警告数据结构 / Startup warnings data structure
-#[derive(serde::Serialize)]
-pub struct StartupWarnings {
-    pub missing_streamers: Vec<String>,
-    pub missing_pp_results: Vec<String>,
-}
-
-/// 查询启动警告：检查 pp_results 中是否有对应文件已不存在的孤立记录。
-/// Query startup warnings: check for orphaned pp_results entries whose files no longer exist.
-pub async fn get_startup_warnings(state: &Arc<AppState>) -> Result<StartupWarnings> {
-    let state = Arc::clone(state);
-    tokio::task::spawn_blocking(move || {
-        let data = state.data.read();
-
-        let missing_pp_results: Vec<String> = data
-            .pp_results
-            .iter()
-            .filter(|path| !std::path::Path::new(path.as_str()).exists())
-            .cloned()
-            .collect();
-
-        Ok(StartupWarnings {
-            missing_streamers: Vec::new(),
-            missing_pp_results,
-        })
-    })
-    .await
-    .map_err(|e| crate::core::error::AppError::Other(e.to_string()))?
-}
 
 /// 磁盘空间信息 / Disk space information
 #[derive(serde::Serialize)]
@@ -58,13 +12,6 @@ pub struct DiskSpace {
     pub total_bytes: u64,
     pub available_bytes: u64,
     pub used_bytes: u64,
-}
-
-/// 查询录制输出目录所在磁盘的空间信息。
-/// Query disk space information for the drive containing the recording output directory.
-pub async fn get_disk_space(state: &Arc<AppState>) -> Result<DiskSpace> {
-    let output_dir = state.get_settings().output_dir;
-    get_disk_space_inner(&output_dir)
 }
 
 /// 获取指定路径所在磁盘的空间信息（跨平台实现）。

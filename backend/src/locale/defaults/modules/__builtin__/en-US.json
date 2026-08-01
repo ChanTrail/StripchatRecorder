@@ -1,0 +1,12 @@
+{
+  "recording_input": {
+    "name": "Recording Input",
+    "description": "Virtual recording input node — always the pipeline start point",
+    "params": {}
+  },
+  "unpack": {
+    "name": "Unpack Media Bundle",
+    "description": "Split a media bundle into a video file (port 0) and an image file (port 1)",
+    "params": {}
+  }
+}

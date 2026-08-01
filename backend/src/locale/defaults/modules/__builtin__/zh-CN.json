@@ -1,0 +1,12 @@
+{
+  "recording_input": {
+    "name": "录制输入",
+    "description": "虚拟录制输入节点，始终作为流水线的起点",
+    "params": {}
+  },
+  "unpack": {
+    "name": "解组媒体包",
+    "description": "将媒体包拆分为视频文件（端口 0）和图片文件（端口 1）",
+    "params": {}
+  }
+}

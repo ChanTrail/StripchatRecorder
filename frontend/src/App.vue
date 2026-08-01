@@ -41,12 +41,11 @@
 	const mainScrollEl = ref<HTMLElement | null>(null);
 	useScrollbar(mainScrollEl);
 
-	/** 侧边栏导航项配置 / Sidebar navigation items configuration */
+	/** 侧边栏导航项配置（桌面版无流转发）/ Sidebar navigation items (desktop: no relay) */
 	const navItems = [
 		{ to: "/", labelKey: "nav.streamers" },
 		{ to: "/recordings", labelKey: "nav.recordings" },
 		{ to: "/postprocess", labelKey: "nav.postprocess" },
-		{ to: "/relay", labelKey: "nav.relay" },
 		{ to: "/finder", labelKey: "nav.finder" },
 		{ to: "/settings", labelKey: "nav.settings" },
 	];
@@ -200,11 +199,9 @@
 			},
 		);
 
-		// 初始加载可用语言列表 / Initial load of available locales
+		// 初始加载可用语言列表
+		// Load available locales
 		await localesStore.refresh();
-
-		// locale-files-changed 事件已在 localesStore 内部监听，无需在此重复注册
-		// locale-files-changed is already listened inside localesStore; no need to register here
 	});
 
 	onUnmounted(() => {
@@ -263,7 +260,7 @@
 				</nav>
 			</aside>
 			<main class="flex-1 overflow-hidden">
-				<div ref="mainScrollEl" class="h-full overflow-y-scroll p-6 scrollbar-overlay">
+				<div ref="mainScrollEl" class="h-full overflow-y-scroll scrollbar-overlay">
 					<RouterView v-slot="{ Component }">
 						<Transition name="page" mode="out-in">
 							<component :is="Component" :key="route.path" />

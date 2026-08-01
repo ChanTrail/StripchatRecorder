@@ -6,208 +6,106 @@
 //! Extracts frames from the video at specified intervals, overlays timestamp watermarks,
 //! then tiles all frames into a grid preview image (contact sheet) saved in the video's directory.
 //!
+//! # 子模块 / Sub-modules
+//! - `font`    — 字体查找与 ffmpeg drawtext 路径转义 / Font discovery and drawtext path escaping
+//! - `grid`    — 网格行列数计算 / Grid layout calculation
+//! - `extract` — ffmpeg 截帧、帧数统计、拼图 / Frame extraction, counting, tiling
+//!
 //! # 协议 / Protocol
 //! - `--describe`: 输出 JSON 格式的模块元数据 / Output module metadata as JSON
-//! - 环境变量 `PP_INPUT`: 输入视频文件路径 / Input video file path via env var
-//! - 标准输出 `OUTPUT:{path}`: 输出视频路径（contact sheet 与视频同名）/ Output video path
-//! - 标准输出 `SKIP:{reason}`: 跳过原因（contact sheet 已存在）/ Skip reason (contact sheet already exists)
+//! - stdin: JSON 输入（inputs[0] 为 video_file）/ JSON input (inputs[0] is video_file)
+//! - stdout: 进度行 + 最终 JSON 结果 / Progress lines + final JSON result
 
-use pp_utils::{emit_progress, param, param_u32, video_duration};
-use std::env;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+mod extract;
+mod font;
+mod grid;
+
+use pp_utils::{emit_progress, output_ok, video_duration, ModuleInput};
+use std::path::Path;
 
 /// 模块元数据 JSON，通过 `--describe` 参数输出。
 /// Module metadata JSON, output via `--describe` argument.
 const DESCRIBE: &str = r#"{
     "id": "contact_sheet",
-    "name": "Contact Sheet 0.3.0",
+    "name": "Contact Sheet 0.4.0",
     "description": "每隔指定秒数截帧，拼合成一张带时间戳的预览图保存到视频同目录",
+    "inputTypes": ["video_file"],
+    "outputTypes": ["media_bundle"],
+    "official": true,
     "params": [
-        {
-        "key": "interval",
-        "label": "截帧间隔（秒）",
-        "type": "number",
-        "default": 30
-        },
-        {
-        "key": "thumb_width",
-        "label": "单帧宽度（px）",
-        "type": "number",
-        "default": 320
-        },
-        {
-        "key": "format",
-        "label": "图片格式",
-        "type": "select",
-        "default": "webp",
-        "options": ["webp", "jpg", "png"]
-        },
-        {
-        "key": "quality",
-        "label": "图片质量（1-100，jpg/webp 有效）",
-        "type": "number",
-        "default": 100
-        },
-        {
-        "key": "cols",
-        "label": "列数（0=自动）",
-        "type": "number",
-        "default": 0
-        },
-        {
-        "key": "rows",
-        "label": "行数（0=自动）",
-        "type": "number",
-        "default": 0
-        },
-        {
-        "key": "fontfile",
-        "label": "字体文件路径（留空自动检测）",
-        "type": "string",
-        "default": ""
-        },
-        {
-        "key": "fontsize",
-        "label": "时间戳字号",
-        "type": "number",
-        "default": 18
-        }
+        { "key": "interval",    "label": "截帧间隔（秒）",            "type": "number", "default": 30 },
+        { "key": "thumb_width", "label": "单帧宽度（px）",            "type": "number", "default": 320 },
+        { "key": "format",      "label": "图片格式",                  "type": "select", "default": "webp", "options": ["webp","jpg","png"] },
+        { "key": "quality",     "label": "图片质量（1-100）",         "type": "number", "default": 100 },
+        { "key": "cols",        "label": "列数（0=自动）",            "type": "number", "default": 0 },
+        { "key": "rows",        "label": "行数（0=自动）",            "type": "number", "default": 0 },
+        { "key": "fontfile",    "label": "字体文件路径（留空自动）",  "type": "string", "default": "" },
+        { "key": "fontsize",    "label": "时间戳字号",                "type": "number", "default": 18 }
     ]
 }"#;
 
-/// 根据帧数计算最优列数
-/// 若用户指定了列数则直接使用。
-///
-/// Calculate the optimal number of columns for the grid (to make it roughly square).
-/// Uses the user-specified value if provided.
-///
-/// # 参数 / Parameters
-/// - `frame_count`: 总帧数 / Total frame count
-/// - `forced_cols`: 用户指定的列数（0 = 自动）/ User-specified columns (0 = auto)
-fn compute_cols(frame_count: u32, forced_cols: u32) -> u32 {
-    if forced_cols > 0 {
-        return forced_cols;
-    }
-    // 使用 sqrt * 1.33 使网格略宽于高 / Use sqrt * 1.33 to make grid slightly wider than tall
-    (((frame_count as f64).sqrt() * 1.33).ceil() as u32).max(1)
-}
-
-/// 在常见系统路径中查找可用的字体文件。
-/// 支持 Windows、macOS 和 Linux。
-///
-/// Find an available font file in common system paths.
-/// Supports Windows, macOS, and Linux.
-///
-/// # 返回值 / Returns
-/// ffmpeg drawtext 过滤器可用的字体路径字符串，未找到返回 `None`。
-/// Font path string usable by ffmpeg drawtext filter, or `None` if not found.
-fn find_font() -> Option<String> {
-    let candidates: &[&str] = &[
-        // Windows 字体 / Windows fonts
-        r"C:\Windows\Fonts\arial.ttf",
-        r"C:\Windows\Fonts\segoeui.ttf",
-        r"C:\Windows\Fonts\consola.ttf",
-        // macOS 字体 / macOS fonts
-        "/System/Library/Fonts/Helvetica.ttc",
-        "/Library/Fonts/Arial.ttf",
-        // Linux 字体 / Linux fonts
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-        "/usr/share/fonts/TTF/DejaVuSans.ttf",
-    ];
-    candidates
-        .iter()
-        .find(|p| Path::new(p).exists())
-        .map(|p| ffmpeg_escape_path(p))
-}
-
-/// 将文件路径转换为 ffmpeg drawtext 过滤器可接受的格式。
-/// 在 Windows 上需要将反斜杠转为正斜杠，并对驱动器号后的冒号进行转义。
-///
-/// Convert a file path to a format accepted by ffmpeg's drawtext filter.
-/// On Windows, backslashes are converted to forward slashes and the colon after
-/// the drive letter is escaped.
-fn ffmpeg_escape_path(path: &str) -> String {
-    let fwd = path.replace('\\', "/");
-    // Windows 驱动器路径（如 C:/...）需要转义冒号为 \:
-    // Windows drive paths (e.g. C:/...) need the colon escaped as \:
-    if fwd.len() >= 2 && fwd.as_bytes()[1] == b':' {
-        format!("{}\\:{}", &fwd[..1], &fwd[2..])
-    } else {
-        fwd
-    }
-}
-
-/// 模块主逻辑：截帧 -> 叠加时间戳 -> 拼合网格图。
-/// Main module logic: extract frames -> overlay timestamps -> tile into grid.
+/// 模块主逻辑：截帧 → 叠加时间戳 → 拼合网格图。
+/// Main module logic: extract frames → overlay timestamps → tile into grid.
 fn run() -> Result<(), String> {
-    // 读取输入文件路径 / Read input file path
-    let input_str = env::var("PP_INPUT").map_err(|_| "PP_INPUT not set".to_string())?;
-    let input = PathBuf::from(&input_str);
+    let input_json = ModuleInput::read();
+    let input = input_json
+        .first_input()
+        .ok_or_else(|| "inputs[0] (video_file) is required".to_string())?;
 
     if !input.exists() {
         return Err(format!("Input file not found: {}", input.display()));
     }
 
-    // 读取模块参数 / Read module parameters
-    let interval = param_u32("interval", 30).max(1);
-    let thumb_width = param_u32("thumb_width", 320).max(16);
-    let forced_cols = param_u32("cols", 0);
-    let forced_rows = param_u32("rows", 0);
-    let fontsize = param_u32("fontsize", 18).max(8);
-    let tile_pad = 4u32;
-    let quality = param_u32("quality", 100).clamp(1, 100);
-    let format = param("format", "webp");
-    let fontfile_param = param("fontfile", "");
+    let interval     = input_json.param_u32("interval", 30).max(1);
+    let thumb_width  = input_json.param_u32("thumb_width", 320).max(16);
+    let forced_cols  = input_json.param_u32("cols", 0);
+    let forced_rows  = input_json.param_u32("rows", 0);
+    let fontsize     = input_json.param_u32("fontsize", 18).max(8);
+    let tile_pad     = 4u32;
+    let quality      = input_json.param_u32("quality", 100).clamp(1, 100);
+    let format       = input_json.param_str("format", "webp");
+    let fontfile_param = input_json.param_str("fontfile", "");
 
-    // 确定字体文件路径（优先使用用户指定的）/ Determine font file path (user-specified takes priority)
-    let fontfile = if !fontfile_param.is_empty() {
-        Some(ffmpeg_escape_path(&fontfile_param))
+    // 字体路径：优先用户指定，否则自动查找 / Font: prefer user-specified, else auto-detect
+    let fontfile: Option<String> = if !fontfile_param.is_empty() {
+        Some(font::escape_for_drawtext(&fontfile_param))
     } else {
-        find_font()
+        font::find_font()
     };
 
     if fontfile.is_none() {
         eprintln!("Warning: no font file found, timestamp overlay will be skipped");
     }
 
-    // 输出文件路径：与视频同目录，同名，扩展名为图片格式
-    // Output path: same directory as video, same name, image format extension
+    // 输出文件路径（与视频同目录同名，扩展名为图片格式）
+    // Output path: same directory and stem as the video, image format extension
     let output_path = input
         .parent()
         .unwrap_or_else(|| Path::new("."))
         .join(format!(
             "{}.{}",
-            input
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("contact_sheet"),
+            input.file_stem().and_then(|s| s.to_str()).unwrap_or("contact_sheet"),
             format
         ));
 
     // 若 contact sheet 已存在则跳过 / Skip if contact sheet already exists
     if output_path.exists() {
-        println!(
-            "SKIP: contact sheet already exists: {}",
-            output_path.display()
+        println!("SKIP: contact sheet already exists: {}", output_path.display());
+        let bundle = format!("{}\n{}", input.to_string_lossy(), output_path.display());
+        output_ok(
+            &[&bundle],
+            &format!("Skipped: contact sheet already exists ({})", output_path.display()),
         );
-        println!("OUTPUT:{}", output_path.display());
         return Ok(());
     }
 
-    // 获取视频时长以计算帧数 / Get video duration to calculate frame count
+    // 获取视频时长以计算预期帧数 / Get video duration to calculate expected frame count
     let duration = video_duration(&input)
         .ok_or_else(|| "无法获取视频时长，请确认 ffprobe 已安装".to_string())?;
 
     let frame_count = ((duration / interval as f64).floor() as u32).max(1);
-    let cols = compute_cols(frame_count, forced_cols);
-    let rows = if forced_rows > 0 {
-        forced_rows
-    } else {
-        // 向上取整确保所有帧都能放入网格 / Ceiling division to fit all frames in the grid
-        frame_count.div_ceil(cols)
-    };
+    let cols = grid::compute_cols(frame_count, forced_cols);
+    let rows = grid::compute_rows(frame_count, cols, forced_rows);
 
     // 创建临时目录存放截取的帧 / Create temp directory for extracted frames
     let tmp_dir = std::env::temp_dir().join(format!(
@@ -217,201 +115,78 @@ fn run() -> Result<(), String> {
             .unwrap_or_default()
             .as_millis()
     ));
-    std::fs::create_dir_all(&tmp_dir).map_err(|e| format!("Failed to create temp dir: {}", e))?;
+    std::fs::create_dir_all(&tmp_dir)
+        .map_err(|e| format!("Failed to create temp dir: {}", e))?;
+
     // 定义清理函数，确保临时目录在任何情况下都被删除
-    // Define cleanup closure to ensure temp dir is always removed
+    // Cleanup closure: always remove temp dir on exit
     let cleanup = || {
         let _ = std::fs::remove_dir_all(&tmp_dir);
     };
 
     emit_progress(0, frame_count);
 
-    // 构建时间戳水印过滤器（若有字体文件）/ Build timestamp watermark filter (if font available)
-    let drawtext_filter = if let Some(ref font) = fontfile {
-        format!(
-            ",drawtext=fontfile='{font}'\
-             :text='%{{pts\\:hms}}'\
-             :x=w-tw-8:y=h-th-8:fontsize={fs}:fontcolor=white\
-             :box=1:boxcolor=black@0.6:boxborderw=3",
-            font = font,
-            fs = fontsize,
-        )
-    } else {
-        String::new()
-    };
-
-    // 构建 ffmpeg 视频过滤器：按时间点选帧 + 缩放 + 时间戳水印
-    // Build ffmpeg video filter: select frames by timestamp + scale + timestamp overlay
-    //
-    // 使用 select='not(mod(t,{interval}))' 按原始时间戳选帧，pts 全程保持不变，
-    // drawtext 的 %{pts\:hms} 因此能正确显示视频中的实际时间位置。
-    // 避免使用 fps 过滤器，因为它会重置 pts 导致时间戳显示错误。
-    //
-    // Use select='not(mod(t,{interval}))' to pick frames by original timestamp,
-    // keeping pts intact throughout so drawtext's %{pts\:hms} shows the correct
-    // position in the video. Avoids the fps filter which resets pts to 0.
-    // select 过滤器：选取第一帧，以及距上一帧已过 interval 秒的帧
-    // isnan(prev_selected_t) 匹配第一帧；gte(t-prev_selected_t, interval) 匹配后续帧
-    // 这样 pts 保持原始值，drawtext 能正确显示视频时间码。
-    //
-    // select filter: pick the first frame, then any frame at least `interval` seconds
-    // after the previously selected one. pts stays intact for correct drawtext timestamps.
-    let vf = format!(
-        "select='isnan(prev_selected_t)+gte(t-prev_selected_t\\,{interval})',scale={w}:-1{dt}",
-        interval = interval,
-        w = thumb_width,
-        dt = drawtext_filter
-    );
-    let frame_pattern = tmp_dir.join("frame_%06d.png");
-
-    // 第一步：使用 ffmpeg 截取帧并实时上报进度
-    // Step 1: Extract frames with ffmpeg and report progress in real-time
-    let mut child = Command::new("ffmpeg")
-        .args(["-y", "-i"])
-        .arg(&input)
-        .args(["-vf", &vf])
-        .args(["-vsync", "vfr"])
-        .args(["-frames:v", &frame_count.to_string()])
-        .arg(&frame_pattern)
-        .args(["-progress", "pipe:1"])
-        .args(["-loglevel", "error"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| {
-            cleanup();
-            format!("Failed to spawn ffmpeg (extract): {}", e)
-        })?;
-
-    {
-        // 用 out_time_us 估算进度（select 过滤器输出的 frame= 是输入帧号，不适合做进度）
-        // Use out_time_us to estimate progress (frame= from select filter counts input frames)
-        use std::io::{BufRead, BufReader};
-        let stdout = child.stdout.take().expect("stdout piped");
-        let reader = BufReader::new(stdout);
-        let total_us = (duration * 1_000_000.0) as u64;
-        let mut last_reported = 0u32;
-        for line in reader.lines().map_while(Result::ok) {
-            if let Some(val) = line.strip_prefix("out_time_us=")
-                && let Ok(us) = val.trim().parse::<u64>()
-            {
-                let progress = if total_us > 0 {
-                    ((us as f64 / total_us as f64) * frame_count as f64) as u32
-                } else {
-                    0
-                };
-                let clamped = progress.min(frame_count);
-                if clamped != last_reported {
-                    emit_progress(clamped, frame_count);
-                    last_reported = clamped;
-                }
-            }
-        }
+    // 第一步：截帧 / Step 1: Extract frames
+    if let Err(e) = extract::extract_frames(
+        &input,
+        &tmp_dir,
+        interval,
+        thumb_width,
+        fontfile.as_deref(),
+        fontsize,
+        frame_count,
+        duration,
+    ) {
+        cleanup();
+        return Err(e);
     }
 
-    let status = child.wait().map_err(|e| {
-        cleanup();
-        format!("ffmpeg extract wait failed: {}", e)
-    })?;
-
-    if !status.success() {
-        let stderr_msg = child
-            .stderr
-            .take()
-            .and_then(|mut s| {
-                use std::io::Read;
-                let mut buf = String::new();
-                s.read_to_string(&mut buf).ok()?;
-                Some(buf)
-            })
-            .unwrap_or_default();
-        cleanup();
-        return Err(format!("ffmpeg extract failed:\n{}", stderr_msg.trim()));
-    }
-
-    // 验证实际截取到的帧数 / Verify actual number of extracted frames
-    let extracted = (1..=frame_count)
-        .filter(|i| tmp_dir.join(format!("frame_{:06}.png", i)).exists())
-        .count() as u32;
-
+    // 验证实际截取帧数 / Verify extracted frame count
+    let extracted = extract::count_extracted_frames(&tmp_dir, frame_count);
     if extracted == 0 {
         cleanup();
-        return Err(
-            "No frames extracted — check the video file and ffmpeg installation".to_string(),
-        );
+        return Err("No frames extracted — check the video file and ffmpeg installation".to_string());
     }
 
     emit_progress(frame_count, frame_count);
 
-    // 生成 ffmpeg concat 文件列表 / Generate ffmpeg concat file list
-    let filelist_path = tmp_dir.join("frames.txt");
-    let mut list = String::new();
-    for i in 1..=frame_count {
-        let p = tmp_dir.join(format!("frame_{:06}.png", i));
-        if p.exists() {
-            list.push_str(&format!(
-                "file '{}'\n",
-                p.to_string_lossy().replace('\\', "/")
-            ));
+    // 第二步：写帧列表并拼图 / Step 2: Write concat list and tile
+    let filelist = match extract::write_concat_list(&tmp_dir, frame_count) {
+        Ok(p) => p,
+        Err(e) => {
+            cleanup();
+            return Err(e);
         }
-    }
-    std::fs::write(&filelist_path, &list).map_err(|e| {
+    };
+
+    if let Err(e) = extract::tile_frames(&filelist, &output_path, cols, rows, tile_pad, &format, quality) {
         cleanup();
-        format!("Failed to write filelist: {}", e)
-    })?;
-
-    // 第二步：使用 ffmpeg tile 过滤器将帧拼合为网格图
-    // Step 2: Use ffmpeg tile filter to combine frames into a grid image
-    let tile_filter = format!("tile={}x{}:padding={}", cols, rows, tile_pad);
-    let mut cmd = Command::new("ffmpeg");
-    cmd.args(["-y", "-f", "concat", "-safe", "0", "-i"])
-        .arg(&filelist_path)
-        .args(["-vf", &tile_filter, "-frames:v", "1"]);
-
-    // 根据输出格式设置质量参数 / Set quality parameters based on output format
-    match format.as_str() {
-        "jpg" => {
-            cmd.args(["-q:v", "3"]);
-        }
-        "webp" => {
-            cmd.args(["-quality", &quality.to_string()]);
-        }
-        _ => {}
+        return Err(e);
     }
 
-    cmd.arg(&output_path)
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped());
-
-    let out = cmd.output().map_err(|e| {
-        cleanup();
-        format!("Failed to spawn ffmpeg (tile): {}", e)
-    })?;
-
-    if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        cleanup();
-        return Err(format!("ffmpeg tile failed:\n{}", stderr.trim()));
-    }
-
-    // 清理临时帧文件 / Clean up temporary frame files
+    // 清理临时帧文件 / Clean up temp frames
     cleanup();
-    // 输出 contact sheet 图片路径，供后端写入 meta 的 module_outputs
-    // Output the contact sheet image path so the backend can store it in meta's module_outputs
-    println!("OUTPUT:{}", output_path.display());
+
+    // 输出 media_bundle（视频路径 + 图片路径）/ Output media_bundle (video + image paths)
+    let bundle = format!("{}\n{}", input.to_string_lossy(), output_path.display());
+    output_ok(
+        &[&bundle],
+        &format!("Contact sheet saved: {}", output_path.display()),
+    );
     Ok(())
 }
 
 /// 程序入口：处理 `--describe` 参数或执行主逻辑。
-/// Entry point: handle `--describe` argument or execute main logic.
+/// Entry point: handle `--describe` or run main logic.
 fn main() {
-    let args: Vec<String> = env::args().collect();
+    let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(|s| s.as_str()) == Some("--describe") {
         print!("{}", DESCRIBE);
         return;
     }
     if let Err(e) = run() {
-        eprintln!("{}", e);
+        let json = serde_json::json!({ "code": "error", "message": e, "outputs": [] });
+        println!("{}", json);
         std::process::exit(1);
     }
 }

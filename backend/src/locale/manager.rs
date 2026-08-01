@@ -24,8 +24,14 @@
 //!         ├── notify_discord/
 //!         │   ├── zh-CN.json
 //!         │   └── en-US.json
-//!         └── notify_telegram/
-//!             ├── zh-CN.json
+//!         ├── notify_telegram/
+//!         │   ├── zh-CN.json
+//!         │   └── en-US.json
+//!         ├── cleanup/
+//!         │   ├── zh-CN.json
+//!         │   └── en-US.json
+//!         └── __builtin__/
+//!             ├── zh-CN.json  # 所有内置节点翻译（recording_input、unpack）
 //!             └── en-US.json
 //! ```
 
@@ -65,7 +71,9 @@ const APP_ZH_CN: &str = include_str!("defaults/app/zh-CN.json");
 const APP_EN_US: &str = include_str!("defaults/app/en-US.json");
 
 /// 内置模块的默认 locale 数据（模块 ID, 语言代码, JSON 内容）。
+/// 包含外部可执行模块和内置节点（`__builtin__*`）。
 /// Default locale data for built-in modules (module_id, locale_code, json_content).
+/// Covers both external executable modules and built-in nodes (`__builtin__*`).
 const MODULE_DEFAULTS: &[(&str, &str, &str)] = &[
     (
         "filter_short",
@@ -76,6 +84,16 @@ const MODULE_DEFAULTS: &[(&str, &str, &str)] = &[
         "filter_short",
         "en-US",
         include_str!("defaults/modules/filter_short/en-US.json"),
+    ),
+    (
+        "cleanup",
+        "zh-CN",
+        include_str!("defaults/modules/cleanup/zh-CN.json"),
+    ),
+    (
+        "cleanup",
+        "en-US",
+        include_str!("defaults/modules/cleanup/en-US.json"),
     ),
     (
         "contact_sheet",
@@ -106,6 +124,18 @@ const MODULE_DEFAULTS: &[(&str, &str, &str)] = &[
         "notify_telegram",
         "en-US",
         include_str!("defaults/modules/notify_telegram/en-US.json"),
+    ),
+    // 内置节点（两个节点的翻译合并在单一文件中）
+    // Built-in nodes (both nodes' translations merged into a single file per locale)
+    (
+        "__builtin__",
+        "zh-CN",
+        include_str!("defaults/modules/__builtin__/zh-CN.json"),
+    ),
+    (
+        "__builtin__",
+        "en-US",
+        include_str!("defaults/modules/__builtin__/en-US.json"),
     ),
 ];
 
@@ -345,6 +375,8 @@ pub fn check_custom_locale_files() -> Vec<(String, String)> {
         "contact_sheet",
         "notify_discord",
         "notify_telegram",
+        "cleanup",
+        "__builtin__",
     ];
     let builtin_locale_codes: &[&str] = &["zh-CN", "en-US"];
     if let Ok(mod_dir) = std::fs::read_dir(modules_locale_dir()) {

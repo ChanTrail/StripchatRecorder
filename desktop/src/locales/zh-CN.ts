@@ -192,16 +192,20 @@ export default {
 		description: "录制合并完成后，视频文件将依次经过以下模块处理",
 		saving: "保存中…",
 		saved: "已自动保存",
+		fitView: "自适应视图",
+		guide: "右键画布添加模块节点 · 拖拽输出端口连线 · 选中节点后按 Delete 删除",
 		input: {
-			label: "输入",
-			description: "合并后的单视频文件",
+			label: "录制输入",
+			description: "录制产生的 TS 分片目录（ts_session_dir）",
 		},
 		node: {
 			skip: "跳过",
 			skipped: "已跳过",
+			enable: "启用",
 			missing: "模块缺失",
+			officialHint: "官方模块，建议置于 ts_merge 之后使用",
 		},
-		empty: "暂无后处理节点，点击下方添加",
+		empty: "暂无后处理节点，右键画布添加",
 		addModule: "+ 添加模块",
 		stats: "{enabled} 个执行节点 · 共 {total} 个节点",
 		picker: {

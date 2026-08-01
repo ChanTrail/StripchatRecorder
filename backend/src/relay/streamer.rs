@@ -5,7 +5,12 @@
 //! - 上游离线：离线源 ffmpeg (lavfi) → MPEG-TS 广播
 //! - 状态切换时共用同一个 broadcast channel，播放器不断连。
 //!   切换瞬间时间戳会跳变，播放器通常能自动适应（重新缓冲约 1 秒）。
+//!
+//! 离线占位画面的文字渲染（CJK 字体探测、drawtext 滤镜构建）见 `super::offline_frame`。
+//! Offline placeholder frame text rendering (CJK font detection, drawtext filter
+//! construction) lives in `super::offline_frame`.
 
+use super::offline_frame::build_drawtext;
 use super::state::{RelayManager, RelayStreamState};
 use crate::config::settings::AppState;
 use crate::recording::hls::{get_url_prefix, parse_playlist};
@@ -37,77 +42,6 @@ pub fn start_streamer(
 }
 
 const IDLE_STOP_SECS: u64 = 30;
-
-fn find_cjk_font() -> Option<String> {
-    let candidates: &[&str] = &[
-        "C:/Windows/Fonts/msyh.ttc",
-        "C:/Windows/Fonts/msyhbd.ttc",
-        "C:/Windows/Fonts/simsun.ttc",
-        "C:/Windows/Fonts/simhei.ttf",
-        "C:/Windows/Fonts/STZHONGS.TTF",
-        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
-        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
-        "/usr/share/fonts/wenquanyi/wqy-microhei/wqy-microhei.ttc",
-        "/System/Library/Fonts/PingFang.ttc",
-        "/Library/Fonts/Arial Unicode.ttf",
-    ];
-    for path in candidates {
-        if std::path::Path::new(path).exists() {
-            return Some(path.to_string());
-        }
-    }
-    None
-}
-
-fn to_ascii_status(s: &str) -> String {
-    match s {
-        "公开秀" => "Public Show".to_string(),
-        "私密秀" => "Private Show".to_string(),
-        "票务秀" => "Ticket Show".to_string(),
-        "计时秀" => "Per-Minute Show".to_string(),
-        "群组秀" => "Group Show".to_string(),
-        "虚拟私密" => "Virtual Private".to_string(),
-        "P2P" => "P2P".to_string(),
-        "等待" => "Waiting".to_string(),
-        "离线" => "Offline".to_string(),
-        "获取状态失败" => "Status Unavailable".to_string(),
-        _ => s.to_string(),
-    }
-}
-
-fn escape_drawtext(s: &str) -> String {
-    s.replace('\\', "\\\\")
-     .replace('\'', "\\'")
-     .replace(':', "\\:")
-     .replace('[', "\\[")
-     .replace(']', "\\]")
-}
-
-fn build_drawtext(username: &str, status_text: &str) -> String {
-    let username_esc = escape_drawtext(username);
-    match find_cjk_font() {
-        Some(font_path) => {
-            let font_esc = font_path.replace('\\', "/").replace(':', "\\:");
-            let status_esc = escape_drawtext(status_text);
-            format!(
-                "drawtext=fontfile='{}':text='{}':fontcolor=white:fontsize=36:x=(w-text_w)/2:y=(h-text_h)/2-40,\
-                 drawtext=fontfile='{}':text='{}':fontcolor=gray:fontsize=24:x=(w-text_w)/2:y=(h-text_h)/2+20",
-                font_esc, username_esc, font_esc, status_esc
-            )
-        }
-        None => {
-            let status_ascii = escape_drawtext(&to_ascii_status(status_text));
-            format!(
-                "drawtext=text='{}':fontcolor=white:fontsize=36:x=(w-text_w)/2:y=(h-text_h)/2-40,\
-                 drawtext=text='{}':fontcolor=gray:fontsize=24:x=(w-text_w)/2:y=(h-text_h)/2+20",
-                username_esc, status_ascii,
-            )
-        }
-    }
-}
 
 async fn worker_loop(
     username: String,

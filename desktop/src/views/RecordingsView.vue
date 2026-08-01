@@ -88,9 +88,6 @@
 	/** 各文件的实时录制速度（字节/秒）/ Real-time recording speed per file (bytes/second) */
 	const recordingSpeed = ref<Record<string, number>>({});
 
-	/** 合并进度（video_path -> {out_bytes, total_bytes}）/ Merge progress per video path */
-	const mergeProgress = ref<Record<string, { out_bytes: number; total_bytes: number }>>({});
-
 	/** 分片下载统计（video_path -> {downloaded, failed}）/ Segment download stats per video path */
 	const segmentStats = ref<Record<string, { downloaded: number; failed: number }>>({});
 
@@ -142,13 +139,19 @@
 	function syncModuleOutputsFromFiles() {
 		for (const f of files.value) {
 			if (f.is_recording) continue;
-			if (f.module_outputs && Object.keys(f.module_outputs).length > 0) {
-				// meta 是持久化真相来源，直接覆盖写入（与 onMounted 初始化行为一致）
-				// Meta is the persistent source of truth; overwrite directly (consistent with onMounted init)
-				moduleOutputs.value[f.path] = {
-					...moduleOutputs.value[f.path],
-					...f.module_outputs,
-				};
+			if (f.pp_execution) {
+				const outputs: Record<string, string> = {};
+				for (const entry of f.pp_execution) {
+					if (entry.outputs && entry.outputs.length > 0) {
+						const nonVideo = entry.outputs.find(
+							(p) => !/\.(mp4|mkv|ts|avi|mov)$/i.test(p),
+						);
+						if (nonVideo) outputs[entry.module_id] = nonVideo;
+					}
+				}
+				if (Object.keys(outputs).length > 0) {
+					moduleOutputs.value[f.path] = { ...moduleOutputs.value[f.path], ...outputs };
+				}
 			}
 		}
 	}
@@ -287,7 +290,7 @@
 				ppStatus.value[p] !== "running" &&
 				ppStatus.value[p] !== "waiting" &&
 				!files.value.find((f) => f.path === p)?.is_recording &&
-				!files.value.find((f) => f.path === p)?.status?.startsWith("merging"),
+				files.value.find((f) => f.path === p)?.status === "finish",
 		);
 		if (paths.length === 0) return;
 		selected.value.clear();
@@ -314,7 +317,7 @@
 					ppStatus.value[p] !== "running" &&
 					ppStatus.value[p] !== "waiting" &&
 					!files.value.find((f) => f.path === p)?.is_recording &&
-					!files.value.find((f) => f.path === p)?.status?.startsWith("merging"),
+					files.value.find((f) => f.path === p)?.status === "finish",
 			).length,
 	);
 
@@ -347,6 +350,12 @@
 		unlisteners.push(() => clearInterval(diskTimer));
 		if (!ppStore.pipeline?.nodes?.length) await ppStore.fetchPipeline();
 
+		// 监听其他客户端的流水线更新，实时刷新模块输出路径推断结果
+		// Listen for pipeline updates from other clients and re-infer module output paths
+		ppStore.initModuleWatcher(() => {
+			syncModuleOutputsFromFiles();
+		});
+
 		// 先恢复运行中/等待中的后处理任务状态（来自内存，不依赖 meta）
 		// First restore running/waiting post-processing task states (from memory, independent of meta)
 		await restoreFromBackend();
@@ -367,15 +376,17 @@
 			} else if (f.status === "pp_running") {
 				ppStatus.value[f.path] = "running";
 			}
-			// 从 meta pp_results 恢复各模块执行结果，用于 done/error 状态下的详情展示
-			// Restore per-module results from meta pp_results for detail display in done/error state
-			if (f.pp_results && f.pp_results.length > 0 &&
+			// 从 meta pp_execution 恢复已完成节点的执行结果，用于 done/error 状态下的详情展示
+			// Restore completed node results from meta pp_execution for detail display in done/error state
+			if (f.pp_execution && f.pp_execution.length > 0 &&
 				(f.status === "finish" || f.status === "pp_error")) {
-				const results = f.pp_results.map((r) => ({
-					moduleId: r.module_id,
-					success: r.success,
-					message: r.message,
-				}));
+				const results = f.pp_execution
+					.filter((e) => e.result != null)
+					.map((e) => ({
+						moduleId: e.module_id,
+						success: e.result?.code === "ok" || e.result?.code === "done" || e.result?.code === "skipped",
+						message: e.result?.message ?? "",
+					}));
 				const allOk = results.every((r) => r.success);
 				ppProgress.value[f.path] = {
 					...makePpProgress(
@@ -387,8 +398,22 @@
 					moduleResults: results,
 				};
 			}
-			if (f.module_outputs && Object.keys(f.module_outputs).length > 0) {
-				moduleOutputs.value[f.path] = f.module_outputs;
+			// 从 pp_execution 输出路径推断模块输出（contact_sheet 等）
+			// Infer module outputs from pp_execution output paths (e.g. contact_sheet)
+			if (f.pp_execution) {
+				const outputs: Record<string, string> = {};
+				for (const entry of f.pp_execution) {
+					if (entry.outputs && entry.outputs.length > 0) {
+						// 非视频文件（图片等）视为模块输出 / Non-video files (images etc.) treated as module outputs
+						const nonVideo = entry.outputs.find(
+							(p) => !/\.(mp4|mkv|ts|avi|mov)$/i.test(p),
+						);
+						if (nonVideo) outputs[entry.module_id] = nonVideo;
+					}
+				}
+				if (Object.keys(outputs).length > 0) {
+					moduleOutputs.value[f.path] = outputs;
+				}
 			}
 		}
 
@@ -415,13 +440,15 @@
 					} else if (f.status === "pp_running") {
 						ppStatus.value[f.path] = "running";
 					}
-					if (f.pp_results && f.pp_results.length > 0 &&
+					if (f.pp_execution && f.pp_execution.length > 0 &&
 						(f.status === "finish" || f.status === "pp_error")) {
-						const results = f.pp_results.map((r) => ({
-							moduleId: r.module_id,
-							success: r.success,
-							message: r.message,
-						}));
+						const results = f.pp_execution
+							.filter((e) => e.result != null)
+							.map((e) => ({
+								moduleId: e.module_id,
+								success: e.result?.code === "ok" || e.result?.code === "done" || e.result?.code === "skipped",
+								message: e.result?.message ?? "",
+							}));
 						const allOk = results.every((r) => r.success);
 						ppProgress.value[f.path] = {
 							...makePpProgress(
@@ -433,8 +460,19 @@
 							moduleResults: results,
 						};
 					}
-					if (f.module_outputs && Object.keys(f.module_outputs).length > 0) {
-						moduleOutputs.value[f.path] = f.module_outputs;
+					if (f.pp_execution) {
+						const outputs: Record<string, string> = {};
+						for (const entry of f.pp_execution) {
+							if (entry.outputs && entry.outputs.length > 0) {
+								const nonVideo = entry.outputs.find(
+									(p) => !/\.(mp4|mkv|ts|avi|mov)$/i.test(p),
+								);
+								if (nonVideo) outputs[entry.module_id] = nonVideo;
+							}
+						}
+						if (Object.keys(outputs).length > 0) {
+							moduleOutputs.value[f.path] = outputs;
+						}
 					}
 				}
 			}),
@@ -515,33 +553,11 @@
 					delete nextSpeed[p.video_path];
 					recordingSpeed.value = nextSpeed;
 				}
-				// 合并完成后清理进度数据 / Clean up merge progress after merge completes
-				if (p.video_path) {
-					const next = { ...mergeProgress.value };
-					delete next[p.video_path];
-					mergeProgress.value = next;
-				}
 				// 录制结束时清理分片统计 / Clean up segment stats when recording stops
 				if (p.video_path) {
 					const nextStats = { ...segmentStats.value };
 					delete nextStats[p.video_path];
 					segmentStats.value = nextStats;
-				}
-			}),
-		);
-
-		unlisteners.push(
-			await on("merge-progress", (payload) => {
-				const p = payload as {
-					video_path: string;
-					out_bytes: number;
-					total_bytes: number;
-				};
-				if (p.video_path) {
-					mergeProgress.value = {
-						...mergeProgress.value,
-						[p.video_path]: { out_bytes: p.out_bytes, total_bytes: p.total_bytes },
-					};
 				}
 			}),
 		);
@@ -568,21 +584,21 @@
 			await on("postprocess-progress", (payload) => {
 				const p = payload as {
 					path: string;
-					done: number;
-					total: number;
-					pct: number;
+					nodeId: string;
 					modDone: number;
 					modTotal: number;
-					moduleName: string;
+					status: string;
 				};
 				const prev = ppProgress.value[p.path];
+				// 仅更新模块内进度，整体进度由 postprocess-node-done 维护
+				// Only update intra-module progress; overall progress maintained by postprocess-node-done
 				ppProgress.value[p.path] = makePpProgress(
-					p.done,
-					p.total,
+					prev?.overallDone ?? 0,
+					prev?.overallTotal ?? 0,
 					p.modDone,
 					p.modTotal,
-					p.moduleName ?? "",
-					p.pct,
+					prev?.moduleName ?? "",
+					prev?.overallPct ?? 0,
 					prev?.moduleName ?? "",
 					prev?.modulePct ?? 0,
 					{
@@ -594,11 +610,79 @@
 		);
 
 		unlisteners.push(
-			await on("postprocess-done", async (payload) => {
+			await on("postprocess-node-start", (payload) => {
+				const p = payload as { path: string; nodeId: string; moduleId: string };
+				const prev = ppProgress.value[p.path];
+				ppProgress.value[p.path] = makePpProgress(
+					prev?.overallDone ?? 0,
+					prev?.overallTotal ?? 0,
+					0, 0,
+					p.moduleId,
+					prev?.overallPct ?? 0,
+					"",
+					0,
+					{
+						processing: t("usePostprocess.processing"),
+						waiting: t("usePostprocess.waitingProgress"),
+					},
+				);
+			}),
+		);
+
+		unlisteners.push(
+			await on("postprocess-node-done", (payload) => {
 				const p = payload as {
 					path: string;
-					results: { moduleId: string; success: boolean; message: string }[];
+					nodeId: string;
+					moduleId: string;
+					code: string;
+					message: string;
+					outputs: string[];
+					pct: number;
+					done: number;
+					total: number;
 				};
+				const prev = ppProgress.value[p.path];
+				const prevResults = prev?.moduleResults ?? [];
+				const isOk = p.code === "ok" || p.code === "done" || p.code === "skipped";
+				const updatedResults = [
+					...prevResults.filter((r) => r.moduleId !== p.moduleId),
+					{ moduleId: p.moduleId, success: isOk, message: p.message },
+				];
+				ppProgress.value[p.path] = {
+					...makePpProgress(
+						p.done,
+						p.total,
+						0, 0, "",
+						p.pct,
+						"",
+						0,
+						{
+							processing: t("usePostprocess.processing"),
+							waiting: t("usePostprocess.waitingProgress"),
+						},
+					),
+					moduleResults: updatedResults,
+				};
+				// 从输出路径中提取非视频文件作为模块输出（如 contact_sheet 图片）
+				// Extract non-video files from outputs as module outputs (e.g. contact_sheet image)
+				if (p.outputs && p.outputs.length > 0) {
+					const nonVideo = p.outputs.find(
+						(path) => !/\.(mp4|mkv|ts|avi|mov)$/i.test(path),
+					);
+					if (nonVideo) {
+						moduleOutputs.value = {
+							...moduleOutputs.value,
+							[p.path]: { ...moduleOutputs.value[p.path], [p.moduleId]: nonVideo },
+						};
+					}
+				}
+			}),
+		);
+
+		unlisteners.push(
+			await on("postprocess-done", async (payload) => {
+				const p = payload as { path: string; success: boolean; message?: string; pp_execution?: { module_id: string; result?: { code: string; message?: string } | null }[] };
 				const wasCancelledByDelete = ppCancelledByDelete.has(p.path);
 				ppCancelledByDelete.delete(p.path);
 				handlePostprocessDone(
@@ -636,7 +720,7 @@
 </script>
 
 <template>
-	<div class="flex flex-col">
+	<div class="flex flex-col h-full gap-0">
 		<Dialog :open="previewOpen" @update:open="previewOpen = $event">
 			<DialogContent
 				class="p-0 overflow-hidden flex flex-col w-fit"
@@ -697,7 +781,7 @@
 
 		<header
 			ref="headerEl"
-			class="flex items-start justify-between gap-4 shrink-0 pb-4 bg-background sticky top-0 z-20 -mx-6 px-6 shadow-[0_-1.5rem_0_0_var(--background)]"
+			class="flex items-start justify-between gap-4 shrink-0 pb-4 bg-background sticky top-0 z-20 px-6 pt-6 border-b"
 		>
 			<div class="flex-1 min-w-0">
 				<h1 class="text-xl font-bold mb-0.5">{{ t("recordings.title") }}</h1>
@@ -764,7 +848,7 @@
 			</div>
 		</header>
 
-		<div class="pb-6">
+		<div class="px-6 flex-1 overflow-y-auto">
 			<div
 				v-if="loading && files.length === 0"
 				class="text-center text-muted-foreground py-16"
@@ -780,8 +864,7 @@
 
 			<Table v-else>
 				<TableHeader
-					class="sticky z-10 bg-background"
-					:style="{ top: `${headerHeight}px` }"
+					class="sticky top-0 z-10 bg-background"
 				>
 					<TableRow>
 						<TableHead class="w-8">
@@ -871,54 +954,6 @@
 
 						<template v-if="!collapsedGroups.has(group.username)">
 							<TableRow v-for="f in group.files" :key="f.path" class="relative">
-								<template v-if="f.status === 'merging_waiting' || f.status === 'merging'">
-									<TableCell class="w-8">
-										<Checkbox :model-value="false" :disabled="true" />
-									</TableCell>
-									<TableCell class="font-medium w-px whitespace-nowrap pl-7">
-										<div class="flex items-center gap-1.5">
-											<span>{{ f.name }}</span>
-											<Badge variant="outline" class="text-[10px] shrink-0">{{
-												f.status === 'merging_waiting'
-													? t("recordings.status.waitingMerge")
-													: t("recordings.status.merging")
-											}}</Badge>
-										</div>
-									</TableCell>
-									<td colspan="9" class="p-2 align-middle w-full">
-										<div class="flex items-center gap-3 h-9 w-full">
-											<Loader2
-												class="size-4 animate-spin shrink-0 text-muted-foreground"
-											/>
-											<span class="text-xs text-muted-foreground shrink-0">{{
-												f.status === 'merging_waiting'
-													? t("recordings.status.waitingMergeVideo")
-													: t("recordings.status.mergingVideo")
-											}}</span>
-											<template v-if="f.status === 'merging' && mergeProgress[f.path]">
-												<div
-													class="flex-1 bg-muted rounded-full h-1.5 overflow-hidden"
-												>
-													<div
-														class="h-full bg-primary rounded-full transition-all duration-500"
-														:style="{
-															width: `${mergeProgress[f.path].total_bytes > 0
-																? Math.min(99, Math.floor(mergeProgress[f.path].out_bytes / mergeProgress[f.path].total_bytes * 10000) / 100)
-																: 0}%`,
-														}"
-													/>
-												</div>
-												<span class="tabular-nums text-xs text-muted-foreground w-14 shrink-0">{{
-													mergeProgress[f.path].total_bytes > 0
-														? (Math.min(99, Math.floor(mergeProgress[f.path].out_bytes / mergeProgress[f.path].total_bytes * 10000) / 100)).toFixed(2)
-														: '0.00'
-												}}%</span>
-											</template>
-										</div>
-									</td>
-								</template>
-
-								<template v-else>
 									<TableCell class="w-8">
 										<Checkbox
 											:model-value="getFileChecked(f.path)"
@@ -1067,17 +1102,6 @@
 														<span class="truncate max-w-40">{{ r.moduleId }}</span>
 													</div>
 												</template>
-												<template v-else>
-													<div
-														v-if="ppStatus[f.path] === 'done'"
-														class="text-lg text-green-500"
-													>
-														{{ t("recordings.status.done") }}
-													</div>
-													<div v-else class="text-lg text-destructive">
-														{{ t("recordings.status.failed") }}
-													</div>
-												</template>
 											</div>
 											<span v-else class="text-xs text-muted-foreground"
 												>—</span
@@ -1143,7 +1167,6 @@
 											>
 										</div>
 									</TableCell>
-								</template>
 							</TableRow>
 						</template>
 					</template>

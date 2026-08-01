@@ -1,10 +1,21 @@
 //! HLS 播放列表解析与 Mouflon 解密 / HLS Playlist Parsing and Mouflon Decryption
 //!
-//! 解析 Stripchat 的 HLS m3u8 播放列表，提取分片 URL 和 fMP4 初始化段 URL。
+//! 解析 Stripchat 的 HLS m3u8 播放列表（媒体播放列表和主播放列表两种），提取分片 URL、
+//! fMP4 初始化段 URL，以及主播放列表中带宽最高的变体流 URL。
 //! 支持 Mouflon 加密系统：通过 SHA-256 密钥对分片 URL 进行 XOR 解密。
 //!
-//! Parses Stripchat's HLS m3u8 playlists, extracting segment URLs and fMP4 init segment URLs.
+//! 本模块只负责纯文本解析，不涉及任何网络请求——播放列表文本的获取（含多 CDN 竞速）
+//! 由 `streaming::stripchat::StripchatApi` 负责，解析后再调用本模块的函数。
+//!
+//! Parses Stripchat's HLS m3u8 playlists (both media playlists and master playlists),
+//! extracting segment URLs, fMP4 init segment URLs, and the highest-bandwidth variant
+//! stream URL from a master playlist.
 //! Supports the Mouflon encryption system: XOR-decrypts segment URLs using SHA-256 keys.
+//!
+//! This module performs pure text parsing only — no network requests. Fetching the
+//! playlist text (including multi-CDN racing) is the responsibility of
+//! `streaming::stripchat::StripchatApi`, which calls into this module's functions
+//! once the text is retrieved.
 
 use crate::core::error::{AppError, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
@@ -113,6 +124,59 @@ pub fn parse_playlist(
     }
 
     Ok((segments, mp4_header_url))
+}
+
+/// 从主播放列表（master playlist）文本中解析出 BANDWIDTH 最高的变体流 URL，
+/// 以及所有 Mouflon PSCH 参数对。
+///
+/// 与 [`parse_playlist`] 的区别：主播放列表列出多个不同码率的变体流供选择，
+/// 而 [`parse_playlist`] 解析的是某个变体流自身的媒体播放列表（分片列表）。
+///
+/// Parse the variant stream URL with the highest BANDWIDTH from master playlist text,
+/// along with all Mouflon PSCH parameter pairs.
+///
+/// Distinction from [`parse_playlist`]: a master playlist lists multiple variant
+/// streams at different bitrates to choose from, whereas [`parse_playlist`] parses
+/// a single variant's own media playlist (the segment list).
+pub fn parse_master_playlist(playlist: &str) -> Option<(String, Vec<(String, String)>)> {
+    // 先把 \r\n 统一成 \n，再按 \n 分割
+    let normalized = playlist.replace("\r\n", "\n").replace('\r', "\n");
+    let lines: Vec<&str> = normalized.split('\n').map(|l| l.trim()).collect();
+
+    // 收集所有 Mouflon PSCH 参数对 (psch, pkey)
+    let mut mouflon_pairs: Vec<(String, String)> = Vec::new();
+    for &line in &lines {
+        if let Some(rest) = line.strip_prefix("#EXT-X-MOUFLON:PSCH:")
+            && let Some((scheme, key)) = rest.split_once(':') {
+            mouflon_pairs.push((scheme.to_string(), key.to_string()));
+        }
+    }
+
+    // 解析 BANDWIDTH 最高的流
+    let mut best_bandwidth: u64 = 0;
+    let mut best_url: Option<String> = None;
+    let mut pending_bandwidth: Option<u64> = None;
+
+    for &line in &lines {
+        if let Some(attrs) = line.strip_prefix("#EXT-X-STREAM-INF:") {
+            // 去掉标签前缀后再按逗号分割，避免标签名干扰 BANDWIDTH= 匹配
+            pending_bandwidth = attrs
+                .split(',')
+                .find(|seg| seg.trim_start().starts_with("BANDWIDTH="))
+                .and_then(|seg| seg.trim_start().strip_prefix("BANDWIDTH="))
+                .and_then(|v| v.parse::<u64>().ok());
+        } else if !line.is_empty() && !line.starts_with('#') {
+            if let Some(bw) = pending_bandwidth.take()
+                && bw > best_bandwidth {
+                best_bandwidth = bw;
+                best_url = Some(line.to_string());
+            }
+        } else {
+            pending_bandwidth = None;
+        }
+    }
+
+    best_url.map(|url| (url, mouflon_pairs))
 }
 
 /// 从完整 URL 中提取 URL 前缀（去掉最后一个路径段）。

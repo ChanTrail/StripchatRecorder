@@ -24,7 +24,7 @@ use crate::server_mod::routes::{
     },
     settings::{
         add_mouflon_key, get_disk_space_handler, get_settings, get_startup_warnings_handler,
-        list_mouflon_keys, remove_missing_pp_results_handler, remove_mouflon_key, save_settings,
+        list_mouflon_keys, remove_mouflon_key, save_settings,
         sync_mouflon_keys,
     },
     streamer::{
@@ -99,10 +99,6 @@ pub fn build_router(state: ServerState) -> Router {
         .route("/api/mouflon-keys/{pkey}", delete(remove_mouflon_key))
         .route("/api/mouflon-keys/sync", post(sync_mouflon_keys))
         .route("/api/startup-warnings", get(get_startup_warnings_handler))
-        .route(
-            "/api/startup-warnings/pp-results",
-            post(remove_missing_pp_results_handler),
-        )
         .route("/api/disk-space", get(get_disk_space_handler))
         .route("/api/recordings", get(list_recordings))
         .route("/api/recordings/merging", get(get_merging_dirs_handler))
@@ -137,25 +133,6 @@ pub fn build_router(state: ServerState) -> Router {
         .layer(cors)
 }
 
-/// 扫描用户自定义语言文件，将校验失败的文件通过 SSE 推送给前端。
-/// 在服务器启动、emitter 就绪后调用一次。
-///
-/// Scan all user-defined locale files and push validation failures to the frontend via SSE.
-/// Called once after server startup when the emitter is ready.
-pub fn emit_locale_warnings(emitter: &Arc<dyn crate::core::emitter::Emitter>) {
-    use crate::core::emitter::EmitterExt;
-    let warnings = crate::locale::manager::check_custom_locale_files();
-    if warnings.is_empty() {
-        return;
-    }
-    let payload: Vec<serde_json::Value> = warnings
-        .into_iter()
-        .map(|(path, reason)| serde_json::json!({ "path": path, "reason": reason }))
-        .collect();
-    tracing::warn!("Custom locale file validation warnings: {:?}", payload);
-    emitter.emit("locale-warnings", &payload);
-}
-
 /// 初始化并启动 HTTP 服务器模式。
 /// Initialize and start the HTTP server mode.
 pub async fn run_server(port: u16) {
@@ -165,118 +142,28 @@ pub async fn run_server(port: u16) {
     }
 
     let app_state = AppState::new().expect("Failed to initialize app state");
-
-    // 初始化 locale 目录（首次运行时创建默认语言 JSON 文件）
-    // Initialize locale directories (create default locale JSON files on first run)
-    crate::locale::manager::init_locale_dirs();
-
     let recorder = RecorderManager::new(Arc::clone(&app_state));
     let (tx, _) = broadcast::channel::<Event>(4096);
     let emitter: Arc<dyn crate::core::emitter::Emitter> = Arc::new(BroadcastEmitter(tx.clone()));
     let monitor = StatusMonitor::new(Arc::clone(&app_state), Arc::clone(&recorder));
-    crate::watcher::fs_watch::start_recordings_dir_watcher(
+
+    // 执行所有启动时一次性初始化任务（locale 初始化、ffmpeg 检查、FS 监控）。
+    // 输出目录维护（合并遗留分片、重建 meta 等）由下方的定时任务首次立即执行覆盖，
+    // 不在此处单独重复。
+    //
+    // Run all one-shot startup tasks (locale init, ffmpeg check, FS watchers).
+    // Output-directory maintenance (merging leftover segments, rebuilding meta, etc.) is
+    // covered by the scheduled task's immediate first run below, not duplicated here.
+    crate::server_mod::startup::run_all(Arc::clone(&app_state), Arc::clone(&emitter));
+
+    // 启动所有后台定时任务（状态轮询、配置检查、密钥同步、输出目录维护）
+    // Launch all background scheduled tasks (status polling, config checks, key sync, output dir maintenance)
+    crate::server_mod::scheduler::start_all(
         Arc::clone(&app_state),
+        Arc::clone(&monitor),
         Arc::clone(&emitter),
+        Arc::clone(&recorder),
     );
-    crate::watcher::fs_watch::start_modules_dir_watcher(Arc::clone(&emitter));
-    crate::watcher::fs_watch::start_locale_dir_watcher(Arc::clone(&emitter));
-
-    // 扫描用户自定义语言文件，将校验警告推送给前端
-    // Scan user-defined locale files and push validation warnings to the frontend
-    {
-        let emitter_clone = Arc::clone(&emitter);
-        tokio::task::spawn_blocking(move || {
-            emit_locale_warnings(&emitter_clone);
-        });
-    }
-
-    if !crate::recording::recorder::ffmpeg_available() {
-        tracing::warn!("ffmpeg not found on PATH");
-    }
-    {
-        let settings = app_state.get_settings();
-        let output_dir = std::path::PathBuf::from(&settings.output_dir);
-        let tmp_dir = settings
-            .tmp_dir
-            .as_deref()
-            .filter(|s| !s.is_empty())
-            .map(std::path::PathBuf::from);
-        let merge_format = settings.merge_format.clone();
-        let emitter_clone = Arc::clone(&emitter);
-        let recorder_clone = Arc::clone(&recorder);
-        tokio::task::spawn_blocking(move || {
-            crate::recording::recorder::startup_merge_leftover_segments(
-                &output_dir,
-                tmp_dir.as_deref(),
-                &merge_format,
-                &emitter_clone,
-                &recorder_clone,
-            );
-            crate::recording::recorder::startup_remove_empty_dirs(&output_dir);
-            // 扫描并补写缺失的 meta 文件
-            // Scan and write missing meta files
-            crate::recording::meta::startup_ensure_meta_files(&output_dir, &merge_format);
-        });
-    }
-
-    // 提前创建 restart channel，确保 poll_interval_notify_tx 在 spawn 前就已注入
-    // Pre-create restart channel so poll_interval_notify_tx is available before spawning
-    {
-        let (restart_tx, restart_rx) = tokio::sync::mpsc::channel::<()>(1);
-        *app_state.poll_interval_notify_tx.write() = Some(restart_tx.clone());
-        *monitor.restart_tx.write() = Some(restart_tx);
-        let monitor_clone = Arc::clone(&monitor);
-        let emitter_clone = Arc::clone(&emitter);
-        tokio::spawn(async move {
-            monitor_clone
-                .start_with_emitter_inner(emitter_clone, restart_rx)
-                .await;
-        });
-    }
-
-    let app_state_clone = Arc::clone(&app_state);
-    let emitter_clone2 = Arc::clone(&emitter);
-    tokio::spawn(async move {
-        crate::config::settings::schedule_config_checks(app_state_clone, emitter_clone2).await;
-    });
-
-    // 启动 Mouflon Keys 自动同步调度器（启动时立即同步一次，之后每小时一次）
-    // Start Mouflon Keys auto-sync scheduler (once on startup, then every hour)
-    {
-        let app_state_clone = Arc::clone(&app_state);
-        let emitter_clone = Arc::clone(&emitter);
-        let (mouflon_notify_tx, mouflon_notify_rx) = tokio::sync::mpsc::channel::<()>(1);
-        *app_state_clone.mouflon_sync_notify_tx.write() = Some(mouflon_notify_tx);
-        tokio::spawn(async move {
-            crate::config::settings::schedule_mouflon_sync(
-                app_state_clone,
-                emitter_clone,
-                mouflon_notify_rx,
-            )
-            .await;
-        });
-    }
-
-    // 启动孤立 meta 文件清理调度器（启动时立即执行一次，之后每小时一次）
-    // Start orphaned meta cleanup scheduler (once on startup, then every hour)
-    {
-        let output_dir = std::path::PathBuf::from(&app_state.get_settings().output_dir);
-        tokio::spawn(async move {
-            crate::recording::meta::schedule_meta_cleanup(output_dir).await;
-        });
-    }
-
-    // 启动 meta 版本检查轮询调度器（启动时立即执行一次，之后每 5 分钟一次）
-    // Start meta version-check polling scheduler (once on startup, then every 5 minutes)
-    {
-        let settings = app_state.get_settings();
-        let output_dir = std::path::PathBuf::from(&settings.output_dir);
-        let merge_format = settings.merge_format.clone();
-        tokio::spawn(async move {
-            crate::recording::meta::schedule_meta_version_check(output_dir, merge_format, 300)
-                .await;
-        });
-    }
 
     let server_state = ServerState {
         app_state,

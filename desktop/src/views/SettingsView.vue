@@ -2,23 +2,23 @@
     应用设置页面 / Application Settings View
 
     提供录制器的全局配置界面，包括：
-    - 录制输出目录（支持系统目录选择器）
-    - 最大并发录制数、轮询间隔、合并格式
+    - TS 流输出目录（支持系统目录选择器）
+    - 最大并发录制数、轮询间隔
     - 网络代理：API 代理、Stripchat 镜像站、CDN 代理
     - Mouflon HLS 解密密钥管理（pkey/pdkey 对）
 
     大多数设置在失焦或按回车时自动保存；
-    部分设置（轮询间隔、并发数、合并格式）通过 watch 自动保存。
+    部分设置（轮询间隔、并发数）通过 watch 自动保存。
     支持多客户端实时同步：其他客户端修改设置时自动更新表单。
 
     Provides global recorder configuration UI including:
-    - Recording output directory (with system directory picker)
-    - Max concurrent recordings, poll interval, merge format
+    - TS stream output directory (with system directory picker)
+    - Max concurrent recordings, poll interval
     - Network proxies: API proxy, Stripchat mirror, CDN proxy
     - Mouflon HLS decryption key management (pkey/pdkey pairs)
 
     Most settings auto-save on blur or Enter key;
-    some settings (poll interval, concurrency, merge format) auto-save via watch.
+    some settings (poll interval, concurrency) auto-save via watch.
     Supports real-time multi-client sync: form updates when another client changes settings.
 -->
 <script setup lang="ts">
@@ -36,11 +36,17 @@
 		NumberFieldIncrement,
 		NumberFieldInput,
 	} from "@/components/ui/number-field";
-	import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 	import { useI18n } from "vue-i18n";
 	import { loadLocaleFromServer } from "@/i18n";
 	import { useModuleLocaleStore } from "@/stores/moduleLocale";
 	import { useLocalesStore } from "@/stores/locales";
+	import {
+		Select,
+		SelectContent,
+		SelectItem,
+		SelectTrigger,
+		SelectValue,
+	} from "@/components/ui/select";
 
 	const store = useSettingsStore();
 	const { toast, confirm } = useNotify();
@@ -71,14 +77,12 @@
 	/** 表单响应式数据（与 store.settings 保持同步）/ Reactive form data (synced with store.settings) */
 	const form = reactive<Settings>({
 		output_dir: "",
-		tmp_dir: null,
 		poll_interval_secs: 30,
 		auto_record: true,
 		api_proxy_url: null,
 		cdn_proxy_url: null,
 		sc_mirror_url: null,
 		max_concurrent: 0,
-		merge_format: "mp4",
 		max_tmp_dir_gb: 50,
 		language: "zh-CN",
 		mouflon_sync_url: null,
@@ -89,7 +93,6 @@
 	// 保存各代理字段的原始值，用于检测是否有实际变更
 	// Store original values for proxy fields to detect actual changes
 	const originalOutputDir = ref("");
-	const originalTmpDir = ref<string | null>(null);
 	const originalApiProxy = ref<string | null>(null);
 	const originalCdnProxy = ref<string | null>(null);
 	const originalScMirror = ref<string | null>(null);
@@ -105,7 +108,6 @@
 		await store.fetchSettings();
 		Object.assign(form, store.settings);
 		originalOutputDir.value = form.output_dir;
-		originalTmpDir.value = form.tmp_dir;
 		originalApiProxy.value = form.api_proxy_url;
 		originalCdnProxy.value = form.cdn_proxy_url;
 		originalScMirror.value = form.sc_mirror_url;
@@ -136,7 +138,6 @@
 			poll_interval_secs: form.poll_interval_secs,
 			auto_record: form.auto_record,
 			max_concurrent: form.max_concurrent,
-			merge_format: form.merge_format,
 			max_tmp_dir_gb: form.max_tmp_dir_gb,
 		}),
 		async () => {
@@ -156,7 +157,6 @@
 			initialized = false;
 			Object.assign(form, newSettings);
 			originalOutputDir.value = newSettings.output_dir;
-			originalTmpDir.value = newSettings.tmp_dir;
 			originalApiProxy.value = newSettings.api_proxy_url;
 			originalCdnProxy.value = newSettings.cdn_proxy_url;
 			originalScMirror.value = newSettings.sc_mirror_url;
@@ -192,27 +192,6 @@
 		await store.saveSettings({ ...form });
 		original.value = form[field];
 		toast(t("settings.saved"), "success");
-	}
-
-	/**
-	 * 保存临时分片目录（需要用户确认，因为会影响正在进行的录制）。
-	 * Save the temporary segment directory (requires user confirmation as it affects ongoing recordings).
-	 */
-	async function saveTmpDir() {
-		if (!initialized) return;
-		if (form.tmp_dir === originalTmpDir.value) return;
-		const ok = await confirm({
-			title: t("settings.tmpDir.changeTitle"),
-			message: t("settings.tmpDir.changeMessage", { dir: form.tmp_dir || t("settings.tmpDir.sameAsOutput") }),
-			confirmText: t("settings.tmpDir.changeConfirm"),
-		});
-		if (ok) {
-			await store.saveSettings({ ...form });
-			originalTmpDir.value = form.tmp_dir;
-			toast(t("settings.tmpDir.changeDone"), "info");
-		} else {
-			form.tmp_dir = originalTmpDir.value;
-		}
 	}
 
 	/**
@@ -314,7 +293,7 @@
 </script>
 
 <template>
-	<div class="flex flex-col gap-5 max-w-160">
+	<div class="flex flex-col gap-5 max-w-160 px-6 pt-6 pb-6">
 		<h1 class="text-xl font-bold">{{ t("settings.title") }}</h1>
 
 		<div v-if="store.loading" class="text-muted-foreground">{{ t("settings.loading") }}</div>
@@ -328,20 +307,23 @@
 				</h2>
 				<div class="flex flex-col gap-1.5">
 					<Label>{{ t("settings.language.label") }}</Label>
-					<RadioGroup
+					<Select
 						:model-value="String(locale)"
-						class="flex flex-row gap-4"
 						@update:model-value="(v) => v && setLocale(String(v))"
 					>
-						<div
-							v-for="loc in localesStore.locales"
-							:key="loc.code"
-							class="flex items-center gap-2"
-						>
-							<RadioGroupItem :id="`lang-${loc.code}`" :value="loc.code" />
-							<Label :for="`lang-${loc.code}`" class="cursor-pointer">{{ loc.name }}</Label>
-						</div>
-					</RadioGroup>
+						<SelectTrigger class="w-48">
+							<SelectValue />
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem
+								v-for="loc in localesStore.locales"
+								:key="loc.code"
+								:value="loc.code"
+							>
+								{{ loc.name }}
+							</SelectItem>
+						</SelectContent>
+					</Select>
 				</div>
 			</section>
 
@@ -363,21 +345,6 @@
 					/>
 					<p class="text-xs text-muted-foreground">
 						{{ t("settings.outputDir.hint") }}
-					</p>
-				</div>
-
-				<div class="flex flex-col gap-1.5">
-					<Label>{{ t("settings.tmpDir.label") }}</Label>
-					<Input
-						:model-value="form.tmp_dir ?? ''"
-						:placeholder="t('settings.tmpDir.placeholder')"
-						autocomplete="off"
-						@update:model-value="form.tmp_dir = ($event as string) || null"
-						@keyup.enter="saveTmpDir"
-						@blur="saveTmpDir"
-					/>
-					<p class="text-xs text-muted-foreground">
-						{{ t("settings.tmpDir.hint") }}
 					</p>
 				</div>
 
@@ -418,29 +385,6 @@
 							<NumberFieldIncrement />
 						</NumberFieldContent>
 					</NumberField>
-				</div>
-
-				<div class="flex flex-col gap-1.5">
-					<Label>{{ t("settings.mergeFormat.label") }}</Label>
-					<RadioGroup
-						:model-value="form.merge_format"
-						class="flex flex-row gap-4"
-						@update:model-value="(v) => v && (form.merge_format = v as string)"
-					>
-						<div
-							v-for="fmt in ['mp4', 'mkv', 'ts']"
-							:key="fmt"
-							class="flex items-center gap-2"
-						>
-							<RadioGroupItem :id="`fmt-${fmt}`" :value="fmt" />
-							<Label :for="`fmt-${fmt}`" class="font-mono cursor-pointer">{{
-								fmt
-							}}</Label>
-						</div>
-					</RadioGroup>
-					<p class="text-xs text-muted-foreground">
-						{{ t("settings.mergeFormat.hint") }}
-					</p>
 				</div>
 
 				<div class="flex flex-col gap-1.5">

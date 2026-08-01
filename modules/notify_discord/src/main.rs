@@ -11,11 +11,10 @@
 //! - 标准输出 `STATUS:{speed}`: 上传速度上报 / Upload speed reporting
 
 use pp_utils::{
-    emit_progress_step, find_cover, format_bytes, format_duration, format_speed, param, parse_stem,
-    tmp_dir, video_duration, PROGRESS_SCALE,
+    emit_progress_step, find_cover, format_bytes, format_duration, format_speed, parse_stem,
+    tmp_dir, video_duration, PROGRESS_SCALE, ModuleInput,
 };
 use socket2::{Domain, Socket, Type};
-use std::env;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
@@ -25,27 +24,15 @@ use std::time::{Duration, Instant};
 
 const DESCRIBE: &str = r#"{
     "id": "notify_discord",
-    "name": "Discord 通知 0.3.0",
+    "name": "Discord 通知 0.4.0",
     "description": "将录制信息和封面图发送到 Discord Webhook",
+    "inputTypes": ["media_bundle"],
+    "outputTypes": ["media_bundle"],
+    "official": true,
     "params": [
-        {
-        "key": "webhook_url",
-        "label": "Webhook URL",
-        "type": "string",
-        "default": ""
-        },
-        {
-        "key": "proxy",
-        "label": "代理地址（支持 http://、socks5://）",
-        "type": "string",
-        "default": ""
-        },
-        {
-        "key": "username",
-        "label": "Bot 显示名称",
-        "type": "string",
-        "default": "Recorder Bot"
-        }
+        { "key": "webhook_url", "label": "Webhook URL",                                "type": "string", "default": "" },
+        { "key": "proxy",       "label": "代理地址（支持 http://、socks5://）",        "type": "string", "default": "" },
+        { "key": "username",    "label": "Bot 显示名称",                               "type": "string", "default": "Recorder Bot" }
     ]
 }"#;
 
@@ -604,18 +591,34 @@ fn send_once(
 }
 
 fn run() -> Result<(), String> {
-    let input_str = env::var("PP_INPUT").map_err(|_| "PP_INPUT not set".to_string())?;
-    let input = PathBuf::from(&input_str);
+    let module_input = ModuleInput::read();
+    let bundle_input = module_input.first_input()
+        .ok_or_else(|| "inputs[0] (media_bundle) is required".to_string())?;
+
+    // 从 MediaBundle 解包视频路径和图片路径
+    // Unpack video path and image path from MediaBundle
+    let (input, cover_from_bundle) = {
+        let s = bundle_input.to_string_lossy();
+        if let Some(sep) = s.find('\n') {
+            let video = PathBuf::from(&s[..sep]);
+            let img_str = s[sep + 1..].trim();
+            let img = if img_str.is_empty() { None } else { Some(PathBuf::from(img_str)) };
+            (video, img)
+        } else {
+            (bundle_input.clone(), None)
+        }
+    };
+
     if !input.exists() {
         return Err(format!("Input file not found: {}", input.display()));
     }
 
-    let webhook_url = param("webhook_url", "");
+    let webhook_url = module_input.param_str("webhook_url", "");
     if webhook_url.is_empty() {
         return Err("webhook_url is required".to_string());
     }
-    let proxy = param("proxy", "");
-    let bot_name = param("username", "Recorder Bot");
+    let proxy = module_input.param_str("proxy", "");
+    let bot_name = module_input.param_str("username", "Recorder Bot");
 
     emit_progress_step(0, 3);
 
@@ -646,7 +649,9 @@ fn run() -> Result<(), String> {
 
     emit_progress_step(1, 3);
 
-    let cover = find_cover(&input);
+    // 优先使用 bundle 中的图片；没有时回退到同目录查找（向后兼容）
+    // Prefer image from bundle; fall back to find_cover for backward compatibility
+    let cover = cover_from_bundle.or_else(|| find_cover(&input));
 
     // 若封面图超过 Discord 10MB 限制则压缩 / Compress cover if it exceeds Discord's 10 MB limit
     let effective_cover: Option<PathBuf> = if let Some(ref img) = cover {
@@ -688,18 +693,19 @@ fn run() -> Result<(), String> {
     }
 
     emit_progress_step(3, 3);
-    println!("OUTPUT:{}", input.display());
+    pp_utils::output_ok(&[&bundle_input.to_string_lossy()], "Discord notification sent");
     Ok(())
 }
 
 fn main() {
-    let args: Vec<String> = env::args().collect();
+    let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(|s| s.as_str()) == Some("--describe") {
         print!("{}", DESCRIBE);
         return;
     }
     if let Err(e) = run() {
-        eprintln!("{}", e);
+        let json = serde_json::json!({ "code": "error", "message": e, "outputs": [] });
+        println!("{}", json);
         std::process::exit(1);
     }
 }

@@ -192,16 +192,20 @@ export default {
 		description: "After recording is merged, the video file will be processed by the following modules in order",
 		saving: "Saving…",
 		saved: "Auto-saved",
+		fitView: "Fit View",
+		guide: "Right-click canvas to add modules · Drag output port to wire · Select node then press Delete to remove",
 		input: {
-			label: "Input",
-			description: "Merged single video file",
+			label: "Recording Input",
+			description: "TS segment directory produced by the recording (ts_session_dir)",
 		},
 		node: {
 			skip: "Skip",
 			skipped: "Skipped",
+			enable: "Enable",
 			missing: "Module Missing",
+			officialHint: "Official module — recommended to place after ts_merge",
 		},
-		empty: "No post-processing nodes yet, click below to add",
+		empty: "No post-processing nodes yet — right-click canvas to add",
 		addModule: "+ Add Module",
 		stats: "{enabled} active node(s) · {total} total",
 		picker: {

@@ -8,7 +8,6 @@ use crate::core::error::Result;
 use crate::recording::recorder::RecorderManager;
 use crate::config::settings::AppState;
 use std::fs;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 /// 录制文件元数据（序列化后返回给前端）/ Recording file metadata (serialized and returned to the frontend)
@@ -26,172 +25,159 @@ pub struct RecordingFile {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub pp_results: Option<Vec<crate::recording::meta::PpModuleResult>>,
+    pub pp_execution: Option<Vec<crate::recording::meta::PpExecutionEntry>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub module_outputs: Option<std::collections::HashMap<String, String>>,
+    pub pp_progress: Option<crate::recording::meta::PpNodeProgress>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub segments_downloaded: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub segments_failed: Option<u64>,
+    pub username: String,
 }
 
 /// 录制文件列表查询的核心实现（同步，在阻塞线程中调用）。
+/// 数据源：活跃录制会话 + meta/ 目录扫描 + pp_tasks（进行中的后处理）。
+///
 /// Core implementation of recording file list query (synchronous, called in a blocking thread).
+/// Data sources: active recording sessions + meta/ directory scan + pp_tasks (in-progress).
 pub fn list_recordings_inner(
     state: &Arc<AppState>,
     recorder: &Arc<RecorderManager>,
 ) -> std::io::Result<Vec<RecordingFile>> {
-    let settings = state.get_settings();
-    let output_dir = std::path::Path::new(&settings.output_dir);
-
-    if !output_dir.exists() {
-        return Ok(Vec::new());
-    }
-
     let sessions = recorder.get_active_sessions();
-    let merging = recorder.merging_dirs.read().clone();
-    let waiting_merging = recorder.waiting_merge_dirs.read().clone();
-    let all_merging: std::collections::HashSet<PathBuf> =
-        merging.union(&waiting_merging).cloned().collect();
     let live_segment_stats = recorder.segment_stats.read().clone();
+
+    // 活跃录制中的 session_dir stem 集合（用于去重）
+    // Set of stems for active recording session_dirs (for deduplication)
+    let active_stems: std::collections::HashSet<String> = sessions
+        .iter()
+        .filter_map(|(sd, _)| sd.file_stem().and_then(|s| s.to_str()).map(|s| s.to_string()))
+        .collect();
 
     let mut files: Vec<RecordingFile> = Vec::new();
 
-    collect_from_meta(
-        output_dir,
-        &mut files,
-        &sessions,
-        &all_merging,
-        &settings.merge_format,
-        &live_segment_stats,
-    )?;
+    // 1. 活跃录制中的 session_dir（实时进度）
+    // 1. Currently active recording session_dirs (real-time progress)
+    for (session_dir, started_dt) in &sessions {
+        let session_dir_str = session_dir.to_string_lossy().to_string();
+        let local: chrono::DateTime<chrono::Local> = (*started_dt).into();
+        let elapsed = chrono::Utc::now()
+            .signed_duration_since(*started_dt)
+            .num_seconds()
+            .max(0) as u64;
+        let size_bytes = crate::recording::ffmpeg_util::dir_size_bytes(session_dir).unwrap_or(0);
+        let username = session_dir
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown");
+        let stem = session_dir.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        let (seg_dl, seg_fail) = live_segment_stats.get(&session_dir_str).copied().unwrap_or((0, 0));
+
+        files.push(RecordingFile {
+            name: format!("{}/", stem),
+            path: session_dir_str,
+            size_bytes,
+            started_at: local.to_rfc3339(),
+            is_recording: true,
+            record_duration_secs: Some(elapsed),
+            video_duration_secs: None,
+            video_resolution: None,
+            status: Some("recording".to_string()),
+            pp_execution: None,
+            pp_progress: None,
+            segments_downloaded: Some(seg_dl),
+            segments_failed: Some(seg_fail),
+            username: username.to_string(),
+        });
+    }
+
+    // 2. 扫描 meta/ 目录，获取所有已完成/后处理中的录制
+    // 2. Scan meta/ directory to get all completed/post-processed recordings
+    let meta_dir = crate::recording::meta::meta_dir();
+    if let Ok(entries) = std::fs::read_dir(&meta_dir) {
+        for entry in entries.flatten() {
+            let meta_path = entry.path();
+            if !meta_path.is_file() { continue; }
+            if meta_path.extension().and_then(|e| e.to_str()) != Some("json") { continue; }
+
+            let content = match std::fs::read_to_string(&meta_path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            let meta: crate::recording::meta::VideoMeta = match serde_json::from_str(&content) {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+
+            // 跳过正在录制的（由活跃会话处理）/ Skip actively recording (handled by active sessions)
+            if meta.status == "recording" { continue; }
+
+            // video_path 是对应的视频文件或 session_dir 路径
+            let vp_str = match meta.video_path.as_deref() {
+                Some(p) => p.to_string(),
+                None => continue,
+            };
+            let video_path = std::path::PathBuf::from(&vp_str);
+            let stem = video_path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+
+            // 跳过活跃录制中的 stem（避免重复）/ Skip stems currently being recorded
+            if active_stems.contains(stem) { continue; }
+
+            // 从 pp_queue 获取更精确的运行时状态（若有）
+            // Use runtime status from pp_queue if available (more accurate)
+            let runtime_status = state.pp_queue.get_status(&vp_str);
+
+            let is_dir = video_path.is_dir();
+            let size_bytes = if is_dir {
+                crate::recording::ffmpeg_util::dir_size_bytes(&video_path).unwrap_or(meta.size_bytes)
+            } else if video_path.exists() {
+                fs::metadata(&video_path).map(|m| m.len()).unwrap_or(meta.size_bytes)
+            } else {
+                meta.size_bytes
+            };
+
+            let username = video_path
+                .parent()
+                .and_then(|p| p.file_name())
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown")
+                .to_string();
+
+            let name = if is_dir {
+                format!("{}/", stem)
+            } else {
+                video_path.file_name().and_then(|n| n.to_str()).unwrap_or(stem).to_string()
+            };
+
+            // 若 meta 中 size_bytes 与实际不符，顺手更新 / Update size_bytes in meta if stale
+            if !is_dir && video_path.exists() && size_bytes != meta.size_bytes && size_bytes > 0 {
+                let mut updated = meta.clone();
+                updated.size_bytes = size_bytes;
+                crate::recording::meta::write_meta(&video_path, &updated);
+            }
+
+            files.push(RecordingFile {
+                name,
+                path: vp_str,
+                size_bytes,
+                started_at: meta.started_at,
+                is_recording: false,
+                record_duration_secs: None,
+                video_duration_secs: meta.video_duration_secs,
+                video_resolution: meta.video_resolution,
+                status: Some(runtime_status.unwrap_or(meta.status)),
+                pp_execution: meta.pp_execution,
+                pp_progress: meta.pp_progress,
+                segments_downloaded: meta.segments_downloaded,
+                segments_failed: meta.segments_failed,
+                username,
+            });
+        }
+    }
 
     files.sort_by(|a, b| b.started_at.cmp(&a.started_at));
     Ok(files)
-}
-
-fn collect_from_meta(
-    dir: &std::path::Path,
-    files: &mut Vec<RecordingFile>,
-    sessions: &[(PathBuf, chrono::DateTime<chrono::Utc>)],
-    merging: &std::collections::HashSet<PathBuf>,
-    merge_format: &str,
-    live_segment_stats: &std::collections::HashMap<String, (u64, u64)>,
-) -> std::io::Result<()> {
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-
-        if path.is_dir() {
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if name.starts_with('.') || merging.contains(&path) {
-                continue;
-            }
-            collect_from_meta(&path, files, sessions, merging, merge_format, live_segment_stats)?;
-        } else if path.is_file() {
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if !name.starts_with('.') || !name.ends_with(".json") {
-                continue;
-            }
-
-            let stem = match name.strip_prefix('.').and_then(|s| s.strip_suffix(".json")) {
-                Some(s) if !s.is_empty() => s,
-                _ => continue,
-            };
-
-            let meta = match crate::recording::meta::read_meta(
-                &path.parent().unwrap_or(dir).join(format!("{}.{}", stem, merge_format)),
-            ) {
-                Some(m) => m,
-                None => continue,
-            };
-
-            let video_path = path
-                .parent()
-                .unwrap_or(dir)
-                .join(format!("{}.{}", stem, merge_format));
-
-            if video_path.exists() {
-                let actual_size = fs::metadata(&video_path).map(|m| m.len()).unwrap_or(0);
-                let effective_size = if meta.size_bytes != actual_size && actual_size > 0 {
-                    let mut updated = meta.clone();
-                    updated.size_bytes = actual_size;
-                    crate::recording::meta::write_meta(&video_path, &updated);
-                    actual_size
-                } else {
-                    meta.size_bytes
-                };
-
-                files.push(RecordingFile {
-                    name: format!("{}.{}", stem, merge_format),
-                    path: video_path.to_string_lossy().to_string(),
-                    size_bytes: effective_size,
-                    started_at: meta.started_at,
-                    is_recording: false,
-                    record_duration_secs: None,
-                    video_duration_secs: meta.video_duration_secs,
-                    video_resolution: meta.video_resolution,
-                    status: Some(meta.status),
-                    pp_results: meta.pp_results,
-                    module_outputs: meta.module_outputs,
-                    segments_downloaded: meta.segments_downloaded,
-                    segments_failed: meta.segments_failed,
-                });
-            } else {
-                let session_dir = path.parent().unwrap_or(dir).join(stem);
-
-                if let Some((_, dt)) = sessions.iter().find(|(sp, _)| sp == &session_dir) {
-                    let local: chrono::DateTime<chrono::Local> = (*dt).into();
-                    let elapsed = chrono::Utc::now()
-                        .signed_duration_since(*dt)
-                        .num_seconds()
-                        .max(0) as u64;
-                    let size_bytes = crate::recording::recorder::dir_size_bytes(&session_dir)
-                        .unwrap_or(0);
-
-                    // 从管理器中读取实时分片统计 / Read real-time segment stats from manager
-                    let vpath_str = video_path.to_string_lossy().to_string();
-                    let (seg_dl, seg_fail) = live_segment_stats
-                        .get(&vpath_str)
-                        .copied()
-                        .unwrap_or((0, 0));
-
-                    files.push(RecordingFile {
-                        name: format!("{}.{}", stem, merge_format),
-                        path: vpath_str,
-                        size_bytes,
-                        started_at: local.to_rfc3339(),
-                        is_recording: true,
-                        record_duration_secs: Some(elapsed),
-                        video_duration_secs: None,
-                        video_resolution: None,
-                        status: Some("recording".to_string()),
-                        pp_results: None,
-                        module_outputs: None,
-                        segments_downloaded: Some(seg_dl),
-                        segments_failed: Some(seg_fail),
-                    });
-                } else {
-                    files.push(RecordingFile {
-                        name: format!("{}.{}", stem, merge_format),
-                        path: video_path.to_string_lossy().to_string(),
-                        size_bytes: meta.size_bytes,
-                        started_at: meta.started_at,
-                        is_recording: false,
-                        record_duration_secs: None,
-                        video_duration_secs: None,
-                        video_resolution: None,
-                        status: Some(meta.status),
-                        pp_results: meta.pp_results,
-                        module_outputs: meta.module_outputs,
-                        segments_downloaded: meta.segments_downloaded,
-                        segments_failed: meta.segments_failed,
-                    });
-                }
-            }
-        }
-    }
-    Ok(())
 }
 
 /// 删除录制文件的核心实现（同步，在阻塞线程中调用）。
@@ -208,22 +194,20 @@ pub fn delete_recording_inner(
         ));
     }
 
-    state.pp_task_cancel(path);
+    state.pp_queue.cancel(path);
 
-    let task_status = state.pp_tasks.read().get(path).map(|t| t.status.clone());
+    let task_status = state.pp_queue.get_status(path);
 
     match task_status.as_deref() {
-        Some("running") => {
-            state.pp_tasks.write().remove(path);
-        }
-        Some("waiting") => {
-            state.pp_tasks.write().remove(path);
+        Some("running") | Some("waiting") => {
+            state.pp_queue.remove(path);
         }
         _ => {}
     }
 
     if p.is_dir() {
         fs::remove_dir_all(p)?;
+        crate::recording::meta::delete_meta(p);
     } else {
         let mut last_err = None;
         for _ in 0..20 {
@@ -253,16 +237,7 @@ pub fn delete_recording_inner(
         crate::recording::meta::delete_meta(p);
     }
 
-    {
-        let mut data = state.data.write();
-        let before = data.pp_results.len();
-        data.pp_results.retain(|p| p != path);
-        if data.pp_results.len() != before {
-            drop(data);
-            let _ = state.save();
-        }
-    }
-    state.pp_tasks.write().remove(path);
+    state.pp_queue.remove(path);
     Ok(())
 }
 

@@ -29,9 +29,6 @@ pub async fn list_recordings(
 pub async fn get_merging_dirs_handler(
     AxumState(s): AxumState<ServerState>,
 ) -> ApiResult<serde_json::Value> {
-    let settings = s.app_state.get_settings();
-    let merge_format = settings.merge_format.clone();
-
     let make_entry = |path: &std::path::PathBuf, status: &str| {
         let path_str = path.to_string_lossy().to_string();
         let stem = path
@@ -45,17 +42,10 @@ pub async fn get_merging_dirs_handler(
             .and_then(|n| n.to_str())
             .unwrap_or("unknown")
             .to_string();
-        let parent = path
-            .parent()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_default();
-        let sep = if path_str.contains('\\') { "\\" } else { "/" };
-        let merged_path = format!("{}{}{}.{}", parent, sep, stem, merge_format);
         serde_json::json!({
             "session_dir": path_str,
-            "merged_path": merged_path,
-            "merge_format": merge_format,
             "username": username,
+            "stem": stem,
             "status": status,
         })
     };

@@ -96,41 +96,14 @@ pub async fn sync_mouflon_keys(
 }
 
 pub async fn get_startup_warnings_handler(
-    AxumState(s): AxumState<ServerState>,
+    AxumState(_s): AxumState<ServerState>,
 ) -> ApiResult<serde_json::Value> {
-    let state = Arc::clone(&s.app_state);
-    let warnings = tokio::task::spawn_blocking(move || {
-        let data = state.data.read();
-        let missing_pp_results: Vec<String> = data
-            .pp_results
-            .iter()
-            .filter(|path| !std::path::Path::new(path.as_str()).exists())
-            .cloned()
-            .collect();
-        serde_json::json!({
-            "missing_streamers": [],
-            "missing_pp_results": missing_pp_results,
-        })
-    })
-    .await
-    .map_err(|e| ApiError(e.to_string()))?;
-    Ok(Json(warnings))
-}
-
-#[derive(Deserialize)]
-pub struct RemovePpResultsBody {
-    pub paths: Vec<String>,
-}
-
-pub async fn remove_missing_pp_results_handler(
-    AxumState(s): AxumState<ServerState>,
-    Json(body): Json<RemovePpResultsBody>,
-) -> ApiResult<serde_json::Value> {
-    let mut data = s.app_state.data.write();
-    data.pp_results.retain(|p| !body.paths.contains(p));
-    drop(data);
-    s.app_state.save().map_err(ApiError::from)?;
-    Ok(Json(serde_json::json!({ "ok": true })))
+    // 启动警告（missing_streamers）由 run_config_check 异步推送，此接口仅返回空占位
+    // Startup warnings (missing_streamers) are pushed asynchronously by run_config_check;
+    // this endpoint returns an empty placeholder
+    Ok(Json(serde_json::json!({
+        "missing_streamers": [],
+    })))
 }
 
 pub async fn get_disk_space_handler(

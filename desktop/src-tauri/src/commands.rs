@@ -339,7 +339,7 @@ pub async fn run_postprocess_cmd(
     state: State<'_, DesktopState>,
 ) -> CmdResult<serde_json::Value> {
     let pipeline = state.app_state.get_pipeline();
-    if pipeline.nodes.is_empty() {
+    if !pipeline.nodes.iter().any(|n| n.enabled) {
         return Err("后处理流水线为空".to_string());
     }
     let video_path = std::path::PathBuf::from(&path);
@@ -359,7 +359,7 @@ pub async fn run_postprocess_batch(
     state: State<'_, DesktopState>,
 ) -> CmdResult<serde_json::Value> {
     let pipeline = state.app_state.get_pipeline();
-    if pipeline.nodes.is_empty() {
+    if !pipeline.nodes.iter().any(|n| n.enabled) {
         return Err("后处理流水线为空".to_string());
     }
     for path in paths {

@@ -16,10 +16,8 @@ import { call, on } from "@/lib/api";
 
 /** 应用设置数据结构 / Application settings data structure */
 export interface Settings {
-	/** 录制文件输出目录 / Recording output directory */
+	/** TS 分片流输出目录 / TS segment stream output directory */
 	output_dir: string;
-	/** 临时分片目录（空/null 表示与 output_dir 相同）/ Temporary segment directory (empty/null means same as output_dir) */
-	tmp_dir: string | null;
 	/** 主播状态轮询间隔（秒）/ Streamer status poll interval (seconds) */
 	poll_interval_secs: number;
 	/** 是否默认开启自动录制 / Whether auto-record is enabled by default */
@@ -32,8 +30,6 @@ export interface Settings {
 	sc_mirror_url: string | null;
 	/** 最大并发录制数（0 = 不限制）/ Max concurrent recordings (0 = unlimited) */
 	max_concurrent: number;
-	/** 录制片段合并格式（"mp4" 或 "mkv"）/ Recording segment merge format ("mp4" or "mkv") */
-	merge_format: string;
 	/** 后处理 tmp 目录最大占用（GB，0 = 不限制）/ Max tmp dir size in GB (0 = unlimited) */
 	max_tmp_dir_gb: number;
 	/** 界面语言 / UI language */
@@ -60,14 +56,12 @@ export const useSettingsStore = defineStore("settings", () => {
 	/** 当前设置值 / Current settings values */
 	const settings = ref<Settings>({
 		output_dir: "",
-		tmp_dir: null,
 		poll_interval_secs: 30,
 		auto_record: true,
 		api_proxy_url: null,
 		cdn_proxy_url: null,
 		sc_mirror_url: null,
 		max_concurrent: 0,
-		merge_format: "mp4",
 		max_tmp_dir_gb: 50,
 		language: "zh-CN",
 		mouflon_sync_url: null,

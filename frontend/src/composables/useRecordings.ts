@@ -126,12 +126,7 @@ export function useRecordings() {
 	});
 
 	const allSelectableFiles = computed(() =>
-		files.value.filter(
-			(f) =>
-				!f.is_recording &&
-				f.status !== "merging_waiting" &&
-				f.status !== "merging",
-		),
+		files.value.filter((f) => !f.is_recording),
 	);
 	const selectedCount = computed(() => selected.value.size);
 
@@ -145,12 +140,7 @@ export function useRecordings() {
 	}
 
 	function getGroupChecked(group: Group): boolean | "indeterminate" {
-		const selectable = group.files.filter(
-			(f) =>
-				!f.is_recording &&
-				f.status !== "merging_waiting" &&
-				f.status !== "merging",
-		);
+		const selectable = group.files.filter((f) => !f.is_recording);
 		if (selectable.length === 0) return false;
 		const n = selectable.filter((f) => selected.value.has(f.path)).length;
 		if (n === 0) return false;
@@ -159,12 +149,7 @@ export function useRecordings() {
 	}
 
 	function setGroupChecked(group: Group) {
-		const selectable = group.files.filter(
-			(f) =>
-				!f.is_recording &&
-				f.status !== "merging_waiting" &&
-				f.status !== "merging",
-		);
+		const selectable = group.files.filter((f) => !f.is_recording);
 		const allSel = selectable.every((f) => selected.value.has(f.path));
 		if (allSel) selectable.forEach((f) => selected.value.delete(f.path));
 		else selectable.forEach((f) => selected.value.add(f.path));

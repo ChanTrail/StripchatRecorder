@@ -421,7 +421,7 @@ async function openSimilarDialog(m: ModelResult) {
 </script>
 
 <template>
-  <div class="flex flex-col gap-5" @paste.capture="onPaste">
+  <div class="flex flex-col gap-5 px-6 pt-6 pb-6" @paste.capture="onPaste">
     <!-- Header -->
     <header>
       <h1 class="text-xl font-bold mb-0.5">{{ t("finder.title") }}</h1>

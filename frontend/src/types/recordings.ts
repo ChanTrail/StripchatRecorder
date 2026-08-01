@@ -2,35 +2,61 @@
  * 录制文件相关类型定义 / Recording File Type Definitions
  */
 
-/** 后处理模块执行结果 / Post-processing module execution result */
-export interface PpModuleResult {
+/** 后处理节点执行结果码 / Post-processing node execution result code */
+export type PpExecCode = "ok" | "done" | "skipped" | "error" | "cancelled";
+
+/** 后处理节点执行结果 / Post-processing node execution result */
+export interface PpExecResult {
+	code: PpExecCode;
+	message?: string | null;
+}
+
+/** 后处理流水线单个节点的执行记录 / Execution record for a single post-processing pipeline node */
+export interface PpExecutionEntry {
+	/** 节点唯一 ID / Node unique ID */
+	node_id: string;
 	/** 模块 ID / Module ID */
 	module_id: string;
-	/** 是否成功 / Whether succeeded */
-	success: boolean;
-	/** 结果消息 / Result message */
-	message: string;
+	/** 节点开始执行时间（RFC 3339）/ Node execution start time (RFC 3339) */
+	started_at: string;
+	/** 节点完成时间，执行中为 null / Finish time, null while running */
+	finished_at: string | null;
+	/** 执行结果，执行中为 null / Execution result, null while running */
+	result: PpExecResult | null;
+	/** 输入路径列表 / Input path list */
+	inputs: string[];
+	/** 输出路径列表，执行中为 null / Output path list, null while running */
+	outputs: string[] | null;
 }
 
 /**
  * 录制文件状态 / Recording file status
  *
- * - `recording`       — 正在录制
- * - `merging_waiting` — 等待合并（排队中）
- * - `merging`         — 正在合并 TS 分片
- * - `pp_waiting`      — 等待后处理（排队中）
- * - `pp_running`      — 后处理执行中
- * - `pp_error`        — 后处理失败
- * - `finish`          — 全部完成
+ * - `recording`  — 正在录制
+ * - `pp_waiting` — 等待后处理（含 ts_merge 合并，排队中）
+ * - `pp_running` — 后处理执行中（含 ts_merge 合并）
+ * - `pp_error`   — 后处理失败
+ * - `finish`     — 全部完成
+ *
+ * 注：合并 TS 分片现由 ts_merge 后处理模块负责，不再有单独的 merging 状态。
+ * Note: TS segment merging is now handled by the ts_merge module; no separate merging status.
  */
 export type RecordingStatus =
 	| "recording"
-	| "merging_waiting"
-	| "merging"
 	| "pp_waiting"
 	| "pp_running"
 	| "pp_error"
 	| "finish";
+
+/** 正在执行的节点的模块内进度快照 / In-progress node's intra-module progress snapshot */
+export interface PpNodeProgress {
+	node_id: string;
+	module_id: string;
+	mod_done: number;
+	mod_total: number;
+	overall_done: number;
+	overall_total: number;
+}
 
 /** 录制文件元数据 / Recording file metadata */
 export interface RecordingFile {
@@ -52,12 +78,12 @@ export interface RecordingFile {
 	video_resolution?: string | null;
 	/** 当前处理状态（来自 meta 文件）/ Current processing status (from meta file) */
 	status?: RecordingStatus | null;
-	/** 各模块后处理结果（来自 meta 文件）/ Per-module post-processing results (from meta file) */
-	pp_results?: PpModuleResult[] | null;
-	/** 模块输出路径（来自 meta 文件）/ Module output paths (from meta file) */
-	module_outputs?: Record<string, string> | null;
-	/** 累计成功下载的分片数（录制中实时更新，结束后持久化）/ Total successfully downloaded segments (updated in real-time while recording, persisted after) */
+	/** 后处理流水线各节点的执行记录（来自 meta 文件）/ Post-processing pipeline node execution records (from meta file) */
+	pp_execution?: PpExecutionEntry[] | null;
+	/** 累计成功下载的分片数（录制中实时更新）/ Total successfully downloaded segments (updated in real-time while recording) */
 	segments_downloaded?: number | null;
-	/** 累计下载失败的分片数（录制中实时更新，结束后持久化）/ Total failed segment downloads (updated in real-time while recording, persisted after) */
+	/** 累计下载失败的分片数（录制中实时更新）/ Total failed segment downloads (updated in real-time while recording) */
 	segments_failed?: number | null;
+	/** 当前正在执行节点的模块内进度（未在执行时为 null）/ Intra-module progress of the running node (null when idle) */
+	pp_progress?: PpNodeProgress | null;
 }

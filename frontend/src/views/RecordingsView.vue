@@ -25,11 +25,12 @@
 	import { useNotify } from "../composables/useNotify";
 	import { usePostprocessStore } from "@/stores/postprocess";
 	import { useRecordings } from "@/composables/useRecordings";
-	import { usePostprocess, makePpProgress } from "@/composables/usePostprocess";
+	import { usePostprocess, ppProgressFromMeta } from "@/composables/usePostprocess";
 	import { useImagePreview } from "@/composables/useImagePreview";
 	import { Button } from "@/components/ui/button";
 	import { Badge } from "@/components/ui/badge";
 	import { Checkbox } from "@/components/ui/checkbox";
+	import { Tooltip } from "@/components/ui/tooltip";
 	import { Loader2, Image } from "@lucide/vue";
 	import { Progress } from "@/components/ui/progress";
 	import {
@@ -88,9 +89,6 @@
 	/** 各文件的实时录制速度（字节/秒）/ Real-time recording speed per file (bytes/second) */
 	const recordingSpeed = ref<Record<string, number>>({});
 
-	/** 合并进度（video_path -> {out_bytes, total_bytes}）/ Merge progress per video path */
-	const mergeProgress = ref<Record<string, { out_bytes: number; total_bytes: number }>>({});
-
 	/** 分片下载统计（video_path -> {downloaded, failed}）/ Segment download stats per video path */
 	const segmentStats = ref<Record<string, { downloaded: number; failed: number }>>({});
 
@@ -142,13 +140,70 @@
 	function syncModuleOutputsFromFiles() {
 		for (const f of files.value) {
 			if (f.is_recording) continue;
-			if (f.module_outputs && Object.keys(f.module_outputs).length > 0) {
-				// meta 是持久化真相来源，直接覆盖写入（与 onMounted 初始化行为一致）
-				// Meta is the persistent source of truth; overwrite directly (consistent with onMounted init)
-				moduleOutputs.value[f.path] = {
-					...moduleOutputs.value[f.path],
-					...f.module_outputs,
-				};
+			if (f.pp_execution) {
+				const outputs: Record<string, string> = {};
+				for (const entry of f.pp_execution) {
+					if (entry.outputs && entry.outputs.length > 0) {
+						const nonVideo = entry.outputs.find(
+							(p) => !/\.(mp4|mkv|ts|avi|mov)$/i.test(p),
+						);
+						if (nonVideo) outputs[entry.module_id] = nonVideo;
+					}
+				}
+				if (Object.keys(outputs).length > 0) {
+					moduleOutputs.value[f.path] = { ...moduleOutputs.value[f.path], ...outputs };
+				}
+			}
+		}
+	}
+
+	/**
+	 * 从当前 files.value 列表的 meta status/pp_execution/pp_progress 字段，
+	 * 同步后处理状态(ppStatus)、进度(ppProgress)和模块输出路径(moduleOutputs)。
+	 * meta 是持久化的真相来源，优先级高于内存推断值，直接覆盖写入。
+	 * 用于 onMounted 初始加载和 sse-lagged 事件后的全量状态恢复。
+	 *
+	 * Sync post-processing status (ppStatus), progress (ppProgress), and module output
+	 * paths (moduleOutputs) from the current files.value list's meta status/pp_execution/pp_progress
+	 * fields. Meta is the persistent source of truth and takes priority over in-memory inferred
+	 * values, overwriting them directly. Used for the initial onMounted load and full state
+	 * restoration after an sse-lagged event.
+	 */
+	function syncPpStateFromFiles() {
+		for (const f of files.value) {
+			if (f.is_recording) continue;
+			if (f.status === "finish") {
+				ppStatus.value[f.path] = "done";
+			} else if (f.status === "pp_error") {
+				ppStatus.value[f.path] = "error";
+			} else if (f.status === "pp_waiting") {
+				if (ppStatus.value[f.path] !== "running") ppStatus.value[f.path] = "waiting";
+			} else if (f.status === "pp_running") {
+				ppStatus.value[f.path] = "running";
+			}
+			// 从 meta 的 pp_execution + pp_progress 恢复进度（含运行中节点）
+			// Restore progress from meta pp_execution + pp_progress (covers running nodes too)
+			if (f.pp_execution && f.pp_execution.length > 0) {
+				ppProgress.value[f.path] = ppProgressFromMeta(
+					f.pp_execution, f.pp_progress,
+					{ processing: t("usePostprocess.processing"), waiting: t("usePostprocess.waitingProgress") },
+				);
+			}
+			// 从 pp_execution 输出路径推断模块输出（contact_sheet 等）
+			// Infer module outputs from pp_execution output paths (e.g. contact_sheet)
+			if (f.pp_execution) {
+				const outputs: Record<string, string> = {};
+				for (const entry of f.pp_execution) {
+					if (entry.outputs && entry.outputs.length > 0) {
+						const nonVideo = entry.outputs.find(
+							(p) => !/\.(mp4|mkv|ts|avi|mov)$/i.test(p),
+						);
+						if (nonVideo) outputs[entry.module_id] = nonVideo;
+					}
+				}
+				if (Object.keys(outputs).length > 0) {
+					moduleOutputs.value[f.path] = outputs;
+				}
 			}
 		}
 	}
@@ -183,15 +238,20 @@
 
 	/**
 	 * 打开模块输出文件（使用预览弹窗）。
+	 * Tauri 版：通过 invoke 读取文件为 base64 data URL 后显示。
+	 *
 	 * Open module output file (preview dialog).
+	 * Tauri version: reads file as base64 data URL via invoke.
 	 */
 	async function openModuleOutput(filePath: string, moduleId: string) {
 		const outputPath = moduleOutputs.value[filePath]?.[moduleId];
 		if (!outputPath) return;
-		openPreview(
-			`/api/files?path=${encodeURIComponent(outputPath)}`,
-			outputPath.split(/[\\/]/).pop() ?? "预览图",
-		);
+		try {
+			const result = await call<{ data: string }>("read_output_file", { path: outputPath });
+			openPreview(result.data, outputPath.split(/[\\/]/).pop() ?? "预览图");
+		} catch (e) {
+			toast(String(e), "error");
+		}
 	}
 
 	/**
@@ -277,12 +337,15 @@
 	 * Sorted by recording start time to ensure consistent processing order.
 	 */
 	async function postProcessSelected() {
+		if (!hasPipelineNodes.value) {
+			toast(t("recordings.postprocessEmptyPipeline"), "error");
+			return;
+		}
 		const paths = [...selected.value].filter(
 			(p) =>
 				ppStatus.value[p] !== "running" &&
 				ppStatus.value[p] !== "waiting" &&
-				!files.value.find((f) => f.path === p)?.is_recording &&
-				!files.value.find((f) => f.path === p)?.status?.startsWith("merging"),
+				!files.value.find((f) => f.path === p)?.is_recording,
 		);
 		if (paths.length === 0) return;
 		selected.value.clear();
@@ -308,9 +371,16 @@
 				(p) =>
 					ppStatus.value[p] !== "running" &&
 					ppStatus.value[p] !== "waiting" &&
-					!files.value.find((f) => f.path === p)?.is_recording &&
-					!files.value.find((f) => f.path === p)?.status?.startsWith("merging"),
+					!files.value.find((f) => f.path === p)?.is_recording,
 			).length,
+	);
+
+	/** 流水线是否有已连接输入节点的启用节点（即输入节点有连线）
+	 * / Whether the pipeline has any enabled node connected to the recording input node */
+	const hasPipelineNodes = computed(
+		() => ppStore.pipeline?.nodes?.some(
+			(n) => n.enabled && Object.values(n.inputs ?? {}).some((ref) => ref.nodeId === "0"),
+		) ?? false,
 	);
 
 	/** 所有正在录制文件的总录制速度（字节/秒）/ Total recording speed (bytes/second) */
@@ -342,6 +412,12 @@
 		unlisteners.push(() => clearInterval(diskTimer));
 		if (!ppStore.pipeline?.nodes?.length) await ppStore.fetchPipeline();
 
+		// 监听其他客户端的流水线更新，实时刷新模块输出路径推断结果
+		// Listen for pipeline updates from other clients and re-infer module output paths
+		ppStore.initModuleWatcher(() => {
+			syncModuleOutputsFromFiles();
+		});
+
 		// 先恢复运行中/等待中的后处理任务状态（来自内存，不依赖 meta）
 		// First restore running/waiting post-processing task states (from memory, independent of meta)
 		await restoreFromBackend();
@@ -351,41 +427,7 @@
 		//
 		// Then initialize status and module output paths from meta status fields in the file list.
 		// Meta is the persistent source of truth and takes priority over inferred values.
-		for (const f of files.value) {
-			if (f.is_recording) continue;
-			if (f.status === "finish") {
-				ppStatus.value[f.path] = "done";
-			} else if (f.status === "pp_error") {
-				ppStatus.value[f.path] = "error";
-			} else if (f.status === "pp_waiting") {
-				if (ppStatus.value[f.path] !== "running") ppStatus.value[f.path] = "waiting";
-			} else if (f.status === "pp_running") {
-				ppStatus.value[f.path] = "running";
-			}
-			// 从 meta pp_results 恢复各模块执行结果，用于 done/error 状态下的详情展示
-			// Restore per-module results from meta pp_results for detail display in done/error state
-			if (f.pp_results && f.pp_results.length > 0 &&
-				(f.status === "finish" || f.status === "pp_error")) {
-				const results = f.pp_results.map((r) => ({
-					moduleId: r.module_id,
-					success: r.success,
-					message: r.message,
-				}));
-				const allOk = results.every((r) => r.success);
-				ppProgress.value[f.path] = {
-					...makePpProgress(
-						allOk ? results.length : 0,
-						results.length,
-						0, 0, "", allOk ? 100 : 0, "", 0,
-						{ processing: t("usePostprocess.processing"), waiting: t("usePostprocess.waitingProgress") },
-					),
-					moduleResults: results,
-				};
-			}
-			if (f.module_outputs && Object.keys(f.module_outputs).length > 0) {
-				moduleOutputs.value[f.path] = f.module_outputs;
-			}
-		}
+		syncPpStateFromFiles();
 
 		unlisteners.push(
 			await on("recordings-dir-changed", () => scheduleDirRefresh(syncModuleOutputsFromFiles)),
@@ -396,42 +438,8 @@
 				// SSE 广播队列溢出，事件已丢失，重新从后端恢复完整状态
 				// SSE broadcast queue overflowed, events lost; restore full state from backend
 				await load();
-				// 先恢复运行中任务，再用 meta 覆盖 done/error 状态
-				// First restore running tasks, then overwrite done/error status from meta
 				await restoreFromBackend();
-				for (const f of files.value) {
-					if (f.is_recording) continue;
-					if (f.status === "finish") {
-						ppStatus.value[f.path] = "done";
-					} else if (f.status === "pp_error") {
-						ppStatus.value[f.path] = "error";
-					} else if (f.status === "pp_waiting") {
-						if (ppStatus.value[f.path] !== "running") ppStatus.value[f.path] = "waiting";
-					} else if (f.status === "pp_running") {
-						ppStatus.value[f.path] = "running";
-					}
-					if (f.pp_results && f.pp_results.length > 0 &&
-						(f.status === "finish" || f.status === "pp_error")) {
-						const results = f.pp_results.map((r) => ({
-							moduleId: r.module_id,
-							success: r.success,
-							message: r.message,
-						}));
-						const allOk = results.every((r) => r.success);
-						ppProgress.value[f.path] = {
-							...makePpProgress(
-								allOk ? results.length : 0,
-								results.length,
-								0, 0, "", allOk ? 100 : 0, "", 0,
-								{ processing: t("usePostprocess.processing"), waiting: t("usePostprocess.waitingProgress") },
-							),
-							moduleResults: results,
-						};
-					}
-					if (f.module_outputs && Object.keys(f.module_outputs).length > 0) {
-						moduleOutputs.value[f.path] = f.module_outputs;
-					}
-				}
+				syncPpStateFromFiles();
 			}),
 		);
 
@@ -510,33 +518,11 @@
 					delete nextSpeed[p.video_path];
 					recordingSpeed.value = nextSpeed;
 				}
-				// 合并完成后清理进度数据 / Clean up merge progress after merge completes
-				if (p.video_path) {
-					const next = { ...mergeProgress.value };
-					delete next[p.video_path];
-					mergeProgress.value = next;
-				}
 				// 录制结束时清理分片统计 / Clean up segment stats when recording stops
 				if (p.video_path) {
 					const nextStats = { ...segmentStats.value };
 					delete nextStats[p.video_path];
 					segmentStats.value = nextStats;
-				}
-			}),
-		);
-
-		unlisteners.push(
-			await on("merge-progress", (payload) => {
-				const p = payload as {
-					video_path: string;
-					out_bytes: number;
-					total_bytes: number;
-				};
-				if (p.video_path) {
-					mergeProgress.value = {
-						...mergeProgress.value,
-						[p.video_path]: { out_bytes: p.out_bytes, total_bytes: p.total_bytes },
-					};
 				}
 			}),
 		);
@@ -552,48 +538,52 @@
 			await on("postprocess-started", (payload) => {
 				const p = payload as { path: string };
 				ppStatus.value[p.path] = "running";
-				ppProgress.value[p.path] = makePpProgress(0, 0, 0, 0, "", 0, "", 0, {
-					processing: t("usePostprocess.processing"),
-					waiting: t("usePostprocess.waitingProgress"),
-				});
+				// 进度由后续 postprocess-meta-update 事件初始化，此处无需设置
+				// Progress will be initialized by the first postprocess-meta-update event
 			}),
 		);
 
+		// postprocess-meta-update：每次节点开始/进度更新/节点完成时后端推送最新 meta 快照，
+		// 前端直接从 pp_execution + pp_progress 重算进度，无需依赖独立进度事件字段。
+		// postprocess-meta-update: backend pushes the latest meta snapshot on each node start/progress/done.
+		// Frontend recalculates progress directly from pp_execution + pp_progress without relying on
+		// individual progress event fields.
 		unlisteners.push(
-			await on("postprocess-progress", (payload) => {
+			await on("postprocess-meta-update", (payload) => {
 				const p = payload as {
 					path: string;
-					done: number;
-					total: number;
-					pct: number;
-					modDone: number;
-					modTotal: number;
-					moduleName: string;
+					meta: {
+						pp_execution?: import("@/types/recordings").PpExecutionEntry[] | null;
+						pp_progress?: import("@/types/recordings").PpNodeProgress | null;
+					};
 				};
-				const prev = ppProgress.value[p.path];
-				ppProgress.value[p.path] = makePpProgress(
-					p.done,
-					p.total,
-					p.modDone,
-					p.modTotal,
-					p.moduleName ?? "",
-					p.pct,
-					prev?.moduleName ?? "",
-					prev?.modulePct ?? 0,
-					{
-						processing: t("usePostprocess.processing"),
-						waiting: t("usePostprocess.waitingProgress"),
-					},
+				if (!p.meta) return;
+				ppProgress.value[p.path] = ppProgressFromMeta(
+					p.meta.pp_execution, p.meta.pp_progress,
+					{ processing: t("usePostprocess.processing"), waiting: t("usePostprocess.waitingProgress") },
 				);
+				// 实时提取新完成节点的非视频输出（如 contact_sheet 图片）
+				// Extract non-video outputs of newly completed nodes in real time (e.g. contact_sheet image)
+				if (p.meta.pp_execution) {
+					const outputs: Record<string, string> = { ...moduleOutputs.value[p.path] };
+					for (const entry of p.meta.pp_execution) {
+						if (entry.result != null && entry.outputs && entry.outputs.length > 0) {
+							const nonVideo = entry.outputs.find(
+								(op) => !/\.(mp4|mkv|ts|avi|mov)$/i.test(op),
+							);
+							if (nonVideo) outputs[entry.module_id] = nonVideo;
+						}
+					}
+					if (Object.keys(outputs).length > 0) {
+						moduleOutputs.value = { ...moduleOutputs.value, [p.path]: outputs };
+					}
+				}
 			}),
 		);
 
 		unlisteners.push(
 			await on("postprocess-done", async (payload) => {
-				const p = payload as {
-					path: string;
-					results: { moduleId: string; success: boolean; message: string }[];
-				};
+				const p = payload as { path: string; success: boolean; message?: string };
 				const wasCancelledByDelete = ppCancelledByDelete.has(p.path);
 				ppCancelledByDelete.delete(p.path);
 				handlePostprocessDone(
@@ -631,7 +621,7 @@
 </script>
 
 <template>
-	<div class="flex flex-col">
+	<div class="flex flex-col h-full gap-0">
 		<Dialog :open="previewOpen" @update:open="previewOpen = $event">
 			<DialogContent
 				class="p-0 overflow-hidden flex flex-col w-fit"
@@ -692,7 +682,7 @@
 
 		<header
 			ref="headerEl"
-			class="flex items-start justify-between gap-4 shrink-0 pb-4 bg-background sticky top-0 z-20 -mx-6 px-6 shadow-[0_-1.5rem_0_0_var(--background)]"
+			class="flex items-start justify-between gap-4 shrink-0 pb-4 bg-background sticky top-0 z-20 px-6 pt-6 border-b"
 		>
 			<div class="flex-1 min-w-0">
 				<h1 class="text-xl font-bold mb-0.5">{{ t("recordings.title") }}</h1>
@@ -739,15 +729,25 @@
 				</div>
 			</div>
 			<div class="flex gap-2 shrink-0">
-				<Button
+				<Tooltip
 					v-if="selectedCount > 0"
-					variant="outline"
-					size="sm"
-					:disabled="ppSelectableCount === 0"
-					@click="postProcessSelected"
+					:content="
+						!hasPipelineNodes
+							? t('recordings.postprocessEmptyPipeline')
+							: ppSelectableCount === 0
+								? t('recordings.postprocessNoneSelectable')
+								: undefined
+					"
 				>
-					{{ t("recordings.batchPostprocess", { count: ppSelectableCount }) }}
-				</Button>
+					<Button
+						variant="outline"
+						size="sm"
+						:disabled="ppSelectableCount === 0 || !hasPipelineNodes"
+						@click="postProcessSelected"
+					>
+						{{ t("recordings.batchPostprocess", { count: ppSelectableCount }) }}
+					</Button>
+				</Tooltip>
 				<Button
 					v-if="selectedCount > 0"
 					variant="destructive"
@@ -759,7 +759,7 @@
 			</div>
 		</header>
 
-		<div class="pb-6">
+		<div class="px-6 flex-1 overflow-y-auto">
 			<div
 				v-if="loading && files.length === 0"
 				class="text-center text-muted-foreground py-16"
@@ -775,8 +775,7 @@
 
 			<Table v-else>
 				<TableHeader
-					class="sticky z-10 bg-background"
-					:style="{ top: `${headerHeight}px` }"
+					class="sticky top-0 z-10 bg-background"
 				>
 					<TableRow>
 						<TableHead class="w-8">
@@ -821,7 +820,7 @@
 						</TableHead>
 						<TableHead class="whitespace-nowrap">{{ t("recordings.table.resolution") }}</TableHead>
 						<TableHead>{{ t("recordings.table.speed") }}</TableHead>
-						<TableHead class="min-w-36">{{ t("recordings.table.segments") }}</TableHead>
+						<TableHead>{{ t("recordings.table.segments") }}</TableHead>
 						<TableHead class="min-w-45">{{
 							t("recordings.table.postprocess")
 						}}</TableHead>
@@ -866,54 +865,6 @@
 
 						<template v-if="!collapsedGroups.has(group.username)">
 							<TableRow v-for="f in group.files" :key="f.path" class="relative">
-								<template v-if="f.status === 'merging_waiting' || f.status === 'merging'">
-									<TableCell class="w-8">
-										<Checkbox :model-value="false" :disabled="true" />
-									</TableCell>
-									<TableCell class="font-medium w-px whitespace-nowrap pl-7">
-										<div class="flex items-center gap-1.5">
-											<span>{{ f.name }}</span>
-											<Badge variant="outline" class="text-[10px] shrink-0">{{
-												f.status === 'merging_waiting'
-													? t("recordings.status.waitingMerge")
-													: t("recordings.status.merging")
-											}}</Badge>
-										</div>
-									</TableCell>
-									<td colspan="9" class="p-2 align-middle w-full">
-										<div class="flex items-center gap-3 h-9 w-full">
-											<Loader2
-												class="size-4 animate-spin shrink-0 text-muted-foreground"
-											/>
-											<span class="text-xs text-muted-foreground shrink-0">{{
-												f.status === 'merging_waiting'
-													? t("recordings.status.waitingMergeVideo")
-													: t("recordings.status.mergingVideo")
-											}}</span>
-											<template v-if="f.status === 'merging' && mergeProgress[f.path]">
-												<div
-													class="flex-1 bg-muted rounded-full h-1.5 overflow-hidden"
-												>
-													<div
-														class="h-full bg-primary rounded-full transition-all duration-500"
-														:style="{
-															width: `${mergeProgress[f.path].total_bytes > 0
-																? Math.min(99, Math.floor(mergeProgress[f.path].out_bytes / mergeProgress[f.path].total_bytes * 10000) / 100)
-																: 0}%`,
-														}"
-													/>
-												</div>
-												<span class="tabular-nums text-xs text-muted-foreground w-14 shrink-0">{{
-													mergeProgress[f.path].total_bytes > 0
-														? (Math.min(99, Math.floor(mergeProgress[f.path].out_bytes / mergeProgress[f.path].total_bytes * 10000) / 100)).toFixed(2)
-														: '0.00'
-												}}%</span>
-											</template>
-										</div>
-									</td>
-								</template>
-
-								<template v-else>
 									<TableCell class="w-8">
 										<Checkbox
 											:model-value="getFileChecked(f.path)"
@@ -984,33 +935,6 @@
 													{{
 														segmentStats[f.path].downloaded + segmentStats[f.path].failed > 0
 															? Math.round(segmentStats[f.path].downloaded / (segmentStats[f.path].downloaded + segmentStats[f.path].failed) * 100)
-															: 100
-													}}%
-												</Badge>
-											</div>
-										</template>
-										<template v-else-if="!f.is_recording && (f.segments_downloaded != null || f.segments_failed != null)">
-											<div class="flex items-center gap-1 flex-wrap">
-												<Badge variant="secondary" class="tabular-nums text-[11px] px-1.5 py-0">
-													{{ f.segments_downloaded ?? 0 }}
-												</Badge>
-												<Badge
-													v-if="(f.segments_failed ?? 0) > 0"
-													variant="secondary"
-													class="tabular-nums text-[11px] px-1.5 py-0 bg-destructive/15 text-destructive border-0"
-												>
-													{{ f.segments_failed }}
-												</Badge>
-												<Badge
-													variant="outline"
-													class="tabular-nums text-[11px] px-1.5 py-0"
-													:class="(f.segments_failed ?? 0) === 0
-														? 'border-green-500 text-green-500'
-														: 'border-destructive text-destructive'"
-												>
-													{{
-														(f.segments_downloaded ?? 0) + (f.segments_failed ?? 0) > 0
-															? Math.round((f.segments_downloaded ?? 0) / ((f.segments_downloaded ?? 0) + (f.segments_failed ?? 0)) * 100)
 															: 100
 													}}%
 												</Badge>
@@ -1089,17 +1013,6 @@
 														<span class="truncate max-w-40">{{ r.moduleId }}</span>
 													</div>
 												</template>
-												<template v-else>
-													<div
-														v-if="ppStatus[f.path] === 'done'"
-														class="text-lg text-green-500"
-													>
-														{{ t("recordings.status.done") }}
-													</div>
-													<div v-else class="text-lg text-destructive">
-														{{ t("recordings.status.failed") }}
-													</div>
-												</template>
 											</div>
 											<span v-else class="text-xs text-muted-foreground"
 												>—</span
@@ -1130,27 +1043,35 @@
 											>
 												<Image class="size-3.5" />
 											</Button>
-											<Button
-												size="sm"
-												variant="outline"
-												:disabled="
-													f.is_recording ||
-													ppStatus[f.path] === 'running' ||
-													ppStatus[f.path] === 'waiting'
+											<Tooltip
+												:content="
+													f.is_recording
+														? t('recordings.status.recording')
+														: !hasPipelineNodes
+															? t('recordings.postprocessEmptyPipeline')
+															: undefined
 												"
-												:title="
-													f.is_recording ? t('recordings.status.recording') : ''
-												"
-												@click="runPostprocess(f.path)"
 											>
-												<Loader2
-													v-if="ppStatus[f.path] === 'running'"
-													class="size-3.5 animate-spin"
-												/>
-												<span v-else>{{
-													t("recordings.actions.postprocess")
-												}}</span>
-											</Button>
+												<Button
+													size="sm"
+													variant="outline"
+													:disabled="
+														f.is_recording ||
+														ppStatus[f.path] === 'running' ||
+														ppStatus[f.path] === 'waiting' ||
+														!hasPipelineNodes
+													"
+													@click="runPostprocess(f.path)"
+												>
+													<Loader2
+														v-if="ppStatus[f.path] === 'running'"
+														class="size-3.5 animate-spin"
+													/>
+													<span v-else>{{
+														t("recordings.actions.postprocess")
+													}}</span>
+												</Button>
+											</Tooltip>
 											<Button
 												size="sm"
 												variant="destructive"
@@ -1165,7 +1086,6 @@
 											>
 										</div>
 									</TableCell>
-								</template>
 							</TableRow>
 						</template>
 					</template>

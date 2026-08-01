@@ -390,11 +390,11 @@
 </script>
 
 <template>
-	<div class="flex flex-col gap-4">
+	<div class="flex flex-col gap-4 px-6">
 		<!-- 置顶区域：页头 + 筛选 Tab 栏 / Sticky zone: header + filter tabs -->
-		<div class="bg-background sticky top-0 z-20 -mx-6 px-6 shadow-[0_-1.5rem_0_0_var(--background)] flex flex-col">
+		<div class="bg-background sticky top-0 z-20 -mx-6 px-6 border-b flex flex-col">
 		<!-- 页头 / Header -->
-		<header class="flex items-start justify-between gap-3 shrink-0 pt-4 pb-3">
+		<header class="flex items-start justify-between gap-3 shrink-0 pt-6 pb-3">
 			<div>
 				<h1 class="text-xl font-bold mb-0.5">{{ t("home.title") }}</h1>
 				<p class="text-sm text-muted-foreground">

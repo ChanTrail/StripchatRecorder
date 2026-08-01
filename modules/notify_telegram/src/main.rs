@@ -14,7 +14,6 @@
 //! - 标准输出 `PROGRESS:{done}/{total}`: 进度上报 / Progress reporting
 //! - 标准输出 `STATUS:{speed}`: 上传速度上报 / Upload speed reporting
 
-use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -31,7 +30,7 @@ use grammers_client::tl;
 use grammers_session::storages::SqliteSession;
 use grammers_session::types::{PeerAuth, PeerId, PeerRef};
 use tokio::io::AsyncReadExt;
-use pp_utils::{param, param_bool, format_duration, format_bytes, format_speed, parse_stem, find_cover, tmp_dir, image_dimensions, video_meta};
+use pp_utils::{format_duration, format_bytes, format_speed, parse_stem, find_cover, tmp_dir, image_dimensions, video_meta, ModuleInput};
 
 /// 进度上报的缩放基数 / Progress reporting scale base
 const PROGRESS_SCALE: usize = 10_000;
@@ -40,51 +39,19 @@ const PROGRESS_SCALE: usize = 10_000;
 /// Module metadata JSON, output via `--describe` argument.
 const DESCRIBE: &str = r#"{
     "id": "notify_telegram",
-    "name": "Telegram 通知 0.3.0",
+    "name": "Telegram 通知 0.4.0",
     "description": "将录制信息、封面图和视频通过 MTProto 发送到 Telegram（支持超过 50MB 的大文件，支持 HTTP/SOCKS5 代理）",
+    "inputTypes": ["media_bundle"],
+    "outputTypes": ["media_bundle"],
+    "official": true,
     "params": [
-        {
-        "key": "api_id",
-        "label": "API ID（从 my.telegram.org 获取）",
-        "type": "string",
-        "default": ""
-        },
-        {
-        "key": "api_hash",
-        "label": "API Hash",
-        "type": "string",
-        "default": ""
-        },
-        {
-        "key": "bot_token",
-        "label": "Bot Token（从 @BotFather 获取）",
-        "type": "string",
-        "default": ""
-        },
-        {
-        "key": "chat_id",
-        "label": "Chat ID（超级群组填 -100xxxxxxxxxx 格式）",
-        "type": "string",
-        "default": ""
-        },
-        {
-        "key": "username",
-        "label": "群组 Username（超级群组必填，如 mygroupname，不含 @）",
-        "type": "string",
-        "default": ""
-        },
-        {
-        "key": "proxy",
-        "label": "代理地址（支持 http://、socks5://）",
-        "type": "string",
-        "default": ""
-        },
-        {
-        "key": "send_video",
-        "label": "同时发送视频文件",
-        "type": "boolean",
-        "default": true
-        }
+        { "key": "api_id",     "label": "API ID（从 my.telegram.org 获取）",         "type": "string",  "default": "" },
+        { "key": "api_hash",   "label": "API Hash",                                   "type": "string",  "default": "" },
+        { "key": "bot_token",  "label": "Bot Token（从 @BotFather 获取）",           "type": "string",  "default": "" },
+        { "key": "chat_id",    "label": "Chat ID（超级群组填 -100xxxxxxxxxx 格式）", "type": "string",  "default": "" },
+        { "key": "username",   "label": "群组 Username（超级群组必填，不含 @）",     "type": "string",  "default": "" },
+        { "key": "proxy",      "label": "代理地址（支持 http://、socks5://）",       "type": "string",  "default": "" },
+        { "key": "send_video", "label": "同时发送视频文件",                           "type": "boolean", "default": true }
     ]
 }"#;
 
@@ -460,7 +427,9 @@ async fn upload_with_progress(
     let file_id = {
         use std::time::{SystemTime, UNIX_EPOCH};
         let t = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
-        (t.as_nanos() as i64) ^ (path.as_os_str().len() as i64 * 0x9e3779b97f4a7c15_u64 as i64)
+        let nanos = t.as_nanos() as i64;
+        let len_hash = (path.as_os_str().len() as i64).wrapping_mul(0x9e3779b97f4a7c15_u64 as i64);
+        nanos ^ len_hash
     };
 
     let mut buf = vec![0u8; CHUNK_SIZE];
@@ -571,6 +540,15 @@ async fn upload_with_progress(
 /// 3. Convert/remux video format if needed
 /// 4. Upload cover image, video thumbnails, and video files
 /// 5. Send as album (cover + videos, up to 10 per batch)
+///
+/// `upload_bytes_done` 和 `upload_bytes_total` 从外部传入，在整个重试循环中持续累计，
+/// 保证进度条在每次重连重试时不从 0 重置。每次外层重试开始时，调用方将 `upload_bytes_done`
+/// 重置为 0 后再传入。
+///
+/// `upload_bytes_done` and `upload_bytes_total` are passed in from the outer scope so they
+/// persist across the entire retry loop, preventing the progress bar from resetting to 0 on
+/// each reconnect retry. The caller resets `upload_bytes_done` to 0 at the start of each
+/// outer attempt.
 #[allow(clippy::too_many_arguments)]
 async fn upload_and_send(
     api_id: i32, api_hash: &str, bot_token: &str, proxy: &str,
@@ -579,11 +557,11 @@ async fn upload_and_send(
     file_name: &str, file_size_str: &str,
     input: &Path, cover: Option<&Path>, send_video: bool,
     video_parts: &[PathBuf],
+    done: Arc<AtomicUsize>,
+    upload_total: usize,
 ) -> Result<(), String> {
     let (base_caption_text, base_caption_entities) =
         build_caption(model_name, timestamp, duration_str, file_name, file_size_str, None);
-
-    // 打开或创建 SQLite 会话文件 / Open or create SQLite session file
     let session = Arc::new(
         SqliteSession::open(&session_path(api_id)).await
             .map_err(|e| format!("open session failed: {}", e))?,
@@ -697,20 +675,10 @@ async fn upload_and_send(
         }).collect()
     } else { vec![] };
 
-    // 计算所有需要上传的文件总大小（用于进度计算）
-    // Calculate total size of all files to upload (for progress calculation)
-    let cover_size = effective_cover.and_then(|p| fs::metadata(p).ok()).map(|m| m.len() as usize).unwrap_or(0);
-    let video_size: usize = if send_video {
-        effective_parts.iter().map(|p| fs::metadata(p).ok().map(|m| m.len() as usize).unwrap_or(0)).sum()
-    } else { 0 };
-    let thumb_size: usize = part_metas.iter()
-        .filter_map(|m| m.thumb_path.as_ref())
-        .filter_map(|p| fs::metadata(p).ok())
-        .map(|m| m.len() as usize).sum();
-    let upload_total = cover_size + video_size + thumb_size;
-
-    // 共享的已上传字节计数器 / Shared uploaded bytes counter
-    let done = Arc::new(AtomicUsize::new(0));
+    // upload_total 和 done 计数器由外部传入，在整个外层重试循环中持续累计，
+    // 避免每次重连重试时进度从 0 重置。
+    // upload_total and done counter are passed in from the outer scope to persist across
+    // the outer retry loop, preventing progress from resetting to 0 on each reconnect attempt.
 
     if send_video {
         // 固化后的视频分片，包含服务端永久 Media 引用和元数据
@@ -956,28 +924,43 @@ async fn upload_and_send(
 /// 模块主逻辑：读取参数、准备文件、带重试的上传发送。
 /// Main module logic: read parameters, prepare files, upload and send with retries.
 fn run() -> Result<(), String> {
-    let input_str = env::var("PP_INPUT").map_err(|_| "PP_INPUT not set".to_string())?;
-    let input = PathBuf::from(&input_str);
+    let module_input = ModuleInput::read();
+    let bundle_input = module_input.first_input()
+        .ok_or_else(|| "inputs[0] (media_bundle) is required".to_string())?;
+
+    // 从 MediaBundle 解包视频路径和图片路径
+    // Unpack video path and image path from MediaBundle
+    let (input, cover_from_bundle) = {
+        let s = bundle_input.to_string_lossy();
+        if let Some(sep) = s.find('\n') {
+            let video = PathBuf::from(&s[..sep]);
+            let img_str = s[sep + 1..].trim();
+            let img = if img_str.is_empty() { None } else { Some(PathBuf::from(img_str)) };
+            (video, img)
+        } else {
+            (bundle_input.clone(), None)
+        }
+    };
+
     if !input.exists() { return Err(format!("Input file not found: {}", input.display())); }
 
-    // 读取并验证必填参数 / Read and validate required parameters
     let api_id: i32 = {
-        let s = param("api_id", "");
+        let s = module_input.param_str("api_id", "");
         if s.is_empty() { return Err("api_id is required".to_string()); }
         s.parse().map_err(|_| "api_id must be a number".to_string())?
     };
-    let api_hash  = param("api_hash", "");
+    let api_hash  = module_input.param_str("api_hash", "");
     if api_hash.is_empty()  { return Err("api_hash is required".to_string()); }
-    let bot_token = param("bot_token", "");
+    let bot_token = module_input.param_str("bot_token", "");
     if bot_token.is_empty() { return Err("bot_token is required".to_string()); }
     let chat_id: i64 = {
-        let s = param("chat_id", "");
+        let s = module_input.param_str("chat_id", "");
         if s.is_empty() { return Err("chat_id is required".to_string()); }
         s.parse().map_err(|_| "chat_id must be a number".to_string())?
     };
-    let proxy      = param("proxy", "");
-    let username   = param("username", "");
-    let send_video = param_bool("send_video", true);
+    let proxy      = module_input.param_str("proxy", "");
+    let username   = module_input.param_str("username", "");
+    let send_video = module_input.param_bool("send_video", true);
 
     // 从文件名解析元数据 / Parse metadata from filename
     let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("recording");
@@ -989,13 +972,37 @@ fn run() -> Result<(), String> {
     let name_str  = input.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
     let size_str  = format_bytes(file_size);
 
-    let cover = find_cover(&input);
+    let cover = cover_from_bundle.or_else(|| find_cover(&input));
 
     // Telegram 单文件大小限制为 2GB
     // Telegram single file size limit is 2GB
     const TG_MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
     let video_parts: Vec<PathBuf> = if send_video { split_video(&input, TG_MAX_BYTES)? } else { vec![input.clone()] };
     let is_split = video_parts.len() > 1 || video_parts.first().map(|p| p != &input).unwrap_or(false);
+
+    // 预计算上传总字节数（外层重试循环保持不变，done 计数器每次重试从 0 重置）。
+    // cover/sidecar 图片尺寸此时已是原始文件；ffmpeg 转换/缩放后的实际大小略有不同，
+    // 但差异极小（封面图通常远小于视频），仅影响百分比精度而不影响功能。
+    //
+    // Pre-calculate total upload bytes (stays constant across outer retries; done counter
+    // resets to 0 on each retry). Cover/sidecar sizes reflect the original files; converted/
+    // resized sizes differ slightly, but the difference is tiny (cover images are far smaller
+    // than the video) and only affects percentage precision.
+    let cover_size_estimate = cover.as_ref()
+        .and_then(|p| fs::metadata(p).ok())
+        .map(|m| m.len() as usize)
+        .unwrap_or(0);
+    let video_size_estimate: usize = if send_video {
+        video_parts.iter().map(|p| fs::metadata(p).ok().map(|m| m.len() as usize).unwrap_or(0)).sum()
+    } else { 0 };
+    // 缩略图大小未知（需实际提取后才知道），保守估计每个片段约 200 KB
+    // Thumbnail size is unknown until extracted; conservatively estimate ~200KB per part
+    let thumb_size_estimate: usize = if send_video { video_parts.len() * 200 * 1024 } else { 0 };
+    let upload_total = cover_size_estimate + video_size_estimate + thumb_size_estimate;
+
+    // 共享的已上传字节计数器，在整个外层重试循环中持续累计
+    // Shared uploaded bytes counter, persists across the outer retry loop
+    let done = Arc::new(AtomicUsize::new(0));
 
     // 构建 Tokio 运行时并执行异步上传，最多重试 3 次
     // Build Tokio runtime and execute async upload with up to 3 retries
@@ -1008,10 +1015,14 @@ fn run() -> Result<(), String> {
             const RECONNECT_DELAY: Duration = Duration::from_secs(30);
             let mut attempt = 0u32;
             loop {
+                // 每次外层重试前将计数器重置为 0，保证进度从头计算
+                // Reset counter to 0 before each outer attempt so progress starts from scratch
+                done.store(0, Ordering::Relaxed);
                 let result = upload_and_send(
                     api_id, &api_hash, &bot_token, &proxy, chat_id, &username,
                     &model_name, &ts_str, &dur_str, &name_str, &size_str,
                     &input, cover.as_deref(), send_video, &video_parts,
+                    Arc::clone(&done), upload_total,
                 ).await;
                 match result {
                     Ok(()) => break Ok(()),
@@ -1026,23 +1037,21 @@ fn run() -> Result<(), String> {
                     }
                 }
             }
-        })?;
-
-    // 清理分割产生的临时片段文件 / Clean up temporary segment files from splitting
+        })?;    // 清理分割产生的临时片段文件 / Clean up temporary segment files from splitting
     if is_split {
         for part in &video_parts {
             if part != &input { let _ = fs::remove_file(part); }
         }
     }
 
-    println!("OUTPUT:{}", input.display());
+    pp_utils::output_ok(&[&bundle_input.to_string_lossy()], "Telegram notification sent");
     Ok(())
 }
 
 /// 程序入口：处理 `--describe` 参数或执行主逻辑。
 /// Entry point: handle `--describe` argument or execute main logic.
 fn main() {
-    let args: Vec<String> = env::args().collect();
+    let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(|s| s.as_str()) == Some("--describe") {
         print!("{}", DESCRIBE);
         return;
@@ -1050,7 +1059,8 @@ fn main() {
     // 确保临时目录存在 / Ensure temp directory exists
     tmp_dir();
     if let Err(e) = run() {
-        eprintln!("{}", e);
+        let json = serde_json::json!({ "code": "error", "message": e, "outputs": [] });
+        println!("{}", json);
         std::process::exit(1);
     }
 }

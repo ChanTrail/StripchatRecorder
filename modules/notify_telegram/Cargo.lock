@@ -1193,6 +1193,7 @@ dependencies = [
  "grammers-session",
  "md5",
  "pp_utils",
+ "serde_json",
  "tokio",
 ]
 
@@ -1483,6 +1484,10 @@ dependencies = [
 [[package]]
 name = "pp_utils"
 version = "0.2.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "ppv-lite86"
@@ -1681,6 +1686,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9a8e94ea7f378bd32cbbd37198a4a91436180c5bb472411e48b5ec2e2124ae9e"
 dependencies = [
  "serde_core",
+ "serde_derive",
 ]
 
 [[package]]

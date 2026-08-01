@@ -310,67 +310,63 @@ export function usePostprocess() {
 	function handlePostprocessDone(
 		payload: {
 			path: string;
-			results: { moduleId: string; success: boolean; message: string }[];
+			success: boolean;
+			message?: string;
+			pp_execution?: { module_id: string; result?: { code: string; message?: string } | null }[];
 		},
 		onLoad: () => Promise<void>,
 		isFileDeleted?: () => boolean,
 	) {
-		const allOk = payload.results.every((r) => r.success);
+		const allOk = payload.success;
 		ppStatus.value[payload.path] = allOk ? "done" : "error";
 
-		// 若文件已被用户删除，跳过所有 toast 提示，仅刷新列表
-		// If the file was deleted by the user, skip all toasts and just reload
 		const deleted = isFileDeleted?.() ?? false;
 
-		if (allOk) {
-			// 所有模块成功：更新进度为 100% 并收集输出路径
-			// All modules succeeded: set progress to 100% and collect output paths
-			ppProgress.value[payload.path] = {
-				...makePpProgress(
-					payload.results.length,
-					payload.results.length,
-					0,
-					0,
-					"",
-					100,
-					"",
-					0,
-					ppLabels(),
-				),
-				moduleResults: payload.results,
-			};
-			if (!deleted) {
-				const names = payload.results.map((r) => r.moduleId).join(" → ");
-				toast(t("usePostprocess.done", { modules: names }), "success");
-			}
-			// NodeResult.output 字段在序列化时被 #[serde(skip)] 跳过，前端无法直接获取。
-			// 使用 inferModuleOutputs 根据流水线配置推断输出路径（如 contact_sheet 图片路径）。
-			// NodeResult.output is skipped during serialization (#[serde(skip)]), so the frontend
-			// cannot access it directly. Use inferModuleOutputs to derive output paths from the
-			// pipeline config (e.g., the contact_sheet image path).
-			const inferred = inferModuleOutputs(payload.path);
-			if (Object.keys(inferred).length > 0) {
-				moduleOutputs.value = {
-					...moduleOutputs.value,
-					[payload.path]: inferred,
+		// 若 payload 携带完整的 pp_execution，立即更新 moduleResults（含被跳过的节点）
+		// If payload carries full pp_execution, update moduleResults immediately (including skipped nodes)
+		if (payload.pp_execution && payload.pp_execution.length > 0) {
+			const results = payload.pp_execution
+				.filter((e) => e.result != null)
+				.map((e) => ({
+					moduleId: e.module_id,
+					success: e.result?.code === "ok" || e.result?.code === "done" || e.result?.code === "skipped",
+					message: e.result?.message ?? "",
+				}));
+			if (results.length > 0) {
+				ppProgress.value[payload.path] = {
+					...makePpProgress(
+						allOk ? results.length : 0,
+						results.length,
+						0, 0, "", allOk ? 100 : 0, "", 0,
+						ppLabels(),
+					),
+					moduleResults: results,
 				};
-			} else {
-				fetchModuleOutputs(payload.path);
 			}
+		} else if (allOk) {
+			ppProgress.value[payload.path] = {
+				...makePpProgress(0, 0, 0, 0, "", 100, "", 0, ppLabels()),
+			};
 		} else {
 			ppProgress.value[payload.path] = {
-				...makePpProgress(0, payload.results.length, 0, 0, "", 0, "", 0, ppLabels()),
-				moduleResults: payload.results,
+				...makePpProgress(0, 0, 0, 0, "", 0, "", 0, ppLabels()),
 			};
-			if (!deleted) {
-				const failed = payload.results.find((r) => !r.success);
-				toast(
-					t("usePostprocess.failed", {
-						moduleId: failed?.moduleId,
-						message: failed?.message,
-					}),
-					"error",
-				);
+		}
+
+		if (!deleted) {
+			if (allOk) {
+				toast(t("usePostprocess.done", { modules: "" }).replace(" →", "").trim(), "success");
+			} else if (payload.message) {
+				toast(t("usePostprocess.failed", { moduleId: "", message: payload.message }), "error");
+			}
+		}
+
+		if (allOk) {
+			const inferred = inferModuleOutputs(payload.path);
+			if (Object.keys(inferred).length > 0) {
+				moduleOutputs.value = { ...moduleOutputs.value, [payload.path]: inferred };
+			} else {
+				fetchModuleOutputs(payload.path);
 			}
 		}
 		return onLoad();

@@ -13,7 +13,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 /// Mouflon 密钥存储结构，持久化到 mouflon_keys.json。
@@ -34,35 +33,10 @@ pub struct MouflonKeysStore {
     pub manual_updated_at: Option<String>,
 }
 
-/// 后处理任务状态快照（序列化后发送给前端）。
-/// Post-processing task status snapshot (serialized and sent to the frontend).
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PpTaskStatus {
-    /// 视频文件路径 / Video file path
-    pub path: String,
-    /// 整体进度百分比（0.0 - 100.0）/ Overall progress percentage (0.0 - 100.0)
-    pub pct: f64,
-    /// 当前模块已完成进度值 / Current module done progress value
-    pub mod_done: u32,
-    /// 当前模块总进度值 / Current module total progress value
-    pub mod_total: u32,
-    /// 当前模块名称 / Current module name
-    pub module_name: String,
-    /// 已完成的节点数 / Number of completed nodes
-    pub done: usize,
-    /// 总节点数 / Total number of nodes
-    pub total: usize,
-    /// 任务状态字符串（"waiting" / "running" / "done" / "error"）/ Task status string
-    pub status: String,
-    /// 是否来自内存（true = 运行中任务，false = 持久化结果）/ Whether from memory (true = in-progress, false = persisted result)
-    pub from_memory: bool,
-}
-
 /// 用户可配置的录制器设置 / User-configurable recorder settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
-    /// 录制文件输出目录 / Recording output directory
+    /// TS 分片流输出目录 / TS segment stream output directory
     pub output_dir: String,
     /// 主播状态轮询间隔（秒）/ Streamer status poll interval (seconds)
     pub poll_interval_secs: u64,
@@ -76,9 +50,6 @@ pub struct Settings {
     pub sc_mirror_url: Option<String>,
     /// 最大并发录制数（0 = 不限制）/ Max concurrent recordings (0 = unlimited)
     pub max_concurrent: usize,
-    /// 录制片段合并格式（默认 "mp4"）/ Recording segment merge format (default "mp4")
-    #[serde(default = "default_merge_format")]
-    pub merge_format: String,
     /// 后处理临时目录最大占用（GB，0 = 不限制，默认 50 GB）
     /// Max size of the post-processing tmp directory in GB (0 = unlimited, default 50 GB)
     #[serde(default = "default_max_tmp_dir_gb")]
@@ -97,9 +68,6 @@ pub struct Settings {
     /// Mouflon Keys sync Worker auth token (corresponds to Worker's AUTH_TOKEN env var)
     #[serde(default)]
     pub mouflon_sync_token: Option<String>,
-    /// 临时分片目录（None 表示与 output_dir 相同）/ Temporary segment directory (None means same as output_dir)
-    #[serde(default)]
-    pub tmp_dir: Option<String>,
     /// 首次启动向导是否已完成（false = 显示 Setup 页面）
     /// Whether the first-launch setup wizard has been completed (false = show Setup page)
     #[serde(default)]
@@ -109,11 +77,6 @@ pub struct Settings {
 /// Mouflon 同步地址的默认值 / Default value for Mouflon sync URL
 fn default_mouflon_sync_url() -> Option<String> {
     Some("https://mouflon.chantrail.com".to_string())
-}
-
-/// 合并格式的默认值 / Default value for merge format
-fn default_merge_format() -> String {
-    "mp4".to_string()
 }
 
 /// tmp 目录最大占用的默认值（50 GB）/ Default value for max tmp dir size (50 GB)
@@ -142,20 +105,18 @@ pub fn exe_dir() -> PathBuf {
 
 impl Default for Settings {
     fn default() -> Self {
-        // 默认输出目录为可执行文件同目录下的 recordings 文件夹
-        // Default output directory is the recordings folder next to the executable
+        // 默认输出目录为可执行文件同目录下的 recordings 文件夹（存放 TS 分片流）
+        // Default output directory is the recordings folder next to the executable (for TS segment streams)
         let output_dir = exe_dir().join("recordings").to_string_lossy().to_string();
 
         Self {
             output_dir,
-            tmp_dir: None,
             poll_interval_secs: 30,
             auto_record: true,
             api_proxy_url: None,
             cdn_proxy_url: None,
             sc_mirror_url: None,
             max_concurrent: 0,
-            merge_format: default_merge_format(),
             max_tmp_dir_gb: default_max_tmp_dir_gb(),
             language: default_language(),
             server_port: default_server_port(),
@@ -179,10 +140,6 @@ pub struct AppData {
     /// 后处理流水线配置 / Post-processing pipeline configuration
     #[serde(default)]
     pub pipeline: PipelineConfig,
-    /// 已执行过后处理的视频路径列表（目录文件，true/false 由对应 meta JSON 确认）
-    /// List of video paths that have been post-processed (directory file; success/failure confirmed by reading the corresponding meta JSON)
-    #[serde(default)]
-    pub pp_results: Vec<String>,
 }
 
 /// 单个主播的持久化数据 / Persisted data for a single streamer
@@ -203,12 +160,9 @@ pub struct AppState {
     pub data: RwLock<AppData>,
     /// 配置目录路径（exe_dir/config/）/ Config directory path (exe_dir/config/)
     config_dir: PathBuf,
-    /// 后处理任务状态表（文件路径 -> 任务状态）/ Post-processing task status map (file path -> status)
-    pub pp_tasks: RwLock<HashMap<String, PpTaskStatus>>,
-    /// 后处理取消标志（文件路径 -> 原子布尔）/ Post-processing cancel flags (file path -> atomic bool)
-    pub pp_cancel_flags: RwLock<HashMap<String, Arc<AtomicBool>>>,
-    /// 后处理串行锁，确保同一时刻只有一个后处理任务运行 / Serial lock ensuring only one post-processing task runs at a time
-    pub pp_lock: std::sync::Mutex<()>,
+    /// 后处理任务队列（状态表 + 取消标志 + 串行锁），详见 `postprocess::queue`
+    /// Post-processing task queue (status table + cancel flags + serial lock), see `postprocess::queue`
+    pub pp_queue: crate::postprocess::queue::PpQueue,
     /// 启动合并锁，防止启动时的合并与正常录制并发 / Startup merge lock preventing concurrent startup merge and normal recording
     pub startup_lock: std::sync::Mutex<()>,
     /// 通知监控器 poll_interval_secs 已变更的发送端（可选，启动后注入）
@@ -231,6 +185,7 @@ impl AppState {
     pub fn new() -> Result<Arc<Self>> {
         let config_dir = Self::config_dir();
         fs::create_dir_all(&config_dir)?;
+        fs::create_dir_all(crate::recording::meta::meta_dir())?;
 
         // 从拆分文件加载各部分数据 / Load each section from split files
         let load_json = |name: &str| -> Option<String> {
@@ -246,36 +201,47 @@ impl AppState {
         let mouflon_keys: MouflonKeysStore = load_json("mouflon_keys.json")
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
-        let pipeline: PipelineConfig = load_json("pipeline.json")
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default();
-        // pp_results.json 存储已执行过后处理的视频路径列表（Vec<String>）
-        // 兼容旧格式（HashMap<String, bool>）：若解析为 Vec 失败，尝试解析为旧格式并提取 keys
-        // pp_results.json stores a list of video paths that have been post-processed (Vec<String>)
-        // Compatibility with old format (HashMap<String, bool>): if Vec parse fails, try old format and extract keys
-        let pp_results: Vec<String> = load_json("pp_results.json")
-            .and_then(|s| {
-                serde_json::from_str::<Vec<String>>(&s).ok().or_else(|| {
-                    serde_json::from_str::<HashMap<String, bool>>(&s)
-                        .ok()
-                        .map(|m| m.into_keys().collect())
-                })
-            })
-            .unwrap_or_default();
-
-        let data = AppData { settings, streamers, mouflon_keys, pipeline, pp_results };
+        let pipeline: PipelineConfig = {
+            let raw = load_json("pipeline.json");
+            // pipeline.json 不存在时（首次启动），注入默认 ts_merge 节点
+            // On first startup (pipeline.json absent), inject default ts_merge node
+            if raw.is_none() {
+                let mut p = PipelineConfig::default();
+                p.nodes.push(crate::postprocess::pipeline::PipelineNode {
+                    node_id: "default-ts_merge".to_string(),
+                    module_id: "ts_merge".to_string(),
+                    params: {
+                        let mut m = std::collections::HashMap::new();
+                        m.insert("format".to_string(), serde_json::json!("mp4"));
+                        m
+                    },
+                    enabled: true,
+                    position: None,
+                    inputs: {
+                        let mut m = std::collections::HashMap::new();
+                        // 录制输入节点固定 ID 为 "0"，端口 0 → 本节点端口 0
+                        // Recording input node has fixed ID "0", port 0 → this node port 0
+                        m.insert(0, crate::postprocess::pipeline::NodeInputRef {
+                            node_id: "0".to_string(),
+                            port: 0,
+                        });
+                        m
+                    },
+                });
+                p
+            } else {
+                raw.and_then(|s| serde_json::from_str(&s).ok())
+                    .unwrap_or_default()
+            }
+        };
+        let data = AppData { settings, streamers, mouflon_keys, pipeline };
 
         fs::create_dir_all(&data.settings.output_dir)?;
-        if let Some(ref tmp) = data.settings.tmp_dir {
-            fs::create_dir_all(tmp)?;
-        }
 
         Ok(Arc::new(Self {
             data: RwLock::new(data),
             config_dir,
-            pp_tasks: RwLock::new(HashMap::new()),
-            pp_cancel_flags: RwLock::new(HashMap::new()),
-            pp_lock: std::sync::Mutex::new(()),
+            pp_queue: crate::postprocess::queue::PpQueue::new(),
             startup_lock: std::sync::Mutex::new(()),
             poll_interval_notify_tx: RwLock::new(None),
             mouflon_sync_notify_tx: RwLock::new(None),
@@ -297,7 +263,6 @@ impl AppState {
         fs::write(dir.join("streamers.json"), serde_json::to_string_pretty(&data.streamers)?)?;
         fs::write(dir.join("mouflon_keys.json"), serde_json::to_string_pretty(&data.mouflon_keys)?)?;
         fs::write(dir.join("pipeline.json"), serde_json::to_string_pretty(&data.pipeline)?)?;
-        fs::write(dir.join("pp_results.json"), serde_json::to_string_pretty(&data.pp_results)?)?;
         Ok(())
     }
 
@@ -316,9 +281,6 @@ impl AppState {
     /// If mouflon_sync_url or mouflon_sync_token changed, notify the sync scheduler to trigger immediately.
     pub fn update_settings(&self, settings: Settings) -> Result<()> {
         fs::create_dir_all(&settings.output_dir)?;
-        if let Some(ref tmp) = settings.tmp_dir {
-            fs::create_dir_all(tmp)?;
-        }
         let old = self.data.read().settings.clone();
         let poll_interval_changed = old.poll_interval_secs != settings.poll_interval_secs;
         let mouflon_sync_changed = old.mouflon_sync_url != settings.mouflon_sync_url
@@ -530,313 +492,4 @@ impl AppState {
         self.save()
     }
 
-    /// 将指定文件路径的后处理任务加入等待队列。
-    /// Enqueue a post-processing task for the given file path.
-    pub fn pp_task_enqueue(&self, path: &str) {
-        self.pp_tasks.write().insert(
-            path.to_string(),
-            PpTaskStatus {
-                path: path.to_string(),
-                pct: 0.0,
-                mod_done: 0,
-                mod_total: 0,
-                module_name: String::new(),
-                done: 0,
-                total: 0,
-                status: "waiting".to_string(),
-                from_memory: true,
-            },
-        );
-        // 确保取消标志存在（若已存在则不覆盖）/ Ensure cancel flag exists (don't overwrite if already present)
-        self.pp_cancel_flags
-            .write()
-            .entry(path.to_string())
-            .or_insert_with(|| Arc::new(AtomicBool::new(false)));
-    }
-
-    /// 将指定文件路径的后处理任务标记为运行中。
-    /// Mark the post-processing task for the given file path as running.
-    pub fn pp_task_start(&self, path: &str, total: usize) {
-        self.pp_tasks.write().insert(
-            path.to_string(),
-            PpTaskStatus {
-                path: path.to_string(),
-                pct: 0.0,
-                mod_done: 0,
-                mod_total: 0,
-                module_name: String::new(),
-                done: 0,
-                total,
-                status: "running".to_string(),
-                from_memory: true,
-            },
-        );
-    }
-
-    /// 获取或创建指定文件路径的取消标志。
-    /// Get or create the cancel flag for the given file path.
-    pub fn pp_task_make_cancel_flag(&self, path: &str) -> Arc<AtomicBool> {
-        let mut flags = self.pp_cancel_flags.write();
-        if let Some(existing) = flags.get(path) {
-            return Arc::clone(existing);
-        }
-        let flag = Arc::new(AtomicBool::new(false));
-        flags.insert(path.to_string(), Arc::clone(&flag));
-        flag
-    }
-
-    /// 设置指定文件路径的取消标志为 true，请求中止后处理。
-    /// Set the cancel flag for the given file path to true, requesting post-processing abort.
-    pub fn pp_task_cancel(&self, path: &str) {
-        if let Some(flag) = self.pp_cancel_flags.read().get(path) {
-            flag.store(true, std::sync::atomic::Ordering::Relaxed);
-        }
-    }
-
-    /// 清除指定文件路径的取消标志（任务完成后调用）。
-    /// Clear the cancel flag for the given file path (called after task completes).
-    pub fn pp_task_clear_cancel_flag(&self, path: &str) {
-        self.pp_cancel_flags.write().remove(path);
-    }
-
-    /// 更新指定文件路径的后处理进度信息。
-    /// Update the post-processing progress for the given file path.
-    #[allow(clippy::too_many_arguments)]
-    pub fn pp_task_progress(
-        &self,
-        path: &str,
-        pct: f64,
-        mod_done: u32,
-        mod_total: u32,
-        module_name: &str,
-        done: usize,
-        total: usize,
-    ) {
-        if let Some(t) = self.pp_tasks.write().get_mut(path) {
-            t.pct = pct;
-            t.mod_done = mod_done;
-            t.mod_total = mod_total;
-            t.module_name = module_name.to_string();
-            t.done = done;
-            t.total = total;
-        }
-    }
-
-    /// 将后处理任务标记为完成或失败。成功/失败状态由对应 meta JSON 的 status 字段确认，
-    /// 此处仅将路径记录到 pp_results 目录文件中（用于快速判断是否已执行过后处理）。
-    ///
-    /// Mark the post-processing task as done or failed. Success/failure is confirmed by the
-    /// corresponding meta JSON's status field; here we only record the path in the pp_results
-    /// directory file (for quick lookup of whether post-processing has been run).
-    pub fn pp_task_finish(&self, path: &str, success: bool) {
-        if let Some(t) = self.pp_tasks.write().get_mut(path) {
-            t.status = if success { "done" } else { "error" }.to_string();
-            t.pct = if success { 100.0 } else { t.pct };
-        }
-        // 将路径加入目录列表（去重）/ Add path to directory list (deduplicated)
-        {
-            let mut data = self.data.write();
-            if !data.pp_results.contains(&path.to_string()) {
-                data.pp_results.push(path.to_string());
-            }
-        }
-        let _ = self.save();
-    }
-
-    /// 获取所有后处理任务状态的列表，合并内存中的运行时状态和持久化的历史结果。
-    /// 历史结果通过读取对应 meta JSON 的 status 字段确认成功/失败。
-    ///
-    /// Get a list of all post-processing task statuses, merging in-memory runtime state with persisted historical results.
-    /// Historical results are confirmed by reading the status field from the corresponding meta JSON.
-    pub fn get_pp_tasks(&self) -> Vec<PpTaskStatus> {
-        let mut tasks: HashMap<String, PpTaskStatus> = self.pp_tasks.read().clone();
-
-        // 从 pp_results 目录文件补充历史任务，通过 meta 确认 success/failure
-        // Supplement historical tasks from pp_results directory, confirming success/failure via meta
-        for path in self.data.read().pp_results.iter() {
-            if tasks.contains_key(path) {
-                continue;
-            }
-            let video_path = std::path::Path::new(path);
-            let success = crate::recording::meta::read_meta(video_path)
-                .map(|m| m.status == "finish")
-                .unwrap_or(false);
-            tasks.insert(path.clone(), PpTaskStatus {
-                path: path.clone(),
-                pct: if success { 100.0 } else { 0.0 },
-                mod_done: 0,
-                mod_total: 0,
-                module_name: String::new(),
-                done: 0,
-                total: 0,
-                status: if success { "done" } else { "error" }.to_string(),
-                from_memory: false,
-            });
-        }
-
-        tasks.into_values().collect()
-    }
-}
-
-/// 执行一次配置检查：验证所有追踪主播是否仍然存在，并检查孤立的后处理记录。
-/// 若发现问题，通过 emitter 向前端发送 `startup-warnings` 事件。
-///
-/// Perform a single config check: verify all tracked streamers still exist,
-/// and check for orphaned post-processing records.
-/// If issues are found, emit a `startup-warnings` event to the frontend via the emitter.
-pub async fn run_config_check(state: &Arc<AppState>, emitter: &Arc<dyn crate::core::emitter::Emitter>) {
-    use crate::core::emitter::EmitterExt;
-    use crate::core::error::AppError;
-
-    let settings = state.get_settings();
-    let streamers = state.get_streamers();
-
-    let api = match crate::streaming::stripchat::StripchatApi::new_api_only(
-        settings.api_proxy_url.as_deref(),
-        settings.cdn_proxy_url.as_deref(),
-        settings.sc_mirror_url.as_deref(),
-    ) {
-        Ok(a) => a,
-        Err(_) => return,
-    };
-
-    // 每个主播最多重试 3 次，间隔 10 秒，确认不存在后才加入缺失列表
-    // Retry up to 3 times per streamer with 10s delay; only add to missing list after confirmed
-    const MAX_ATTEMPTS: u32 = 3;
-    const RETRY_DELAY: tokio::time::Duration = tokio::time::Duration::from_secs(10);
-
-    let mut missing_streamers = Vec::new();
-    for s in &streamers {
-        let mut confirmed_missing = false;
-        for attempt in 1..=MAX_ATTEMPTS {
-            match api.get_stream_info(&s.username, false).await {
-                Ok(_) => {
-                    confirmed_missing = false;
-                    break;
-                }
-                Err(AppError::UserNotFound(_)) => {
-                    confirmed_missing = true;
-                    break;
-                }
-                Err(_) => {
-                    if attempt < MAX_ATTEMPTS {
-                        tokio::time::sleep(RETRY_DELAY).await;
-                    } else {
-                        confirmed_missing = true;
-                    }
-                }
-            }
-        }
-        if confirmed_missing {
-            missing_streamers.push(s.username.clone());
-        }
-    }
-
-    // 查找 pp_results 中对应文件已不存在的孤立记录
-    // Find orphaned pp_results entries whose corresponding files no longer exist
-    let missing_pp_results: Vec<String> = state
-        .data
-        .read()
-        .pp_results
-        .iter()
-        .filter(|p| !std::path::Path::new(p.as_str()).exists())
-        .cloned()
-        .collect();
-
-    if !missing_streamers.is_empty() || !missing_pp_results.is_empty() {
-        emitter.emit(
-            "startup-warnings",
-            &serde_json::json!({
-                "missing_streamers": missing_streamers,
-                "missing_pp_results": missing_pp_results,
-            }),
-        );
-    }
-}
-
-/// 启动配置检查调度器：立即执行一次检查，之后每天午夜执行一次。
-/// Start the config check scheduler: run once immediately, then once every day at midnight.
-pub async fn schedule_config_checks(state: Arc<AppState>, emitter: Arc<dyn crate::core::emitter::Emitter>) {
-    run_config_check(&state, &emitter).await;
-
-    loop {
-        // 计算到下一个午夜的等待秒数 / Calculate seconds until next midnight
-        let now = chrono::Local::now();
-        let secs_until = {
-            let tomorrow = now.date_naive().succ_opt().unwrap_or(now.date_naive());
-            let midnight = tomorrow.and_hms_opt(0, 0, 0).unwrap();
-            let midnight_local = midnight
-                .and_local_timezone(chrono::Local)
-                .single()
-                .unwrap_or_else(|| now + chrono::Duration::hours(24));
-            (midnight_local - now).num_seconds().max(0) as u64
-        };
-        tokio::time::sleep(tokio::time::Duration::from_secs(secs_until)).await;
-        run_config_check(&state, &emitter).await;
-    }
-}
-
-/// 启动 Mouflon Keys 自动同步调度器：启动时立即同步一次，之后每小时同步一次。
-/// 若 Settings 中未配置 mouflon_sync_url，则静默跳过。
-///
-/// Start the Mouflon Keys auto-sync scheduler: sync once on startup, then every hour.
-/// Silently skips if mouflon_sync_url is not configured in Settings.
-pub async fn schedule_mouflon_sync(
-    state: Arc<AppState>,
-    emitter: Arc<dyn crate::core::emitter::Emitter>,
-    mut notify_rx: tokio::sync::mpsc::Receiver<()>,
-) {
-    use crate::core::emitter::EmitterExt;
-    const INTERVAL: tokio::time::Duration = tokio::time::Duration::from_secs(3600);
-    // 失败后的重试间隔（5 分钟），最多重试 3 次
-    // Retry interval after failure (5 minutes), up to 3 retries
-    const RETRY_INTERVAL: tokio::time::Duration = tokio::time::Duration::from_secs(300);
-    const MAX_RETRIES: u32 = 3;
-
-    loop {
-        let settings = state.get_settings();
-        if let Some(url) = settings.mouflon_sync_url.as_deref().filter(|u| !u.is_empty()) {
-            let token = settings.mouflon_sync_token.clone();
-            let url = url.to_string();
-            let mut attempt = 0u32;
-            loop {
-                match state.sync_mouflon_keys_from_worker(&url, token.as_deref()).await {
-                    Ok(true) => {
-                        tracing::info!("Mouflon keys synced from {}", url);
-                        emitter.emit(
-                            "mouflon-keys-updated",
-                            &state.get_mouflon_keys_store(),
-                        );
-                        break;
-                    }
-                    Ok(false) => {
-                        tracing::debug!("Mouflon keys up-to-date, skipped");
-                        break;
-                    }
-                    Err(e) => {
-                        attempt += 1;
-                        if attempt >= MAX_RETRIES {
-                            tracing::warn!("Mouflon keys sync failed after {} attempts: {:?}", attempt, e);
-                            break;
-                        }
-                        tracing::warn!("Mouflon keys sync failed (attempt {}/{}): {:?}, retrying in {}s",
-                            attempt, MAX_RETRIES, e, RETRY_INTERVAL.as_secs());
-                        tokio::time::sleep(RETRY_INTERVAL).await;
-                    }
-                }
-            }
-        }
-        // 等待 1 小时，或收到立即同步通知
-        // Wait 1 hour, or until an immediate sync notification arrives
-        tokio::select! {
-            _ = tokio::time::sleep(INTERVAL) => {}
-            v = notify_rx.recv() => {
-                if v.is_none() {
-                    // 发送端已关闭，退出调度器 / Sender dropped, exit scheduler
-                    break;
-                }
-                tracing::info!("Mouflon sync: settings changed, triggering immediate sync");
-            }
-        }
-    }
 }

@@ -5,5 +5,6 @@
 //! 上游离线时自动输出黑屏+状态文字画面。
 
 pub mod handler;
+pub mod offline_frame;
 pub mod state;
 pub mod streamer;
