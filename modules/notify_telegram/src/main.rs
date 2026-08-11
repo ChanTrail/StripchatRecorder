@@ -27,8 +27,9 @@ use grammers_client::media::{InputMedia, Uploaded};
 use grammers_client::message::InputMessage;
 use grammers_client::sender::{ConnectionParams, SenderPool};
 use grammers_client::tl;
+use grammers_session::Session;
 use grammers_session::storages::SqliteSession;
-use grammers_session::types::{PeerAuth, PeerId, PeerRef};
+use grammers_session::types::{PeerId, PeerKind, PeerRef};
 use tokio::io::AsyncReadExt;
 use pp_utils::{format_duration, format_bytes, format_speed, parse_stem, find_cover, tmp_dir, image_dimensions, video_meta, ModuleInput};
 
@@ -36,11 +37,21 @@ use pp_utils::{format_duration, format_bytes, format_speed, parse_stem, find_cov
 const PROGRESS_SCALE: usize = 10_000;
 
 /// 模块元数据 JSON，通过 `--describe` 参数输出。
+///
+/// `chat_id` 和 `username` 二者至少填写一个：公开群组/频道通过 `username` 发送
+/// （Telegram 允许按公开 username 直接解析目标，无需知道数字 ID）；私密群组/频道
+/// 没有公开 username，必须通过 `chat_id` 发送。两者都填时优先使用 `username`。
+///
 /// Module metadata JSON, output via `--describe` argument.
+///
+/// At least one of `chat_id`/`username` must be set: public groups/channels are sent
+/// via `username` (Telegram can resolve the target directly from its public username,
+/// no numeric ID needed); private groups/channels have no public username and must be
+/// sent via `chat_id`. When both are set, `username` takes priority.
 const DESCRIBE: &str = r#"{
     "id": "notify_telegram",
-    "name": "Telegram 通知 0.4.0",
-    "description": "将录制信息、封面图和视频通过 MTProto 发送到 Telegram（支持超过 50MB 的大文件，支持 HTTP/SOCKS5 代理）",
+    "name": "Telegram 通知",
+    "description": "将录制信息、封面图和视频通过 MTProto 发送到 Telegram（支持超过 50MB 的大文件，支持 HTTP/SOCKS5 代理）。公开群组/频道填 Username，私密群组/频道填 Chat ID",
     "inputTypes": ["media_bundle"],
     "outputTypes": ["media_bundle"],
     "official": true,
@@ -48,8 +59,8 @@ const DESCRIBE: &str = r#"{
         { "key": "api_id",     "label": "API ID（从 my.telegram.org 获取）",         "type": "string",  "default": "" },
         { "key": "api_hash",   "label": "API Hash",                                   "type": "string",  "default": "" },
         { "key": "bot_token",  "label": "Bot Token（从 @BotFather 获取）",           "type": "string",  "default": "" },
-        { "key": "chat_id",    "label": "Chat ID（超级群组填 -100xxxxxxxxxx 格式）", "type": "string",  "default": "" },
-        { "key": "username",   "label": "群组 Username（超级群组必填，不含 @）",     "type": "string",  "default": "" },
+        { "key": "username",   "label": "公开群组/频道 Username（不含 @，公开时填写）", "type": "string",  "default": "" },
+        { "key": "chat_id",    "label": "Chat ID（私密群组/频道填写，格式 -100xxxxxxxxxx）", "type": "string",  "default": "" },
         { "key": "proxy",      "label": "代理地址（支持 http://、socks5://）",       "type": "string",  "default": "" },
         { "key": "send_video", "label": "同时发送视频文件",                           "type": "boolean", "default": true }
     ]
@@ -289,22 +300,69 @@ fn session_path(api_id: i32) -> PathBuf {
     base.join(format!("{}.db", api_id))
 }
 
-/// 根据数字 chat_id 构建 Telegram PeerRef（不需要网络请求）。
-/// Build a Telegram PeerRef from a numeric chat_id (no network request needed).
+/// 将数字 chat_id 解析为 Telegram 内部 PeerId（不需要网络请求）。
 ///
-/// 支持用户、普通群组和超级群组/频道的 ID 格式。
-/// Supports user, regular group, and supergroup/channel ID formats.
-fn build_peer_ref(chat_id: i64) -> PeerRef {
-    let id = if chat_id < -1_000_000_000_000 {
-        PeerId::channel_unchecked((-chat_id) - 1_000_000_000_000)
-    } else if chat_id < -1_000_000_000 {
-        PeerId::channel_unchecked((-chat_id) - 1_000_000_000)
-    } else if chat_id < 0 {
-        PeerId::chat_unchecked(-chat_id)
+/// grammers 0.10 起提供官方的 `PeerId::from_bot_api_dialog_id`，直接按 Telegram
+/// 官方 "Bot API dialog ID" 规范（<https://core.telegram.org/api/bots/ids>）完成
+/// 用户/小群组/超级群组·频道三种 ID 区间的判定和转换，不再需要自己手写边界值
+/// 判断逻辑——此前手写版本存在一个中间分支误判区间的 bug（把部分真实小群组 ID
+/// 当成了频道 ID，导致其 access_hash 计算方式错误，直接造成 PEER_ID_INVALID /
+/// CHANNEL_INVALID），改用官方实现从根源上排除了这一类边界计算错误。
+///
+/// Parse a numeric chat_id into its Telegram-internal PeerId (no network request needed).
+///
+/// Since grammers 0.10, the official `PeerId::from_bot_api_dialog_id` performs the
+/// user/small-group/supergroup-channel range classification and conversion per Telegram's
+/// "Bot API dialog ID" spec (<https://core.telegram.org/api/bots/ids>) directly, so we no
+/// longer need to hand-roll the boundary logic ourselves — the previous hand-rolled version
+/// had a bug in one boundary branch (misclassifying some real small-group IDs as channel
+/// IDs, computing the wrong access_hash formula, and directly causing PEER_ID_INVALID /
+/// CHANNEL_INVALID). Using the official implementation eliminates this entire class of
+/// boundary-math error at the source.
+fn peer_id_from_chat_id(chat_id: i64) -> Result<PeerId, String> {
+    PeerId::from_bot_api_dialog_id(chat_id)
+        .ok_or_else(|| format!("chat_id {chat_id} is out of any valid Telegram peer ID range"))
+}
+
+/// 若错误信息表明是"peer 权限/解析"类问题（CHANNEL_INVALID、CHANNEL_PRIVATE、
+/// PEER_ID_INVALID 等），追加一句可操作的诊断提示；其他错误原样返回。
+///
+/// 不改变、不掩盖 Telegram 服务端返回的原始错误——只是附加上下文，帮助用户判断
+/// 该向哪个方向排查（bot 权限 vs. chat_id 填写错误 vs. 网络/代理问题等）。
+///
+/// If the error message indicates a "peer authority/resolution" issue
+/// (CHANNEL_INVALID, CHANNEL_PRIVATE, PEER_ID_INVALID, etc.), append an actionable
+/// diagnostic hint; other errors pass through unchanged.
+///
+/// Does not alter or mask the raw error returned by Telegram's server — only adds
+/// context to help the user narrow down where to look (bot permissions vs. a wrong
+/// chat_id vs. network/proxy issues, etc.).
+fn annotate_peer_error(err: String, chat_id: i64, username: &str) -> String {
+    let is_peer_issue = ["CHANNEL_INVALID", "CHANNEL_PRIVATE", "PEER_ID_INVALID", "CHAT_ID_INVALID"]
+        .iter()
+        .any(|code| err.contains(code));
+    if !is_peer_issue {
+        return err;
+    }
+    if !username.is_empty() {
+        format!(
+            "{err}\n\nHint: username=@{username} was resolved, but Telegram still rejected the \
+             target. Make sure the bot has actually been added as a member/admin of this \
+             group/channel — a bot cannot message a public group it hasn't joined.",
+        )
     } else {
-        PeerId::user_unchecked(chat_id)
-    };
-    PeerRef { id, auth: PeerAuth::default() }
+        format!(
+            "{err}\n\nHint: chat_id={chat_id} was used with a zero access_hash (the only option \
+             this bot has when it has never seen this peer before). This fails unless Telegram \
+             already grants the bot implicit authority over it. Checklist:\n\
+             1. The bot must be an actual member of this group/channel (add it there first).\n\
+             2. Double-check chat_id is correct: for a supergroup/channel it must be the full \
+             '-100xxxxxxxxxx' form; for a small (non-super) group it's a plain negative number \
+             without the -100 prefix.\n\
+             3. If this is a small group that was never upgraded to a supergroup, no access_hash \
+             is needed at all — a persistent failure there points to an incorrect chat_id instead.",
+        )
+    }
 }
 
 /// 计算字符串的 UTF-16 编码长度（Telegram 消息实体使用 UTF-16 偏移量）。
@@ -376,15 +434,84 @@ fn build_caption(
 }
 
 /// 解析 Telegram Peer（优先通过 username 解析，其次使用数字 chat_id）。
+///
+/// chat_id 路径的解析策略：
+/// 1. 小群组（chat，非超级群组）不需要 access_hash，Telegram 直接接受零权限凭证。
+/// 2. 超级群组/频道/私聊用户理想情况下需要真实非零的 access_hash——优先从 session
+///    缓存中查找（`auto_cache_peers` 已开启，此前任何一次成功的 RPC 调用返回过该
+///    peer 信息时都会自动缓存，包括此前的发送成功、resolve_username 命中等）；
+/// 3. 缓存未命中时**不再在本地预先报错**，而是直接使用零 access_hash 尝试——这不是
+///    临时兜底，而是 Telegram 官方文档（<https://core.telegram.org/api/peers>
+///    "Access hash" 一节）明确记载的 bot 专属行为：
+///    > Zero access hash: equal to 0, must be used by bots when only a min access hash
+///    > (or no access hash) is available locally, but a full access hash is required.
+///    是否成立完全取决于 Telegram 服务端是否已经认可这个 bot 对该 peer 的隐式权限
+///    （例如 bot 是群组成员），本地无法提前判断，必须让真实的 RPC 调用结果说话——
+///    之前版本在本地直接返回自定义错误，反而掩盖了 Telegram 服务端返回的真实错误码
+///    （如 CHANNEL_INVALID/CHANNEL_PRIVATE），不利于用户排查实际原因。
+///
 /// Resolve a Telegram Peer (prefers username resolution, falls back to numeric chat_id).
-async fn resolve_peer(client: &Client, chat_id: i64, username: &str) -> Result<PeerRef, String> {
+///
+/// Resolution strategy for the chat_id path:
+/// 1. Small group chats (not supergroups) need no access_hash — Telegram accepts a
+///    zero/ambient credential for them directly.
+/// 2. Supergroups/channels/private user chats ideally need a real, non-zero access_hash —
+///    first checked against the session cache (`auto_cache_peers` is enabled, so any prior
+///    successful RPC call that returned this peer's info — including a previous successful
+///    send, or a `resolve_username` hit — would have cached it automatically).
+/// 3. On a cache miss, this **no longer pre-emptively errors locally**; it proceeds with a
+///    zero access_hash instead. This isn't a stopgap — it's the bot-specific behavior
+///    explicitly documented by Telegram itself (see the "Access hash" section of
+///    <https://core.telegram.org/api/peers>):
+///    > Zero access hash: equal to 0, must be used by bots when only a min access hash
+///    > (or no access hash) is available locally, but a full access hash is required.
+///    Whether this succeeds depends entirely on whether Telegram's server has already
+///    granted this bot implicit authority over the peer (e.g. the bot is a member of the
+///    group) — something that cannot be determined locally, so the real RPC response must
+///    be the final word. The previous version returned a custom local error instead, which
+///    masked Telegram's actual error code (e.g. CHANNEL_INVALID/CHANNEL_PRIVATE) and made
+///    it harder for users to diagnose the real cause.
+async fn resolve_peer(
+    session: &Arc<SqliteSession>,
+    client: &Client,
+    chat_id: i64,
+    username: &str,
+) -> Result<PeerRef, String> {
     if !username.is_empty() {
         let peer = client.resolve_username(username).await
             .map_err(|e| format!("resolve_username failed: {}", e))?
-            .ok_or_else(|| format!("username @{} not found", username))?;
-        return peer.to_ref().await.ok_or_else(|| format!("@{} peer_ref unavailable", username));
+            .ok_or_else(|| format!(
+                "username @{username} not found. Note: `username` only works for PUBLIC \
+                 groups/channels that have an @username set — a private group's display \
+                 name/title is NOT a username. For private groups/channels, leave `username` \
+                 empty and use `chat_id` instead."
+            ))?;
+        return peer.to_ref().await
+            .map_err(|e| format!("to_ref failed for @{}: {}", username, e))?
+            .ok_or_else(|| format!("@{} peer_ref unavailable", username));
     }
-    Ok(build_peer_ref(chat_id))
+
+    let id = peer_id_from_chat_id(chat_id)?;
+
+    // 小群组（chat）没有 access_hash 的概念，零凭证即可访问
+    // Small group chats have no concept of access_hash; the zero credential works directly
+    if id.kind() == PeerKind::Chat {
+        return Ok(id.to_ambient_ref());
+    }
+
+    // 先查 session 缓存（若此前已成功发送过，或曾通过其他 RPC 见过该 peer）；
+    // 未命中则退回零 access_hash（`to_ambient_ref`），交给真实 RPC 调用决定成败
+    // （见函数文档）。grammers 0.10 起 Session 的方法均为 fallible（返回
+    // Result<_, Self::Error>），缓存查询本身出错（如 sqlite 读取失败）时视同未命中，
+    // 不应中断整个发送流程——因此这里用 .ok().flatten() 吞掉查询错误。
+    //
+    // Check the session cache first (hit if we've sent here before, or seen this peer via
+    // any other RPC); on a miss, fall back to a zero access_hash (`to_ambient_ref`) and let
+    // the real RPC call decide (see function doc). Since grammers 0.10, Session methods are
+    // fallible (return Result<_, Self::Error>); a cache-lookup error itself (e.g. sqlite read
+    // failure) should be treated the same as a miss rather than aborting the whole send flow
+    // — hence swallowing the lookup error via .ok().flatten() here.
+    Ok(session.peer_ref(id).await.ok().flatten().unwrap_or_else(|| id.to_ambient_ref()))
 }
 
 /// 上传文件到 Telegram，支持断点续传、进度上报。
@@ -575,6 +702,12 @@ async fn upload_and_send(
     // 创建连接池并在后台运行 / Create connection pool and run in background
     let pool = SenderPool::with_configuration(Arc::clone(&session), api_id, conn_params);
     let runner = pool.runner;
+    // pool.updates（未处理的更新流）在此模块中未被消费——这是符合预期的：本模块是
+    // 一次性 CLI 进程，只需要发送一条消息就退出，不需要长期监听更新。
+    // pool.updates (the raw update stream) is intentionally left undrained — this
+    // module is a one-shot CLI process that only needs to send a single message and
+    // exit; it has no need to listen for updates long-term.
+    drop(pool.updates);
     tokio::spawn(async move { runner.run().await });
     // 配置激进的 retry policy：I/O 错误视为 5 秒 flood，flood wait 阈值提高到 5 分钟
     // Aggressive retry policy: treat I/O errors as 5s flood, raise flood-wait threshold to 5 min
@@ -592,7 +725,7 @@ async fn upload_and_send(
             .map_err(|e| format!("bot_sign_in failed: {}", e))?;
     }
 
-    let peer = resolve_peer(&client, chat_id, username).await?;
+    let peer = resolve_peer(&session, &client, chat_id, username).await?;
 
     // 处理封面图：非 jpg/png 格式需先用 ffmpeg 转换，然后检查尺寸限制
     // Handle cover image: non-jpg/png formats need ffmpeg conversion first, then check dimension limits
@@ -692,9 +825,42 @@ async fn upload_and_send(
         //
         // Upload a file then immediately commit it via messages.UploadMedia, with retry.
         // Committed Media is not subject to the ~10-minute upload session TTL.
+        //
+        // `peer` 传入实际解析出的目标 peer（与后面 send_album/send_message 用的是
+        // 同一个 `PeerRef`），而不是 `InputPeer::Empty`。
+        //
+        // 官方文档字面上写"peer can be inputPeerEmpty for bots"，此前据此认为传空
+        // 是安全的；但实测（本项目对私密群组的两轮真实测试，以及第三方 MTProto 客户端
+        // MadelineProto 的公开 issue：<https://github.com/danog/MadelineProto/issues/689>，
+        // 同样在 uploadMedia 传空 peer 时报 PEER_ID_INVALID，改传真实目标 peer 后问题
+        // 消失）一致表明：至少对私密群组/频道场景，服务端在 uploadMedia 阶段确实会
+        // 校验 peer——传空反而触发了这个校验的失败路径（此前误以为传空能跳过校验，
+        // 实际上传空本身就是一种会被拒绝的取值）。
+        //
+        // 改用真实 peer 后，uploadMedia 和最终发送使用的是同一个已解析目标——不存在
+        // "先用一个假 peer 上传、再用另一个真 peer 发送"之间的不一致，逻辑上也更简单、
+        // 更符合直觉。
+        //
+        // `peer` is the actual resolved target peer (the same `PeerRef` used later by
+        // send_album/send_message), not `InputPeer::Empty`.
+        //
+        // The official docs literally say "peer can be inputPeerEmpty for bots", which
+        // previously led us to assume passing empty was safe here. But real-world testing
+        // (two rounds of live testing against private groups in this project, plus a public
+        // issue from the MadelineProto MTProto client:
+        // <https://github.com/danog/MadelineProto/issues/689>, which hit the same
+        // PEER_ID_INVALID on uploadMedia with an empty peer and resolved it by supplying
+        // the real target peer) consistently shows: at least for private groups/channels,
+        // the server does validate the peer during uploadMedia — passing empty triggers
+        // this validation's failure path (previously assumed empty would skip validation
+        // entirely; in reality, empty itself is a value the validation rejects).
+        //
+        // Using the real peer means uploadMedia and the final send target the exact same
+        // resolved peer — no inconsistency between "upload against a fake peer, then send
+        // to a different real one", which is also simpler and more intuitive.
         async fn commit_media(
             client: &Client,
-            peer: &PeerRef,
+            peer: PeerRef,
             raw_media: tl::enums::InputMedia,
         ) -> Result<grammers_client::media::Media, String> {
             const MAX_RETRIES: u32 = 10;
@@ -703,7 +869,7 @@ async fn upload_and_send(
             loop {
                 match client.invoke(&tl::functions::messages::UploadMedia {
                     business_connection_id: None,
-                    peer: (*peer).into(),
+                    peer: (&peer).into(),
                     media: raw_media.clone(),
                 }).await {
                     Ok(committed) => {
@@ -729,11 +895,13 @@ async fn upload_and_send(
             let uploaded = upload_with_progress(&client, img, Arc::clone(&done), upload_total).await?;
             let raw: tl::enums::InputMedia = tl::types::InputMediaUploadedPhoto {
                 spoiler: false,
+                live_photo: false,
                 file: uploaded.raw,
                 stickers: None,
                 ttl_seconds: None,
+                video: None,
             }.into();
-            Some(commit_media(&client, &peer, raw).await?)
+            Some(commit_media(&client, peer, raw).await?)
         } else { None };
         if let Some(ref tmp) = converted_cover { let _ = fs::remove_file(tmp); }
         if let Some(ref tmp) = resized_cover { let _ = fs::remove_file(tmp); }
@@ -744,7 +912,6 @@ async fn upload_and_send(
             let client = &client;
             let effective_parts = &effective_parts;
             let part_metas = &part_metas;
-            let peer = &peer;
             async move {
                 let mut parts: Vec<CommittedPart> = Vec::new();
                 for (part_path, meta) in effective_parts.iter().zip(part_metas.iter()) {
@@ -953,13 +1120,33 @@ fn run() -> Result<(), String> {
     if api_hash.is_empty()  { return Err("api_hash is required".to_string()); }
     let bot_token = module_input.param_str("bot_token", "");
     if bot_token.is_empty() { return Err("bot_token is required".to_string()); }
-    let chat_id: i64 = {
-        let s = module_input.param_str("chat_id", "");
-        if s.is_empty() { return Err("chat_id is required".to_string()); }
-        s.parse().map_err(|_| "chat_id must be a number".to_string())?
+
+    // 公开群组/频道通过 username 发送，私密群组/频道通过 chat_id 发送——二者至少
+    // 填写一个，不再强制要求 chat_id（此前即使填了公开 username 也会因 chat_id
+    // 为空而报错，导致公开群组场景无法只靠 username 使用）。两者都填时优先用 username
+    // （与 resolve_peer 的解析优先级保持一致）。
+    //
+    // Public groups/channels are sent via username; private groups/channels via chat_id —
+    // at least one is required, chat_id is no longer unconditionally mandatory (previously
+    // even a valid public username would fail validation because chat_id was empty, making
+    // the username-only flow for public groups unusable). When both are set, username takes
+    // priority (matching resolve_peer's resolution order).
+    let username = module_input.param_str("username", "").trim().to_string();
+    let chat_id_str = module_input.param_str("chat_id", "").trim().to_string();
+    if username.is_empty() && chat_id_str.is_empty() {
+        return Err(
+            "Either username (for public groups/channels) or chat_id (for private ones) is required"
+                .to_string(),
+        );
+    }
+    let chat_id: i64 = if chat_id_str.is_empty() {
+        0 // 未使用：username 非空时 resolve_peer 优先走 username 路径，不会用到 chat_id
+          // Unused: resolve_peer prefers the username path when non-empty, chat_id is never read
+    } else {
+        chat_id_str.parse().map_err(|_| "chat_id must be a number".to_string())?
     };
+
     let proxy      = module_input.param_str("proxy", "");
-    let username   = module_input.param_str("username", "");
     let send_video = module_input.param_bool("send_video", true);
 
     // 从文件名解析元数据 / Parse metadata from filename
@@ -1027,11 +1214,18 @@ fn run() -> Result<(), String> {
                 match result {
                     Ok(()) => break Ok(()),
                     Err(e) => {
+                        let annotated = annotate_peer_error(e, chat_id, &username);
+                        // peer 权限/解析类错误不是网络瞬断，重连重试无法修复，直接放弹并
+                        // 附带诊断提示，避免用户多等 2 * 30s 才看到同样的错误。
+                        // Peer authority/resolution errors aren't transient network blips —
+                        // reconnect retries can't fix them. Fail fast with the diagnostic hint
+                        // instead of making the user wait through 2 * 30s of pointless retries.
+                        if annotated.contains("Hint:") { break Err(annotated); }
                         attempt += 1;
-                        if attempt >= MAX_OUTER { break Err(e); }
+                        if attempt >= MAX_OUTER { break Err(annotated); }
                         eprintln!(
                             "connection failed (attempt {}/{}): {}. rebuilding connection in {:?}…",
-                            attempt, MAX_OUTER, e, RECONNECT_DELAY
+                            attempt, MAX_OUTER, annotated, RECONNECT_DELAY
                         );
                         tokio::time::sleep(RECONNECT_DELAY).await;
                     }
@@ -1053,11 +1247,22 @@ fn run() -> Result<(), String> {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(|s| s.as_str()) == Some("--describe") {
-        print!("{}", DESCRIBE);
+        print!("{}", pp_utils::describe_with_version(DESCRIBE, env!("CARGO_PKG_VERSION")));
         return;
     }
-    // 确保临时目录存在 / Ensure temp directory exists
-    tmp_dir();
+    // 注：不在此处提前调用 tmp_dir() 创建目录——此时 stdin 尚未被 run() 内部的
+    // ModuleInput::read() 解析，PP_EXE_DIR 环境变量还未被设置为后端目录，提前调用
+    // 会在错误的位置（本模块自身可执行文件目录）创建一个用不到的空目录。run() 内部
+    // 每处实际写入临时文件前都会重新调用 tmp_dir()（此时已能正确解析到后端目录），
+    // 无需在此预先创建。
+    //
+    // Note: tmp_dir() is intentionally NOT called here to pre-create the directory —
+    // at this point stdin hasn't been parsed by run()'s internal ModuleInput::read()
+    // yet, so the PP_EXE_DIR env var isn't set to the backend's directory yet; calling
+    // it here would create an unused empty directory at the wrong location (this
+    // module's own executable directory). Every actual tmp-file write site inside run()
+    // calls tmp_dir() again right before writing (by which point it resolves correctly
+    // to the backend's directory), so no pre-creation is needed here.
     if let Err(e) = run() {
         let json = serde_json::json!({ "code": "error", "message": e, "outputs": [] });
         println!("{}", json);

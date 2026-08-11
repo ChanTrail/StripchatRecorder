@@ -188,14 +188,12 @@
 </script>
 
 <template>
-	<div class="flex flex-col gap-5">
-		<header class="flex items-start justify-between">
-			<div>
-				<h1 class="text-xl font-bold mb-0.5">{{ t("relay.title") }}</h1>
-				<p class="text-sm text-muted-foreground">
-					{{ t("relay.subtitle", { streams: sessions.length, connections: totalConnections }) }}
-				</p>
-			</div>
+	<div class="flex flex-col gap-5 px-6 pt-6 pb-6">
+		<header>
+			<h1 class="text-xl font-bold mb-0.5">{{ t("relay.title") }}</h1>
+			<p class="text-sm text-muted-foreground">
+				{{ t("relay.subtitle", { streams: sessions.length, connections: totalConnections }) }}
+			</p>
 		</header>
 
 		<!-- 转发流提示 / Relay hint -->

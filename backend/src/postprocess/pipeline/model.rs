@@ -85,6 +85,13 @@ pub struct ModuleInfo {
     pub id: String,
     /// 模块显示名称 / Module display name
     pub name: String,
+    /// 模块版本号（从模块自身 Cargo.toml 的 `version` 字段读取，见 `pp_utils::describe_with_version`；
+    /// 内置节点使用 backend 自身的 `CARGO_PKG_VERSION`）。旧版模块若未提供此字段，默认空字符串。
+    /// Module version (read from the module's own Cargo.toml `version` field, see
+    /// `pp_utils::describe_with_version`; built-in nodes use the backend's own
+    /// `CARGO_PKG_VERSION`). Defaults to an empty string if an older module omits this field.
+    #[serde(default)]
+    pub version: String,
     /// 模块功能描述 / Module description
     pub description: String,
     /// 输入端口类型列表（按顺序对应 inputs 数组各元素）/ Input port types (indexed with inputs array)
@@ -100,6 +107,10 @@ pub struct ModuleInfo {
     /// Whether this is an official module (UI shows a hint to place it after ts_merge)
     #[serde(default)]
     pub official: bool,
+    /// 是否为可复用内置节点（可在流水线中放置多次，需要 node_id 区分实例）
+    /// Whether this is a reusable built-in node (can appear multiple times in pipeline; needs node_id per instance)
+    #[serde(default)]
+    pub reusable: bool,
     /// 模块可执行文件路径（不序列化，运行时填充）/ Executable path (not serialized, filled at runtime)
     #[serde(skip)]
     pub exe_path: PathBuf,
@@ -111,10 +122,12 @@ pub struct ModuleInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PipelineNode {
-    /// 节点唯一 ID（UUID）/ Node unique ID (UUID)
-    pub node_id: String,
-    /// 对应的模块 ID / Corresponding module ID
+    /// 模块 ID，同时也是普通节点的唯一标识 / Module ID, also serves as unique identifier for regular nodes
     pub module_id: String,
+    /// 节点实例 ID（仅可复用内置节点的多个实例需要，普通节点不填）
+    /// Node instance ID (only needed for multiple instances of reusable built-in nodes; omitted for regular nodes)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,
     /// 节点参数值 / Node parameter values
     pub params: HashMap<String, serde_json::Value>,
     /// 是否启用此节点 / Whether this node is enabled
@@ -137,10 +150,18 @@ pub struct PipelineNode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NodeInputRef {
-    /// 上游节点 ID（"0" 表示录制输入节点）/ Upstream node ID ("0" = recording input node)
+    /// 上游节点标识（"0" 表示录制输入节点）/ Upstream node identifier ("0" = recording input node)
     pub node_id: String,
     /// 上游节点的输出端口索引 / Upstream output port index
     pub port: usize,
+}
+
+impl PipelineNode {
+    /// 返回节点的有效唯一标识：有 node_id 时用 node_id，否则用 module_id。
+    /// Returns the effective unique identifier: node_id if present, otherwise module_id.
+    pub fn effective_id(&self) -> &str {
+        self.node_id.as_deref().unwrap_or(&self.module_id)
+    }
 }
 
 /// DAG 中的一条有向边，表示上游节点的某个输出连接到下游节点的某个输入。
@@ -159,60 +180,56 @@ pub struct PipelineEdge {
 }
 
 /// 流水线 DAG 配置 / Pipeline DAG configuration
+///
+/// 连线信息唯一存储在 `nodes[].inputs` 中，不再有独立的顶层 `edges` 字段
+/// （历史上曾同时维护两者，导致状态可能不一致）。需要边列表形式时调用
+/// `resolved_edges()` 从 `nodes[].inputs` 实时派生。
+///
+/// Wiring is stored exclusively in `nodes[].inputs`; there is no separate top-level
+/// `edges` field (previously both were maintained in parallel, risking desync).
+/// Call `resolved_edges()` to derive an edge-list view from `nodes[].inputs` on demand.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct PipelineConfig {
+    /// 配置格式版本号（用于向后兼容和更新检测）
+    /// Configuration format version (for backward compatibility and update detection)
+    #[serde(default = "default_pipeline_version")]
+    pub version: String,
     /// 节点列表 / Node list
     pub nodes: Vec<PipelineNode>,
-    /// 有向边列表 / Directed edge list
-    #[serde(default)]
-    pub edges: Vec<PipelineEdge>,
     /// 虚拟录制输入节点在画布中的位置（仅前端使用，后端透传保存）
     /// Virtual recording input node position on canvas (frontend-only, backend stores as-is)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_node_position: Option<serde_json::Value>,
 }
 
+/// 默认的流水线配置版本号 / Default pipeline configuration version
+fn default_pipeline_version() -> String {
+    "1".to_string()
+}
+
 impl PipelineConfig {
-    /// 合并 nodes[].inputs 和顶层 edges，返回完整的有向边列表。
-    /// nodes[].inputs 中 node_id="0" 的连接表示来自录制输入节点，执行时作为初始输入，
+    /// 从 nodes[].inputs 派生完整的有向边列表（唯一的连线数据来源）。
+    /// node_id="0" 的连接表示来自录制输入节点，执行时作为初始输入，
     /// 不产生实际的 PipelineEdge（run_pipeline 通过 root_nodes 处理）。
     ///
-    /// Merges nodes[].inputs and top-level edges into a complete directed edge list.
-    /// Connections with node_id="0" in nodes[].inputs represent the recording input node;
-    /// they don't produce actual PipelineEdges (handled by root_nodes via run_pipeline).
+    /// Derive the directed edge list from nodes[].inputs (the sole source of wiring data).
+    /// Connections with node_id="0" represent the recording input node; they don't produce
+    /// actual PipelineEdges (handled by root_nodes via run_pipeline).
     pub fn resolved_edges(&self) -> Vec<PipelineEdge> {
         let mut edges: Vec<PipelineEdge> = Vec::new();
 
-        // 从每个节点的 inputs 字段生成边（排除来自录制输入节点 "0" 的连接）
-        // Generate edges from each node's inputs field (skip connections from recording input node "0")
         for node in &self.nodes {
             for (to_port, input_ref) in &node.inputs {
                 if input_ref.node_id == "0" {
-                    // 来自录制输入节点，不生成 edge，由 root_nodes() 处理
-                    // From recording input node — not an edge, handled by root_nodes()
                     continue;
                 }
                 edges.push(PipelineEdge {
                     from_node_id: input_ref.node_id.clone(),
                     from_port: input_ref.port,
-                    to_node_id: node.node_id.clone(),
+                    to_node_id: node.effective_id().to_string(),
                     to_port: *to_port,
                 });
-            }
-        }
-
-        // 合并顶层 edges（后向兼容旧格式）去重
-        // Merge top-level edges (backward compat with old format), dedup
-        for e in &self.edges {
-            let already = edges.iter().any(|x| {
-                x.from_node_id == e.from_node_id
-                    && x.from_port == e.from_port
-                    && x.to_node_id == e.to_node_id
-                    && x.to_port == e.to_port
-            });
-            if !already {
-                edges.push(e.clone());
             }
         }
 
@@ -222,9 +239,20 @@ impl PipelineConfig {
     /// 返回没有入边但有出边、或者其 inputs 中有来自录制输入节点("0")的连接的节点 ID 列表。
     /// 孤立节点（无任何入边且无出边且 inputs 为空）不作为根节点，不会被执行。
     ///
+    /// 不按 `enabled` 过滤：被禁用的根节点仍需进入执行队列，由 `exec::run_pipeline`
+    /// 将其作为"跳过（透传）"节点处理——原样把输入转发给下游，而不是从图中整个
+    /// 消失导致下游永远收不到输入（见 `run_pipeline` 主循环中对 `!node.enabled`
+    /// 的处理逻辑及其文档说明）。
+    ///
     /// Returns node IDs that are connected to the recording input node ("0") via their inputs field,
     /// OR that have outgoing edges but no incoming edges in the resolved edge list.
     /// Isolated nodes are NOT treated as roots and will not run.
+    ///
+    /// Does NOT filter by `enabled`: a disabled root node still needs to enter the
+    /// execution queue, where `exec::run_pipeline` treats it as a "skip (pass-through)"
+    /// node — forwarding its input to downstream nodes unchanged, rather than vanishing
+    /// from the graph entirely and leaving downstream nodes permanently starved of input
+    /// (see the handling of `!node.enabled` in `run_pipeline`'s main loop and its doc comment).
     pub fn root_nodes(&self) -> Vec<&str> {
         let edges = self.resolved_edges();
         let has_incoming: std::collections::HashSet<&str> =
@@ -235,26 +263,31 @@ impl PipelineConfig {
         self.nodes
             .iter()
             .filter(|n| {
-                if !n.enabled {
-                    return false;
-                }
-                // 直接连接到录制输入节点 "0" 的节点是根节点
-                // Nodes directly connected to recording input node "0" are roots
                 let connected_to_input = n.inputs.values().any(|r| r.node_id == "0");
                 if connected_to_input {
                     return true;
                 }
-                // 无入边但有出边的节点也是根节点（后向兼容）
-                // No incoming edges but has outgoing edges (backward compat)
-                !has_incoming.contains(n.node_id.as_str())
-                    && has_outgoing.contains(n.node_id.as_str())
+                let eid = n.effective_id();
+                !has_incoming.contains(eid) && has_outgoing.contains(eid)
             })
-            .map(|n| n.node_id.as_str())
+            .map(|n| n.effective_id())
             .collect()
     }
 
-    /// 返回节点的直接后继节点信息（边 + 目标节点）。
-    /// Returns direct successors of a node (edges + target nodes).
+    /// 返回从 `node_id` 出发的所有下游边及其目标节点。
+    ///
+    /// 不按目标节点的 `enabled` 过滤：被禁用的下游节点仍需被 `exec::run_pipeline`
+    /// 当作有效的分发目标接收输入（原因同 [`Self::root_nodes`] 的文档说明）——
+    /// 否则任何一条分支上出现禁用节点，都会导致该分支自身以及其后所有节点被整个
+    /// 从执行队列中排除，而不仅仅是禁用节点自身不运行。
+    ///
+    /// Returns all outgoing edges from `node_id` and their target nodes.
+    ///
+    /// Does NOT filter by the target node's `enabled`: a disabled downstream node still
+    /// needs to be a valid dispatch target for `exec::run_pipeline` to receive input
+    /// (same reasoning as [`Self::root_nodes`]'s doc comment) — otherwise a disabled
+    /// node anywhere along a branch would exclude that entire branch (and everything
+    /// after it) from the execution queue, not just the disabled node itself.
     pub fn successors(&self, node_id: &str) -> Vec<(PipelineEdge, &PipelineNode)> {
         let edges = self.resolved_edges();
         edges
@@ -263,7 +296,7 @@ impl PipelineConfig {
             .filter_map(|e| {
                 self.nodes
                     .iter()
-                    .find(|n| n.node_id == e.to_node_id && n.enabled)
+                    .find(|n| n.effective_id() == e.to_node_id)
                     .map(|n| (e, n))
             })
             .collect()
@@ -288,17 +321,14 @@ pub struct ModuleOutput {
 /// 单个节点的执行结果（供调用方聚合）/ Execution result of a single node (for aggregation by caller)
 #[derive(Debug, Clone)]
 pub struct NodeResult {
-    /// 节点 ID / Node ID
-    pub node_id: String,
+    /// 节点有效标识（effective_id：普通节点=module_id，可复用内置节点=node_id）
+    /// Effective node identifier (module_id for regular nodes, node_id for reusable built-ins)
+    pub effective_id: String,
     /// 模块 ID / Module ID
     pub module_id: String,
-    /// 执行结果码 / Result code
     pub code: PpExecCode,
-    /// 结果消息 / Result message
     pub message: String,
-    /// 输出路径列表（传递给后继节点）/ Output paths (passed to successor nodes)
     pub outputs: Vec<PathBuf>,
-    /// 本次节点实际使用的输入路径 / Actual input paths used by this node
     pub inputs: Vec<PathBuf>,
 }
 

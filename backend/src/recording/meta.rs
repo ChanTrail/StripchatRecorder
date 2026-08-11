@@ -1,10 +1,17 @@
 //! 视频元数据文件管理 / Video Metadata File Management
 //!
-//! 每个录制对应一个 JSON 元数据文件，统一存储在 `exe_dir()/meta/` 目录下。
-//! 文件名为 `{stem}.json`，与视频文件（或 session_dir）的 stem 相同。
+//! 每个录制对应一个 JSON 元数据文件，按主播分子目录存储在
+//! `exe_dir()/meta/{username}/` 下。文件名为 `{stem}.json`，与视频文件
+//! （或 session_dir）的 stem 相同；`{username}` 从视频路径的直接父目录名推断
+//! （见 [`model::username_from_path`]），与 session_dir/合并输出路径的
+//! `{output_dir}/{username}/...` 结构保持一致。
 //!
-//! Each recording has a JSON metadata file stored centrally in `exe_dir()/meta/`.
-//! The filename is `{stem}.json`, matching the stem of the video file or session_dir.
+//! Each recording has a JSON metadata file stored in a per-streamer subdirectory
+//! under `exe_dir()/meta/{username}/`. The filename is `{stem}.json`, matching the
+//! stem of the video file or session_dir; `{username}` is inferred from the video
+//! path's direct parent directory name (see [`model::username_from_path`]), matching
+//! the `{output_dir}/{username}/...` structure used by session_dirs and merged output
+//! paths.
 //!
 //! ## Status 状态流转 / Status lifecycle
 //!
@@ -35,11 +42,11 @@ mod model;
 mod scan;
 mod store;
 
-pub use maintenance::{cleanup_orphaned_meta_files, maintain_output_dir, schedule_meta_cleanup, schedule_meta_version_check};
+pub use maintenance::{cleanup_orphaned_meta_files, maintain_output_dir, migrate_flat_meta_files, schedule_meta_cleanup, schedule_meta_version_check};
 pub use model::{
     META_VERSION, PpExecCode, PpExecResult, PpExecutionEntry, PpModuleResult,
-    PpNodeInputSnapshot, PpNodeProgress, VideoMeta, meta_dir, meta_path_for,
-    parse_timestamp_from_stem,
+    PpNodeProgress, VideoMeta, extract_verified_module_outputs, list_all_meta_paths,
+    meta_dir, meta_dir_for, meta_path_for, parse_timestamp_from_stem, username_from_path,
 };
 pub use scan::{ensure_meta_files, ts_merge_output_dir};
 pub use store::{

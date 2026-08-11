@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [[bin]]
-name = "ts_merge_v010"
+name = "ts_merge"
 path = "src/main.rs"
 
 [dependencies]

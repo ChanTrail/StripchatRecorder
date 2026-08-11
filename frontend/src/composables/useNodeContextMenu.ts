@@ -13,7 +13,7 @@
  */
 
 import { computed, reactive } from "vue";
-import { usePostprocessStore, isPortCompatible, type PortType } from "@/stores/postprocess";
+import { usePostprocessStore, isPortCompatible, nodeEffectiveId, type PortType } from "@/stores/postprocess";
 import type { PortRef } from "./usePortWiring";
 
 export function useNodeContextMenu() {
@@ -39,12 +39,19 @@ export function useNodeContextMenu() {
 	}
 
 	/**
-	 * 右键菜单中显示的模块列表：可选且未使用的模块，排除内置节点（不可手动放置）。
-	 * Modules shown in context menu: available, not yet in the pipeline, excluding built-in nodes.
+	 * 右键菜单中显示的模块列表：可选模块，排除已使用且不可复用的模块，
+	 * 以及 recording_input（永远不需要手动放置）。可复用模块（reusable）
+	 * 即使已放置过，仍会保留在列表中，支持多次添加。
+	 *
+	 * Modules shown in context menu: available modules, excluding already-used
+	 * non-reusable modules and recording_input (never placed manually). Reusable
+	 * modules stay in the list even after being placed, so they can be added multiple times.
 	 */
 	const contextMenuModules = computed(() => {
 		const used = new Set(store.pipeline.nodes.map((n) => n.moduleId));
-		return store.modules.filter((m) => !used.has(m.id) && !m.id.startsWith("__builtin__recording_input"));
+		return store.modules.filter((m) =>
+			(m.reusable || !used.has(m.id)) && !m.id.startsWith("__builtin__recording_input"),
+		);
 	});
 
 	function addModuleAtCursor(moduleId: string, snapPos: (pos: { x: number; y: number }) => { x: number; y: number }) {
@@ -75,27 +82,45 @@ export function useNodeContextMenu() {
 	}
 
 	/**
-	 * 连线释放时兼容的模块列表：
-	 * - 未已使用，且输入端口 0 类型与当前输出端口兼容
-	 * - 排除 recording_input（永远不需要手动放置）
-	 * Modules compatible with the current output port type when dropping a wire.
-	 * recording_input is excluded (never placed manually).
+	 * 连线释放时兼容的模块列表。
+	 *
+	 * `wireMenu.fromPort` 始终是拖拽起点为输出端口（起始端点/start point）的情况——
+	 * 从输入端口拖出释放到空白处不会打开此菜单（见 usePortWiring.endWireDrag）。
+	 * 因此这里列出的是"可以接收 fromPort 这个输出端口"的候选模块：
+	 * - 未使用，或已使用但可复用（reusable）
+	 * - 排除 recording_input（已是固定虚拟节点，不通过模块列表添加）
+	 * - 模块的第一个输入类型与 fromPort 的类型兼容
+	 *
+	 * Modules compatible with the source output port when a wire is dropped on empty canvas.
+	 *
+	 * `wireMenu.fromPort` is always the case where the drag originated from an output port
+	 * (the start point) — dragging from an input port and dropping on empty space never opens
+	 * this menu (see usePortWiring.endWireDrag). So the candidates listed here are modules
+	 * that can receive the `fromPort` output:
+	 * - Unused, or used-but-reusable
+	 * - recording_input is excluded (it's a fixed virtual node, not added via the module list)
+	 * - The module's first input type is compatible with fromPort's type
 	 */
 	const wireMenuModules = computed(() => {
 		if (!wireMenu.fromPort) return [];
 		const used = new Set(store.pipeline.nodes.map((n) => n.moduleId));
 		return store.modules.filter((m) => {
-			if (used.has(m.id)) return false;
+			if (used.has(m.id) && !m.reusable) return false;
 			if (m.id === "__builtin__recording_input") return false;
-			// 取模块的第一个输入类型做兼容性检查 / Check compatibility with first input type
+			// 取模块的第一个输入类型做兼容性检查（作为下游，来源是 fromPort 的输出类型）
+			// Check compatibility with the first input type (as downstream, source is fromPort's output type)
 			const firstInput = (m.inputTypes?.[0] ?? "any_file") as PortType;
 			return isPortCompatible(wireMenu.fromPort!.type, firstInput);
 		});
 	});
 
 	/**
-	 * 从连线菜单中选择模块：在释放位置添加节点并自动连线。
-	 * Select a module from the wire menu: add node at drop position and auto-wire.
+	 * 从连线菜单中选择模块：在释放位置添加节点，并将拖拽起点的输出端口（fromPort）
+	 * 连接到新节点的输入端口 0——新模块作为下游，接收用户原本想连接的输出。
+	 *
+	 * Select a module from the wire menu: add a node at the drop position, and wire the
+	 * drag-origin output port (fromPort) to the new node's input port 0 — the new module
+	 * becomes the downstream target receiving the output the user was trying to connect.
 	 */
 	function addModuleFromWire(moduleId: string, snapPos: (pos: { x: number; y: number }) => { x: number; y: number }) {
 		if (!wireMenu.fromPort) return;
@@ -107,7 +132,7 @@ export function useNodeContextMenu() {
 			store.addEdge({
 				fromNodeId: wireMenu.fromPort.nodeId,
 				fromPort: wireMenu.fromPort.portIndex,
-				toNodeId: newNode.nodeId,
+				toNodeId: nodeEffectiveId(newNode),
 				toPort: 0,
 			});
 		}

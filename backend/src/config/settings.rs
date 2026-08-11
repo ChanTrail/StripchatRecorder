@@ -208,7 +208,7 @@ impl AppState {
             if raw.is_none() {
                 let mut p = PipelineConfig::default();
                 p.nodes.push(crate::postprocess::pipeline::PipelineNode {
-                    node_id: "default-ts_merge".to_string(),
+                    node_id: None,
                     module_id: "ts_merge".to_string(),
                     params: {
                         let mut m = std::collections::HashMap::new();
@@ -219,8 +219,6 @@ impl AppState {
                     position: None,
                     inputs: {
                         let mut m = std::collections::HashMap::new();
-                        // 录制输入节点固定 ID 为 "0"，端口 0 → 本节点端口 0
-                        // Recording input node has fixed ID "0", port 0 → this node port 0
                         m.insert(0, crate::postprocess::pipeline::NodeInputRef {
                             node_id: "0".to_string(),
                             port: 0,

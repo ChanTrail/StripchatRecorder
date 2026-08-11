@@ -132,10 +132,44 @@ pub fn find_cover(video: &Path) -> Option<PathBuf> {
     None
 }
 
-/// 获取临时文件目录（优先使用 `PP_EXE_DIR` 环境变量指定目录下的 `tmp` 子目录）。
+/// 获取临时文件目录：`{后端可执行文件所在目录}/tmp/`。
+///
+/// 优先使用 `PP_EXE_DIR` 环境变量指定的目录（该变量由 [`ModuleInput::read`] 在解析
+/// stdin JSON 后自动设置为 `exe_dir` 字段的值——即**后端**可执行文件所在目录，
+/// 由后端 `exec.rs` 通过 `crate::config::settings::exe_dir()` 传入，而不是本模块
+/// 自身可执行文件所在目录）。仅当 `PP_EXE_DIR` 未被设置（如模块脱离主程序单独
+/// 手动调用、或走的是旧版环境变量协议）时，才回退到 `env::current_exe()` 推断的
+/// 模块自身可执行文件目录。
+///
+/// 之所以要用后端可执行文件目录而非模块自身目录：所有模块二进制文件被统一复制到
+/// 同一个共享目录 `{后端目录}/modules/`（见 `discovery.rs` 的 `modules_dir()`），
+/// 若临时目录挂在这个共享目录下（`modules/tmp/`），会与 `modules/` 目录本身的
+/// 语义混淆（`modules/` 应该只存放可执行文件，不该混入运行时产生的缓存文件）；
+/// 挂在后端目录下（`{后端目录}/tmp/`）则与 `meta/`、`locale/`、`logs/` 等其他
+/// 运行时目录保持同一层级，语义更清晰，也不会因构建脚本清理/替换模块二进制文件
+/// 而影响到缓存内容。
+///
 /// 若设置了 `PP_MAX_TMP_MB` 环境变量，会在返回前自动清理超出限制的旧文件。
 ///
-/// Get the temporary file directory (prefers a `tmp` subdirectory under `PP_EXE_DIR` env var).
+/// Get the temporary file directory: `{backend executable's directory}/tmp/`.
+///
+/// Prefers the directory specified by the `PP_EXE_DIR` env var (automatically set by
+/// [`ModuleInput::read`] to the `exe_dir` field's value after parsing the stdin JSON —
+/// i.e. the **backend's own** executable directory, passed in by the backend's
+/// `exec.rs` via `crate::config::settings::exe_dir()`, not this module's own executable
+/// directory). Only falls back to the module's own executable directory (via
+/// `env::current_exe()`) when `PP_EXE_DIR` isn't set (e.g. the module is invoked
+/// standalone outside the host app, or via the legacy env-var protocol).
+///
+/// Why the backend's directory rather than the module's own: all module binaries are
+/// copied into one shared directory, `{backend dir}/modules/` (see `modules_dir()` in
+/// `discovery.rs`). Nesting the tmp directory under that shared directory
+/// (`modules/tmp/`) would blur its meaning (`modules/` should only ever hold
+/// executables, not runtime-generated cache files); nesting it under the backend's own
+/// directory (`{backend dir}/tmp/`) keeps it at the same level as the other runtime
+/// directories (`meta/`, `locale/`, `logs/`, etc.), which is clearer and keeps cache
+/// contents unaffected by the build script cleaning up/replacing module binaries.
+///
 /// If `PP_MAX_TMP_MB` is set, automatically prunes old files that exceed the size limit before returning.
 pub fn tmp_dir() -> PathBuf {
     let base = env::var("PP_EXE_DIR")
@@ -326,17 +360,46 @@ impl ModuleInput {
     /// 从 stdin 读取并解析 JSON 输入。
     /// 若 stdin 为空或解析失败，回退到旧协议（`PP_INPUT` 环境变量）。
     ///
+    /// 解析成功后，若 JSON 中的 `exe_dir` 字段非空，会将其写入 `PP_EXE_DIR`
+    /// 环境变量——这样 [`tmp_dir`] 无论在 `ModuleInput::read()` 调用前还是调用后
+    /// 被使用，都能读到同一个值，不需要每个模块自己在 `main()` 里手动转发这个字段。
+    /// `exe_dir` 字段的值来自后端 `exec.rs`（`crate::config::settings::exe_dir()`），
+    /// 是后端可执行文件所在目录，不是本模块自身可执行文件所在目录——[`tmp_dir`] 由此
+    /// 得到的临时目录路径是 `{后端目录}/tmp/`。
+    ///
     /// Read and parse JSON input from stdin.
     /// Falls back to legacy protocol (`PP_INPUT` env var) if stdin is empty or parse fails.
+    ///
+    /// On successful parse, if the JSON's `exe_dir` field is non-empty, it's written into
+    /// the `PP_EXE_DIR` env var — so [`tmp_dir`] sees the same value whether it's called
+    /// before or after `ModuleInput::read()`, without every module having to manually
+    /// forward this field in `main()`. The `exe_dir` field's value comes from the
+    /// backend's `exec.rs` (`crate::config::settings::exe_dir()`) — the backend's own
+    /// executable directory, not this module's own — so the tmp directory path
+    /// [`tmp_dir`] resolves to is `{backend dir}/tmp/`.
     pub fn read() -> Self {
         use std::io::Read;
         let mut buf = String::new();
         std::io::stdin().lock().read_to_string(&mut buf).ok();
         let trimmed = buf.trim();
-        if trimmed.is_empty() {
-            return Self::from_legacy_env();
+        let parsed = if trimmed.is_empty() {
+            Self::from_legacy_env()
+        } else {
+            serde_json::from_str(trimmed).unwrap_or_else(|_| Self::from_legacy_env())
+        };
+        if let Some(ref dir) = parsed.exe_dir
+            && !dir.is_empty()
+        {
+            // SAFETY: 本进程是一次性 CLI 子进程，且此时刚从 stdin 完成一次性解析，
+            // 尚未 spawn 任何线程，不存在与其他线程并发读写环境变量的竞争。
+            // SAFETY: this process is a one-shot CLI subprocess, and we're right after a
+            // one-time stdin parse with no threads spawned yet, so there's no concurrent
+            // read/write race on the environment from other threads.
+            unsafe {
+                env::set_var("PP_EXE_DIR", dir);
+            }
         }
-        serde_json::from_str(trimmed).unwrap_or_else(|_| Self::from_legacy_env())
+        parsed
     }
 
     /// 从旧协议环境变量构建输入（`PP_INPUT`、`PP_EXE_DIR`、`PP_MAX_TMP_MB`）。
@@ -435,4 +498,39 @@ pub fn output_skipped(input: &str, message: &str) {
         "outputs": [input],
     });
     println!("{}", json);
+}
+
+/// 解析模块的 `DESCRIBE` JSON 模板并注入版本号，返回可直接打印到 stdout 的完整 JSON 字符串。
+///
+/// 各模块的 `DESCRIBE` 常量本身不再手写版本号；版本号统一在编译期通过
+/// `env!("CARGO_PKG_VERSION")` 从模块自身 `Cargo.toml` 的 `version` 字段读取，
+/// 调用方式为 `pp_utils::describe_with_version(DESCRIBE, env!("CARGO_PKG_VERSION"))`。
+/// 这样升级模块版本时只需改动一处（Cargo.toml），不会再出现 Cargo.toml、DESCRIBE 的
+/// `name` 字段、locale 翻译文件三处版本号各自漂移、互相不一致的问题。
+///
+/// Parse a module's `DESCRIBE` JSON template and inject the version, returning a JSON
+/// string ready to print to stdout.
+///
+/// Each module's `DESCRIBE` constant no longer hardcodes a version number; the version is
+/// read once at compile time from the module's own `Cargo.toml` `version` field via
+/// `env!("CARGO_PKG_VERSION")`, called as
+/// `pp_utils::describe_with_version(DESCRIBE, env!("CARGO_PKG_VERSION"))`. This way,
+/// bumping a module's version only requires editing one place (Cargo.toml), eliminating
+/// the previous drift between Cargo.toml, the DESCRIBE `name` field, and locale
+/// translation files.
+///
+/// # Panics
+/// Panics if `template` is not valid JSON — this indicates a bug in the module's own
+/// `DESCRIBE` constant that should surface immediately during development rather than
+/// silently emitting broken metadata to the host.
+pub fn describe_with_version(template: &str, version: &str) -> String {
+    let mut value: serde_json::Value = serde_json::from_str(template)
+        .expect("pp_utils::describe_with_version: DESCRIBE template is not valid JSON");
+    if let serde_json::Value::Object(map) = &mut value {
+        map.insert(
+            "version".to_string(),
+            serde_json::Value::String(version.to_string()),
+        );
+    }
+    serde_json::to_string(&value).unwrap_or_else(|_| template.to_string())
 }

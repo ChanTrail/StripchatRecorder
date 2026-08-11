@@ -19,6 +19,7 @@
 	import { onMounted, onUnmounted, ref } from "vue";
 	import { RouterView, useRouter, useRoute } from "vue-router";
 	import NotifyLayer from "./components/NotifyLayer.vue";
+	import DirectoryBrowserDialog from "./components/DirectoryBrowserDialog.vue";
 	import { Button } from "@/components/ui/button";
 	import { call, on, onSseReconnect, onSseDisconnect } from "@/lib/api";
 	import { useNotify } from "@/composables/useNotify";
@@ -41,11 +42,29 @@
 	const mainScrollEl = ref<HTMLElement | null>(null);
 	useScrollbar(mainScrollEl);
 
-	/** 侧边栏导航项配置（桌面版无流转发）/ Sidebar navigation items (desktop: no relay) */
+	/**
+	 * 侧边栏导航项配置。
+	 *
+	 * 注：早前这里的注释写的是"桌面版无流转发"，但这份代码是 frontend/（Web/Server
+	 * 版）而不是 desktop/——流转发（backend/src/relay.rs）是纯 Server 端功能，
+	 * RelayView.vue、对应的 /relay 路由（见 router/index.ts）、以及 relay.* 的
+	 * 中英文翻译此前都完整存在，只是这个导航数组里缺了这一项，导致页面在实际存在、
+	 * 路由能正常跳转的情况下，用户在侧边栏里根本看不到入口。
+	 *
+	 * Sidebar navigation items configuration.
+	 *
+	 * Note: this used to be commented "desktop: no relay", but this file lives under
+	 * frontend/ (the Web/Server build), not desktop/ — relay streaming
+	 * (backend/src/relay.rs) is a server-only feature. RelayView.vue, its /relay route
+	 * (see router/index.ts), and the relay.* zh-CN/en-US translations were all already
+	 * complete; this array was simply missing the entry, so the page existed and the
+	 * route worked fine, but users had no way to find it from the sidebar.
+	 */
 	const navItems = [
 		{ to: "/", labelKey: "nav.streamers" },
 		{ to: "/recordings", labelKey: "nav.recordings" },
 		{ to: "/postprocess", labelKey: "nav.postprocess" },
+		{ to: "/relay", labelKey: "nav.relay" },
 		{ to: "/finder", labelKey: "nav.finder" },
 		{ to: "/settings", labelKey: "nav.settings" },
 	];
@@ -227,6 +246,7 @@
 				</Transition>
 			</RouterView>
 			<NotifyLayer />
+			<DirectoryBrowserDialog />
 		</div>
 
 		<!-- 正常布局：侧边栏 + 内容区 / Normal layout: sidebar + content -->
@@ -269,6 +289,7 @@
 				</div>
 			</main>
 			<NotifyLayer />
+			<DirectoryBrowserDialog />
 		</div>
 
 	</Transition>

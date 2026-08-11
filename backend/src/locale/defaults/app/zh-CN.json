@@ -325,8 +325,9 @@
     "waitingProgress": "等待进度…",
     "fetchOutputFailed": "获取模块输出失败",
     "fetchTasksFailed": "获取后处理任务失败",
-    "done": "后处理完成：{modules}",
-    "failed": "后处理失败 [{moduleId}]：{message}"
+    "doneForFile": "{name} 后处理完成",
+    "failedWithDetail": "{name} 后处理失败：{detail}",
+    "failedGeneric": "{name} 后处理失败"
   },
   "relay": {
     "title": "转发流",

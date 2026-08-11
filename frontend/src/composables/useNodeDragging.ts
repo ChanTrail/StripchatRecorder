@@ -13,7 +13,7 @@
 
 import { reactive, ref, watch } from "vue";
 import type { Ref } from "vue";
-import { usePostprocessStore } from "@/stores/postprocess";
+import { usePostprocessStore, nodeEffectiveId } from "@/stores/postprocess";
 
 /** 虚拟录制输入节点的固定 ID / Fixed ID for the virtual recording input node */
 export const INPUT_NODE_ID = "__recording_input__";
@@ -167,7 +167,7 @@ export function useNodeDragging(
 			const nw = (el?.offsetWidth ?? 224) / transform.scale;
 			const nh = (el?.offsetHeight ?? 120) / transform.scale;
 			if (nx < selMaxX && nx + nw > selMinX && ny < selMaxY && ny + nh > selMinY) {
-				selectedNodeIds.add(node.nodeId);
+				selectedNodeIds.add(nodeEffectiveId(node));
 			}
 		});
 
@@ -191,8 +191,8 @@ export function useNodeDragging(
 		}
 		const canvasPos = screenToCanvas(e.clientX, e.clientY);
 		dragOffset = {
-			x: canvasPos.x - (store.pipeline.nodes.find((n) => n.nodeId === nodeId)?.position?.x ?? 0),
-			y: canvasPos.y - (store.pipeline.nodes.find((n) => n.nodeId === nodeId)?.position?.y ?? 0),
+			x: canvasPos.x - (store.pipeline.nodes.find((n) => nodeEffectiveId(n) === nodeId)?.position?.x ?? 0),
+			y: canvasPos.y - (store.pipeline.nodes.find((n) => nodeEffectiveId(n) === nodeId)?.position?.y ?? 0),
 		};
 		lastDragCanvasPos = canvasPos;
 	}
@@ -231,7 +231,7 @@ export function useNodeDragging(
 					inputNodePos.x += dx;
 					inputNodePos.y += dy;
 				} else {
-					const node = store.pipeline.nodes.find((n) => n.nodeId === id);
+					const node = store.pipeline.nodes.find((n) => nodeEffectiveId(n) === id);
 					if (node?.position) {
 						store.updateNodePosition(id, {
 							x: node.position.x + dx,
@@ -268,7 +268,7 @@ export function useNodeDragging(
 				inputNodePos.x = snapped.x;
 				inputNodePos.y = snapped.y;
 			} else {
-				const node = store.pipeline.nodes.find((n) => n.nodeId === id);
+				const node = store.pipeline.nodes.find((n) => nodeEffectiveId(n) === id);
 				if (node?.position) {
 					const snapped = snapPos(node.position);
 					store.updateNodePosition(id, snapped);

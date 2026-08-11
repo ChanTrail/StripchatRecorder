@@ -11,22 +11,33 @@ export interface PpExecResult {
 	message?: string | null;
 }
 
-/** 后处理流水线单个节点的执行记录 / Execution record for a single post-processing pipeline node */
+/**
+ * 后处理流水线单个节点的执行记录 / Execution record for a single post-processing pipeline node
+ *
+ * `inputs`/`outputs` 按端口分组：外层数组下标对应端口索引，内层数组是该端口承载的
+ * 路径列表（大多数端口只有一个路径；MediaBundle 端口会拆分为多个字符串，如
+ * `[视频路径, 图片路径]`）。两者始终存在，节点尚无输出时 `outputs` 为空数组。
+ *
+ * `inputs`/`outputs` are grouped by port: the outer array's index is the port index,
+ * and the inner array holds the path(s) carried on that port (most ports have a single
+ * path; a MediaBundle port is split into multiple strings, e.g. `[videoPath, imagePath]`).
+ * Both are always present; `outputs` is an empty array before the node has produced output.
+ */
 export interface PpExecutionEntry {
-	/** 节点唯一 ID / Node unique ID */
-	node_id: string;
-	/** 模块 ID / Module ID */
+	/** 模块 ID（普通节点的主标识）/ Module ID (primary identifier for regular nodes) */
 	module_id: string;
-	/** 节点开始执行时间（RFC 3339）/ Node execution start time (RFC 3339) */
+	/** 节点实例 ID（仅可复用内置节点的多个实例需要）/ Node instance ID (only for reusable built-in multi-instances) */
+	node_id?: string | null;
 	started_at: string;
-	/** 节点完成时间，执行中为 null / Finish time, null while running */
 	finished_at: string | null;
-	/** 执行结果，执行中为 null / Execution result, null while running */
 	result: PpExecResult | null;
-	/** 输入路径列表 / Input path list */
-	inputs: string[];
-	/** 输出路径列表，执行中为 null / Output path list, null while running */
-	outputs: string[] | null;
+	inputs: string[][];
+	outputs: string[][];
+}
+
+/** 辅助函数：返回执行记录的有效唯一标识 / Helper: effective identifier for an execution entry */
+export function entryEffectiveId(entry: PpExecutionEntry): string {
+	return entry.node_id ?? entry.module_id;
 }
 
 /**
@@ -50,12 +61,10 @@ export type RecordingStatus =
 
 /** 正在执行的节点的模块内进度快照 / In-progress node's intra-module progress snapshot */
 export interface PpNodeProgress {
-	node_id: string;
 	module_id: string;
+	/** 节点实例 ID（仅可复用内置节点多实例时需要）*/
+	node_id?: string | null;
 	mod_done: number;
-	mod_total: number;
-	overall_done: number;
-	overall_total: number;
 }
 
 /** 录制文件元数据 / Recording file metadata */
@@ -86,4 +95,17 @@ export interface RecordingFile {
 	segments_failed?: number | null;
 	/** 当前正在执行节点的模块内进度（未在执行时为 null）/ Intra-module progress of the running node (null when idle) */
 	pp_progress?: PpNodeProgress | null;
+	/**
+	 * 模块输出路径（如 contact_sheet 生成的预览图），按 module_id 建立映射。
+	 * 后端已验证：节点执行结果为 `"ok"` 且路径当前确实存在于磁盘上——前端应仅
+	 * 依据此字段判断预览图按钮是否显示，不要自行从 pp_execution 推断路径
+	 * （前端没有文件系统访问权限，无法验证路径是否真实存在）。
+	 *
+	 * Module output paths (e.g. contact_sheet's generated preview image), keyed by
+	 * module_id. Backend-verified: the node's result is `"ok"` and the path currently
+	 * exists on disk — the frontend should rely solely on this field to decide whether
+	 * to show a preview button, rather than inferring paths from pp_execution itself
+	 * (the frontend has no filesystem access and cannot verify a path actually exists).
+	 */
+	module_outputs?: Record<string, string>;
 }

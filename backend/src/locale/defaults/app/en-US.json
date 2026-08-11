@@ -325,8 +325,9 @@
     "waitingProgress": "Waiting for progress…",
     "fetchOutputFailed": "Failed to fetch module output",
     "fetchTasksFailed": "Failed to fetch post-processing tasks",
-    "done": "Post-processing done: {modules}",
-    "failed": "Post-processing failed [{moduleId}]: {message}"
+    "doneForFile": "{name} post-processing done",
+    "failedWithDetail": "{name} post-processing failed: {detail}",
+    "failedGeneric": "{name} post-processing failed"
   },
   "relay": {
     "title": "Relay Streams",

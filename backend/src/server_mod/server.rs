@@ -23,9 +23,9 @@ use crate::server_mod::routes::{
         open_recording, serve_output_file,
     },
     settings::{
-        add_mouflon_key, get_disk_space_handler, get_settings, get_startup_warnings_handler,
-        list_mouflon_keys, remove_mouflon_key, save_settings,
-        sync_mouflon_keys,
+        add_mouflon_key, create_dir_handler, get_disk_space_handler, get_settings,
+        get_startup_warnings_handler, list_dir_handler, list_drives_handler, list_mouflon_keys,
+        remove_mouflon_key, save_settings, sync_mouflon_keys,
     },
     streamer::{
         add_streamer, list_streamers, remove_streamer, set_auto_record, start_recording,
@@ -100,6 +100,9 @@ pub fn build_router(state: ServerState) -> Router {
         .route("/api/mouflon-keys/sync", post(sync_mouflon_keys))
         .route("/api/startup-warnings", get(get_startup_warnings_handler))
         .route("/api/disk-space", get(get_disk_space_handler))
+        .route("/api/fs/list-dir", get(list_dir_handler))
+        .route("/api/fs/list-drives", get(list_drives_handler))
+        .route("/api/fs/create-dir", post(create_dir_handler))
         .route("/api/recordings", get(list_recordings))
         .route("/api/recordings/merging", get(get_merging_dirs_handler))
         .route("/api/recordings/delete", post(delete_recording))

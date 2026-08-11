@@ -189,6 +189,19 @@ const COMMAND_MAP: Record<
 		body: (a) => ({ paths: a.paths }),
 	},
 	get_disk_space: { method: "GET", url: () => "/api/disk-space" },
+	list_dir: {
+		method: "GET",
+		url: (a) => `/api/fs/list-dir?path=${encodeURIComponent(String(a.path ?? ""))}`,
+	},
+	list_drives: {
+		method: "GET",
+		url: () => "/api/fs/list-drives",
+	},
+	create_dir: {
+		method: "POST",
+		url: () => "/api/fs/create-dir",
+		body: (a) => ({ parent: a.parent, name: a.name }),
+	},
 	list_recordings: { method: "GET", url: () => "/api/recordings" },
 	get_merging_dirs: { method: "GET", url: () => "/api/recordings/merging" },
 	delete_recording: {

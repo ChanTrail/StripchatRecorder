@@ -6,7 +6,7 @@
 //!
 //! ## pp_execution 写入时机 / pp_execution write timing
 //!
-//! - 节点开始前：追加 PpExecutionEntry（finished_at/result/outputs 为 null）
+//! - 节点开始前：追加 PpExecutionEntry（finished_at/result 为 null，outputs 为空数组）
 //! - 节点完成后：更新对应条目（填入 finished_at、result、outputs）
 //! - 每次写入后立即通过 SSE 推送 `postprocess-execution-update` 事件
 
@@ -15,10 +15,11 @@ use crate::postprocess::pipeline::{
     discover_modules, run_pipeline, NodeResult, PipelineConfig, PipelineNode, RecordingContext,
 };
 use crate::recording::meta::{
-    PpExecCode, PpExecResult, PpExecutionEntry, PpNodeInputSnapshot, PpNodeProgress,
+    PpExecCode, PpExecResult, PpExecutionEntry, PpNodeProgress,
 };
 use crate::config::settings::AppState;
-use std::collections::{HashMap, HashSet};
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 // ─── 公开入口 / Public Entry Point ───────────────────────────────────────────
@@ -171,7 +172,11 @@ pub fn run_postprocess_inner(
     // Execute DAG; write pp_execution entry incrementally on node start/done
     let state_ref = Arc::clone(state);
     let emitter_ref = Arc::clone(emitter);
-    let path_str_ref = path_str.clone();
+    // path_str_ref 用于 SSE 事件的 path 字段，初始值为 video_path，
+    // ts_merge 成功后会更新为新生成的视频文件路径
+    // path_str_ref for SSE event path field, initial value is video_path,
+    // updated to newly generated video file path after ts_merge succeeds
+    let path_str_ref = std::sync::Mutex::new(path_str.clone());
     let video_path_buf = video_path.to_path_buf();
 
     let node_done_count = std::sync::Mutex::new(0usize);
@@ -188,8 +193,26 @@ pub fn run_postprocess_inner(
     let pre_collected = build_pre_collected(pipeline, &prev_execution, &dirty_nodes);
 
     /// 读取 meta 并通过 SSE 推送快照，让前端无需依赖独立事件字段即可获得完整进度。
+    ///
+    /// 同时附带 `module_outputs`：从 `meta.pp_execution` 中提取、且已验证路径当前
+    /// 确实存在于磁盘上的模块输出（如 contact_sheet 预览图），与 `list_recordings`
+    /// 接口的 `RecordingFile.module_outputs` 使用同一套验证逻辑
+    /// （[`crate::recording::meta::extract_verified_module_outputs`]）。前端应统一
+    /// 依据这个已验证字段判断预览图按钮是否显示，无论数据来源于初次加载还是
+    /// 这里的实时 SSE 快照，都不会出现"路径已记录但文件其实不存在"的情况。
+    ///
     /// Read meta and push a snapshot via SSE so the frontend gets the full picture without
     /// relying on individual event fields.
+    ///
+    /// Also includes `module_outputs`: module outputs extracted from `meta.pp_execution`
+    /// and verified to currently exist on disk (e.g. contact_sheet's preview image),
+    /// using the exact same verification logic
+    /// ([`crate::recording::meta::extract_verified_module_outputs`]) as the
+    /// `list_recordings` endpoint's `RecordingFile.module_outputs`. The frontend should
+    /// uniformly rely on this verified field to decide whether to show a preview button,
+    /// so it never shows a stale "path recorded but file doesn't actually exist" state,
+    /// regardless of whether the data came from the initial load or this real-time SSE
+    /// snapshot.
     fn emit_meta_update(
         video_path: &std::path::Path,
         emitter: &Arc<dyn Emitter>,
@@ -197,9 +220,12 @@ pub fn run_postprocess_inner(
     ) {
         use crate::core::emitter::EmitterExt;
         if let Some(meta) = crate::recording::meta::read_meta(video_path) {
+            let module_outputs = crate::recording::meta::extract_verified_module_outputs(
+                meta.pp_execution.as_deref(),
+            );
             emitter.emit(
                 "postprocess-meta-update",
-                &serde_json::json!({ "path": path_str, "meta": meta }),
+                &serde_json::json!({ "path": path_str, "meta": meta, "module_outputs": module_outputs }),
             );
         }
     }
@@ -214,45 +240,44 @@ pub fn run_postprocess_inner(
         pre_collected,
         // on_node_start：追加 pp_execution 条目（result=null），写入初始 pp_progress，推送 meta 快照
         // on_node_start: append pp_execution entry (result=null), write initial pp_progress, push meta snapshot
-        &|node_id, module_id, inputs| {
+        &|effective_id, module_id, inputs| {
             let now = chrono::Local::now().to_rfc3339();
-            let (params, wiring) = pipeline
+            // 在 pipeline.nodes 中查找节点时使用 effective_id() 匹配
+            // Find node in pipeline.nodes using effective_id()
+            let fingerprint = pipeline
                 .nodes
                 .iter()
-                .find(|n| n.node_id == node_id)
-                .map(node_config_snapshot)
+                .find(|n| n.effective_id() == effective_id)
+                .map(node_config_fingerprint)
                 .unwrap_or_default();
+            // effective_id 对应 module_id（普通节点）或 node_id（可复用内置节点）
+            // effective_id corresponds to module_id (regular) or node_id (reusable built-in)
+            let is_reusable_builtin = module_id.starts_with(crate::postprocess::builtin_nodes::BUILTIN_PREFIX)
+                && effective_id != module_id;
             let entry = PpExecutionEntry {
-                node_id: node_id.to_string(),
                 module_id: module_id.to_string(),
+                node_id: if is_reusable_builtin { Some(effective_id.to_string()) } else { None },
                 started_at: now,
                 finished_at: None,
                 result: None,
-                inputs: inputs.iter().map(|p| p.to_string_lossy().to_string()).collect(),
-                outputs: None,
-                params,
-                wiring,
+                inputs: group_paths_by_bundle(inputs),
+                outputs: Vec::new(),
+                config_fingerprint: fingerprint,
             };
             crate::recording::meta::pp_execution_start(&video_path_buf, entry);
 
-            // 更新共享的当前节点信息，供 on_progress 直接使用
-            // Update shared current node info for direct use by on_progress
             *current_node_module_id.lock().unwrap() = module_id.to_string();
-            *current_node_id.lock().unwrap() = node_id.to_string();
+            *current_node_id.lock().unwrap() = effective_id.to_string();
 
-            let done_so_far = *node_done_count.lock().unwrap();
             crate::recording::meta::set_pp_progress(
                 &video_path_buf,
                 PpNodeProgress {
-                    node_id: node_id.to_string(),
                     module_id: module_id.to_string(),
+                    node_id: if is_reusable_builtin { Some(effective_id.to_string()) } else { None },
                     mod_done: 0,
-                    mod_total: 0,
-                    overall_done: done_so_far,
-                    overall_total: total,
                 },
             );
-            emit_meta_update(&video_path_buf, &emitter_ref, &path_str_ref);
+            emit_meta_update(&video_path_buf, &emitter_ref, &path_str_ref.lock().unwrap());
         },
         // on_node_done：完成 pp_execution 条目，清空 pp_progress，更新整体进度，推送 meta 快照
         // on_node_done: finish pp_execution entry, clear pp_progress, update overall progress, push meta snapshot
@@ -260,38 +285,44 @@ pub fn run_postprocess_inner(
             let now = chrono::Local::now().to_rfc3339();
             let pp_result = PpExecResult {
                 code: result.code.clone(),
-                message: if result.message.is_empty() {
-                    None
-                } else {
-                    Some(result.message.clone())
-                },
+                message: if result.message.is_empty() { None } else { Some(result.message.clone()) },
             };
-            let outputs: Option<Vec<String>> = if result.outputs.is_empty() {
-                None
-            } else {
-                Some(result.outputs.iter().map(|p| p.to_string_lossy().to_string()).collect())
-            };
+            let outputs = group_paths_by_bundle(&result.outputs);
             crate::recording::meta::pp_execution_finish(
                 &video_path_buf,
-                &result.node_id,
+                &result.effective_id,
                 now,
                 pp_result,
                 outputs,
             );
 
-            // ts_merge 成功后更新 meta.video_path
-            // After ts_merge succeeds, update meta.video_path
+            // ts_merge 成功后更新 meta.video_path，切换 SSE path。
+            //
+            // 视频时长/分辨率的探测和写入不在此处进行——原因见 run_postprocess_inner
+            // 末尾 backfill_video_probe_fields 调用点的说明：本次 ts_merge 若因"已成功
+            // 且配置未变"被跳过（见 compute_dirty_nodes/build_effective_pipeline），
+            // on_node_done 根本不会为它触发，写在这里会导致老录制的 meta 永远补不上
+            // 这两个字段。
+            //
+            // After ts_merge succeeds, update meta.video_path and switch the SSE path.
+            //
+            // Video duration/resolution probing and writing does NOT happen here — see the
+            // comment at the backfill_video_probe_fields call site near the end of
+            // run_postprocess_inner for why: if this run's ts_merge was skipped because it
+            // "already succeeded with unchanged config" (see compute_dirty_nodes/
+            // build_effective_pipeline), on_node_done never fires for it at all, so writing
+            // here would leave these two fields permanently unfilled for any recording that
+            // was already merged before this logic existed.
             if result.module_id == "ts_merge" && result.is_success() {
                 if let Some(output_path) = result.outputs.first() {
                     if let Some(mut meta) = crate::recording::meta::read_meta(&video_path_buf) {
                         meta.video_path = Some(output_path.to_string_lossy().to_string());
                         crate::recording::meta::write_meta(&video_path_buf, &meta);
                     }
+                    *path_str_ref.lock().unwrap() = output_path.to_string_lossy().to_string();
                 }
             }
 
-            // 清空进度快照和共享节点信息
-            // Clear progress snapshot and shared node info
             crate::recording::meta::clear_pp_progress(&video_path_buf);
             *current_node_module_id.lock().unwrap() = String::new();
             *current_node_id.lock().unwrap() = String::new();
@@ -300,40 +331,33 @@ pub fn run_postprocess_inner(
             *done += 1;
             let done_val = *done;
 
-            let pct = if total == 0 {
-                100.0f64
-            } else {
-                (done_val as f64 * 100.0 / total as f64).min(100.0)
-            };
+            let pct = if total == 0 { 100.0f64 } else { (done_val as f64 * 100.0 / total as f64).min(100.0) };
             state_ref.pp_queue.progress(
-                &path_str_ref,
+                &path_str_ref.lock().unwrap(),
                 pct,
-                0, 0,
+                0,
                 &result.module_id,
                 done_val,
                 total,
             );
-
-            emit_meta_update(&video_path_buf, &emitter_ref, &path_str_ref);
+            emit_meta_update(&video_path_buf, &emitter_ref, &path_str_ref.lock().unwrap());
         },
         // on_progress：直接用共享变量中的 module_id，无需 read_meta，大幅降低磁盘 I/O
         // on_progress: use module_id from shared variable directly, no read_meta needed,
         // significantly reducing disk I/O during high-frequency progress reporting
-        &|node_id, mod_done, mod_total, _status_text| {
+        &|effective_id, mod_done, _mod_total, _status_text| {
             let module_id = current_node_module_id.lock().unwrap().clone();
-            let done_so_far = *node_done_count.lock().unwrap();
+            let is_reusable_builtin = module_id.starts_with(crate::postprocess::builtin_nodes::BUILTIN_PREFIX)
+                && effective_id != module_id;
             crate::recording::meta::set_pp_progress(
                 &video_path_buf,
                 PpNodeProgress {
-                    node_id: node_id.to_string(),
                     module_id,
+                    node_id: if is_reusable_builtin { Some(effective_id.to_string()) } else { None },
                     mod_done,
-                    mod_total,
-                    overall_done: done_so_far,
-                    overall_total: total,
                 },
             );
-            emit_meta_update(&video_path_buf, &emitter_ref, &path_str_ref);
+            emit_meta_update(&video_path_buf, &emitter_ref, &path_str_ref.lock().unwrap());
         },
         // on_log：模块 stdout/stderr 日志，保持不变
         // on_log: module stdout/stderr log lines, unchanged
@@ -403,14 +427,12 @@ pub fn run_postprocess_inner(
     let final_execution: Vec<PpExecutionEntry> = merged_results
         .iter()
         .filter_map(|r| {
-            // 优先取本次执行的条目（有完整的 started_at/finished_at/outputs）
-            // Prefer the entry from this run (has complete started_at/finished_at/outputs)
-            if let Some(entry) = current_execution.iter().rfind(|e| e.node_id == r.node_id) {
+            // 优先取本次执行的条目 / Prefer the entry from this run
+            if let Some(entry) = current_execution.iter().rfind(|e| e.effective_id() == r.effective_id) {
                 return Some(entry.clone());
             }
-            // 回退到上次成功的条目（被跳过的节点）
-            // Fall back to the previously succeeded entry (for skipped nodes)
-            prev_execution.iter().find(|e| e.node_id == r.node_id).cloned()
+            // 回退到上次成功的条目（被跳过的节点）/ Fall back to previously succeeded entry (skipped nodes)
+            prev_execution.iter().find(|e| e.effective_id() == r.effective_id).cloned()
         })
         .collect();
 
@@ -420,11 +442,92 @@ pub fn run_postprocess_inner(
     // ts_merge 产生的输出与 session_dir 的 stem 相同，meta 文件名不变，无需迁移。
     // ts_merge output has the same stem as the session_dir — meta filename is unchanged, no migration needed.
 
+    // 无条件补写视频时长/分辨率（若尚未写入）：不依赖本次 ts_merge 是否真的执行过。
+    //
+    // 之前的实现把 ffprobe 探测放在 on_node_done 的 ts_merge 分支里，只有该节点
+    // 本次真正跑过才会触发；但重新后处理一个"ts_merge 已成功且配置未变"的历史
+    // 视频时，compute_dirty_nodes 会把 ts_merge 标记为非 dirty，
+    // build_effective_pipeline 直接把它从本次要执行的节点列表中过滤掉，
+    // on_node_done 根本不会为它调用——导致这两个字段永远停留在 null，
+    // 无论重新触发多少次后处理都补不上。
+    //
+    // 这里改为在流水线整个跑完之后、按 surviving_path 是否已存在探测结果统一检查
+    // 一次：只要 meta 里这两个字段任一为 None，且 surviving_path 是一个真实存在的
+    // 视频文件（而非目录——若流水线尚未跑到 ts_merge，surviving_path 仍是原始
+    // session_dir，ffprobe 对目录必然失败，get_video_duration/get_video_resolution
+    // 内部的 Command 调用会静默返回 None，不会报错也不会误写），就补一次 ffprobe。
+    // 已有值时不重新探测，避免徒增磁盘 IO。
+    //
+    // Unconditionally backfill video duration/resolution (if not already set) —
+    // independent of whether this run's ts_merge actually executed.
+    //
+    // The previous implementation put the ffprobe probing inside on_node_done's ts_merge
+    // branch, which only fires when that node genuinely runs this time. But re-processing
+    // a historical video whose ts_merge "already succeeded with unchanged config" causes
+    // compute_dirty_nodes to mark ts_merge as not dirty, and build_effective_pipeline
+    // filters it out of this run's node list entirely — on_node_done is never called for
+    // it, leaving these two fields permanently null no matter how many times
+    // post-processing is re-triggered.
+    // This is now checked once after the whole pipeline finishes, based on whether
+    // surviving_path already has probed values in meta: as long as either field is still
+    // None and surviving_path is a real video file (not a directory — if the pipeline never
+    // reached ts_merge, surviving_path is still the original session_dir; ffprobe on a
+    // directory simply fails and the get_video_duration/get_video_resolution helpers'
+    // internal Command calls silently return None, without erroring or writing anything
+    // wrong), a single ffprobe backfill pass runs. Fields already set are left untouched to
+    // avoid redundant disk I/O.
+    if surviving_path.is_file()
+        && let Some(mut meta) = crate::recording::meta::read_meta(video_path)
+        && (meta.video_duration_secs.is_none() || meta.video_resolution.is_none())
+    {
+        meta.video_duration_secs = meta.video_duration_secs
+            .or_else(|| crate::recording::ffmpeg_util::get_video_duration(surviving_path));
+        meta.video_resolution = meta.video_resolution
+            .or_else(|| crate::recording::ffmpeg_util::get_video_resolution(surviving_path));
+        crate::recording::meta::write_meta(video_path, &meta);
+    }
+
     state.pp_queue.finish(&path_str, all_ok);
+    // `postprocess-done` 的 path 字段必须用 path_str_ref 的最终值，而不是本函数
+    // 开头就固定下来的 path_str。
+    //
+    // 当流水线从 TS 分片目录开始执行时，ts_merge 成功后会把 path_str_ref 更新为
+    // 合并后的视频文件路径（`postprocess-meta-update` 事件全程用的都是这个会变化
+    // 的值），但 path_str 从函数开始到结束始终是最初传入的 video_path（分片目录）
+    // 不变。前端在收到第一个"新路径"的 postprocess-meta-update 时会尝试把
+    // ppStatus/ppProgress 从旧路径迁移到新路径，但迁移只有在 `files.value` 已经
+    // 不包含旧路径时才会触发——如果此时页面缓存的文件列表还没来得及刷新（仍包含
+    // 旧的分片目录路径），迁移就会被跳过。这种情况下若 `postprocess-done` 仍然
+    // 上报旧路径，就会把 "done" 状态写到一个再也没人读取的 key 上（页面显示的
+    // 那一行早已用新路径渲染），导致进度列永久卡在最后一次 meta 快照（模块已全部
+    // 完成但因为没有正在运行的节点，被误渲染成"处理中 0%"），必须手动刷新页面
+    // 重新从 meta 加载 ppStatus 才能恢复。改成用 path_str_ref 的最终值，保证
+    // "任务完成" 信号总是发到与 `postprocess-meta-update` 相同的 key 上。
+    //
+    // `postprocess-done`'s path field must use path_str_ref's final value, not
+    // path_str which was fixed at the start of this function.
+    //
+    // When the pipeline starts from a TS segment directory, path_str_ref gets updated
+    // to the merged video file path once ts_merge succeeds (postprocess-meta-update
+    // uses this evolving value throughout), but path_str stays as the originally
+    // passed-in video_path (the segment directory) for the entire function. The
+    // frontend tries to migrate ppStatus/ppProgress from the old path to the new one
+    // upon the first "new path" postprocess-meta-update event, but that migration only
+    // fires if `files.value` no longer contains the old path — if the cached file list
+    // hasn't been refreshed yet at that moment (still contains the old segment
+    // directory path), migration is skipped. In that case, if `postprocess-done` still
+    // reports the old path, it writes the "done" status to a key nobody reads anymore
+    // (the row on screen has long since rendered under the new path), leaving the
+    // progress column permanently stuck on the last meta snapshot (all nodes finished,
+    // but with no running node it gets misrendered as "processing 0%") until a manual
+    // page refresh reloads ppStatus fresh from meta. Using path_str_ref's final value
+    // ensures the "task done" signal always lands on the same key as
+    // `postprocess-meta-update`.
+    let final_path_str = path_str_ref.lock().unwrap().clone();
     emitter.emit(
         "postprocess-done",
         &serde_json::json!({
-            "path": path_str,
+            "path": final_path_str,
             "success": all_ok,
             "pp_execution": final_execution,
             "video_path": ts_merge_output.as_ref().map(|p| p.to_string_lossy().to_string()),
@@ -459,51 +562,145 @@ pub fn infer_initial_path(video_path: &std::path::Path) -> std::path::PathBuf {
     video_path.to_path_buf()
 }
 
-/// 提取一个节点当前的参数和连线快照，用于与上次执行记录比较是否发生变更。
-/// Extract a node's current params and wiring snapshot, for comparison against the
-/// previous execution record to detect changes.
-fn node_config_snapshot(
-    node: &PipelineNode,
-) -> (HashMap<String, serde_json::Value>, HashMap<usize, PpNodeInputSnapshot>) {
-    let params = node.params.clone();
-    let wiring = node
+/// 计算节点当前参数 + 连线的指纹（sha256 十六进制字符串），用于与上次执行记录比较
+/// 是否发生变更。不直接比较/存储原始 params/wiring——那些已是 `pipeline.json` 的
+/// 权威数据，重复保存到 meta 属于冗余；这里只保留一个用于变更检测的哈希摘要。
+/// BTreeMap 保证键顺序稳定，使指纹不受 HashMap 迭代顺序影响。
+///
+/// Compute a fingerprint (sha256 hex string) of a node's current params + wiring, for
+/// comparison against the previous execution record to detect changes. Does not compare/
+/// store the raw params/wiring directly — those are already authoritative in
+/// `pipeline.json`; duplicating them in meta would be redundant. Only a hash digest for
+/// change detection is kept. BTreeMap guarantees stable key ordering so the fingerprint
+/// doesn't depend on HashMap iteration order.
+fn node_config_fingerprint(node: &PipelineNode) -> String {
+    let params: BTreeMap<&String, &serde_json::Value> = node.params.iter().collect();
+    let wiring: BTreeMap<usize, (String, usize)> = node
         .inputs
         .iter()
-        .map(|(port, input_ref)| {
-            (
-                *port,
-                PpNodeInputSnapshot {
-                    node_id: input_ref.node_id.clone(),
-                    port: input_ref.port,
-                },
-            )
-        })
+        .map(|(port, input_ref)| (*port, (input_ref.node_id.clone(), input_ref.port)))
         .collect();
-    (params, wiring)
+    // enabled 纳入指纹：禁用节点现在会被执行引擎当作"跳过并透传"处理（见
+    // exec.rs 的文档说明），这是一种与"正常执行"截然不同的行为，因此启用/禁用
+    // 状态的切换必须被视为"自身配置变更"，强制重新评估——否则在启用状态切换后
+    // 重新触发后处理时，指纹不变会导致该节点被误判为"未变更"而跳过重新执行，
+    // 继续复用切换前的旧结果（如把"已禁用透传"的旧输出当作"现在应该真正执行"
+    // 的结果直接复用）。
+    //
+    // enabled is included in the fingerprint: a disabled node is now treated by the
+    // execution engine as "skip and pass through" (see exec.rs's doc comments), a
+    // fundamentally different behavior from "run normally" — so toggling enabled must
+    // count as a "self config change" and force re-evaluation. Otherwise, re-triggering
+    // post-processing after flipping enabled would see an unchanged fingerprint and
+    // wrongly treat the node as "unchanged", skipping re-execution and continuing to
+    // reuse the stale pre-toggle result (e.g. reusing an old "disabled pass-through"
+    // output as if it were the result of "now actually running").
+    let combined = serde_json::json!({ "params": params, "wiring": wiring, "enabled": node.enabled });
+    let serialized = serde_json::to_string(&combined).unwrap_or_default();
+    let mut hasher = Sha256::new();
+    hasher.update(serialized.as_bytes());
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<String>()
 }
 
-/// 判断某节点相对于上次执行记录是否"自身发生变更"（模块 ID、参数或连线任意一项不同）。
+/// 判断某节点相对于上次执行记录是否"自身发生变更"（模块 ID、参数、连线任意
+/// 一项不同，或上次记录的输出文件已不再存在于磁盘上）。
 /// 找不到上次记录（新增节点）或上次未成功，也视为自身变更。
 ///
+/// 关于"输出文件已不再存在"这一判断依据：不能仅凭 meta 中记录过某个输出路径
+/// 就认为该输出现在依然可用——文件可能在两次后处理之间被 cleanup 模块删除、
+/// 被用户手动删除、或被外部磁盘清理工具误删。若该节点因"配置未变"被跳过
+/// （见 `build_effective_pipeline`），它在 meta 中记录的旧输出路径会被
+/// `build_pre_collected` 原样当作真实数据传给下游节点——下游节点收到一个根本
+/// 不存在的路径，读取时才会失败，报错信息与真实原因（"上游产物已丢失"）完全
+/// 脱节。将这种情况纳入"自身变更"判断，会让该节点被重新执行（重新生成缺失的
+/// 输出），而不是假装它仍然成功过。
+///
 /// Determine whether a node has "changed on its own" relative to its previous execution
-/// record (module ID, params, or wiring differ). A missing previous record (newly added
-/// node) or a non-successful previous run also counts as self-changed.
+/// record (module ID, params, or wiring differ, OR the previously recorded output
+/// file(s) no longer exist on disk). A missing previous record (newly added node) or a
+/// non-successful previous run also counts as self-changed.
+///
+/// On the "output files no longer exist" criterion: a path having been recorded in meta
+/// doesn't mean that output is still available now — the file could have been deleted by
+/// the cleanup module, by the user manually, or by an external disk-cleanup tool between
+/// two post-processing runs. If this node were skipped because its "config is unchanged"
+/// (see `build_effective_pipeline`), its stale output path recorded in meta would be
+/// handed to downstream nodes as real data by `build_pre_collected` — the downstream node
+/// receives a path that simply doesn't exist, failing only once it tries to read it, with
+/// an error message completely disconnected from the real cause ("the upstream artifact
+/// is gone"). Folding this into "self-changed" makes the node re-execute (regenerating
+/// the missing output) instead of pretending it's still successful.
 fn node_self_changed(node: &PipelineNode, prev_execution: &[PpExecutionEntry]) -> bool {
-    let Some(prev) = prev_execution.iter().find(|e| e.node_id == node.node_id) else {
-        return true; // 新增节点，无历史记录 / New node, no history
+    let eid = node.effective_id();
+    let Some(prev) = prev_execution.iter().find(|e| e.effective_id() == eid) else {
+        return true;
     };
     let was_success = matches!(
         prev.result.as_ref().map(|r| &r.code),
         Some(PpExecCode::Ok | PpExecCode::Done | PpExecCode::Skipped)
     );
-    if !was_success {
-        return true;
-    }
-    if prev.module_id != node.module_id {
-        return true;
-    }
-    let (params, wiring) = node_config_snapshot(node);
-    prev.params != params || prev.wiring != wiring
+    if !was_success { return true; }
+    if prev.module_id != node.module_id { return true; }
+    if prev.config_fingerprint != node_config_fingerprint(node) { return true; }
+    if !all_recorded_outputs_exist(&prev.outputs) { return true; }
+    false
+}
+
+/// 检查 meta 中按端口分组记录的输出路径（`Vec<Vec<String>>`，见 [`PpExecutionEntry::outputs`]
+/// 的文档说明）是否每一个都仍然真实存在于磁盘上。空列表（节点无输出）视为通过。
+///
+/// Check whether every output path recorded in meta, grouped by port
+/// (`Vec<Vec<String>>`, see [`PpExecutionEntry::outputs`]'s doc comment), still actually
+/// exists on disk. An empty list (node produced no output) is considered passing.
+fn all_recorded_outputs_exist(outputs: &[Vec<String>]) -> bool {
+    outputs.iter().flatten().all(|p| std::path::Path::new(p).exists())
+}
+
+/// 将执行引擎按端口顺序返回的扁平路径列表（`inputs`/`outputs`）转换为 meta 存储格式：
+/// 按端口分组的二维数组，每个端口内部按 `BUNDLE_SEP`（`\n`）拆分为多个路径字符串。
+///
+/// 流水线执行时的实际连线格式完全不受影响——`MediaBundle` 端口传递的仍然是
+/// "视频路径\n图片路径" 的单一 PathBuf；这里只是让 meta JSON 中的表达更清晰，
+/// 调用方可以直接按数组下标取路径，无需各自重复实现按 `\n` 拆分的逻辑。
+///
+/// Convert the flat, port-ordered path list returned by the execution engine
+/// (`inputs`/`outputs`) into the meta storage format: a 2D array grouped by port, with
+/// each port's single string split on `BUNDLE_SEP` (`\n`) into multiple path strings.
+///
+/// The actual pipeline wiring format is completely unaffected — a `MediaBundle` port
+/// still carries a single "video_path\nimage_path" PathBuf during execution; this only
+/// makes the meta JSON representation clearer so callers can index into the array
+/// directly instead of each re-implementing `\n`-splitting themselves.
+fn group_paths_by_bundle(paths: &[std::path::PathBuf]) -> Vec<Vec<String>> {
+    paths
+        .iter()
+        .map(|p| {
+            p.to_string_lossy()
+                .split(crate::postprocess::builtin_nodes::BUNDLE_SEP)
+                .map(|s| s.to_string())
+                .collect()
+        })
+        .collect()
+}
+
+/// `group_paths_by_bundle` 的逆操作：将 meta 中按端口分组的二维数组重新合并为
+/// 扁平的单路径-per-port 列表（同端口内的多个字符串重新用 `BUNDLE_SEP` 拼接），
+/// 用于将历史 meta 记录重新接入执行引擎（如 `build_pre_collected`/`merge_with_prev_results`）。
+///
+/// Inverse of `group_paths_by_bundle`: re-joins the meta's per-port grouped arrays back
+/// into a flat single-path-per-port list (strings within the same port are re-joined with
+/// `BUNDLE_SEP`), for feeding historical meta records back into the execution engine
+/// (e.g. `build_pre_collected`/`merge_with_prev_results`).
+fn ungroup_paths_from_bundle(grouped: &[Vec<String>]) -> Vec<std::path::PathBuf> {
+    let sep = crate::postprocess::builtin_nodes::BUNDLE_SEP.to_string();
+    grouped
+        .iter()
+        .map(|port_paths| std::path::PathBuf::from(port_paths.join(&sep)))
+        .collect()
 }
 
 /// 计算本次需要（重新）执行的"脏"节点集合：自身配置变更的节点，加上所有
@@ -523,11 +720,9 @@ fn compute_dirty_nodes(
         .nodes
         .iter()
         .filter(|n| n.enabled && node_self_changed(n, prev_execution))
-        .map(|n| n.node_id.clone())
+        .map(|n| n.effective_id().to_string())
         .collect();
 
-    // 沿边向下游传播脏标记，直到不再有新节点被标记（BFS 定点）
-    // Propagate the dirty mark downstream along edges until no new nodes are added (BFS fixpoint)
     loop {
         let mut added = false;
         for edge in &edges {
@@ -536,34 +731,20 @@ fn compute_dirty_nodes(
                 added = true;
             }
         }
-        if !added {
-            break;
-        }
+        if !added { break; }
     }
-
     dirty
 }
 
-/// 构建有效流水线：跳过上次已成功且未变更（不在脏节点集合中）的节点，保留边关系。
-/// 为避免图结构损坏，只从节点列表中过滤，边保持原样（run_pipeline 内部会自动处理孤立边）。
-///
-/// Build the effective pipeline: skip nodes that succeeded previously and are unchanged
-/// (not in the dirty set). Only filters from the node list; edges are kept intact
-/// (run_pipeline handles dangling edges internally).
-fn build_effective_pipeline(
-    pipeline: &PipelineConfig,
-    dirty_nodes: &HashSet<String>,
-) -> PipelineConfig {
+fn build_effective_pipeline(pipeline: &PipelineConfig, dirty_nodes: &HashSet<String>) -> PipelineConfig {
     let mut p = pipeline.clone();
     p.nodes.retain(|n| {
-        if !n.enabled {
-            return true; // 保留禁用节点，run_pipeline 会跳过 / Keep disabled; run_pipeline skips it
-        }
-        let skip = !dirty_nodes.contains(&n.node_id);
+        if !n.enabled { return true; }
+        let skip = !dirty_nodes.contains(n.effective_id());
         if skip {
             tracing::info!(
                 "pp re-run: skipping node {} (module: {}) — succeeded previously and unchanged",
-                n.node_id, n.module_id
+                n.effective_id(), n.module_id
             );
         }
         !skip
@@ -571,64 +752,54 @@ fn build_effective_pipeline(
     p
 }
 
-/// 从上次执行记录中提取已成功且未变更节点的 outputs，预填到下游节点的 collected 输入槽。
-/// 这样在重新后处理时，被跳过的节点的输出仍能正常传递给新增/受影响的下游节点。
-/// 脏节点（即将重新执行）的历史 outputs 不预填，避免污染其重新执行后的真实输出。
-///
-/// Extract outputs of previously succeeded, unchanged nodes from execution records and
-/// pre-fill them into downstream nodes' collected input slots. This ensures skipped nodes'
-/// outputs still propagate to newly-added/affected downstream nodes. Dirty nodes (about to
-/// re-run) are excluded here so their stale outputs don't leak into the fresh run.
 fn build_pre_collected(
     pipeline: &PipelineConfig,
     prev_execution: &[PpExecutionEntry],
     dirty_nodes: &HashSet<String>,
 ) -> HashMap<String, Vec<(usize, std::path::PathBuf)>> {
     let mut pre: HashMap<String, Vec<(usize, std::path::PathBuf)>> = HashMap::new();
-
     let edges = pipeline.resolved_edges();
 
     for entry in prev_execution {
-        // 脏节点即将重新执行，跳过其历史 outputs / Dirty nodes will re-run; skip their stale outputs
-        if dirty_nodes.contains(&entry.node_id) {
-            continue;
-        }
-        // 仅处理上次成功且有 outputs 的节点
-        // Only handle previously succeeded nodes that produced outputs
+        if dirty_nodes.contains(entry.effective_id()) { continue; }
         let is_success = matches!(
             entry.result.as_ref().map(|r| &r.code),
             Some(PpExecCode::Ok | PpExecCode::Done | PpExecCode::Skipped)
         );
-        if !is_success {
+        if !is_success { continue; }
+        if entry.outputs.is_empty() { continue; }
+        // 二次防御：只信任"仍然存在于磁盘上"的历史输出路径，不能仅凭 meta 中
+        // 记录过就当作现在依然有效——`node_self_changed` 已经会把输出缺失的
+        // 节点标记为脏节点并从这里排除（见其文档说明），此处是防止未来改动
+        // 绕过那层判断而重新引入同一个 bug 的保险。
+        //
+        // Defense in depth: only trust historical output paths that "still exist on
+        // disk" — meta having recorded a path once doesn't mean it's still valid now.
+        // `node_self_changed` already marks nodes with missing outputs as dirty and
+        // excludes them from reaching here (see its doc comment); this is a safety net
+        // against a future change accidentally bypassing that check and reintroducing
+        // the same bug.
+        if !all_recorded_outputs_exist(&entry.outputs) {
+            tracing::warn!(
+                "pp re-run: node {} (module: {}) was expected unchanged but its recorded \
+                 output(s) no longer exist on disk; skipping stale pre-fill (should have \
+                 been caught as dirty already)",
+                entry.effective_id(), entry.module_id
+            );
             continue;
         }
-        let outputs = match entry.outputs.as_ref() {
-            Some(o) if !o.is_empty() => o,
-            _ => continue,
-        };
-
-        // 遍历该节点的所有出边，把 outputs 预填到下游节点的 collected 槽
-        // Traverse all outgoing edges and pre-fill downstream nodes' collected slots
-        for edge in edges.iter().filter(|e| e.from_node_id == entry.node_id) {
+        let outputs = ungroup_paths_from_bundle(&entry.outputs);
+        for edge in edges.iter().filter(|e| e.from_node_id == entry.effective_id()) {
             if let Some(output_path) = outputs.get(edge.from_port) {
                 pre.entry(edge.to_node_id.clone())
                     .or_default()
-                    .push((edge.to_port, std::path::PathBuf::from(output_path)));
+                    .push((edge.to_port, output_path.clone()));
             }
         }
     }
-
     pre
 }
 
-/// 将本次新执行结果与上次已成功且未变更的结果合并为最终结果列表。
-/// 脏节点（本次已重新执行）一律使用新结果，即使新结果意外缺失也不回退到旧记录，
-/// 避免用过期结果掩盖"本应重新执行但未执行"的问题。
-///
-/// Merge new execution results with previously succeeded, unchanged results.
-/// Dirty nodes (re-run this time) always use the new result — even if unexpectedly
-/// missing, we do not fall back to the stale record, to avoid masking a "should have
-/// re-run but didn't" bug behind an outdated result.
 fn merge_with_prev_results(
     new_results: Vec<NodeResult>,
     prev_execution: &[PpExecutionEntry],
@@ -637,37 +808,48 @@ fn merge_with_prev_results(
 ) -> Vec<NodeResult> {
     let mut merged: Vec<NodeResult> = Vec::new();
     for node in pipeline.nodes.iter().filter(|n| n.enabled) {
-        if let Some(r) = new_results.iter().find(|r| r.node_id == node.node_id) {
+        let eid = node.effective_id();
+        if let Some(r) = new_results.iter().find(|r| r.effective_id == eid) {
             merged.push(r.clone());
             continue;
         }
-        if dirty_nodes.contains(&node.node_id) {
-            // 脏节点本应重新执行但未产生结果（如流水线提前终止）——不回退到旧记录
-            // Dirty node should have re-run but produced no result (e.g. pipeline
-            // terminated early upstream) — do not fall back to the stale record
-            continue;
-        }
+        if dirty_nodes.contains(eid) { continue; }
         if let Some(prev) = prev_execution.iter().find(|e| {
-            e.node_id == node.node_id
+            e.effective_id() == eid
                 && matches!(
                     e.result.as_ref().map(|r| &r.code),
                     Some(PpExecCode::Ok | PpExecCode::Done | PpExecCode::Skipped)
                 )
         }) {
-            // 重建为成功结果（保留上次的输出路径）/ Reconstruct as successful result
+            // 二次防御：与 build_pre_collected 的同名检查一样——`node_self_changed`
+            // 已经会把输出缺失的节点标记为脏并从这里排除（`dirty_nodes.contains`
+            // 判断在上面已经 `continue` 掉了），这里只是防止未来改动绕过那层
+            // 判断后，最终写回 meta 的 pp_execution 里出现一条"结果码是 ok，但
+            // 输出文件其实已经不存在"的记录。
+            //
+            // Defense in depth, mirroring the same check in build_pre_collected —
+            // `node_self_changed` already marks nodes with missing outputs as dirty and
+            // excludes them from reaching here (the `dirty_nodes.contains` check above
+            // already `continue`s past them); this only guards against a future change
+            // bypassing that check and letting a "result code is ok, but the output file
+            // no longer actually exists" record end up in the final pp_execution
+            // written back to meta.
+            if !all_recorded_outputs_exist(&prev.outputs) {
+                tracing::warn!(
+                    "pp re-run: node {} (module: {}) was expected unchanged but its recorded \
+                     output(s) no longer exist on disk; dropping stale result (should have \
+                     been caught as dirty already)",
+                    eid, prev.module_id
+                );
+                continue;
+            }
             merged.push(NodeResult {
-                node_id: prev.node_id.clone(),
+                effective_id: prev.effective_id().to_string(),
                 module_id: prev.module_id.clone(),
                 code: prev.result.as_ref().map(|r| r.code.clone()).unwrap_or(PpExecCode::Ok),
-                message: prev.result.as_ref()
-                    .and_then(|r| r.message.clone())
-                    .unwrap_or_default(),
-                outputs: prev.outputs.as_deref()
-                    .unwrap_or(&[])
-                    .iter()
-                    .map(std::path::PathBuf::from)
-                    .collect(),
-                inputs: prev.inputs.iter().map(std::path::PathBuf::from).collect(),
+                message: prev.result.as_ref().and_then(|r| r.message.clone()).unwrap_or_default(),
+                outputs: ungroup_paths_from_bundle(&prev.outputs),
+                inputs: ungroup_paths_from_bundle(&prev.inputs),
             });
         }
     }

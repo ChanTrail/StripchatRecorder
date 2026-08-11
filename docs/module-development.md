@@ -52,7 +52,7 @@ PP_INPUT=<path>  PP_PARAM_<KEY>=<value> ...  ./<module_binary>
 | ---------------- | ---- | ------------------------------------------ |
 | `PP_INPUT`       | 是   | 输入视频文件的绝对路径                     |
 | `PP_PARAM_<KEY>` | 否   | 模块参数，`<KEY>` 为参数键名的大写形式     |
-| `PP_EXE_DIR`     | 否   | 模块二进制文件所在目录，可用于存放临时文件 |
+| `PP_EXE_DIR`     | 否   | 后端可执行文件所在目录，`pp_utils::tmp_dir()` 据此定位临时文件目录 |
 
 ### 标准输出协议
 
@@ -324,13 +324,20 @@ let meta: Option<(f64, i32, i32)> = video_meta(Path::new("/recordings/alice_2024
 
 ### 临时目录
 
-返回 `PP_EXE_DIR` 下的 `tmp/` 子目录（若未设置 `PP_EXE_DIR` 则使用模块二进制文件所在目录）。目录会自动创建。
+返回**后端可执行文件所在目录**下的 `tmp/` 子目录（而不是模块自身二进制文件所在
+目录——模块通常与其他模块共享同一个 `modules/` 目录，临时文件挂在后端目录下可
+避免与 `modules/` 目录本身的语义混淆）。目录会自动创建。
+
+主程序在通过新版 JSON stdin 协议调用模块时，会自动将后端可执行文件所在目录写入
+`PP_EXE_DIR` 环境变量（`ModuleInput::read()` 内部完成，模块无需手动处理）；仅当
+模块脱离主程序单独运行、且未设置 `PP_EXE_DIR` 时，才回退到模块自身二进制文件
+所在目录。
 
 ```rust
 use pp_utils::tmp_dir;
 
 let tmp: PathBuf = tmp_dir();
-// 例如 /app/stripchat-recorder/modules/tmp/
+// 例如 /app/stripchat-recorder/tmp/（后端可执行文件所在目录下）
 ```
 
 ### 进度上报

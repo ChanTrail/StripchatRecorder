@@ -57,52 +57,46 @@ pub fn startup_merge_leftover_segments(
     // Scan for merged-but-unprocessed videos (from meta/ dir: video files with status not finish/pp_error)
     let mut unprocessed_videos: Vec<PathBuf> = Vec::new();
     {
-        let meta_dir = crate::recording::meta::meta_dir();
-        if let Ok(entries) = std::fs::read_dir(&meta_dir) {
-            for entry in entries.flatten() {
-                let meta_path = entry.path();
-                if !meta_path.is_file() { continue; }
-                if meta_path.extension().and_then(|e| e.to_str()) != Some("json") { continue; }
-                let content = match std::fs::read_to_string(&meta_path) {
-                    Ok(c) => c,
-                    Err(_) => continue,
-                };
-                let meta: crate::recording::meta::VideoMeta = match serde_json::from_str(&content) {
-                    Ok(m) => m,
-                    Err(_) => continue,
-                };
-                // 只处理 status 为 recording（未完成）且有 video_path 的条目
-                // 实际上是寻找合并完成但后处理未运行的视频：status == "finish" 且 video_path 是文件
-                // We look for video files (not dirs) that exist but have no pp_execution success
-                if matches!(meta.status.as_str(), "finish") {
-                    let has_pp = meta.pp_execution.as_ref()
-                        .map(|e| !e.is_empty())
-                        .unwrap_or(false);
-                    if has_pp { continue; } // 已后处理过 / Already post-processed
-                }
-                let vp_str = match meta.video_path.as_deref() {
-                    Some(p) => p.to_string(),
-                    None => continue,
-                };
-                let path = std::path::PathBuf::from(&vp_str);
-                if !path.is_file() {
-                    continue;
-                }
-                // 排除 finish（已完成，上面已单独处理）和 recording（由活跃会话处理）。
-                // pp_waiting/pp_running 若不在本进程的内存队列中追踪，说明是进程重启前遗留的
-                // 陈旧状态（上次异常退出），需要重新加入 unprocessed_videos 触发后处理，
-                // 而不是被当作"仍在进行"而永久跳过。
-                //
-                // Exclude finish (already handled above) and recording (handled by active sessions).
-                // If pp_waiting/pp_running is not tracked by this process's in-memory queue, it's a
-                // stale status left over from a previous abnormal exit and should be re-added to
-                // unprocessed_videos to trigger post-processing, rather than being permanently
-                // skipped as "still in progress".
-                match meta.status.as_str() {
-                    "finish" | "pp_error" | "recording" => continue,
-                    "pp_waiting" | "pp_running" if state.pp_queue.is_tracked(&vp_str) => continue,
-                    _ => unprocessed_videos.push(path),
-                }
+        for meta_path in crate::recording::meta::list_all_meta_paths() {
+            let content = match std::fs::read_to_string(&meta_path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            let meta: crate::recording::meta::VideoMeta = match serde_json::from_str(&content) {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            // 只处理 status 为 recording（未完成）且有 video_path 的条目
+            // 实际上是寻找合并完成但后处理未运行的视频：status == "finish" 且 video_path 是文件
+            // We look for video files (not dirs) that exist but have no pp_execution success
+            if matches!(meta.status.as_str(), "finish") {
+                let has_pp = meta.pp_execution.as_ref()
+                    .map(|e| !e.is_empty())
+                    .unwrap_or(false);
+                if has_pp { continue; } // 已后处理过 / Already post-processed
+            }
+            let vp_str = match meta.video_path.as_deref() {
+                Some(p) => p.to_string(),
+                None => continue,
+            };
+            let path = std::path::PathBuf::from(&vp_str);
+            if !path.is_file() {
+                continue;
+            }
+            // 排除 finish（已完成，上面已单独处理）和 recording（由活跃会话处理）。
+            // pp_waiting/pp_running 若不在本进程的内存队列中追踪，说明是进程重启前遗留的
+            // 陈旧状态（上次异常退出），需要重新加入 unprocessed_videos 触发后处理，
+            // 而不是被当作"仍在进行"而永久跳过。
+            //
+            // Exclude finish (already handled above) and recording (handled by active sessions).
+            // If pp_waiting/pp_running is not tracked by this process's in-memory queue, it's a
+            // stale status left over from a previous abnormal exit and should be re-added to
+            // unprocessed_videos to trigger post-processing, rather than being permanently
+            // skipped as "still in progress".
+            match meta.status.as_str() {
+                "finish" | "pp_error" | "recording" => continue,
+                "pp_waiting" | "pp_running" if state.pp_queue.is_tracked(&vp_str) => continue,
+                _ => unprocessed_videos.push(path),
             }
         }
         unprocessed_videos.sort_by_key(|p| {

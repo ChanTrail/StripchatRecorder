@@ -110,27 +110,39 @@ pub fn builtin_module_infos() -> Vec<ModuleInfo> {
         "Split a media bundle into a video file (port 0) and an image file (port 1)",
     );
 
+    // 内置节点没有独立的 Cargo.toml，也不随 backend 版本单独展示版本号——
+    // 它们与 backend 是同一次编译产物，展示版本号对用户没有实际意义（无法单独升级），
+    // 留空即可，前端在 version 为空字符串时不渲染版本号徽章。
+    //
+    // Built-in nodes have no separate Cargo.toml and don't display a version on their
+    // own — they're compiled as part of the backend itself, so showing a version number
+    // would be meaningless to the user (they can't be upgraded independently). Left empty;
+    // the frontend skips rendering the version badge when it's an empty string.
     vec![
         ModuleInfo {
             id: ID_RECORDING_INPUT.to_string(),
             name: ri_name,
+            version: String::new(),
             description: ri_desc,
             input_types: vec![],
             output_types: vec![PortType::TsSessionDir],
             params: vec![],
             i18n: None,
             official: false,
+            reusable: false,
             exe_path: PathBuf::new(),
         },
         ModuleInfo {
             id: ID_UNPACK.to_string(),
             name: unpack_name,
+            version: String::new(),
             description: unpack_desc,
             input_types: vec![PortType::MediaBundle],
             output_types: vec![PortType::VideoFile, PortType::ImageFile],
             params: vec![],
             i18n: None,
             official: true,
+            reusable: true,
             exe_path: PathBuf::new(),
         },
     ]
@@ -142,12 +154,12 @@ pub fn builtin_module_infos() -> Vec<ModuleInfo> {
 ///
 /// - port 0 (VideoFile): 视频路径，始终存在 / Video path, always present
 /// - port 1 (ImageFile): 图片路径，bundle 中无图片时不输出 / Image path, absent when bundle has no image
-pub fn run_unpack(node_id: &str, inputs: &[PathBuf]) -> NodeResult {
+pub fn run_unpack(effective_id: &str, inputs: &[PathBuf]) -> NodeResult {
     let bundle = match inputs.first() {
         Some(p) => p,
         None => {
             return NodeResult {
-                node_id: node_id.to_string(),
+                effective_id: effective_id.to_string(),
                 module_id: ID_UNPACK.to_string(),
                 code: PpExecCode::Error,
                 message: "unpack: no input provided".to_string(),
@@ -161,7 +173,7 @@ pub fn run_unpack(node_id: &str, inputs: &[PathBuf]) -> NodeResult {
 
     if !video.exists() {
         return NodeResult {
-            node_id: node_id.to_string(),
+            effective_id: effective_id.to_string(),
             module_id: ID_UNPACK.to_string(),
             code: PpExecCode::Error,
             message: format!("unpack: video path not found: {}", video.display()),
@@ -180,7 +192,7 @@ pub fn run_unpack(node_id: &str, inputs: &[PathBuf]) -> NodeResult {
     }
 
     NodeResult {
-        node_id: node_id.to_string(),
+        effective_id: effective_id.to_string(),
         module_id: ID_UNPACK.to_string(),
         code: PpExecCode::Ok,
         message: format!("unpacked {} output(s)", outputs.len()),

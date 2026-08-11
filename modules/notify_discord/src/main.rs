@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 
 const DESCRIBE: &str = r#"{
     "id": "notify_discord",
-    "name": "Discord 通知 0.4.0",
+    "name": "Discord 通知",
     "description": "将录制信息和封面图发送到 Discord Webhook",
     "inputTypes": ["media_bundle"],
     "outputTypes": ["media_bundle"],
@@ -700,7 +700,7 @@ fn run() -> Result<(), String> {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(|s| s.as_str()) == Some("--describe") {
-        print!("{}", DESCRIBE);
+        print!("{}", pp_utils::describe_with_version(DESCRIBE, env!("CARGO_PKG_VERSION")));
         return;
     }
     if let Err(e) = run() {

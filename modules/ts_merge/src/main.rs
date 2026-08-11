@@ -26,7 +26,7 @@ use std::process::{Command, Stdio};
 /// Module metadata JSON, output via `--describe` argument.
 const DESCRIBE: &str = r#"{
     "id": "ts_merge",
-    "name": "合并 TS 分片 0.1.0",
+    "name": "合并 TS 分片",
     "description": "将录制产生的 TS 分片目录合并为单一视频文件。官方后处理模块应置于本模块之后。",
     "inputTypes": ["ts_session_dir"],
     "outputTypes": ["video_file"],
@@ -42,7 +42,7 @@ const DESCRIBE: &str = r#"{
         {
             "key": "output_dir",
             "label": "合并输出目录",
-            "type": "text",
+            "type": "dir",
             "default": "",
             "description": "合并后视频文件的输出目录。留空则与 TS 分片目录的父目录相同。"
         },
@@ -259,7 +259,7 @@ fn run() -> Result<serde_json::Value, String> {
 
 fn main() {    let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(|s| s.as_str()) == Some("--describe") {
-        print!("{}", DESCRIBE);
+        print!("{}", pp_utils::describe_with_version(DESCRIBE, env!("CARGO_PKG_VERSION")));
         return;
     }
     match run() {

@@ -9,13 +9,99 @@
 //! and periodic maintenance share identical logic (see how [`maintain_output_dir`] is
 //! invoked).
 
-use super::model::{VideoMeta, meta_dir};
+use super::model::{VideoMeta, list_all_meta_paths, meta_dir, meta_dir_for, username_from_path};
 use super::scan::{ensure_meta_files, ts_merge_output_dir};
 use super::store::{read_meta, write_meta};
 use std::path::Path;
 use std::sync::Arc;
 
-/// 扫描集中 meta/ 目录，删除所有对应视频文件（或 session_dir）已不存在的孤立 meta 文件。
+/// 一次性迁移：将 `meta_dir()` 根目录下的旧版扁平 meta 文件（升级前生成，直接平铺
+/// 存放、不含主播子目录）移动到按主播分子目录的新结构（`meta_dir()/{username}/{stem}.json`）。
+///
+/// 每个文件的目标子目录从其自身 `video_path` 字段推断用户名（[`username_from_path`]）；
+/// 若文件内容无法解析或缺少 `video_path` 字段，保守跳过（保留在原位，不强行猜测，
+/// 后续若确实孤立会被 [`cleanup_orphaned_meta_files`] 处理，但由于本函数仅基于文件
+/// 内容判断而非路径存在性，跳过不会误删任何数据）。已经位于子目录下的文件不受影响。
+///
+/// 应在程序启动时、任何其他 meta 扫描/读取发生之前调用一次；重复调用是幂等的——
+/// 已迁移的文件不再存在于根目录，不会被再次处理。
+///
+/// One-shot migration: move legacy flat meta files directly under `meta_dir()` root
+/// (generated before this change, with no per-streamer subdirectory) into the new
+/// per-streamer layout (`meta_dir()/{username}/{stem}.json`).
+///
+/// Each file's target subdirectory is inferred from its own `video_path` field
+/// ([`username_from_path`]); files that fail to parse or lack `video_path` are skipped
+/// conservatively (left in place rather than guessed at — if genuinely orphaned they'll
+/// later be handled by [`cleanup_orphaned_meta_files`], and since this function only
+/// acts based on file content rather than path existence, skipping never deletes data).
+/// Files already inside a subdirectory are untouched.
+///
+/// Must be called once at startup, before any other meta scan/read happens; repeated
+/// calls are idempotent — migrated files no longer exist at the root and won't be
+/// reprocessed.
+pub fn migrate_flat_meta_files() -> usize {
+    let dir = meta_dir();
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => return 0,
+    };
+
+    let mut migrated = 0usize;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        // 子目录（新结构）或非 json 文件，跳过 / Subdirectory (new layout) or non-json file, skip
+        if !path.is_file() || path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+
+        let content = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let meta: VideoMeta = match serde_json::from_str(&content) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let video_path_str = match meta.video_path.as_deref() {
+            Some(p) => p,
+            None => continue,
+        };
+
+        let username = username_from_path(Path::new(video_path_str));
+        let target_dir = meta_dir_for(&username);
+        if let Err(e) = std::fs::create_dir_all(&target_dir) {
+            tracing::warn!("Meta migration: failed to create dir {:?}: {}", target_dir, e);
+            continue;
+        }
+        let Some(file_name) = path.file_name() else { continue };
+        let target_path = target_dir.join(file_name);
+        if target_path.exists() {
+            tracing::warn!("Meta migration: target already exists, skipping {:?}", path);
+            continue;
+        }
+        match std::fs::rename(&path, &target_path) {
+            Ok(()) => {
+                tracing::info!("Meta migration: moved {:?} -> {:?}", path, target_path);
+                migrated += 1;
+            }
+            Err(e) => {
+                tracing::warn!("Meta migration: failed to move {:?}: {}", path, e);
+            }
+        }
+    }
+
+    if migrated > 0 {
+        tracing::info!(
+            "Meta migration: moved {} legacy flat meta file(s) into per-streamer subdirectories",
+            migrated
+        );
+    }
+    migrated
+}
+
+/// 扫描 meta/ 目录（含所有主播子目录），删除所有对应视频文件（或 session_dir）
+/// 已不存在的孤立 meta 文件；清理完成后顺手移除变空的主播子目录。
 ///
 /// 孤立判断的唯一依据：`video_path` 字段指向的路径（目录或视频文件）是否存在。
 /// 不再叠加任何基于 `status` 的前置过滤——`status` 是否为 "recording"/"pp_waiting"/
@@ -24,8 +110,9 @@ use std::sync::Arc;
 /// （包括因进程重启等原因卡在中间状态的陈旧记录），都应视为孤立并清理。
 /// 之前基于 status 的前置跳过会掩盖这类陈旧记录，导致孤立 meta 无法被清理。
 ///
-/// Scan the centralized meta/ directory and delete orphaned meta files whose
-/// corresponding video file or session_dir no longer exists.
+/// Scan the meta/ directory (including all per-streamer subdirectories) and delete
+/// orphaned meta files whose corresponding video file or session_dir no longer exists;
+/// afterwards, remove any streamer subdirectories left empty by the cleanup.
 ///
 /// The sole criterion for "orphaned": whether the path referenced by `video_path`
 /// (a directory or video file) exists. No status-based pre-filter is applied anymore —
@@ -36,25 +123,14 @@ use std::sync::Arc;
 /// stale records stuck mid-state due to a process restart). The previous status-based
 /// pre-filter masked exactly these stale records, preventing orphaned meta from being cleaned.
 pub fn cleanup_orphaned_meta_files() -> usize {
-    let dir = meta_dir();
-    if !dir.exists() {
+    let paths = list_all_meta_paths();
+    if paths.is_empty() {
         return 0;
     }
-    let entries = match std::fs::read_dir(&dir) {
-        Ok(e) => e,
-        Err(_) => return 0,
-    };
 
     let mut count = 0usize;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-        let name = match path.file_name().and_then(|n| n.to_str()) {
-            Some(n) if n.ends_with(".json") => n.to_string(),
-            _ => continue,
-        };
+    for path in paths {
+        let name = path.to_string_lossy().to_string();
 
         let meta_content = match std::fs::read_to_string(&path) {
             Ok(c) => c,
@@ -87,8 +163,31 @@ pub fn cleanup_orphaned_meta_files() -> usize {
 
     if count > 0 {
         tracing::info!("Meta cleanup: deleted {} orphaned meta file(s)", count);
+        remove_empty_meta_subdirs();
     }
     count
+}
+
+/// 移除 meta 根目录下已变空的主播子目录（如该主播的所有录制都已被删除/清理）。
+/// 仅做一层浅层检查，不递归——meta 子目录结构固定为一层。
+///
+/// Remove now-empty streamer subdirectories under the meta root (e.g. all of a
+/// streamer's recordings have been deleted/cleaned up). Only checks one level deep —
+/// the meta subdirectory structure is a fixed single level.
+fn remove_empty_meta_subdirs() {
+    let Ok(entries) = std::fs::read_dir(meta_dir()) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let is_empty = std::fs::read_dir(&path)
+            .map(|mut e| e.next().is_none())
+            .unwrap_or(false);
+        if is_empty {
+            let _ = std::fs::remove_dir(&path);
+        }
+    }
 }
 
 /// 启动孤立 meta 清理调度器：立即执行一次，之后每小时执行一次。

@@ -50,7 +50,7 @@ A module must support two invocation modes:
 | ---------------- | -------- | ------------------------------------------------------------- |
 | `PP_INPUT`       | Yes      | Absolute path to the input video file                         |
 | `PP_PARAM_<KEY>` | No       | Module parameter; `<KEY>` is the uppercased parameter key     |
-| `PP_EXE_DIR`     | No       | Directory containing the module binary, useful for temp files |
+| `PP_EXE_DIR`     | No       | The backend executable's own directory; `pp_utils::tmp_dir()` uses it to locate the temp file directory |
 
 ### Stdout Protocol
 
@@ -322,13 +322,23 @@ let meta: Option<(f64, i32, i32)> = video_meta(Path::new("/recordings/alice_2024
 
 ### Temporary Directory
 
-Returns a writable `tmp/` subdirectory under `PP_EXE_DIR` (or next to the module binary if `PP_EXE_DIR` is not set). The directory is created automatically.
+Returns a writable `tmp/` subdirectory under the **backend executable's own
+directory** (not the module's own binary directory — modules typically share a
+single `modules/` directory with other modules, so nesting the tmp dir under the
+backend's directory instead avoids blurring the meaning of `modules/` itself). The
+directory is created automatically.
+
+When the host invokes a module via the current JSON stdin protocol, it automatically
+sets the `PP_EXE_DIR` env var to the backend executable's own directory (handled
+internally by `ModuleInput::read()`; modules don't need to do anything). It only
+falls back to the module's own binary directory when the module is run standalone
+outside the host app and `PP_EXE_DIR` isn't set.
 
 ```rust
 use pp_utils::tmp_dir;
 
 let tmp: PathBuf = tmp_dir();
-// e.g. /app/stripchat-recorder/modules/tmp/
+// e.g. /app/stripchat-recorder/tmp/ (under the backend executable's directory)
 ```
 
 ### Progress Reporting

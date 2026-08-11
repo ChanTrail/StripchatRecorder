@@ -170,7 +170,12 @@ pub fn init_locale_dirs() {
     }
 
     // 模块内置语言文件：不存在则创建，存在但校验失败则重建
-    // Built-in module locale files: create if missing, rebuild if validation fails
+    // `__builtin__` 是按节点分组的嵌套结构，需要用专门的校验函数（见
+    // validate_builtin_locale 的文档），其余常规模块用扁平结构的校验函数。
+    //
+    // Built-in module locale files: create if missing, rebuild if validation fails.
+    // `__builtin__` has a nested per-node structure and needs its own validator (see
+    // validate_builtin_locale's docs); other regular modules use the flat-structure validator.
     for (module_id, locale_code, content) in MODULE_DEFAULTS {
         let dir = module_locale_dir(module_id);
         if let Err(e) = std::fs::create_dir_all(&dir) {
@@ -178,10 +183,15 @@ pub fn init_locale_dirs() {
             continue;
         }
         let file_path = dir.join(format!("{}.json", locale_code));
+        let validator: fn(&serde_json::Value, &str) -> Result<(), String> = if *module_id == "__builtin__" {
+            validate_builtin_locale
+        } else {
+            validate_module_locale
+        };
         write_or_rebuild_if_invalid(
             &file_path,
             content,
-            validate_module_locale,
+            validator,
             &format!("{}/{}", module_id, locale_code),
         );
     }
@@ -228,11 +238,21 @@ fn validate_app_locale(value: &serde_json::Value, default_content: &str) -> Resu
     Ok(())
 }
 
-/// 校验模块语言文件：
-/// 必须是 JSON object，且包含 `name`、`description`、`params` 三个 key。
+/// 校验模块语言文件：必须是 JSON object，且包含 `name`、`description`、`params`
+/// 三个 key。只校验键的完整性，不检查值的具体内容——翻译文本本身允许用户自定义
+/// 替换为任意内容，值的取值范围不属于"格式是否有效"的判断标准。
 ///
-/// Validate a module locale file:
-/// Must be a JSON object containing `name`, `description`, and `params`.
+/// 只适用于常规的单节点模块（每个可执行模块对应一个 `ModuleInfo`）。`__builtin__`
+/// 对应多个内置节点，顶层结构不同，见 [`validate_builtin_locale`]。
+///
+/// Validate a module locale file: must be a JSON object containing `name`,
+/// `description`, and `params`. Only checks key completeness, not value content —
+/// translation text itself is meant to be freely customizable by the user, so the
+/// value's content is not part of what determines "format validity".
+///
+/// Only applies to regular single-node modules (each executable module maps to one
+/// `ModuleInfo`). `__builtin__` covers multiple built-in nodes and has a different
+/// top-level shape — see [`validate_builtin_locale`].
 fn validate_module_locale(value: &serde_json::Value, _default_content: &str) -> Result<(), String> {
     let obj = value
         .as_object()
@@ -241,6 +261,58 @@ fn validate_module_locale(value: &serde_json::Value, _default_content: &str) -> 
     for required in ["name", "description", "params"] {
         if !obj.contains_key(required) {
             return Err(format!("missing required key: {}", required));
+        }
+    }
+
+    Ok(())
+}
+
+/// 校验 `__builtin__` locale 文件：与常规模块 locale 文件（单节点，顶层直接是
+/// `name`/`description`/`params`）不同，`__builtin__` 对应多个内置节点（目前是
+/// `recording_input` 和 `unpack`，见 `postprocess::builtin_nodes`），顶层结构是
+/// "按节点 key 分组"的嵌套对象——每个节点 key 下才是常规的
+/// `name`/`description`/`params` 结构。
+///
+/// 不硬编码要求具体哪些节点 key 必须存在——`builtin_nodes.rs` 的读取逻辑本身就
+/// 容忍某个节点 key 缺失（缺失时回退到内嵌的英文默认值），校验只需确保**已存在**
+/// 的每个节点条目结构正确即可，这样未来新增内置节点时旧的 locale 文件不会因
+/// "缺少新节点的 key"而被误判为无效。
+///
+/// 只校验键的完整性，不检查值的具体内容，与 [`validate_module_locale`] 保持一致
+/// 的校验哲学。
+///
+/// Validate a `__builtin__` locale file: unlike a regular module locale file (single
+/// node, `name`/`description`/`params` directly at the top level), `__builtin__` covers
+/// multiple built-in nodes (currently `recording_input` and `unpack`, see
+/// `postprocess::builtin_nodes`) — its top level is a nested object grouped by node
+/// key, with the usual `name`/`description`/`params` shape one level down, under each
+/// node key.
+///
+/// Does not hardcode which specific node keys must be present — the reading logic in
+/// `builtin_nodes.rs` already tolerates a missing node key (falling back to an embedded
+/// English default), so validation only needs to ensure that whichever entries **are**
+/// present have the correct shape. This way, an older locale file won't be wrongly
+/// flagged as invalid just for "missing the key for a newly added built-in node".
+///
+/// Only checks key completeness, not value content, consistent with
+/// [`validate_module_locale`]'s validation philosophy.
+fn validate_builtin_locale(value: &serde_json::Value, _default_content: &str) -> Result<(), String> {
+    let obj = value
+        .as_object()
+        .ok_or_else(|| "not a JSON object".to_string())?;
+
+    if obj.is_empty() {
+        return Err("must contain at least one built-in node entry".to_string());
+    }
+
+    for (node_key, node_value) in obj {
+        let node_obj = node_value
+            .as_object()
+            .ok_or_else(|| format!("node \"{}\" must be a JSON object", node_key))?;
+        for required in ["name", "description", "params"] {
+            if !node_obj.contains_key(required) {
+                return Err(format!("node \"{}\" missing required key: {}", node_key, required));
+            }
         }
     }
 
@@ -310,7 +382,8 @@ fn write_or_rebuild_if_invalid(
 ///
 /// `file_type`:
 /// - `"app"` → 校验 app 文件（languageName + 所有顶层 key）
-/// - `"module"` → 校验 module 文件（name + description + params）
+/// - `"module"` → 校验常规单节点 module 文件（name + description + params）
+/// - `"builtin"` → 校验 `__builtin__` 的按节点分组嵌套结构（见 [`validate_builtin_locale`]）
 fn validate_file_at_path(
     path: &std::path::Path,
     file_type: &str,
@@ -322,6 +395,7 @@ fn validate_file_at_path(
 
     match file_type {
         "module" => validate_module_locale(&value, ""),
+        "builtin" => validate_builtin_locale(&value, ""),
         _ => {
             // app 文件：用对应代码的默认内容做 key 校验
             // App file: use the default content for the corresponding code as the key reference
@@ -405,7 +479,16 @@ pub fn check_custom_locale_files() -> Vec<(String, String)> {
                     if is_builtin_module && builtin_locale_codes.contains(&locale_code.as_str()) {
                         continue;
                     }
-                    if let Err(reason) = validate_file_at_path(&file_path, "module") {
+                    // __builtin__ 的自定义语言文件（如用户新增了 __builtin__ 目录下
+                    // 未内置的语言代码）沿用按节点分组的嵌套结构校验；其余模块用常规
+                    // 单节点结构校验。
+                    //
+                    // Custom locale files for __builtin__ (e.g. the user added a locale
+                    // code not covered by the built-in defaults, still under the
+                    // __builtin__ directory) use the nested per-node structure
+                    // validator; all other modules use the regular single-node validator.
+                    let file_type = if module_id == "__builtin__" { "builtin" } else { "module" };
+                    if let Err(reason) = validate_file_at_path(&file_path, file_type) {
                         warnings.push((file_path.to_string_lossy().to_string(), reason));
                     }
                 }

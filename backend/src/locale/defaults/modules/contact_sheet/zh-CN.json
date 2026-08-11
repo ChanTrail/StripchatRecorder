@@ -1,5 +1,5 @@
 {
-  "name": "Contact Sheet 0.2.0",
+  "name": "Contact Sheet",
   "description": "每隔指定秒数截帧，拼合成一张带时间戳的预览图保存到视频同目录",
   "params": {
     "interval": { "label": "截帧间隔（秒）" },

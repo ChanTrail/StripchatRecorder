@@ -31,8 +31,6 @@ pub struct PpTaskStatus {
     pub pct: f64,
     /// 当前模块已完成进度值 / Current module done progress value
     pub mod_done: u32,
-    /// 当前模块总进度值 / Current module total progress value
-    pub mod_total: u32,
     /// 当前模块名称 / Current module name
     pub module_name: String,
     /// 已完成的节点数 / Number of completed nodes
@@ -93,7 +91,6 @@ impl PpQueue {
                 path: path.to_string(),
                 pct: 0.0,
                 mod_done: 0,
-                mod_total: 0,
                 module_name: String::new(),
                 done: 0,
                 total: 0,
@@ -116,7 +113,6 @@ impl PpQueue {
                 path: path.to_string(),
                 pct: 0.0,
                 mod_done: 0,
-                mod_total: 0,
                 module_name: String::new(),
                 done: 0,
                 total,
@@ -170,7 +166,6 @@ impl PpQueue {
         path: &str,
         pct: f64,
         mod_done: u32,
-        mod_total: u32,
         module_name: &str,
         done: usize,
         total: usize,
@@ -178,7 +173,6 @@ impl PpQueue {
         if let Some(t) = self.tasks.write().get_mut(path) {
             t.pct = pct;
             t.mod_done = mod_done;
-            t.mod_total = mod_total;
             t.module_name = module_name.to_string();
             t.done = done;
             t.total = total;
@@ -242,59 +236,48 @@ impl PpQueue {
     pub fn get_all_tasks(&self) -> Vec<PpTaskStatus> {
         let mut tasks: HashMap<String, PpTaskStatus> = self.tasks.read().clone();
 
-        // 扫描 meta/ 目录，补充历史后处理记录（status 为 finish 或 pp_error）
-        // Scan meta/ directory to supplement historical post-processing records
-        let meta_dir = crate::recording::meta::meta_dir();
-        if let Ok(entries) = std::fs::read_dir(&meta_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if !path.is_file() {
-                    continue;
-                }
-                if path.extension().and_then(|e| e.to_str()) != Some("json") {
-                    continue;
-                }
+        // 扫描 meta/ 目录（含所有主播子目录），补充历史后处理记录（status 为 finish 或 pp_error）
+        // Scan meta/ directory (including all per-streamer subdirectories) to supplement
+        // historical post-processing records
+        for path in crate::recording::meta::list_all_meta_paths() {
+            let content = match std::fs::read_to_string(&path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            let meta: crate::recording::meta::VideoMeta = match serde_json::from_str(&content) {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
 
-                let content = match std::fs::read_to_string(&path) {
-                    Ok(c) => c,
-                    Err(_) => continue,
-                };
-                let meta: crate::recording::meta::VideoMeta = match serde_json::from_str(&content) {
-                    Ok(m) => m,
-                    Err(_) => continue,
-                };
-
-                // 只处理已完成的后处理记录 / Only include completed post-processing records
-                if !matches!(meta.status.as_str(), "finish" | "pp_error") {
-                    continue;
-                }
-
-                // video_path 是前端用的 key / video_path is the key used by the frontend
-                let key = match meta.video_path.as_deref() {
-                    Some(p) => p.to_string(),
-                    None => continue,
-                };
-
-                if tasks.contains_key(&key) {
-                    continue;
-                }
-
-                let success = meta.status == "finish";
-                tasks.insert(
-                    key.clone(),
-                    PpTaskStatus {
-                        path: key,
-                        pct: if success { 100.0 } else { 0.0 },
-                        mod_done: 0,
-                        mod_total: 0,
-                        module_name: String::new(),
-                        done: 0,
-                        total: 0,
-                        status: if success { "done" } else { "error" }.to_string(),
-                        from_memory: false,
-                    },
-                );
+            // 只处理已完成的后处理记录 / Only include completed post-processing records
+            if !matches!(meta.status.as_str(), "finish" | "pp_error") {
+                continue;
             }
+
+            // video_path 是前端用的 key / video_path is the key used by the frontend
+            let key = match meta.video_path.as_deref() {
+                Some(p) => p.to_string(),
+                None => continue,
+            };
+
+            if tasks.contains_key(&key) {
+                continue;
+            }
+
+            let success = meta.status == "finish";
+            tasks.insert(
+                key.clone(),
+                PpTaskStatus {
+                    path: key,
+                    pct: if success { 100.0 } else { 0.0 },
+                    mod_done: 0,
+                    module_name: String::new(),
+                    done: 0,
+                    total: 0,
+                    status: if success { "done" } else { "error" }.to_string(),
+                    from_memory: false,
+                },
+            );
         }
 
         tasks.into_values().collect()

@@ -27,7 +27,7 @@ use std::path::Path;
 /// Module metadata JSON, output via `--describe` argument.
 const DESCRIBE: &str = r#"{
     "id": "contact_sheet",
-    "name": "Contact Sheet 0.4.0",
+    "name": "Contact Sheet",
     "description": "每隔指定秒数截帧，拼合成一张带时间戳的预览图保存到视频同目录",
     "inputTypes": ["video_file"],
     "outputTypes": ["media_bundle"],
@@ -181,7 +181,7 @@ fn run() -> Result<(), String> {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(|s| s.as_str()) == Some("--describe") {
-        print!("{}", DESCRIBE);
+        print!("{}", pp_utils::describe_with_version(DESCRIBE, env!("CARGO_PKG_VERSION")));
         return;
     }
     if let Err(e) = run() {

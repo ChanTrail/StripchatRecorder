@@ -109,39 +109,31 @@ pub async fn get_postprocess_tasks(
     ))
 }
 
+/// 获取指定视频的模块输出路径（如 contact_sheet 生成的预览图路径），供前端展示
+/// 预览按钮等 UI。
+///
+/// 数据来源为 meta 中的真实执行记录（`pp_execution[].outputs`），而非按模块参数
+/// 自行拼接/猜测路径——只有 `result.code == "ok"` 的节点才被视为产出了有效输出
+/// （`done` 表示无输出即终止、`error`/`cancelled` 表示失败、`skipped` 表示未执行），
+/// 避免向前端返回未经确认成功、或与实际参数（如 contact_sheet 的 format 参数
+/// 被后续修改）不一致的路径。
+///
+/// Get module output paths for a video (e.g. contact_sheet's generated preview image
+/// path), for frontend UI elements like preview buttons.
+///
+/// The data source is the real execution record in meta (`pp_execution[].outputs`),
+/// not a path assembled/guessed from module params — only nodes with
+/// `result.code == "ok"` are treated as having produced valid output (`done` means no
+/// output/pipeline terminated, `error`/`cancelled` mean failure, `skipped` means not
+/// executed), avoiding returning paths that were never confirmed successful or that
+/// no longer match the actual params (e.g. contact_sheet's `format` param changed since).
 pub async fn get_module_outputs(
-    AxumState(s): AxumState<ServerState>,
     Json(body): Json<PathBody>,
 ) -> ApiResult<serde_json::Value> {
     let video_path = std::path::Path::new(&body.path);
-    let pipeline = s.app_state.get_pipeline();
-    let mut outputs: std::collections::HashMap<String, String> =
-        std::collections::HashMap::new();
-
-    for node in &pipeline.nodes {
-        if !node.enabled {
-            continue;
-        }
-        if node.module_id == "contact_sheet" {
-            let format = node
-                .params
-                .get("format")
-                .and_then(|v: &serde_json::Value| v.as_str())
-                .unwrap_or("webp");
-            if let (Some(parent), Some(stem)) = (
-                video_path.parent(),
-                video_path.file_stem().and_then(|s| s.to_str()),
-            ) {
-                let img_path = parent.join(format!("{}.{}", stem, format));
-                if img_path.exists() {
-                    outputs.insert(
-                        node.module_id.clone(),
-                        img_path.to_string_lossy().to_string(),
-                    );
-                }
-            }
-        }
-    }
-
+    let meta = crate::recording::meta::read_meta(video_path);
+    let outputs = crate::recording::meta::extract_verified_module_outputs(
+        meta.as_ref().and_then(|m| m.pp_execution.as_deref()),
+    );
     Ok(Json(serde_json::to_value(outputs).unwrap()))
 }

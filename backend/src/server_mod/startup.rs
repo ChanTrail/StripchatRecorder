@@ -59,6 +59,18 @@ pub fn start_fs_watchers(app_state: Arc<AppState>, emitter: Arc<dyn Emitter>) {
     crate::watcher::fs_watch::start_locale_dir_watcher(emitter);
 }
 
+/// 一次性迁移旧版扁平 meta 文件（升级前生成、直接平铺于 meta 根目录下）到按主播
+/// 分子目录的新结构。必须在任何其他 meta 扫描/读取（包括下面的定时维护任务）
+/// 发生之前调用，确保扫描逻辑看到的始终是迁移后的最终布局。
+///
+/// One-shot migration of legacy flat meta files (generated before this change, laid
+/// out directly under the meta root) into the new per-streamer subdirectory layout.
+/// Must be called before any other meta scan/read (including the scheduled maintenance
+/// task below) so scanning logic always sees the post-migration layout.
+pub fn migrate_flat_meta_files() {
+    crate::recording::meta::migrate_flat_meta_files();
+}
+
 /// 在 `run_server()` 中统一执行所有启动时一次性任务。
 ///
 /// 注意：输出目录维护（合并遗留分片、重建 meta、触发遗漏后处理）不在此处执行，
@@ -73,6 +85,7 @@ pub fn start_fs_watchers(app_state: Arc<AppState>, emitter: Arc<dyn Emitter>) {
 /// startup check — so the startup pass and periodic maintenance share identical logic
 /// without duplicating it here.
 pub fn run_all(app_state: Arc<AppState>, emitter: Arc<dyn Emitter>) {
+    migrate_flat_meta_files();
     init_locale_dirs();
     check_ffmpeg();
     start_fs_watchers(app_state, emitter);

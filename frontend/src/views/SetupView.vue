@@ -25,6 +25,8 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { loadLocaleFromServer } from "@/i18n";
 import { useModuleLocaleStore } from "@/stores/moduleLocale";
 import { useLocalesStore } from "@/stores/locales";
+import { useDirectoryBrowser } from "@/composables/useDirectoryBrowser";
+import { FolderOpen } from "@lucide/vue";
 
 const router = useRouter();
 const { t, locale } = useI18n();
@@ -70,6 +72,14 @@ onMounted(async () => {
 	scMirror.value = s.sc_mirror_url || "";
 	cdnProxy.value = s.cdn_proxy_url || "";
 });
+
+// ── 目录浏览器 / Directory browser ───────────────────────────────────────────
+const { open: openDirectoryBrowser } = useDirectoryBrowser();
+function browseOutputDir() {
+	openDirectoryBrowser(outputDir.value, (picked) => {
+		outputDir.value = picked;
+	});
+}
 
 // ── 语言切换 / Language switch ───────────────────────────────────────────────
 async function setLanguage(lang: string) {
@@ -212,12 +222,24 @@ async function finish() {
 							</div>
 							<div class="flex flex-col gap-2">
 								<Label>{{ t("settings.outputDir.label") }}</Label>
-								<Input
-									v-model="outputDir"
-									:placeholder="t('setup.step2.placeholder')"
-									autocomplete="off"
-									autofocus
-								/>
+								<div class="flex items-center gap-1.5">
+									<Input
+										v-model="outputDir"
+										:placeholder="t('setup.step2.placeholder')"
+										autocomplete="off"
+										autofocus
+										class="flex-1"
+									/>
+									<Button
+										type="button"
+										variant="outline"
+										size="icon"
+										:title="t('settings.outputDir.pick')"
+										@click="browseOutputDir"
+									>
+										<FolderOpen class="size-4" />
+									</Button>
+								</div>
 								<p class="text-xs text-muted-foreground">{{ t("setup.step2.hint") }}</p>
 							</div>
 						</template>

@@ -1,5 +1,5 @@
 {
-  "name": "Contact Sheet 0.2.0",
+  "name": "Contact Sheet",
   "description": "Extract frames at specified intervals and tile them into a timestamped preview image saved next to the video",
   "params": {
     "interval": { "label": "Frame interval (seconds)" },

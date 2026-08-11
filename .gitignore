@@ -27,3 +27,4 @@ dist-ssr
 build/
 build_tmp/
 SCAPI Test/
+modules/test_suffix/

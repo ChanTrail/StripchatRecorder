@@ -44,6 +44,83 @@ function listModules() {
     );
 }
 
+/**
+ * 从模块自身 Cargo.toml 的 [package] 段读取 version 字段。
+ * 只在 [package] 段内匹配，避免误读 [dependencies] 等其他段中同名字段
+ * （如 `grammers-client = { version = "0.10" }`）。
+ *
+ * Read the `version` field from a module's own Cargo.toml [package] section.
+ * Only matches within [package] to avoid misreading a same-named field from
+ * other sections (e.g. `grammers-client = { version = "0.10" }` under [dependencies]).
+ *
+ * @param {string} cargoTomlPath
+ * @returns {string|null}
+ */
+function readPackageVersion(cargoTomlPath) {
+  const content = fs.readFileSync(cargoTomlPath, "utf8");
+  let inPackage = false;
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (/^\[.*\]$/.test(line)) {
+      inPackage = line === "[package]";
+      continue;
+    }
+    if (inPackage) {
+      const m = line.match(/^version\s*=\s*"([^"]+)"/);
+      if (m) return m[1];
+    }
+  }
+  return null;
+}
+
+/**
+ * 判断 outDir 下的某个文件名是否是指定模块 stem 遗留的旧产物（无论是否带版本号
+ * 后缀），需要在复制本次新构建的二进制前清理掉，避免新旧文件并存导致
+ * discover_modules 扫描到重复的模块 id。
+ *
+ * 匹配范围涵盖：裸文件名（`{stem}` / `{stem}.exe`，见于本次刚构建、尚未改名前的
+ * 中间产物或更早版本的构建脚本）、新的版本化命名（`{stem}-0.5.0.exe`）、以及历史上
+ * 曾经手动在 Cargo.toml 的 `[[bin]] name` 里内嵌版本号的旧约定（`{stem}_v030.exe`）——
+ * 后两者的共同特征是 stem 后紧跟 `-` 或 `_`。
+ *
+ * Determine whether a filename in outDir is a stale leftover artifact for the given
+ * module stem (versioned or not), which must be cleaned up before copying this build's
+ * new binary — otherwise old and new files would coexist and discover_modules would see
+ * a duplicate module id.
+ *
+ * Covers: bare filenames (`{stem}` / `{stem}.exe`, from this build's intermediate output
+ * before renaming, or from an older version of this build script), the new versioned
+ * naming (`{stem}-0.5.0.exe`), and the legacy convention of hand-embedding the version
+ * into Cargo.toml's `[[bin]] name` (`{stem}_v030.exe`) — the latter two share the trait
+ * of stem being immediately followed by `-` or `_`.
+ *
+ * @param {string} fileName
+ * @param {string} stem
+ * @returns {boolean}
+ */
+function isStaleModuleBinary(fileName, stem) {
+  if (fileName === stem || fileName === `${stem}.exe`) return true;
+  if (!fileName.startsWith(stem)) return false;
+  const nextChar = fileName[stem.length];
+  return nextChar === "-" || nextChar === "_";
+}
+
+/**
+ * 清理 outDir 下指定模块 stem 的所有历史遗留产物文件。
+ * Remove all stale leftover artifact files for the given module stem in outDir.
+ *
+ * @param {string} outDir
+ * @param {string} stem
+ */
+function removeStaleModuleBinaries(outDir, stem) {
+  if (!fs.existsSync(outDir)) return;
+  for (const f of fs.readdirSync(outDir)) {
+    if (isStaleModuleBinary(f, stem)) {
+      fs.rmSync(path.join(outDir, f), { force: true });
+    }
+  }
+}
+
 // ── ANSI 颜色 / ANSI colors ──────────────────────────────────────────────────
 
 const C = {
@@ -162,8 +239,30 @@ function checkModules() {
 }
 
 /**
- * 构建所有模块并将产物二进制复制到指定目录。
- * Build all modules and copy output binaries to the given directory.
+ * 构建所有模块并将产物二进制复制到指定目录，复制时文件名附加模块自身
+ * Cargo.toml 中的 version 号（如 `notify_telegram-0.5.0.exe`），方便用户在
+ * modules/ 目录中直接从文件名分辨版本，不必逐个运行 --describe。
+ *
+ * 复制前会清理 outDir 下该模块的所有历史遗留产物（不论是否带版本号后缀、
+ * 不论是本次构建脚本的中间产物还是更早版本命名约定留下的文件），确保同一
+ * 模块任何时候在 outDir 下只有"本次构建的版本"这一份文件——避免新旧版本
+ * 并存导致后端 discover_modules 扫描到重复的模块 id（曾发生过：升级模块
+ * 版本后旧文件未清理，新旧文件并存，后端随机选中其中一个，导致版本号显示
+ * 不一致、或运行的是修复 bug 之前的旧版本）。
+ *
+ * Build all modules and copy output binaries to the given directory, appending each
+ * module's own Cargo.toml version to the copied filename (e.g.
+ * `notify_telegram-0.5.0.exe`), so users can tell versions apart directly from
+ * filenames in modules/ without running --describe on each one.
+ *
+ * Before copying, all of that module's stale leftover artifacts in outDir are removed
+ * (versioned or not, whether left by an earlier run of this build script or by an older
+ * naming convention) — ensuring outDir always has exactly one file per module: the one
+ * from this build. This avoids old and new versions coexisting, which previously caused
+ * the backend's discover_modules to see a duplicate module id (this actually happened:
+ * after bumping a module's version, the old file wasn't cleaned up, both coexisted, and
+ * the backend would nondeterministically pick either one — causing inconsistent version
+ * display, or running a stale binary predating a bug fix).
  *
  * @param {"debug"|"release"} profile  Cargo 构建模式 / Cargo build profile
  * @param {string} outDir              二进制复制目标目录 / Target directory for copied binaries
@@ -173,13 +272,19 @@ function buildModules(profile, outDir) {
   fs.mkdirSync(outDir, { recursive: true });
   for (const name of listModules()) {
     console.log(`  → ${name}`);
+    const manifestPath = path.join(MODULES_DIR, name, "Cargo.toml");
     run(
-      `cargo build --manifest-path "${path.join(MODULES_DIR, name, "Cargo.toml")}" --bins${releaseFlag}`,
+      `cargo build --manifest-path "${manifestPath}" --bins${releaseFlag}`,
       { env: { ...process.env, CARGO_TARGET_DIR: moduleTarget(name) } }
     );
+    const version = readPackageVersion(manifestPath);
     const bins = collectBinaries(path.join(moduleTarget(name), profile));
     for (const bin of bins) {
-      const dst = path.join(outDir, bin);
+      const ext = process.platform === "win32" ? ".exe" : "";
+      const stem = ext ? bin.slice(0, -ext.length) : bin;
+      removeStaleModuleBinaries(outDir, stem);
+      const dstName = version ? `${stem}-${version}${ext}` : bin;
+      const dst = path.join(outDir, dstName);
       fs.copyFileSync(path.join(moduleTarget(name), profile, bin), dst);
       if (process.platform !== "win32") fs.chmodSync(dst, 0o755);
     }
@@ -246,6 +351,9 @@ module.exports = {
   NESTED,
   moduleTarget,
   listModules,
+  readPackageVersion,
+  isStaleModuleBinary,
+  removeStaleModuleBinaries,
   step,
   header,
   run,

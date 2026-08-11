@@ -15,7 +15,7 @@ use pp_utils::{video_duration, ModuleInput, output_done, output_ok, PROGRESS_SCA
 
 const DESCRIBE: &str = r#"{
     "id": "filter_short",
-    "name": "过滤短视频 0.4.0",
+    "name": "过滤短视频",
     "description": "删除时长低于指定阈值的视频文件，使流水线在此终止；否则原样传递给下一节点",
     "inputTypes": ["video_file"],
     "outputTypes": ["video_file"],
@@ -92,7 +92,7 @@ fn run() -> Result<(), String> {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(|s| s.as_str()) == Some("--describe") {
-        print!("{}", DESCRIBE);
+        print!("{}", pp_utils::describe_with_version(DESCRIBE, env!("CARGO_PKG_VERSION")));
         return;
     }
     if let Err(e) = run() {

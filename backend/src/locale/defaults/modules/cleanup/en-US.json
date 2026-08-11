@@ -1,7 +1,9 @@
 {
-  "name": "Final Cleanup 0.1.0",
-  "description": "Deletes all data related to the currently processed video: the video file, its meta file, Contact Sheet preview images, and same-named temp files left by other modules",
+  "name": "Final Cleanup",
+  "description": "Deletes data related to the currently processed video: recording data (video file, preview image, and meta record — deleted together as a single unit) and cache files (leftover same-named temp files left by other modules, deleted by default)",
   "params": {
+    "delete_recording_data": { "label": "Delete recording data (video file + preview image + meta record)" },
+    "delete_tmp_files": { "label": "Delete cache files (leftover temp files from other modules)" },
     "dry_run": { "label": "Dry run (preview only, no deletion)" }
   }
 }

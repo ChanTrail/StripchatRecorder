@@ -33,6 +33,21 @@ pub struct RecordingFile {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub segments_failed: Option<u64>,
     pub username: String,
+    /// 模块输出路径（如 contact_sheet 生成的预览图），按 module_id 建立映射。
+    /// 只包含节点执行结果为 `"ok"` 且路径当前确实存在于磁盘上的条目（见
+    /// [`crate::recording::meta::extract_verified_module_outputs`]）——前端应仅
+    /// 依据此字段判断预览图按钮是否显示，而非自行推断路径或仅凭 meta 中的路径
+    /// 字符串就假定文件存在。
+    ///
+    /// Module output paths (e.g. contact_sheet's generated preview image), keyed by
+    /// module_id. Only includes entries whose node result is `"ok"` and whose path
+    /// currently exists on disk (see
+    /// [`crate::recording::meta::extract_verified_module_outputs`]) — the frontend
+    /// should rely solely on this field to decide whether to show a preview button,
+    /// rather than inferring the path itself or assuming a file exists just because
+    /// meta records a path string for it.
+    #[serde(skip_serializing_if = "std::collections::HashMap::is_empty", default)]
+    pub module_outputs: std::collections::HashMap<String, String>,
 }
 
 /// 录制文件列表查询的核心实现（同步，在阻塞线程中调用）。
@@ -75,7 +90,7 @@ pub fn list_recordings_inner(
         let (seg_dl, seg_fail) = live_segment_stats.get(&session_dir_str).copied().unwrap_or((0, 0));
 
         files.push(RecordingFile {
-            name: format!("{}/", stem),
+            name: stem.to_string(),
             path: session_dir_str,
             size_bytes,
             started_at: local.to_rfc3339(),
@@ -89,91 +104,91 @@ pub fn list_recordings_inner(
             segments_downloaded: Some(seg_dl),
             segments_failed: Some(seg_fail),
             username: username.to_string(),
+            module_outputs: std::collections::HashMap::new(),
         });
     }
 
-    // 2. 扫描 meta/ 目录，获取所有已完成/后处理中的录制
-    // 2. Scan meta/ directory to get all completed/post-processed recordings
-    let meta_dir = crate::recording::meta::meta_dir();
-    if let Ok(entries) = std::fs::read_dir(&meta_dir) {
-        for entry in entries.flatten() {
-            let meta_path = entry.path();
-            if !meta_path.is_file() { continue; }
-            if meta_path.extension().and_then(|e| e.to_str()) != Some("json") { continue; }
+    // 2. 扫描 meta/ 目录（含所有主播子目录），获取所有已完成/后处理中的录制
+    // 2. Scan meta/ directory (including all per-streamer subdirectories) to get all
+    //    completed/post-processed recordings
+    for meta_path in crate::recording::meta::list_all_meta_paths() {
+        let content = match std::fs::read_to_string(&meta_path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let meta: crate::recording::meta::VideoMeta = match serde_json::from_str(&content) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
 
-            let content = match std::fs::read_to_string(&meta_path) {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
-            let meta: crate::recording::meta::VideoMeta = match serde_json::from_str(&content) {
-                Ok(m) => m,
-                Err(_) => continue,
-            };
+        // 跳过正在录制的（由活跃会话处理）/ Skip actively recording (handled by active sessions)
+        if meta.status == "recording" { continue; }
 
-            // 跳过正在录制的（由活跃会话处理）/ Skip actively recording (handled by active sessions)
-            if meta.status == "recording" { continue; }
+        // video_path 是对应的视频文件或 session_dir 路径
+        let vp_str = match meta.video_path.as_deref() {
+            Some(p) => p.to_string(),
+            None => continue,
+        };
+        let video_path = std::path::PathBuf::from(&vp_str);
+        let stem = video_path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
 
-            // video_path 是对应的视频文件或 session_dir 路径
-            let vp_str = match meta.video_path.as_deref() {
-                Some(p) => p.to_string(),
-                None => continue,
-            };
-            let video_path = std::path::PathBuf::from(&vp_str);
-            let stem = video_path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        // 跳过活跃录制中的 stem（避免重复）/ Skip stems currently being recorded
+        if active_stems.contains(stem) { continue; }
 
-            // 跳过活跃录制中的 stem（避免重复）/ Skip stems currently being recorded
-            if active_stems.contains(stem) { continue; }
+        // 从 pp_queue 获取更精确的运行时状态（若有）
+        // Use runtime status from pp_queue if available (more accurate)
+        let runtime_status = state.pp_queue.get_status(&vp_str);
 
-            // 从 pp_queue 获取更精确的运行时状态（若有）
-            // Use runtime status from pp_queue if available (more accurate)
-            let runtime_status = state.pp_queue.get_status(&vp_str);
+        let is_dir = video_path.is_dir();
+        let size_bytes = if is_dir {
+            crate::recording::ffmpeg_util::dir_size_bytes(&video_path).unwrap_or(meta.size_bytes)
+        } else if video_path.exists() {
+            fs::metadata(&video_path).map(|m| m.len()).unwrap_or(meta.size_bytes)
+        } else {
+            meta.size_bytes
+        };
 
-            let is_dir = video_path.is_dir();
-            let size_bytes = if is_dir {
-                crate::recording::ffmpeg_util::dir_size_bytes(&video_path).unwrap_or(meta.size_bytes)
-            } else if video_path.exists() {
-                fs::metadata(&video_path).map(|m| m.len()).unwrap_or(meta.size_bytes)
-            } else {
-                meta.size_bytes
-            };
+        let username = video_path
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown")
+            .to_string();
 
-            let username = video_path
-                .parent()
-                .and_then(|p| p.file_name())
-                .and_then(|n| n.to_str())
-                .unwrap_or("unknown")
-                .to_string();
+        let name = if is_dir {
+            stem.to_string()
+        } else {
+            video_path.file_name().and_then(|n| n.to_str()).unwrap_or(stem).to_string()
+        };
 
-            let name = if is_dir {
-                format!("{}/", stem)
-            } else {
-                video_path.file_name().and_then(|n| n.to_str()).unwrap_or(stem).to_string()
-            };
-
-            // 若 meta 中 size_bytes 与实际不符，顺手更新 / Update size_bytes in meta if stale
-            if !is_dir && video_path.exists() && size_bytes != meta.size_bytes && size_bytes > 0 {
-                let mut updated = meta.clone();
-                updated.size_bytes = size_bytes;
-                crate::recording::meta::write_meta(&video_path, &updated);
-            }
-
-            files.push(RecordingFile {
-                name,
-                path: vp_str,
-                size_bytes,
-                started_at: meta.started_at,
-                is_recording: false,
-                record_duration_secs: None,
-                video_duration_secs: meta.video_duration_secs,
-                video_resolution: meta.video_resolution,
-                status: Some(runtime_status.unwrap_or(meta.status)),
-                pp_execution: meta.pp_execution,
-                pp_progress: meta.pp_progress,
-                segments_downloaded: meta.segments_downloaded,
-                segments_failed: meta.segments_failed,
-                username,
-            });
+        // 若 meta 中 size_bytes 与实际不符，顺手更新 / Update size_bytes in meta if stale
+        if !is_dir && video_path.exists() && size_bytes != meta.size_bytes && size_bytes > 0 {
+            let mut updated = meta.clone();
+            updated.size_bytes = size_bytes;
+            crate::recording::meta::write_meta(&video_path, &updated);
         }
+
+        let module_outputs = crate::recording::meta::extract_verified_module_outputs(
+            meta.pp_execution.as_deref(),
+        );
+
+        files.push(RecordingFile {
+            name,
+            path: vp_str,
+            size_bytes,
+            started_at: meta.started_at,
+            is_recording: false,
+            record_duration_secs: None,
+            video_duration_secs: meta.video_duration_secs,
+            video_resolution: meta.video_resolution,
+            status: Some(runtime_status.unwrap_or(meta.status)),
+            pp_execution: meta.pp_execution,
+            pp_progress: meta.pp_progress,
+            segments_downloaded: meta.segments_downloaded,
+            segments_failed: meta.segments_failed,
+            username,
+            module_outputs,
+        });
     }
 
     files.sort_by(|a, b| b.started_at.cmp(&a.started_at));

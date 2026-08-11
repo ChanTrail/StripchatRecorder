@@ -22,11 +22,12 @@ pub fn read_meta(video_path: &Path) -> Option<VideoMeta> {
     serde_json::from_str(&content).ok()
 }
 
-/// 将元数据写入集中 meta 目录下对应的 `{stem}.json`。
-/// 写入前自动将 `meta_version` 设置为当前版本常量。
+/// 将元数据写入按主播分子目录存储的 `meta/{username}/{stem}.json`。
+/// 写入前自动将 `meta_version` 设置为当前版本常量，并确保主播子目录存在。
 ///
-/// Write metadata to `meta/{stem}.json` in the centralized meta directory.
-/// Automatically sets `meta_version` to the current version constant before writing.
+/// Write metadata to `meta/{username}/{stem}.json` (per-streamer subdirectory).
+/// Automatically sets `meta_version` to the current version constant before writing,
+/// and ensures the streamer subdirectory exists.
 pub fn write_meta(video_path: &Path, meta: &VideoMeta) {
     let Some(meta_path) = meta_path_for(video_path) else {
         return;
@@ -165,8 +166,18 @@ pub fn set_pp_done(video_path: &Path, status: &str, pp_execution: Vec<PpExecutio
 /// 写入当前正在执行节点的模块内进度（节点开始时和 on_progress 时调用）。
 /// Write the intra-module progress of the currently executing node
 /// (called on node start and on each on_progress update).
-pub fn set_pp_progress(video_path: &Path, progress: PpNodeProgress) {
+pub fn set_pp_progress(video_path: &Path, mut progress: PpNodeProgress) {
     let Some(mut meta) = read_meta(video_path) else { return };
+    
+    // 如果新进度的 mod_done 为 0，保留之前的值以避免前端显示"等待进度"
+    // If the new progress has mod_done set to 0, preserve the previous value
+    // to prevent the frontend from showing "waiting for progress"
+    if progress.mod_done == 0 {
+        if let Some(prev) = &meta.pp_progress {
+            progress.mod_done = prev.mod_done;
+        }
+    }
+    
     meta.pp_progress = Some(progress);
     write_meta(video_path, &meta);
 }
@@ -190,18 +201,20 @@ pub fn pp_execution_start(video_path: &Path, entry: PpExecutionEntry) {
     write_meta(video_path, &meta);
 }
 
-/// 更新后处理执行记录中最后一条匹配 node_id 的条目（节点完成时调用）。
-/// Update the last matching pp_execution entry for a node_id when the node finishes.
+/// 更新后处理执行记录中最后一条匹配 effective_id 的条目（节点完成时调用）。
+/// Update the last matching pp_execution entry for an effective_id when the node finishes.
 pub fn pp_execution_finish(
     video_path: &Path,
-    node_id: &str,
+    effective_id: &str,
     finished_at: String,
     result: PpExecResult,
-    outputs: Option<Vec<String>>,
+    outputs: Vec<Vec<String>>,
 ) {
     let Some(mut meta) = read_meta(video_path) else { return };
     if let Some(entries) = meta.pp_execution.as_mut() {
-        if let Some(entry) = entries.iter_mut().rev().find(|e| e.node_id == node_id) {
+        // effective_id 对应 entry.node_id（若有）或 entry.module_id
+        // effective_id corresponds to entry.node_id (if present) or entry.module_id
+        if let Some(entry) = entries.iter_mut().rev().find(|e| e.effective_id() == effective_id) {
             entry.finished_at = Some(finished_at);
             entry.result = Some(result);
             entry.outputs = outputs;

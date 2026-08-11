@@ -47,6 +47,8 @@
 		SelectTrigger,
 		SelectValue,
 	} from "@/components/ui/select";
+	import { useDirectoryBrowser } from "@/composables/useDirectoryBrowser";
+	import { FolderOpen } from "@lucide/vue";
 
 	const store = useSettingsStore();
 	const { toast, confirm } = useNotify();
@@ -216,6 +218,20 @@
 		}
 	}
 
+	const { open: openDirectoryBrowser } = useDirectoryBrowser();
+
+	/**
+	 * 打开全局目录浏览器选择输出目录，选中后走与手动输入相同的确认保存流程。
+	 * Open the global directory browser to pick the output directory; the selection goes
+	 * through the same confirm-and-save flow as manual input.
+	 */
+	function browseOutputDir() {
+		openDirectoryBrowser(form.output_dir, (picked) => {
+			form.output_dir = picked;
+			saveOutputDir();
+		});
+	}
+
 	/** Mouflon 密钥存储（含时间戳）/ Mouflon key store (with timestamps) */
 	const mouflonStore = ref<MouflonKeysStore>({ keys: {}, auto_synced_at: null, manual_updated_at: null });
 	/** 新密钥表单：pkey 输入值 / New key form: pkey input value */
@@ -336,13 +352,25 @@
 
 				<div class="flex flex-col gap-1.5">
 					<Label>{{ t("settings.outputDir.label") }}</Label>
-					<Input
-						v-model="form.output_dir"
-						:placeholder="t('settings.outputDir.placeholder')"
-						autocomplete="off"
-						@keyup.enter="saveOutputDir"
-						@blur="saveOutputDir"
-					/>
+					<div class="flex items-center gap-1.5">
+						<Input
+							v-model="form.output_dir"
+							:placeholder="t('settings.outputDir.placeholder')"
+							autocomplete="off"
+							class="flex-1"
+							@keyup.enter="saveOutputDir"
+							@blur="saveOutputDir"
+						/>
+						<Button
+							type="button"
+							variant="outline"
+							size="icon"
+							:title="t('settings.outputDir.pick')"
+							@click="browseOutputDir"
+						>
+							<FolderOpen class="size-4" />
+						</Button>
+					</div>
 					<p class="text-xs text-muted-foreground">
 						{{ t("settings.outputDir.hint") }}
 					</p>

@@ -23,22 +23,14 @@
 	import { onMounted, onUnmounted, computed, ref, watchEffect } from "vue";
 	import { call, on } from "@/lib/api";
 	import { useNotify } from "../composables/useNotify";
-	import { usePostprocessStore } from "@/stores/postprocess";
+	import { usePostprocessStore, countPipelineTotal } from "@/stores/postprocess";
 	import { useRecordings } from "@/composables/useRecordings";
 	import { usePostprocess, ppProgressFromMeta } from "@/composables/usePostprocess";
-	import { useImagePreview } from "@/composables/useImagePreview";
 	import { Button } from "@/components/ui/button";
 	import { Badge } from "@/components/ui/badge";
 	import { Checkbox } from "@/components/ui/checkbox";
 	import { Tooltip } from "@/components/ui/tooltip";
-	import { Loader2, Image } from "@lucide/vue";
 	import { Progress } from "@/components/ui/progress";
-	import {
-		Dialog,
-		DialogContent,
-		DialogHeader,
-		DialogTitle,
-	} from "@/components/ui/dialog";
 	import {
 		Table,
 		TableBody,
@@ -47,6 +39,8 @@
 		TableHeader,
 		TableRow,
 	} from "@/components/ui/table";
+	import RecordingRow from "@/components/RecordingRow.vue";
+	import ImagePreviewDialog from "@/components/ImagePreviewDialog.vue";
 	import { formatSize, formatDuration } from "@/utils/format";
 	import { useI18n } from "vue-i18n";
 
@@ -130,29 +124,21 @@
 
 	/**
 	 * 从当前 files.value 列表中同步模块输出路径到 moduleOutputs。
-	 * 仅补充缺失的条目，不覆盖已有的（如推断值或实时更新值）。
-	 * 用于 load() 之后确保 contact_sheet 等预览图按钮能正确显示。
+	 * 直接采用后端已验证的 `f.module_outputs`（result.code === "ok" 且路径当前
+	 * 确实存在于磁盘上，见 `extract_verified_module_outputs`），不再自行从
+	 * pp_execution 推断——前端没有文件系统访问权限，无法验证路径是否真实存在。
 	 *
 	 * Sync module output paths from the current files.value list into moduleOutputs.
-	 * Only fills in missing entries; does not overwrite existing ones (e.g. inferred or live-updated values).
-	 * Called after load() to ensure preview buttons (e.g. contact_sheet) are correctly shown.
+	 * Directly uses the backend-verified `f.module_outputs` (result.code === "ok" and
+	 * the path currently exists on disk, see `extract_verified_module_outputs`), no
+	 * longer inferring from pp_execution itself — the frontend has no filesystem access
+	 * and cannot verify a path actually exists.
 	 */
 	function syncModuleOutputsFromFiles() {
 		for (const f of files.value) {
 			if (f.is_recording) continue;
-			if (f.pp_execution) {
-				const outputs: Record<string, string> = {};
-				for (const entry of f.pp_execution) {
-					if (entry.outputs && entry.outputs.length > 0) {
-						const nonVideo = entry.outputs.find(
-							(p) => !/\.(mp4|mkv|ts|avi|mov)$/i.test(p),
-						);
-						if (nonVideo) outputs[entry.module_id] = nonVideo;
-					}
-				}
-				if (Object.keys(outputs).length > 0) {
-					moduleOutputs.value[f.path] = { ...moduleOutputs.value[f.path], ...outputs };
-				}
+			if (f.module_outputs && Object.keys(f.module_outputs).length > 0) {
+				moduleOutputs.value[f.path] = { ...moduleOutputs.value[f.path], ...f.module_outputs };
 			}
 		}
 	}
@@ -185,48 +171,21 @@
 			// Restore progress from meta pp_execution + pp_progress (covers running nodes too)
 			if (f.pp_execution && f.pp_execution.length > 0) {
 				ppProgress.value[f.path] = ppProgressFromMeta(
-					f.pp_execution, f.pp_progress,
+					f.pp_execution, f.pp_progress, countPipelineTotal(ppStore.pipeline),
 					{ processing: t("usePostprocess.processing"), waiting: t("usePostprocess.waitingProgress") },
 				);
 			}
-			// 从 pp_execution 输出路径推断模块输出（contact_sheet 等）
-			// Infer module outputs from pp_execution output paths (e.g. contact_sheet)
-			if (f.pp_execution) {
-				const outputs: Record<string, string> = {};
-				for (const entry of f.pp_execution) {
-					if (entry.outputs && entry.outputs.length > 0) {
-						const nonVideo = entry.outputs.find(
-							(p) => !/\.(mp4|mkv|ts|avi|mov)$/i.test(p),
-						);
-						if (nonVideo) outputs[entry.module_id] = nonVideo;
-					}
-				}
-				if (Object.keys(outputs).length > 0) {
-					moduleOutputs.value[f.path] = outputs;
-				}
+			// 直接使用后端已验证的模块输出路径（result.code === "ok" 且文件当前确实存在）
+			// Directly use the backend-verified module output paths (result.code === "ok"
+			// and the file currently exists)
+			if (f.module_outputs && Object.keys(f.module_outputs).length > 0) {
+				moduleOutputs.value[f.path] = f.module_outputs;
 			}
 		}
 	}
 
-	const preview = useImagePreview();
-	const {
-		previewOpen,
-		previewUrl,
-		previewTitle,
-		previewScale,
-		previewTranslate,
-		previewViewportRef,
-		previewImageRef,
-		isDragging,
-		viewportSize,
-		resetPreviewTransform,
-		onPreviewImageLoad,
-		onPreviewWheel,
-		onPreviewMousedown,
-		onDocMousemove,
-		onDocMouseup,
-		openPreview,
-	} = preview;
+	/** 图片预览对话框组件引用 / Image preview dialog component ref */
+	const previewDialogRef = ref<InstanceType<typeof ImagePreviewDialog> | null>(null);
 
 	/**
 	 * 用系统默认程序打开录制文件。
@@ -238,20 +197,31 @@
 
 	/**
 	 * 打开模块输出文件（使用预览弹窗）。
-	 * Tauri 版：通过 invoke 读取文件为 base64 data URL 后显示。
+	 * Web 版：直接用后端的静态文件路由（`GET /api/files?video_path=...&module_id=...`，
+	 * 见 backend/src/server_mod/routes/recording.rs 的 serve_output_file）拼出图片 URL
+	 * 交给 <img> 加载，不需要先整个读进内存转 base64。
+	 *
+	 * 传的是 `(video_path, module_id)` 而不是具体文件路径——后端会通过 meta 解析出
+	 * 该模块真正的输出路径（与 moduleOutputs 的来源同一套校验逻辑），不管该路径是否
+	 * 落在默认的 output_dir 内（ts_merge 等模块支持自定义输出目录，产物可能在别处）。
 	 *
 	 * Open module output file (preview dialog).
-	 * Tauri version: reads file as base64 data URL via invoke.
+	 * Web version: builds the image URL directly from the backend's static file route
+	 * (`GET /api/files?video_path=...&module_id=...`, see serve_output_file in
+	 * backend/src/server_mod/routes/recording.rs) and lets <img> load it — no need to
+	 * read the whole file into memory and base64-encode it first.
+	 *
+	 * Passes `(video_path, module_id)` rather than a concrete file path — the backend
+	 * resolves that module's actual output path via meta (the same verification logic
+	 * that populates moduleOutputs), regardless of whether that path falls within the
+	 * default output_dir (modules like ts_merge support a custom output directory, so
+	 * the artifact may live elsewhere).
 	 */
-	async function openModuleOutput(filePath: string, moduleId: string) {
+	function openModuleOutput(filePath: string, moduleId: string) {
 		const outputPath = moduleOutputs.value[filePath]?.[moduleId];
 		if (!outputPath) return;
-		try {
-			const result = await call<{ data: string }>("read_output_file", { path: outputPath });
-			openPreview(result.data, outputPath.split(/[\\/]/).pop() ?? "预览图");
-		} catch (e) {
-			toast(String(e), "error");
-		}
+		const url = `/api/files?video_path=${encodeURIComponent(filePath)}&module_id=${encodeURIComponent(moduleId)}`;
+		previewDialogRef.value?.openPreview(url, outputPath.split(/[\\/]/).pop() ?? "预览图");
 	}
 
 	/**
@@ -402,9 +372,6 @@
 		);
 	});
 	onMounted(async () => {
-		document.addEventListener("mousemove", onDocMousemove);
-		document.addEventListener("mouseup", onDocMouseup);
-
 		await load();
 		startTick();
 		await refreshDiskSpace();
@@ -556,27 +523,56 @@
 						pp_execution?: import("@/types/recordings").PpExecutionEntry[] | null;
 						pp_progress?: import("@/types/recordings").PpNodeProgress | null;
 					};
+					module_outputs?: Record<string, string>;
 				};
 				if (!p.meta) return;
+				
+				// 检测路径迁移：如果新路径不在 ppStatus 中，但有旧路径（文件夹路径）存在，
+				// 则需要将状态从旧路径迁移到新路径（ts_merge 后从文件夹路径切换到视频文件路径）
+				// Detect path migration: if new path is not in ppStatus but an old path (folder path) exists,
+				// migrate state from old path to new path (after ts_merge switches from folder to video file path)
+				if (!ppStatus.value[p.path]) {
+					// 查找可能的旧路径：找到 ppStatus 中状态为 "running" 且不在当前文件列表中的路径
+					// Find possible old path: look for paths in ppStatus with status "running" that aren't in current file list
+					const currentPaths = new Set(files.value.map((f) => f.path));
+					const oldPath = Object.keys(ppStatus.value).find(
+						(path) => ppStatus.value[path] === "running" && !currentPaths.has(path)
+					);
+					
+					if (oldPath) {
+						// 迁移状态：旧路径 → 新路径
+						// Migrate state: old path → new path
+						ppStatus.value[p.path] = ppStatus.value[oldPath];
+						if (ppProgress.value[oldPath]) {
+							ppProgress.value[p.path] = ppProgress.value[oldPath];
+						}
+						if (moduleOutputs.value[oldPath]) {
+							moduleOutputs.value[p.path] = moduleOutputs.value[oldPath];
+						}
+						// 清理旧路径
+						// Clean up old path
+						delete ppStatus.value[oldPath];
+						delete ppProgress.value[oldPath];
+						delete moduleOutputs.value[oldPath];
+					}
+				}
+				
 				ppProgress.value[p.path] = ppProgressFromMeta(
-					p.meta.pp_execution, p.meta.pp_progress,
+					p.meta.pp_execution, p.meta.pp_progress, countPipelineTotal(ppStore.pipeline),
 					{ processing: t("usePostprocess.processing"), waiting: t("usePostprocess.waitingProgress") },
 				);
-				// 实时提取新完成节点的非视频输出（如 contact_sheet 图片）
-				// Extract non-video outputs of newly completed nodes in real time (e.g. contact_sheet image)
-				if (p.meta.pp_execution) {
-					const outputs: Record<string, string> = { ...moduleOutputs.value[p.path] };
-					for (const entry of p.meta.pp_execution) {
-						if (entry.result != null && entry.outputs && entry.outputs.length > 0) {
-							const nonVideo = entry.outputs.find(
-								(op) => !/\.(mp4|mkv|ts|avi|mov)$/i.test(op),
-							);
-							if (nonVideo) outputs[entry.module_id] = nonVideo;
-						}
-					}
-					if (Object.keys(outputs).length > 0) {
-						moduleOutputs.value = { ...moduleOutputs.value, [p.path]: outputs };
-					}
+				// 直接使用后端已验证的模块输出路径（result.code === "ok" 且文件当前确实
+				// 存在于磁盘上，见 extract_verified_module_outputs），实时反映新完成节点
+				// 的预览图（如 contact_sheet），不展示失败节点残留的旧输出
+				// Directly use the backend-verified module output paths (result.code === "ok"
+				// and the file currently exists on disk, see extract_verified_module_outputs),
+				// reflecting newly completed nodes' previews (e.g. contact_sheet) in real
+				// time, without showing stale outputs left over from a failed node
+				if (p.module_outputs && Object.keys(p.module_outputs).length > 0) {
+					moduleOutputs.value = {
+						...moduleOutputs.value,
+						[p.path]: { ...moduleOutputs.value[p.path], ...p.module_outputs },
+					};
 				}
 			}),
 		);
@@ -599,8 +595,6 @@
 	});
 
 	onUnmounted(() => {
-		document.removeEventListener("mousemove", onDocMousemove);
-		document.removeEventListener("mouseup", onDocMouseup);
 		recCleanup();
 		unlisteners.forEach((fn) => fn());
 	});
@@ -622,63 +616,7 @@
 
 <template>
 	<div class="flex flex-col h-full gap-0">
-		<Dialog :open="previewOpen" @update:open="previewOpen = $event">
-			<DialogContent
-				class="p-0 overflow-hidden flex flex-col w-fit"
-				style="max-width: 90vw; max-height: 90vh"
-			>
-				<DialogHeader class="px-4 pt-4 pb-2 shrink-0">
-					<DialogTitle class="text-sm font-mono truncate">{{
-						previewTitle
-					}}</DialogTitle>
-				</DialogHeader>
-				<div
-					ref="previewViewportRef"
-					class="relative overflow-hidden flex items-center justify-center bg-black/5 px-4 pb-4"
-					:style="{
-						width: viewportSize.width,
-						height: viewportSize.height,
-						cursor: isDragging
-							? 'grabbing'
-							: previewScale > 1
-								? 'grab'
-								: 'default',
-					}"
-					@wheel.prevent="onPreviewWheel"
-					@mousedown="onPreviewMousedown"
-				>
-					<img
-						ref="previewImageRef"
-						:src="previewUrl"
-						:alt="previewTitle"
-						class="rounded select-none pointer-events-none"
-						@load="onPreviewImageLoad"
-						:style="{
-							maxWidth: '100%',
-							maxHeight: '100%',
-							transform: `translate(${previewTranslate.x}px, ${previewTranslate.y}px) scale(${previewScale})`,
-							transformOrigin: 'center center',
-							transition: isDragging ? 'none' : 'transform 0.1s',
-						}"
-					/>
-					<Transition name="fade">
-						<Button
-							v-if="previewScale !== 1"
-							variant="secondary"
-							size="sm"
-							class="absolute bottom-5 left-1/2 -translate-x-1/2 z-10 rounded-full bg-black/60 hover:bg-black/80 text-white text-xs px-3 py-1.5 backdrop-blur-sm"
-							@click="resetPreviewTransform"
-						>
-							{{
-								t("recordings.resetZoom", {
-									pct: Math.round(previewScale * 100),
-								})
-							}}
-						</Button>
-					</Transition>
-				</div>
-			</DialogContent>
-		</Dialog>
+		<ImagePreviewDialog ref="previewDialogRef" />
 
 		<header
 			ref="headerEl"
@@ -864,229 +802,24 @@
 						</TableRow>
 
 						<template v-if="!collapsedGroups.has(group.username)">
-							<TableRow v-for="f in group.files" :key="f.path" class="relative">
-									<TableCell class="w-8">
-										<Checkbox
-											:model-value="getFileChecked(f.path)"
-											:disabled="f.is_recording"
-											@update:model-value="setFileChecked(f.path)"
-										/>
-									</TableCell>
-									<TableCell class="font-medium w-px whitespace-nowrap pl-7">
-										{{ f.name }}
-										<Badge
-											v-if="f.is_recording"
-											variant="destructive"
-											class="ml-1.5 text-[10px]"
-											>{{ t("recordings.status.recording") }}</Badge
-										>
-									</TableCell>
-									<TableCell class="tabular-nums">{{
-										formatSize(f.size_bytes)
-									}}</TableCell>
-									<TableCell class="tabular-nums text-muted-foreground">{{
-										new Date(f.started_at).toLocaleString()
-									}}</TableCell>
-									<TableCell class="tabular-nums">
-										<span v-if="f.is_recording" class="text-destructive">{{
-											formatDuration(elapsed[f.path] ?? 0)
-										}}</span>
-										<span v-else class="text-muted-foreground">—</span>
-									</TableCell>
-									<TableCell class="tabular-nums">
-										<span v-if="f.video_duration_secs != null">{{
-											formatDuration(f.video_duration_secs)
-										}}</span>
-										<span v-else class="text-muted-foreground">—</span>
-									</TableCell>
-									<TableCell class="tabular-nums font-mono text-xs">
-										<span v-if="f.video_resolution">{{ f.video_resolution }}</span>
-										<span v-else class="text-muted-foreground">—</span>
-									</TableCell>
-									<TableCell class="tabular-nums">
-										<span
-											v-if="f.is_recording && recordingSpeed[f.path] != null"
-											class="text-xs"
-										>
-											{{ formatSize(recordingSpeed[f.path]) }}/s
-										</span>
-										<span v-else class="text-muted-foreground">—</span>
-									</TableCell>
-									<TableCell class="min-w-36">
-										<template v-if="f.is_recording && segmentStats[f.path] != null">
-											<div class="flex items-center gap-1 flex-wrap">
-												<Badge variant="secondary" class="tabular-nums text-[11px] px-1.5 py-0">
-													{{ segmentStats[f.path].downloaded }}
-												</Badge>
-												<Badge
-													v-if="segmentStats[f.path].failed > 0"
-													variant="secondary"
-													class="tabular-nums text-[11px] px-1.5 py-0 bg-destructive/15 text-destructive border-0"
-												>
-													{{ segmentStats[f.path].failed }}
-												</Badge>
-												<Badge
-													variant="outline"
-													class="tabular-nums text-[11px] px-1.5 py-0"
-													:class="segmentStats[f.path].failed === 0
-														? 'border-green-500 text-green-500'
-														: 'border-destructive text-destructive'"
-												>
-													{{
-														segmentStats[f.path].downloaded + segmentStats[f.path].failed > 0
-															? Math.round(segmentStats[f.path].downloaded / (segmentStats[f.path].downloaded + segmentStats[f.path].failed) * 100)
-															: 100
-													}}%
-												</Badge>
-											</div>
-										</template>
-										<span v-else class="text-muted-foreground">—</span>
-									</TableCell>
-									<TableCell class="min-w-45">
-										<div v-if="!f.is_recording">
-											<div
-												v-if="
-													ppStatus[f.path] === 'running' && ppProgress[f.path]
-												"
-												class="flex flex-col gap-1.5"
-											>
-												<div
-													class="flex items-center justify-between text-xs text-muted-foreground"
-												>
-													<span>{{
-														ppProgress[f.path].moduleExecLabel
-															? t(
-																	"recordings.status.overallProgressWithLabel",
-																	{ label: ppProgress[f.path].moduleExecLabel },
-																)
-															: t("recordings.status.overallProgress")
-													}}</span>
-													<span class="tabular-nums shrink-0">{{
-														ppProgress[f.path].overallLabel
-													}}</span>
-												</div>
-												<Progress
-													:model-value="ppProgress[f.path].overallPct"
-													:animated="false"
-													class="h-1.5"
-												/>
-												<div
-													class="flex items-center justify-between text-xs text-muted-foreground"
-												>
-													<span class="truncate max-w-50">{{
-														ppProgress[f.path].moduleName === "processing"
-															? t("usePostprocess.processing")
-															: ppProgress[f.path].moduleName
-													}}</span>
-													<span class="tabular-nums shrink-0">{{
-														ppProgress[f.path].moduleLabel === "waiting"
-															? t("usePostprocess.waitingProgress")
-															: ppProgress[f.path].moduleLabel
-													}}</span>
-												</div>
-												<Progress
-													:model-value="ppProgress[f.path].modulePct"
-													:animated="false"
-													class="h-1.5"
-												/>
-											</div>
-											<div
-												v-else-if="ppStatus[f.path] === 'waiting'"
-												class="flex items-center gap-1.5 text-xs text-muted-foreground"
-											>
-												<Loader2 class="size-3 animate-spin shrink-0" />
-												<span>{{ t("recordings.status.waiting") }}</span>
-											</div>
-											<div
-												v-else-if="ppStatus[f.path] === 'done' || ppStatus[f.path] === 'error'"
-												class="flex flex-col gap-0.5"
-											>
-												<template v-if="ppProgress[f.path]?.moduleResults?.length">
-													<div
-														v-for="r in ppProgress[f.path].moduleResults"
-														:key="r.moduleId"
-														class="flex items-center gap-1.5 text-xs"
-														:class="r.success ? 'text-green-500' : 'text-destructive'"
-														:title="r.success ? r.moduleId : `${r.moduleId}: ${r.message}`"
-													>
-														<span class="shrink-0">{{ r.success ? "✓" : "✗" }}</span>
-														<span class="truncate max-w-40">{{ r.moduleId }}</span>
-													</div>
-												</template>
-											</div>
-											<span v-else class="text-xs text-muted-foreground"
-												>—</span
-											>
-										</div>
-										<span v-else class="text-xs text-muted-foreground">—</span>
-									</TableCell>
-									<TableCell>
-										<div class="flex gap-1.5">
-											<Button
-												size="sm"
-												variant="outline"
-												:disabled="f.is_recording"
-												:title="
-													f.is_recording
-														? t('recordings.actions.playDisabled')
-														: ''
-												"
-												@click="openFile(f.path)"
-												>{{ t("recordings.actions.play") }}</Button
-											>
-											<Button
-												v-if="moduleOutputs[f.path]?.['contact_sheet']"
-												size="sm"
-												variant="outline"
-												title="查看 Contact Sheet 预览图"
-												@click="openModuleOutput(f.path, 'contact_sheet')"
-											>
-												<Image class="size-3.5" />
-											</Button>
-											<Tooltip
-												:content="
-													f.is_recording
-														? t('recordings.status.recording')
-														: !hasPipelineNodes
-															? t('recordings.postprocessEmptyPipeline')
-															: undefined
-												"
-											>
-												<Button
-													size="sm"
-													variant="outline"
-													:disabled="
-														f.is_recording ||
-														ppStatus[f.path] === 'running' ||
-														ppStatus[f.path] === 'waiting' ||
-														!hasPipelineNodes
-													"
-													@click="runPostprocess(f.path)"
-												>
-													<Loader2
-														v-if="ppStatus[f.path] === 'running'"
-														class="size-3.5 animate-spin"
-													/>
-													<span v-else>{{
-														t("recordings.actions.postprocess")
-													}}</span>
-												</Button>
-											</Tooltip>
-											<Button
-												size="sm"
-												variant="destructive"
-												:disabled="f.is_recording"
-												:title="
-													f.is_recording
-														? t('recordings.actions.deleteDisabled')
-														: ''
-												"
-												@click="deleteFile(f)"
-												>{{ t("recordings.actions.delete") }}</Button
-											>
-										</div>
-									</TableCell>
-							</TableRow>
+							<RecordingRow
+								v-for="f in group.files"
+								:key="f.path"
+								:file="f"
+								:checked="getFileChecked(f.path)"
+								:elapsed-secs="elapsed[f.path] ?? 0"
+								:speed-bps="recordingSpeed[f.path] ?? null"
+								:segment-stats="segmentStats[f.path] ?? null"
+								:pp-status="ppStatus[f.path]"
+								:pp-progress="ppProgress[f.path]"
+								:has-contact-sheet="!!moduleOutputs[f.path]?.['contact_sheet']"
+								:has-pipeline-nodes="hasPipelineNodes"
+								@toggle-checked="setFileChecked(f.path)"
+								@open="openFile(f.path)"
+								@open-contact-sheet="openModuleOutput(f.path, 'contact_sheet')"
+								@run-postprocess="runPostprocess(f.path)"
+								@delete="deleteFile(f)"
+							/>
 						</template>
 					</template>
 				</TableBody>
