@@ -780,16 +780,31 @@ async fn convert_to_ts(fmp4_data: Vec<u8>, ts_path: &PathBuf) -> Result<()> {
         .await
         .map_err(|e| AppError::Other(format!("ffmpeg semaphore: {}", e)))?;
 
-    #[cfg(windows)]
-    let mut child = tokio::process::Command::new("ffmpeg")
-        .creation_flags(0x08000000)
-        .args(["-y", "-i", "pipe:0", "-c", "copy", "-f", "mpegts"])
-        .arg(ts_path)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| AppError::Other(format!("Failed to spawn ffmpeg: {}", e)))?;
+    let mut child = {
+        #[cfg(windows)]
+        {
+            tokio::process::Command::new("ffmpeg")
+                .creation_flags(0x08000000)
+                .args(["-y", "-i", "pipe:0", "-c", "copy", "-f", "mpegts"])
+                .arg(ts_path)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .map_err(|e| AppError::Other(format!("Failed to spawn ffmpeg: {}", e)))?
+        }
+        #[cfg(not(windows))]
+        {
+            tokio::process::Command::new("ffmpeg")
+                .args(["-y", "-i", "pipe:0", "-c", "copy", "-f", "mpegts"])
+                .arg(ts_path)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .map_err(|e| AppError::Other(format!("Failed to spawn ffmpeg: {}", e)))?
+        }
+    };
 
     if let Some(mut stdin) = child.stdin.take() {
         use tokio::io::AsyncWriteExt;
