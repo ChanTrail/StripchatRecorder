@@ -179,7 +179,7 @@ impl RecorderManager {
                 .and_then(|n| n.to_str())
                 .unwrap_or("unknown");
             let parent = session_dir.parent().unwrap_or(&session_dir);
-            let target_path = parent.join(format!("{}.{}", stem, &settings.merge_format));
+            let target_path = parent.join(format!("{}.{}", stem, settings.merge_format));
             let started_at = {
                 let local: chrono::DateTime<chrono::Local> = chrono::Utc::now().into();
                 local.to_rfc3339()
@@ -265,7 +265,7 @@ impl RecorderManager {
                     .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("unknown");
-                let target_path = parent.join(format!("{}.{}", stem, &settings.merge_format));
+                let target_path = parent.join(format!("{}.{}", stem, settings.merge_format));
                 let started_at =
                     crate::commands::recording_cmd::parse_timestamp_from_stem_pub(stem)
                         .unwrap_or_else(|| {
@@ -552,7 +552,7 @@ impl RecorderManager {
                                     .join(format!(
                                         "{}.{}",
                                         session_dir.file_name().and_then(|n| n.to_str()).unwrap_or(""),
-                                        &settings.merge_format
+                                        settings.merge_format
                                     ));
 
                                 // 将实时文件大小写入 meta JSON
