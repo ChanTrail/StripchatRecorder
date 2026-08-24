@@ -4,9 +4,9 @@
 //! Provides recording file list queries, merge status queries, and file deletion.
 //! These functions are called directly by the HTTP server handlers in server_mod/server.rs.
 
+use crate::config::settings::AppState;
 use crate::core::error::Result;
 use crate::recording::recorder::RecorderManager;
-use crate::config::settings::AppState;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -91,7 +91,10 @@ fn collect_from_meta(
             };
 
             let meta = match crate::recording::meta::read_meta(
-                &path.parent().unwrap_or(dir).join(format!("{}.{}", stem, merge_format)),
+                &path
+                    .parent()
+                    .unwrap_or(dir)
+                    .join(format!("{}.{}", stem, merge_format)),
             ) {
                 Some(m) => m,
                 None => continue,
@@ -134,8 +137,8 @@ fn collect_from_meta(
                         .signed_duration_since(*dt)
                         .num_seconds()
                         .max(0) as u64;
-                    let size_bytes = crate::recording::recorder::dir_size_bytes(&session_dir)
-                        .unwrap_or(0);
+                    let size_bytes =
+                        crate::recording::recorder::dir_size_bytes(&session_dir).unwrap_or(0);
 
                     files.push(RecordingFile {
                         name: format!("{}.{}", stem, merge_format),
@@ -217,7 +220,8 @@ pub fn delete_recording_inner(
             return Err(crate::core::error::AppError::Other(e.to_string()));
         }
         if let Some(parent) = p.parent()
-            && let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+            && let Some(stem) = p.file_stem().and_then(|s| s.to_str())
+        {
             for ext in &["webp", "jpg", "jpeg", "png"] {
                 let sidecar = parent.join(format!("{}.{}", stem, ext));
                 if sidecar.exists() {

@@ -38,9 +38,10 @@ fn build_client(proxy_url: Option<&str>) -> Result<Client> {
         .connection_verbose(false);
 
     if let Some(proxy) = proxy_url
-        && !proxy.is_empty() {
-        builder = builder
-            .proxy(reqwest::Proxy::all(proxy).map_err(|e| AppError::Other(e.to_string()))?);
+        && !proxy.is_empty()
+    {
+        builder =
+            builder.proxy(reqwest::Proxy::all(proxy).map_err(|e| AppError::Other(e.to_string()))?);
     } else {
         builder = builder.no_proxy();
     }
@@ -56,9 +57,10 @@ fn build_api_client(proxy_url: Option<&str>) -> Result<Client> {
         .timeout(std::time::Duration::from_secs(30));
 
     if let Some(proxy) = proxy_url
-        && !proxy.is_empty() {
-        builder = builder
-            .proxy(reqwest::Proxy::all(proxy).map_err(|e| AppError::Other(e.to_string()))?);
+        && !proxy.is_empty()
+    {
+        builder =
+            builder.proxy(reqwest::Proxy::all(proxy).map_err(|e| AppError::Other(e.to_string()))?);
         return Ok(builder.build()?);
     }
     builder = builder.no_proxy();
@@ -289,9 +291,42 @@ impl StripchatApi {
         username: &str,
         fetch_playlist: bool,
     ) -> Result<StreamInfo> {
-        let url = self.api_url(&format!(
-            "https://stripchat.com/api/front/v2/models/username/{}/cam",
+        // 第一步：请求 broadcasts 接口，取 item.streamName 作为 model_id
+        // Step 1: Request the broadcasts endpoint and take item.streamName as model_id
+        let broadcasts_url = self.api_url(&format!(
+            "https://stripchat.com/api/front/v1/broadcasts/{}",
             username
+        ));
+
+        let broadcasts_resp = self
+            .api_client
+            .get(&broadcasts_url)
+            .header("Referer", format!("{}{}", self.referer(), username))
+            .send()
+            .await?;
+
+        if !broadcasts_resp.status().is_success() {
+            if broadcasts_resp.status() == reqwest::StatusCode::NOT_FOUND {
+                return Err(AppError::UserNotFound(format!("用户 {} 不存在", username)));
+            }
+            return Err(AppError::Other(format!(
+                "broadcasts API 返回 {} ({})",
+                broadcasts_resp.status().as_u16(),
+                username
+            )));
+        }
+
+        let broadcasts_json: serde_json::Value = broadcasts_resp.json().await?;
+        let model_id = broadcasts_json["item"]["streamName"]
+            .as_str()
+            .ok_or_else(|| AppError::Other(format!("无法获取 {} 的 streamName", username)))?
+            .to_string();
+
+        // 第二步：使用 model_id 请求 cam 接口，获取直播状态详情
+        // Step 2: Request the cam endpoint with model_id to get live status details
+        let url = self.api_url(&format!(
+            "https://stripchat.com/api/front/v2/models/{}/cam",
+            model_id
         ));
 
         let resp = self
@@ -442,7 +477,8 @@ impl StripchatApi {
         let mut mouflon_pairs: Vec<(String, String)> = Vec::new();
         for &line in &lines {
             if let Some(rest) = line.strip_prefix("#EXT-X-MOUFLON:PSCH:")
-                && let Some((scheme, key)) = rest.split_once(':') {
+                && let Some((scheme, key)) = rest.split_once(':')
+            {
                 mouflon_pairs.push((scheme.to_string(), key.to_string()));
             }
         }
@@ -462,7 +498,8 @@ impl StripchatApi {
                     .and_then(|v| v.parse::<u64>().ok());
             } else if !line.is_empty() && !line.starts_with('#') {
                 if let Some(bw) = pending_bandwidth.take()
-                    && bw > best_bandwidth {
+                    && bw > best_bandwidth
+                {
                     best_bandwidth = bw;
                     best_url = Some(line.to_string());
                 }

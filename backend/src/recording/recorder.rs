@@ -266,11 +266,12 @@ impl RecorderManager {
                     .and_then(|n| n.to_str())
                     .unwrap_or("unknown");
                 let target_path = parent.join(format!("{}.{}", stem, &settings.merge_format));
-                let started_at = crate::commands::recording_cmd::parse_timestamp_from_stem_pub(stem)
-                    .unwrap_or_else(|| {
-                        let local: chrono::DateTime<chrono::Local> = chrono::Utc::now().into();
-                        local.to_rfc3339()
-                    });
+                let started_at =
+                    crate::commands::recording_cmd::parse_timestamp_from_stem_pub(stem)
+                        .unwrap_or_else(|| {
+                            let local: chrono::DateTime<chrono::Local> = chrono::Utc::now().into();
+                            local.to_rfc3339()
+                        });
                 crate::recording::meta::ensure_meta(&target_path, &started_at);
                 crate::recording::meta::set_status(&target_path, "merging_waiting");
             }
@@ -377,8 +378,14 @@ impl RecorderManager {
 
             let merged_video_path = {
                 let parent = session_dir.parent().unwrap_or(&session_dir);
-                let stem = session_dir.file_name().and_then(|n| n.to_str()).unwrap_or("unknown");
-                parent.join(format!("{}.{}", stem, merge_format)).to_string_lossy().to_string()
+                let stem = session_dir
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("unknown");
+                parent
+                    .join(format!("{}.{}", stem, merge_format))
+                    .to_string_lossy()
+                    .to_string()
             };
             emitter.emit(
                 "recording-stopped",
@@ -483,10 +490,17 @@ impl RecorderManager {
                 ) {
                     Ok(new_api) => {
                         api = new_api.with_mouflon_keys(current_mouflon_keys);
-                        tracing::info!("Recording {}: api client rebuilt due to settings change", username);
+                        tracing::info!(
+                            "Recording {}: api client rebuilt due to settings change",
+                            username
+                        );
                     }
                     Err(e) => {
-                        tracing::warn!("Recording {}: failed to rebuild api client: {}", username, e);
+                        tracing::warn!(
+                            "Recording {}: failed to rebuild api client: {}",
+                            username,
+                            e
+                        );
                     }
                 }
                 last_settings = current_settings.clone();
@@ -665,7 +679,8 @@ impl RecorderManager {
         let init_url_path = |u: &str| u.split('?').next().unwrap_or(u).to_string();
         let new_init_path = init_url.as_deref().map(init_url_path);
         let cached_init_path = cached_init_url.as_deref().map(init_url_path);
-        if new_init_path.is_some() && new_init_path != cached_init_path
+        if new_init_path.is_some()
+            && new_init_path != cached_init_path
             && let Some(ref url) = init_url
         {
             match api.download_segment(url).await {
@@ -765,7 +780,9 @@ async fn convert_to_ts(fmp4_data: Vec<u8>, ts_path: &PathBuf) -> Result<()> {
         .await
         .map_err(|e| AppError::Other(format!("ffmpeg semaphore: {}", e)))?;
 
+    #[cfg(windows)]
     let mut child = tokio::process::Command::new("ffmpeg")
+        .creation_flags(0x08000000)
         .args(["-y", "-i", "pipe:0", "-c", "copy", "-f", "mpegts"])
         .arg(ts_path)
         .stdin(Stdio::piped())
@@ -1090,8 +1107,14 @@ pub fn startup_merge_leftover_segments(
 
         // 预创建合并目标视频的 meta 文件
         // Pre-create meta file for the merge target video
-        let stem = path.file_name().and_then(|n| n.to_str()).unwrap_or("unknown");
-        let target_path = path.parent().unwrap_or(path).join(format!("{}.{}", stem, merge_format));
+        let stem = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown");
+        let target_path = path
+            .parent()
+            .unwrap_or(path)
+            .join(format!("{}.{}", stem, merge_format));
         let started_at = crate::commands::recording_cmd::parse_timestamp_from_stem_pub(stem)
             .unwrap_or_else(|| {
                 fs::metadata(path)

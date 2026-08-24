@@ -1,13 +1,13 @@
 {
-  "name": "stripchat-recorder-workspace",
-  "private": true,
-  "version": "0.3.0",
-  "scripts": {
-    "dev":           "node scripts/dev.js",
-    "build":         "node scripts/release.js",
-    "check":         "node scripts/check.js",
-    "dev:desktop":   "node scripts/dev.desktop.js",
-    "build:desktop": "node scripts/release.desktop.js",
-    "check:desktop": "node scripts/check.desktop.js"
-  }
+	"name": "stripchat-recorder-workspace",
+	"private": true,
+	"version": "0.3.1",
+	"scripts": {
+		"dev": "node scripts/dev.js",
+		"build": "node scripts/release.js",
+		"check": "node scripts/check.js",
+		"dev:desktop": "node scripts/dev.desktop.js",
+		"build:desktop": "node scripts/release.desktop.js",
+		"check:desktop": "node scripts/check.desktop.js"
+	}
 }
