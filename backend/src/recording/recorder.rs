@@ -451,7 +451,11 @@ impl RecorderManager {
             last_settings.sc_mirror_url.as_deref(),
             Arc::clone(&self.preferred_tld_by_node),
         )?
-        .with_mouflon_keys(self.state.get_mouflon_keys());
+        .with_mouflon_keys(self.state.get_mouflon_keys())
+        .with_resolution_selection(
+            last_settings.preferred_resolution,
+            &last_settings.resolution_preference,
+        );
         let mut current_playlist_url = playlist_url.to_string();
         let mut url_prefix = get_url_prefix(&current_playlist_url);
 
@@ -480,8 +484,11 @@ impl RecorderManager {
             let proxy_changed = current_settings.api_proxy_url != last_settings.api_proxy_url
                 || current_settings.cdn_proxy_url != last_settings.cdn_proxy_url
                 || current_settings.sc_mirror_url != last_settings.sc_mirror_url;
+            let resolution_changed = current_settings.preferred_resolution
+                != last_settings.preferred_resolution
+                || current_settings.resolution_preference != last_settings.resolution_preference;
             let keys_changed = current_mouflon_keys != *api.mouflon_keys();
-            if proxy_changed || keys_changed {
+            if proxy_changed || resolution_changed || keys_changed {
                 match StripchatApi::new(
                     current_settings.api_proxy_url.as_deref(),
                     current_settings.cdn_proxy_url.as_deref(),
@@ -489,7 +496,12 @@ impl RecorderManager {
                     Arc::clone(&self.preferred_tld_by_node),
                 ) {
                     Ok(new_api) => {
-                        api = new_api.with_mouflon_keys(current_mouflon_keys);
+                        api = new_api
+                            .with_mouflon_keys(current_mouflon_keys)
+                            .with_resolution_selection(
+                                current_settings.preferred_resolution,
+                                &current_settings.resolution_preference,
+                            );
                         tracing::info!(
                             "Recording {}: api client rebuilt due to settings change",
                             username

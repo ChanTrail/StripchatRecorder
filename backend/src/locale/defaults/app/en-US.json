@@ -273,6 +273,17 @@
     "pollInterval": {
       "label": "Poll Interval (seconds)"
     },
+    "preferredResolution": {
+      "label": "Preferred Recording Resolution",
+      "original": "Original (highest)",
+      "hint": "Select a target quality, then choose which direction to search when it is unavailable."
+    },
+    "resolutionPreference": {
+      "label": "Fallback Direction",
+      "lower": "Prefer lower",
+      "higher": "Prefer higher",
+      "hint": "Uses the nearest quality in this direction first, then the nearest quality in the other direction instead of failing."
+    },
     "mergeFormat": {
       "label": "Merge Format",
       "hint": "Format for automatically merging segments after recording ends. Changes apply to recordings already in progress."

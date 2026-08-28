@@ -273,6 +273,17 @@
     "pollInterval": {
       "label": "轮询间隔（秒）"
     },
+    "preferredResolution": {
+      "label": "首选录制分辨率",
+      "original": "原始画质（最高）",
+      "hint": "选择目标画质，并设置该画质不可用时的搜索方向。"
+    },
+    "resolutionPreference": {
+      "label": "回退方向",
+      "lower": "优先较低画质",
+      "higher": "优先较高画质",
+      "hint": "先使用该方向最接近的画质；若不存在，则使用反方向最接近的画质，不会因缺少精确画质而失败。"
+    },
     "mergeFormat": {
       "label": "合并格式",
       "hint": "录制结束后自动合并分片为单一文件的格式，修改后对当前录制同样生效"

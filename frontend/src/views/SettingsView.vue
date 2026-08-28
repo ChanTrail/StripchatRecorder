@@ -3,22 +3,22 @@
 
     提供录制器的全局配置界面，包括：
     - 录制输出目录（支持系统目录选择器）
-    - 最大并发录制数、轮询间隔、合并格式
+    - 最大并发录制数、轮询间隔、首选分辨率及回退方向、合并格式
     - 网络代理：API 代理、Stripchat 镜像站、CDN 代理
     - Mouflon HLS 解密密钥管理（pkey/pdkey 对）
 
     大多数设置在失焦或按回车时自动保存；
-    部分设置（轮询间隔、并发数、合并格式）通过 watch 自动保存。
+    部分设置（轮询间隔、并发数、分辨率选择、合并格式）通过 watch 自动保存。
     支持多客户端实时同步：其他客户端修改设置时自动更新表单。
 
     Provides global recorder configuration UI including:
     - Recording output directory (with system directory picker)
-    - Max concurrent recordings, poll interval, merge format
+    - Max concurrent recordings, poll interval, preferred resolution and fallback direction, merge format
     - Network proxies: API proxy, Stripchat mirror, CDN proxy
     - Mouflon HLS decryption key management (pkey/pdkey pairs)
 
     Most settings auto-save on blur or Enter key;
-    some settings (poll interval, concurrency, merge format) auto-save via watch.
+    some settings (poll interval, concurrency, resolution selection, merge format) auto-save via watch.
     Supports real-time multi-client sync: form updates when another client changes settings.
 -->
 <script setup lang="ts">
@@ -37,6 +37,13 @@
 		NumberFieldInput,
 	} from "@/components/ui/number-field";
 	import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+	import {
+		Select,
+		SelectContent,
+		SelectItem,
+		SelectTrigger,
+		SelectValue,
+	} from "@/components/ui/select";
 	import { useI18n } from "vue-i18n";
 	import { loadLocaleFromServer } from "@/i18n";
 	import { useModuleLocaleStore } from "@/stores/moduleLocale";
@@ -47,6 +54,7 @@
 	const { t, locale } = useI18n();
 	const moduleLocaleStore = useModuleLocaleStore();
 	const localesStore = useLocalesStore();
+	const resolutionDirections = ["lower", "higher"] as const;
 
 	/** 可用语言列表（从共享 store 读取，由 App.vue 统一维护）
 	 * Available locales (from shared store, maintained by App.vue) */
@@ -78,6 +86,8 @@
 		sc_mirror_url: null,
 		max_concurrent: 0,
 		merge_format: "mp4",
+		preferred_resolution: 0,
+		resolution_preference: "lower",
 		max_tmp_dir_gb: 50,
 		language: "zh-CN",
 		mouflon_sync_url: null,
@@ -134,6 +144,8 @@
 			auto_record: form.auto_record,
 			max_concurrent: form.max_concurrent,
 			merge_format: form.merge_format,
+			preferred_resolution: form.preferred_resolution,
+			resolution_preference: form.resolution_preference,
 			max_tmp_dir_gb: form.max_tmp_dir_gb,
 		}),
 		async () => {
@@ -381,6 +393,52 @@
 				</div>
 
 				<div class="flex flex-col gap-1.5">
+					<Label>{{ t("settings.preferredResolution.label") }}</Label>
+					<Select
+						:model-value="String(form.preferred_resolution)"
+						@update:model-value="form.preferred_resolution = Number($event ?? 0)"
+					>
+						<SelectTrigger class="w-48">
+							<SelectValue />
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value="0">{{ t("settings.preferredResolution.original") }}</SelectItem>
+							<SelectItem
+								v-for="resolution in [240, 360, 480, 540, 720, 1080, 1440, 2160]"
+								:key="resolution"
+								:value="String(resolution)"
+							>
+								{{ resolution }}p
+							</SelectItem>
+						</SelectContent>
+					</Select>
+					<p class="text-xs text-muted-foreground">
+						{{ t("settings.preferredResolution.hint") }}
+					</p>
+				</div>
+
+				<div v-if="form.preferred_resolution > 0" class="flex flex-col gap-1.5">
+					<Label>{{ t("settings.resolutionPreference.label") }}</Label>
+					<RadioGroup
+						:model-value="form.resolution_preference"
+						class="flex flex-row gap-4"
+						@update:model-value="
+							(v) => v && (form.resolution_preference = v as 'lower' | 'higher')
+						"
+					>
+						<div v-for="direction in resolutionDirections" :key="direction" class="flex items-center gap-2">
+							<RadioGroupItem :id="`resolution-${direction}`" :value="direction" />
+							<Label :for="`resolution-${direction}`" class="cursor-pointer">
+								{{ t(`settings.resolutionPreference.${direction}`) }}
+							</Label>
+						</div>
+					</RadioGroup>
+					<p class="text-xs text-muted-foreground">
+						{{ t("settings.resolutionPreference.hint") }}
+					</p>
+				</div>
+
+				<div class="flex flex-col gap-1.5">
 					<Label>{{ t("settings.mergeFormat.label") }}</Label>
 					<RadioGroup
 						:model-value="form.merge_format"
@@ -596,4 +654,3 @@
 		</form>
 	</div>
 </template>
-

@@ -133,7 +133,11 @@ pub async fn start_recording(
             settings.cdn_proxy_url.as_deref(),
             settings.sc_mirror_url.as_deref(),
         )?
-        .with_mouflon_keys(state.get_mouflon_keys());
+        .with_mouflon_keys(state.get_mouflon_keys())
+        .with_resolution_selection(
+            settings.preferred_resolution,
+            &settings.resolution_preference,
+        );
         let info = api.get_stream_info(&username, true).await?;
         info.playlist_url
             .ok_or_else(|| crate::core::error::AppError::StreamOffline(username.clone()))?

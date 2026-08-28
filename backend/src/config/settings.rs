@@ -79,6 +79,12 @@ pub struct Settings {
     /// 录制片段合并格式（默认 "mp4"）/ Recording segment merge format (default "mp4")
     #[serde(default = "default_merge_format")]
     pub merge_format: String,
+    /// 首选录制分辨率高度（0 = 原始/最高画质）/ Preferred recording resolution height (0 = original/highest quality)
+    #[serde(default)]
+    pub preferred_resolution: u32,
+    /// 首选分辨率不可用时的方向（"lower" 或 "higher"）/ Fallback direction when preferred resolution is unavailable ("lower" or "higher")
+    #[serde(default = "default_resolution_preference")]
+    pub resolution_preference: String,
     /// 后处理临时目录最大占用（GB，0 = 不限制，默认 50 GB）
     /// Max size of the post-processing tmp directory in GB (0 = unlimited, default 50 GB)
     #[serde(default = "default_max_tmp_dir_gb")]
@@ -111,6 +117,11 @@ fn default_mouflon_sync_url() -> Option<String> {
 /// 合并格式的默认值 / Default value for merge format
 fn default_merge_format() -> String {
     "mp4".to_string()
+}
+
+/// 分辨率回退方向的默认值 / Default resolution fallback direction
+fn default_resolution_preference() -> String {
+    "lower".to_string()
 }
 
 /// tmp 目录最大占用的默认值（50 GB）/ Default value for max tmp dir size (50 GB)
@@ -152,6 +163,8 @@ impl Default for Settings {
             sc_mirror_url: None,
             max_concurrent: 0,
             merge_format: default_merge_format(),
+            preferred_resolution: 0,
+            resolution_preference: default_resolution_preference(),
             max_tmp_dir_gb: default_max_tmp_dir_gb(),
             language: default_language(),
             server_port: default_server_port(),
@@ -807,5 +820,28 @@ pub async fn schedule_mouflon_sync(
                 tracing::info!("Mouflon sync: settings changed, triggering immediate sync");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Settings;
+
+    #[test]
+    fn existing_settings_without_resolution_selection_use_original_quality() {
+        let mut value = serde_json::to_value(Settings::default()).expect("serialize settings");
+        value
+            .as_object_mut()
+            .expect("settings should serialize as an object")
+            .remove("preferred_resolution");
+        value
+            .as_object_mut()
+            .expect("settings should serialize as an object")
+            .remove("resolution_preference");
+
+        let settings: Settings = serde_json::from_value(value).expect("deserialize old settings");
+
+        assert_eq!(settings.preferred_resolution, 0);
+        assert_eq!(settings.resolution_preference, "lower");
     }
 }

@@ -130,7 +130,13 @@ async fn worker_loop(
             settings.cdn_proxy_url.as_deref(),
             settings.sc_mirror_url.as_deref(),
         ) {
-            Ok(a) => Arc::new(a.with_mouflon_keys(app_state.get_mouflon_keys())),
+            Ok(a) => Arc::new(
+                a.with_mouflon_keys(app_state.get_mouflon_keys())
+                    .with_resolution_selection(
+                        settings.preferred_resolution,
+                        &settings.resolution_preference,
+                    ),
+            ),
             Err(e) => {
                 tracing::error!("Relay: API client error for {}: {}", username, e);
                 relay_manager.set_state(&username, RelayStreamState::Error { message: e.to_string() });
@@ -264,7 +270,12 @@ async fn feed_offline(
                         settings.cdn_proxy_url.as_deref(),
                         settings.sc_mirror_url.as_deref(),
                     ) {
-                        let api = api.with_mouflon_keys(state.get_mouflon_keys());
+                        let api = api
+                            .with_mouflon_keys(state.get_mouflon_keys())
+                            .with_resolution_selection(
+                                settings.preferred_resolution,
+                                &settings.resolution_preference,
+                            );
                         match api.get_stream_info(username, true).await {
                             Ok(info) => {
                                 tracing::info!("Relay offline [{}]: status={} playlist={}", username, info.status, info.playlist_url.is_some());
@@ -371,7 +382,12 @@ async fn feed_live(
         last_settings.cdn_proxy_url.as_deref(),
         last_settings.sc_mirror_url.as_deref(),
     ) {
-        Ok(a) => a.with_mouflon_keys(app_state.get_mouflon_keys()),
+        Ok(a) => a
+            .with_mouflon_keys(app_state.get_mouflon_keys())
+            .with_resolution_selection(
+                last_settings.preferred_resolution,
+                &last_settings.resolution_preference,
+            ),
         Err(_) => {
             drop(conv_in_tx);
             let _ = conv_stdin_task.await;
@@ -403,13 +419,21 @@ async fn feed_live(
         let proxy_changed = current_settings.api_proxy_url != last_settings.api_proxy_url
             || current_settings.cdn_proxy_url != last_settings.cdn_proxy_url
             || current_settings.sc_mirror_url != last_settings.sc_mirror_url;
-        if proxy_changed || current_mouflon_keys != last_mouflon_keys {
+        let resolution_changed = current_settings.preferred_resolution
+            != last_settings.preferred_resolution
+            || current_settings.resolution_preference != last_settings.resolution_preference;
+        if proxy_changed || resolution_changed || current_mouflon_keys != last_mouflon_keys {
             if let Ok(new_api) = StripchatApi::new_api_only(
                 current_settings.api_proxy_url.as_deref(),
                 current_settings.cdn_proxy_url.as_deref(),
                 current_settings.sc_mirror_url.as_deref(),
             ) {
-                api = new_api.with_mouflon_keys(current_mouflon_keys.clone());
+                api = new_api
+                    .with_mouflon_keys(current_mouflon_keys.clone())
+                    .with_resolution_selection(
+                        current_settings.preferred_resolution,
+                        &current_settings.resolution_preference,
+                    );
             }
             last_settings = current_settings;
             last_mouflon_keys = current_mouflon_keys;

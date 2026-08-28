@@ -98,6 +98,10 @@ pub struct StripchatApi {
     preferred_tld_by_node: Arc<parking_lot::Mutex<std::collections::HashMap<String, String>>>,
     /// Mouflon 解密密钥（pkey -> pdkey），用于 playlist URL 匹配 / Mouflon decryption keys (pkey -> pdkey) for playlist URL matching
     mouflon_keys: HashMap<String, String>,
+    /// 首选分辨率高度（0 = 原始/最高画质）/ Preferred resolution height (0 = original/highest quality)
+    preferred_resolution: u32,
+    /// 首选分辨率缺失时是否优先向上选择 / Whether to prefer a higher resolution when the target is unavailable
+    prefers_higher_resolution: bool,
 }
 
 impl StripchatApi {
@@ -115,6 +119,8 @@ impl StripchatApi {
             sc_mirror: sc_mirror.filter(|s| !s.is_empty()).map(|s| s.to_string()),
             preferred_tld_by_node,
             mouflon_keys: HashMap::new(),
+            preferred_resolution: 0,
+            prefers_higher_resolution: false,
         })
     }
 
@@ -140,10 +146,32 @@ impl StripchatApi {
         self
     }
 
+    /// 设置首选分辨率和回退方向，返回 self 以支持链式调用。
+    /// Set the preferred resolution and fallback direction, returning self for method chaining.
+    pub fn with_resolution_selection(
+        mut self,
+        preferred_resolution: u32,
+        resolution_preference: &str,
+    ) -> Self {
+        self.preferred_resolution = preferred_resolution;
+        self.prefers_higher_resolution = resolution_preference == "higher";
+        self
+    }
+
     /// 获取当前 Mouflon 解密密钥的引用。
     /// Get a reference to the current Mouflon decryption keys.
     pub fn mouflon_keys(&self) -> &HashMap<String, String> {
         &self.mouflon_keys
+    }
+
+    /// 获取当前首选分辨率。/ Get the current preferred resolution.
+    pub fn preferred_resolution(&self) -> u32 {
+        self.preferred_resolution
+    }
+
+    /// 返回是否优先选择更高分辨率。/ Return whether higher resolutions are preferred.
+    pub fn prefers_higher_resolution(&self) -> bool {
+        self.prefers_higher_resolution
     }
 
     /// 将 stripchat.com 域名替换为镜像站域名（若已配置）。
@@ -465,10 +493,22 @@ impl StripchatApi {
         )))
     }
 
-    /// 从 master playlist 文本中解析出 BANDWIDTH 最高的流 URL，以及所有 Mouflon PSCH 参数对。
-    /// Parse the stream URL with the highest BANDWIDTH from the master playlist text,
-    /// along with all Mouflon PSCH parameter pairs.
-    fn parse_best_stream(playlist: &str) -> Option<(String, Vec<(String, String)>)> {
+    /// 从 master playlist 中选择首选分辨率，可配置优先向上或向下回退。
+    /// 若首选方向没有可用流，则使用反方向最接近的流；0 表示按带宽选择最高画质。
+    /// Select a preferred resolution from a master playlist, falling upward or downward first.
+    /// If no stream exists in the preferred direction, use the nearest stream in the other direction;
+    /// 0 selects the highest-bandwidth stream.
+    fn parse_stream(
+        playlist: &str,
+        preferred_resolution: u32,
+        prefers_higher_resolution: bool,
+    ) -> Option<(String, Vec<(String, String)>)> {
+        struct Variant {
+            url: String,
+            bandwidth: u64,
+            height: Option<u32>,
+        }
+
         // 先把 \r\n 统一成 \n，再按 \n 分割
         let normalized = playlist.replace("\r\n", "\n").replace('\r', "\n");
         let lines: Vec<&str> = normalized.split('\n').map(|l| l.trim()).collect();
@@ -483,41 +523,90 @@ impl StripchatApi {
             }
         }
 
-        // 解析 BANDWIDTH 最高的流
-        let mut best_bandwidth: u64 = 0;
-        let mut best_url: Option<String> = None;
-        let mut pending_bandwidth: Option<u64> = None;
+        let mut variants = Vec::new();
+        let mut pending_variant: Option<(u64, Option<u32>)> = None;
 
         for &line in &lines {
             if let Some(attrs) = line.strip_prefix("#EXT-X-STREAM-INF:") {
-                // 去掉标签前缀后再按逗号分割，避免标签名干扰 BANDWIDTH= 匹配
-                pending_bandwidth = attrs
+                let bandwidth = attrs
                     .split(',')
-                    .find(|seg| seg.trim_start().starts_with("BANDWIDTH="))
-                    .and_then(|seg| seg.trim_start().strip_prefix("BANDWIDTH="))
-                    .and_then(|v| v.parse::<u64>().ok());
+                    .find_map(|seg| seg.trim().strip_prefix("BANDWIDTH="))
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .unwrap_or(0);
+                let height = attrs
+                    .split(',')
+                    .find_map(|seg| seg.trim().strip_prefix("RESOLUTION="))
+                    .and_then(|value| value.split_once('x'))
+                    .and_then(|(width, height)| {
+                        Some((width.parse::<u32>().ok()?, height.parse::<u32>().ok()?))
+                    })
+                    .map(|(width, height)| width.min(height));
+                pending_variant = Some((bandwidth, height));
             } else if !line.is_empty() && !line.starts_with('#') {
-                if let Some(bw) = pending_bandwidth.take()
-                    && bw > best_bandwidth
-                {
-                    best_bandwidth = bw;
-                    best_url = Some(line.to_string());
+                if let Some((bandwidth, height)) = pending_variant.take() {
+                    variants.push(Variant {
+                        url: line.to_string(),
+                        bandwidth,
+                        height,
+                    });
                 }
             } else {
-                pending_bandwidth = None;
+                pending_variant = None;
             }
         }
 
-        best_url.map(|url| (url, mouflon_pairs))
+        let selected = if preferred_resolution == 0 {
+            variants.iter().max_by_key(|variant| variant.bandwidth)
+        } else {
+            let at_or_below = || {
+                variants
+                    .iter()
+                    .filter(|variant| {
+                        variant
+                            .height
+                            .is_some_and(|height| height <= preferred_resolution)
+                    })
+                    .max_by_key(|variant| (variant.height.unwrap_or(0), variant.bandwidth))
+            };
+            let at_or_above = || {
+                variants
+                    .iter()
+                    .filter(|variant| {
+                        variant
+                            .height
+                            .is_some_and(|height| height >= preferred_resolution)
+                    })
+                    .min_by(|a, b| {
+                        a.height
+                            .cmp(&b.height)
+                            .then_with(|| b.bandwidth.cmp(&a.bandwidth))
+                    })
+            };
+
+            let selected = if prefers_higher_resolution {
+                at_or_above().or_else(at_or_below)
+            } else {
+                at_or_below().or_else(at_or_above)
+            };
+
+            selected.or_else(|| {
+                variants
+                    .iter()
+                    // Some master playlists omit RESOLUTION; retain the old bandwidth behavior for them.
+                    .max_by_key(|variant| variant.bandwidth)
+            })
+        };
+
+        selected.map(|variant| (variant.url.clone(), mouflon_pairs))
     }
 
     /// 获取主播的 HLS 播放列表 URL。
-    /// 直接对所有 CDN TLD 竞速请求 `{model_id}_auto.m3u8`，解析最高清晰度流。
+    /// 直接对所有 CDN TLD 竞速请求 `{model_id}_auto.m3u8`，按配置选择流。
     /// 若 playlist 包含 Mouflon 加密参数，则按用户配置的 Mouflon Keys 顺序逐一比对，
     /// 取第一个匹配的 pkey 对应的 psch 拼入 URL。
     ///
     /// Get the HLS playlist URL for a streamer.
-    /// Races all CDN TLDs for `{model_id}_auto.m3u8` and picks the highest-quality stream.
+    /// Races all CDN TLDs for `{model_id}_auto.m3u8` and selects a stream using the configured resolution preference.
     /// If the playlist contains Mouflon encryption parameters, iterates through the user-configured
     /// Mouflon Keys in order and uses the first matching pkey's psch in the URL.
     async fn get_playlist_url(
@@ -531,7 +620,11 @@ impl StripchatApi {
 
         let playlist_text = self.fetch_auto_playlist(model_id).await?;
 
-        let parsed = Self::parse_best_stream(&playlist_text);
+        let parsed = Self::parse_stream(
+            &playlist_text,
+            self.preferred_resolution,
+            self.prefers_higher_resolution,
+        );
 
         let (url, mouflon_pairs) =
             parsed.ok_or_else(|| AppError::StreamOffline(username.to_string()))?;
@@ -579,5 +672,122 @@ impl StripchatApi {
     pub async fn download_segment(&self, url: &str) -> Result<Vec<u8>> {
         let resp = self.cdn_get(url).await?;
         Ok(resp.bytes().await?.to_vec())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::StripchatApi;
+
+    const MASTER_PLAYLIST: &str = r#"#EXTM3U
+#EXT-X-MOUFLON:PSCH:scheme:key
+#EXT-X-STREAM-INF:BANDWIDTH=400000,RESOLUTION=640x360
+360.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=700000,RESOLUTION=960x540
+540.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=1200000,RESOLUTION=1280x720
+720.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=2500000,RESOLUTION=1920x1080
+1080.m3u8
+"#;
+
+    fn selected_url(
+        playlist: &str,
+        preferred_resolution: u32,
+        prefers_higher_resolution: bool,
+    ) -> String {
+        StripchatApi::parse_stream(
+            playlist,
+            preferred_resolution,
+            prefers_higher_resolution,
+        )
+        .expect("a stream should be selected")
+        .0
+    }
+
+    #[test]
+    fn zero_limit_preserves_highest_bandwidth_behavior() {
+        assert_eq!(selected_url(MASTER_PLAYLIST, 0, false), "1080.m3u8");
+    }
+
+    #[test]
+    fn selects_exact_resolution_when_available() {
+        assert_eq!(selected_url(MASTER_PLAYLIST, 720, false), "720.m3u8");
+    }
+
+    #[test]
+    fn prefers_highest_lower_resolution_before_a_higher_one() {
+        assert_eq!(selected_url(MASTER_PLAYLIST, 480, false), "360.m3u8");
+    }
+
+    #[test]
+    fn prefer_higher_selects_the_nearest_higher_resolution() {
+        assert_eq!(selected_url(MASTER_PLAYLIST, 480, true), "540.m3u8");
+    }
+
+    #[test]
+    fn prefer_higher_keeps_searching_upward_when_nearer_variants_are_missing() {
+        let playlist = r#"#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=400000,RESOLUTION=640x360
+360.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=1200000,RESOLUTION=1280x720
+720.m3u8
+"#;
+
+        assert_eq!(selected_url(playlist, 480, true), "720.m3u8");
+    }
+
+    #[test]
+    fn falls_back_to_lowest_higher_resolution_when_no_lower_one_exists() {
+        let playlist = r#"#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=700000,RESOLUTION=960x540
+540.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=1200000,RESOLUTION=1280x720
+720.m3u8
+"#;
+
+        assert_eq!(selected_url(playlist, 480, false), "540.m3u8");
+    }
+
+    #[test]
+    fn prefer_higher_falls_back_lower_instead_of_failing() {
+        let playlist = r#"#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=400000,RESOLUTION=640x360
+360.m3u8
+"#;
+
+        assert_eq!(selected_url(playlist, 480, true), "360.m3u8");
+    }
+
+    #[test]
+    fn uses_the_shorter_dimension_for_portrait_streams() {
+        let playlist = r#"#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=1200000,RESOLUTION=720x1280
+720-portrait.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=2500000,RESOLUTION=1080x1920
+1080-portrait.m3u8
+"#;
+
+        assert_eq!(selected_url(playlist, 720, false), "720-portrait.m3u8");
+    }
+
+    #[test]
+    fn falls_back_to_bandwidth_when_resolution_metadata_is_missing() {
+        let playlist = r#"#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=400000
+low.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=700000
+high.m3u8
+"#;
+
+        assert_eq!(selected_url(playlist, 480, false), "high.m3u8");
+    }
+
+    #[test]
+    fn preserves_mouflon_pairs_while_selecting_resolution() {
+        let (_, pairs) = StripchatApi::parse_stream(MASTER_PLAYLIST, 540, false)
+            .expect("a stream should be selected");
+
+        assert_eq!(pairs, vec![("scheme".to_string(), "key".to_string())]);
     }
 }
