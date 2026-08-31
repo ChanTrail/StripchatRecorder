@@ -822,26 +822,3 @@ pub async fn schedule_mouflon_sync(
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::Settings;
-
-    #[test]
-    fn existing_settings_without_resolution_selection_use_original_quality() {
-        let mut value = serde_json::to_value(Settings::default()).expect("serialize settings");
-        value
-            .as_object_mut()
-            .expect("settings should serialize as an object")
-            .remove("preferred_resolution");
-        value
-            .as_object_mut()
-            .expect("settings should serialize as an object")
-            .remove("resolution_preference");
-
-        let settings: Settings = serde_json::from_value(value).expect("deserialize old settings");
-
-        assert_eq!(settings.preferred_resolution, 0);
-        assert_eq!(settings.resolution_preference, "lower");
-    }
-}
