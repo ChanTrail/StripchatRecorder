@@ -136,7 +136,11 @@ pub async fn start_recording(
             settings.sc_mirror_url.as_deref(),
         )
         .map_err(map_err)?
-        .with_mouflon_keys(state.app_state.get_mouflon_keys());
+        .with_mouflon_keys(state.app_state.get_mouflon_keys())
+        .with_resolution_selection(
+            settings.preferred_resolution,
+            &settings.resolution_preference,
+        );
         let info = api.get_stream_info(&username, true).await.map_err(map_err)?;
         info.playlist_url
             .ok_or_else(|| format!("Stream offline: {}", username))?

@@ -75,6 +75,7 @@ The following options are available in the Web UI under Settings:
 | Output directory               | Path where recordings are saved                                             |
 | Max concurrent                 | Maximum number of simultaneous recordings; `0` means unlimited             |
 | Poll interval                  | How often to check if a streamer is live (seconds), range 10–300           |
+| Preferred recording resolution | Target stream resolution and fallback direction (prefer lower or prefer higher); if no stream exists in that direction, the nearest stream in the other direction is used instead of failing; defaults to original/highest |
 | Merge format                   | Format for auto-merging segments after recording: `mp4` (default), `mkv`, `ts` |
 | Auto-record                    | Whether newly added streamers have auto-record enabled by default           |
 | Max post-process tmp dir (GB)  | Size limit for temporary files created by post-processing modules; oldest files are deleted when exceeded; `0` means unlimited, default 50 GB |

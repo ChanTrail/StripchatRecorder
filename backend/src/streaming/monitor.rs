@@ -32,6 +32,12 @@ pub struct StreamerStatus {
     /// HLS 播放列表 URL（不序列化，仅供内部使用）/ HLS playlist URL (not serialized, internal use only)
     #[serde(skip)]
     pub playlist_url: Option<String>,
+    /// 获取该播放列表时使用的首选分辨率 / Preferred resolution used to fetch this playlist
+    #[serde(skip)]
+    pub playlist_resolution: u32,
+    /// 获取该播放列表时是否优先向上选择 / Whether higher resolution was preferred for this playlist
+    #[serde(skip)]
+    pub playlist_prefers_higher: bool,
 }
 
 /// 主播状态监控器，管理轮询循环和自动录制逻辑。
@@ -69,9 +75,15 @@ impl StatusMonitor {
     /// 获取指定主播缓存的 HLS 播放列表 URL（用于快速开始录制，避免重复 API 请求）。
     /// Get the cached HLS playlist URL for a streamer (for fast recording start, avoiding repeated API requests).
     pub fn get_cached_playlist_url(&self, username: &str) -> Option<String> {
+        let settings = self.state.get_settings();
+        let prefers_higher = settings.resolution_preference == "higher";
         self.statuses
             .read()
             .get(username)
+            .filter(|s| {
+                s.playlist_resolution == settings.preferred_resolution
+                    && s.playlist_prefers_higher == prefers_higher
+            })
             .and_then(|s| s.playlist_url.clone())
     }
 
@@ -142,7 +154,11 @@ impl StatusMonitor {
                 .filter(|s| s.auto_record && !self.recorder.is_recording(&s.username))
                 .filter_map(|s| {
                     statuses.get(&s.username).and_then(|cached| {
-                        if cached.is_online {
+                        if cached.is_online
+                            && cached.playlist_resolution == settings.preferred_resolution
+                            && cached.playlist_prefers_higher
+                                == (settings.resolution_preference == "higher")
+                        {
                             cached
                                 .playlist_url
                                 .as_ref()
@@ -188,7 +204,12 @@ impl StatusMonitor {
             settings.sc_mirror_url.as_deref(),
             self.recorder.cdn_tld_cache(),
         ) {
-            Ok(a) => a.with_mouflon_keys(self.state.get_mouflon_keys()),
+            Ok(a) => a
+                .with_mouflon_keys(self.state.get_mouflon_keys())
+                .with_resolution_selection(
+                    settings.preferred_resolution,
+                    &settings.resolution_preference,
+                ),
             Err(e) => {
                 tracing::error!("Failed to create API client: {}", e);
                 emitter.emit(
@@ -219,7 +240,13 @@ impl StatusMonitor {
             settings.sc_mirror_url.as_deref(),
             self.recorder.cdn_tld_cache(),
         ) {
-            Ok(a) => Arc::new(a.with_mouflon_keys(self.state.get_mouflon_keys())),
+            Ok(a) => Arc::new(
+                a.with_mouflon_keys(self.state.get_mouflon_keys())
+                    .with_resolution_selection(
+                        settings.preferred_resolution,
+                        &settings.resolution_preference,
+                    ),
+            ),
             Err(e) => {
                 tracing::error!("Failed to create API client: {}", e);
                 emitter.emit(
@@ -283,6 +310,8 @@ impl StatusMonitor {
                     status: String::new(),
                     thumbnail_url: None,
                     playlist_url: None,
+                    playlist_resolution: api.preferred_resolution(),
+                    playlist_prefers_higher: api.prefers_higher_resolution(),
                 });
         }
 
@@ -314,6 +343,8 @@ impl StatusMonitor {
             status: info.status.clone(),
             thumbnail_url: info.thumbnail_url.clone(),
             playlist_url: info.playlist_url.clone(),
+            playlist_resolution: api.preferred_resolution(),
+            playlist_prefers_higher: api.prefers_higher_resolution(),
         };
 
         emitter.emit("status-update", &status);
