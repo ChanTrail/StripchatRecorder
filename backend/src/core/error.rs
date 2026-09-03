@@ -25,6 +25,16 @@ pub enum AppError {
     NotRecording(String),
     /// 用户不存在 / User not found
     UserNotFound(String),
+    /// 用户名查询不到，但通过缓存的 model_id 反查确认该主播已改名
+    /// （携带旧用户名、新用户名、model_id，供调用方更新追踪列表）。
+    /// Username lookup failed, but a cached model_id confirms the streamer was renamed
+    /// (carries old username, new username, and model_id for the caller to update the
+    /// tracking list).
+    UserRenamed {
+        old: String,
+        new: String,
+        model_id: i64,
+    },
     /// 其他错误 / Other errors
     Other(String),
 }
@@ -39,6 +49,9 @@ impl fmt::Display for AppError {
             Self::AlreadyRecording(s) => write!(f, "Already recording: {}", s),
             Self::NotRecording(s) => write!(f, "Not recording: {}", s),
             Self::UserNotFound(s) => write!(f, "User not found: {}", s),
+            Self::UserRenamed { old, new, .. } => {
+                write!(f, "Streamer renamed: {} -> {}", old, new)
+            }
             Self::Other(s) => write!(f, "{}", s),
         }
     }

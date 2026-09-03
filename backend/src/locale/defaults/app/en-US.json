@@ -6,7 +6,10 @@
     "postprocess": "Post-process",
     "relay": "Relay",
     "finder": "Finder",
-    "settings": "Settings"
+    "settings": "Settings",
+    "about": "About",
+    "collapse": "Collapse",
+    "expand": "Expand"
   },
   "common": {
     "confirm": "Confirm",
@@ -16,7 +19,9 @@
     "save": "Save",
     "loading": "Loading...",
     "noData": "No data",
-    "unknown": "Unknown"
+    "unknown": "Unknown",
+    "show": "Show",
+    "hide": "Hide"
   },
   "notify": {
     "reconnected": "Reconnected to server, reloading in {n} second(s)…",
@@ -249,6 +254,7 @@
       "recording": "Recording",
       "network": "Network",
       "mouflonKeys": "Mouflon Decryption Keys",
+      "security": "Security",
       "language": "Language"
     },
     "language": {
@@ -347,6 +353,36 @@
       "error": "Error"
     }
   },
+  "login": {
+    "title": "Login",
+    "subtitle": "Enter the admin password to continue",
+    "initTitle": "Set Admin Password",
+    "initSubtitle": "Setup is complete — please set an admin password before continuing",
+    "passwordLabel": "Password",
+    "passwordPlaceholder": "Enter password",
+    "initPlaceholder": "Enter password",
+    "initHint": "You will need this password every time you access the interface",
+    "loginButton": "Login",
+    "initButton": "Set Password & Login",
+    "logout": "Logout",
+    "passwordRequired": "Please enter a password",
+    "passwordTooShort": "Password must be at least 6 characters",
+    "passwordStrength": "Password must be at least 6 characters and include letters, digits, and special characters",
+    "passwordStrengthHint": "Min 6 chars · letter · digit · special char (e.g. !#$%)",
+    "wrongPassword": "Incorrect password, please try again",
+    "statusFetchFailed": "Unable to connect to server, please refresh",
+    "changePassword": {
+      "title": "Change Password",
+      "oldLabel": "Current password",
+      "newLabel": "New password",
+      "oldPlaceholder": "Enter current password",
+      "newPlaceholder": "Enter new password",
+      "submit": "Change Password",
+      "submitting": "Updating…",
+      "success": "Password changed. Please log in again.",
+      "wrongOld": "Current password is incorrect"
+    }
+  },
   "setup": {
     "title": "Initial Setup",
     "subtitle": "Complete the following configuration before getting started. You can change these settings anytime in the Settings page.",
@@ -369,6 +405,32 @@
     "step3": {
       "title": "Network Proxies (Optional)",
       "desc": "Configure proxies if the server cannot access Stripchat directly. You can skip this step if not needed."
+    },
+    "step4": {
+      "title": "Set Admin Password",
+      "desc": "Set a password to protect the admin interface (minimum 6 characters). You will need to enter it each time you access the interface.",
+      "placeholder": "Enter password (min 6 characters)",
+      "hint": "Keep this password safe — it protects access to the management interface"
     }
+  },
+  "about": {
+    "title": "About",
+    "version": "Version",
+    "updateCheck": "Check for Updates",
+    "updateChecking": "Checking...",
+    "updateAvailable": "New version available: {version}",
+    "updateNone": "Already up to date",
+    "updateFailed": "Failed to check for updates",
+    "download": "Download",
+    "changelog": "Changelog",
+    "releaseNotes": "Release Notes",
+    "github": "GitHub Repository",
+    "license": "License",
+    "licenseValue": "GPL-3.0",
+    "copyright": "Copyright",
+    "contributors": "Contributors",
+    "reportBug": "Report a Bug",
+    "viewOnGitHub": "View on GitHub",
+    "links": "Links"
   }
 }

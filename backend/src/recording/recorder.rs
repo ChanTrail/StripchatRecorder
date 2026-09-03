@@ -368,12 +368,29 @@ impl RecorderManager {
         mut stop_rx: mpsc::Receiver<()>,
         emitter: Arc<dyn Emitter>,
     ) -> Result<()> {
+        // 每次刷新 playlist 时都重新读取 model_id：录制过程中若因主播改名触发过
+        // AppState::rename_streamer，追踪列表里该主播的用户名会变化，此处需要
+        // 用当前实际记录的 model_id（而非录制开始时的快照）传给 get_stream_info
+        // 做改名反查兜底。
+        //
+        // Re-read model_id on every playlist refresh: if a rename triggered
+        // AppState::rename_streamer during recording, the tracked entry's username may
+        // have changed. Use the currently recorded model_id (not a snapshot taken at
+        // recording start) as the get_stream_info rename-lookup fallback.
+        let known_model_id = || -> Option<i64> {
+            self.state
+                .get_streamers()
+                .into_iter()
+                .find(|s| s.username == username)
+                .and_then(|s| s.model_id)
+        };
         // 初始设置快照，用于检测变更 / Initial settings snapshot for change detection
         let mut last_settings = self.state.get_settings();
         let mut api = StripchatApi::new(
             last_settings.api_proxy_url.as_deref(),
             last_settings.cdn_proxy_url.as_deref(),
             last_settings.sc_mirror_url.as_deref(),
+            Some(last_settings.sc_mirror_scheme.as_str()),
             Arc::clone(&self.preferred_tld_by_node),
         )?
         .with_mouflon_keys(self.state.get_mouflon_keys());
@@ -404,13 +421,15 @@ impl RecorderManager {
             let current_mouflon_keys = self.state.get_mouflon_keys();
             let proxy_changed = current_settings.api_proxy_url != last_settings.api_proxy_url
                 || current_settings.cdn_proxy_url != last_settings.cdn_proxy_url
-                || current_settings.sc_mirror_url != last_settings.sc_mirror_url;
+                || current_settings.sc_mirror_url != last_settings.sc_mirror_url
+                || current_settings.sc_mirror_scheme != last_settings.sc_mirror_scheme;
             let keys_changed = current_mouflon_keys != *api.mouflon_keys();
             if proxy_changed || keys_changed {
                 match StripchatApi::new(
                     current_settings.api_proxy_url.as_deref(),
                     current_settings.cdn_proxy_url.as_deref(),
                     current_settings.sc_mirror_url.as_deref(),
+                    Some(current_settings.sc_mirror_scheme.as_str()),
                     Arc::clone(&self.preferred_tld_by_node),
                 ) {
                     Ok(new_api) => {
@@ -512,7 +531,7 @@ impl RecorderManager {
                                     username, consecutive_cdn_failures
                                 );
                                 consecutive_cdn_failures = 0;
-                                match api.get_stream_info(username, true).await {
+                                match api.get_stream_info(username, true, known_model_id()).await {
                                     Ok(info) => {
                                         if let Some(new_url) = info.playlist_url {
                                             tracing::info!("Refreshed playlist URL → {}", username);
@@ -542,7 +561,7 @@ impl RecorderManager {
                         Err(e) => {
                             tracing::error!("Fetch error → {}: {}, attempting playlist refresh", username, e);
                             consecutive_cdn_failures = 0;
-                            match api.get_stream_info(username, true).await {
+                            match api.get_stream_info(username, true, known_model_id()).await {
                                 Ok(info) => {
                                     if let Some(new_url) = info.playlist_url {
                                         tracing::info!("Refreshed playlist URL → {}", username);

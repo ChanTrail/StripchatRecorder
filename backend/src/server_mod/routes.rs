@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod locale;
 pub mod postprocess;
 pub mod recording;

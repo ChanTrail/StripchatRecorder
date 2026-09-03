@@ -340,6 +340,17 @@ export const useStreamersStore = defineStore("streamers", () => {
 				const s = streamers.value.find((s) => s.username === p.username);
 				if (s) s.auto_record = p.enabled;
 			}),
+			// 主播改名：后端通过缓存的 model_id 反查确认改名后，直接原地更新用户名，
+			// 无需重新拉取整个列表。
+			// Streamer renamed: once the backend confirms a rename via the cached
+			// model_id lookup, update the username in place without refetching the
+			// whole list.
+			on("streamer-renamed", (payload) => {
+				const p = payload as { old_username: string; new_username: string };
+				const s = streamers.value.find((s) => s.username === p.old_username);
+				if (s) s.username = p.new_username;
+				sonnerToast.info(`主播 ${p.old_username} 已改名为 ${p.new_username}`);
+			}),
 			on("api-error", (payload) => {
 				const p = payload as { message: string };
 				sonnerToast.error(`Stripchat API连接错误: ${p.message}`);

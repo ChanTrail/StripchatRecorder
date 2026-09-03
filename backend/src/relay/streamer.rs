@@ -64,6 +64,7 @@ async fn worker_loop(
             settings.api_proxy_url.as_deref(),
             settings.cdn_proxy_url.as_deref(),
             settings.sc_mirror_url.as_deref(),
+            Some(settings.sc_mirror_scheme.as_str()),
         ) {
             Ok(a) => Arc::new(a.with_mouflon_keys(app_state.get_mouflon_keys())),
             Err(e) => {
@@ -79,7 +80,7 @@ async fn worker_loop(
 
         relay_manager.set_state(&username, RelayStreamState::Connecting);
 
-        match api.get_stream_info(&username, true).await {
+        match api.get_stream_info(&username, true, None).await {
             Ok(info) if info.playlist_url.is_some() => {
                 let playlist_url = info.playlist_url.unwrap();
                 tracing::info!("Relay worker [{}]: upstream live", username);
@@ -198,9 +199,10 @@ async fn feed_offline(
                         settings.api_proxy_url.as_deref(),
                         settings.cdn_proxy_url.as_deref(),
                         settings.sc_mirror_url.as_deref(),
+                        Some(settings.sc_mirror_scheme.as_str()),
                     ) {
                         let api = api.with_mouflon_keys(state.get_mouflon_keys());
-                        match api.get_stream_info(username, true).await {
+                        match api.get_stream_info(username, true, None).await {
                             Ok(info) => {
                                 tracing::info!("Relay offline [{}]: status={} playlist={}", username, info.status, info.playlist_url.is_some());
                                 if info.playlist_url.is_some() {
@@ -305,6 +307,7 @@ async fn feed_live(
         last_settings.api_proxy_url.as_deref(),
         last_settings.cdn_proxy_url.as_deref(),
         last_settings.sc_mirror_url.as_deref(),
+        Some(last_settings.sc_mirror_scheme.as_str()),
     ) {
         Ok(a) => a.with_mouflon_keys(app_state.get_mouflon_keys()),
         Err(_) => {
@@ -337,12 +340,14 @@ async fn feed_live(
         let current_mouflon_keys = app_state.get_mouflon_keys();
         let proxy_changed = current_settings.api_proxy_url != last_settings.api_proxy_url
             || current_settings.cdn_proxy_url != last_settings.cdn_proxy_url
-            || current_settings.sc_mirror_url != last_settings.sc_mirror_url;
+            || current_settings.sc_mirror_url != last_settings.sc_mirror_url
+            || current_settings.sc_mirror_scheme != last_settings.sc_mirror_scheme;
         if proxy_changed || current_mouflon_keys != last_mouflon_keys {
             if let Ok(new_api) = StripchatApi::new_api_only(
                 current_settings.api_proxy_url.as_deref(),
                 current_settings.cdn_proxy_url.as_deref(),
                 current_settings.sc_mirror_url.as_deref(),
+                Some(current_settings.sc_mirror_scheme.as_str()),
             ) {
                 api = new_api.with_mouflon_keys(current_mouflon_keys.clone());
             }
@@ -369,7 +374,7 @@ async fn feed_live(
 
                 if consecutive_failures >= MAX_FAILURES { break true; }
 
-                if let Ok(info) = api.get_stream_info(username, true).await {
+                if let Ok(info) = api.get_stream_info(username, true, None).await {
                     if let Some(new_url) = info.playlist_url {
                         url_prefix = get_url_prefix(&new_url);
                         current_url = new_url;

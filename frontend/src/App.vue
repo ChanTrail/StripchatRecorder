@@ -22,6 +22,10 @@
 	import DirectoryBrowserDialog from "./components/DirectoryBrowserDialog.vue";
 	import { Button } from "@/components/ui/button";
 	import { call, on, onSseReconnect, onSseDisconnect } from "@/lib/api";
+	import {
+		Users, Video, Clapperboard, Radio, Search, Settings, Info, LogOut,
+		ChevronsLeft, ChevronsRight,
+	} from "@lucide/vue";
 	import { useNotify } from "@/composables/useNotify";
 	import { toast as sonnerToast } from "vue-sonner";
 	import { useStreamersStore } from "@/stores/streamers";
@@ -30,6 +34,7 @@
 	import { loadLocaleFromServer } from "@/i18n";
 	import { useModuleLocaleStore } from "@/stores/moduleLocale";
 	import { useLocalesStore } from "@/stores/locales";
+	import { useAuthStore } from "@/stores/auth";
 
 	const router = useRouter();
 	const route = useRoute();
@@ -38,6 +43,7 @@
 	const { t, locale } = useI18n();
 	const moduleLocaleStore = useModuleLocaleStore();
 	const localesStore = useLocalesStore();
+	const authStore = useAuthStore();
 
 	const mainScrollEl = ref<HTMLElement | null>(null);
 	useScrollbar(mainScrollEl);
@@ -61,13 +67,17 @@
 	 * route worked fine, but users had no way to find it from the sidebar.
 	 */
 	const navItems = [
-		{ to: "/", labelKey: "nav.streamers" },
-		{ to: "/recordings", labelKey: "nav.recordings" },
-		{ to: "/postprocess", labelKey: "nav.postprocess" },
-		{ to: "/relay", labelKey: "nav.relay" },
-		{ to: "/finder", labelKey: "nav.finder" },
-		{ to: "/settings", labelKey: "nav.settings" },
+		{ to: "/", labelKey: "nav.streamers", icon: Users },
+		{ to: "/recordings", labelKey: "nav.recordings", icon: Video },
+		{ to: "/postprocess", labelKey: "nav.postprocess", icon: Clapperboard },
+		{ to: "/relay", labelKey: "nav.relay", icon: Radio },
+		{ to: "/finder", labelKey: "nav.finder", icon: Search },
+		{ to: "/settings", labelKey: "nav.settings", icon: Settings },
+		{ to: "/about", labelKey: "nav.about", icon: Info },
 	];
+
+	/** 侧边栏是否折叠 / Whether the sidebar is collapsed */
+	const sidebarCollapsed = ref(false);
 
 	/**
 	 * 根据参数切换文档根元素的 dark 类，实现深色/浅色主题切换。
@@ -137,6 +147,11 @@
 				toast(t("notify.missingPpResults.done", { count: w.missing_pp_results.length }), "success");
 			}
 		}
+	}
+
+	async function handleLogout() {
+		await authStore.logout();
+		router.push("/login");
 	}
 
 	onMounted(async () => {
@@ -235,11 +250,11 @@
 </script>
 
 <template>
-	<!-- 全局布局过渡：setup 页面与主页面之间的切换 / Global layout transition between setup and main -->
+	<!-- 全局布局过渡：setup/login 页面与主页面之间的切换 / Global layout transition between setup/login and main -->
 	<Transition name="layout" mode="out-in">
 
-		<!-- setup 页面：全屏无侧边栏 / Setup page: full-screen without sidebar -->
-		<div v-if="route.path === '/setup'" key="setup" class="contents">
+		<!-- setup / login 页面：全屏无侧边栏 / Setup / login page: full-screen without sidebar -->
+		<div v-if="route.path === '/setup' || route.path === '/login'" key="setup" class="contents">
 			<RouterView v-slot="{ Component }">
 				<Transition name="page" mode="out-in">
 					<component :is="Component" :key="route.path" />
@@ -252,35 +267,66 @@
 		<!-- 正常布局：侧边栏 + 内容区 / Normal layout: sidebar + content -->
 		<div v-else key="main" class="flex h-screen overflow-hidden">
 			<aside
-				class="w-44 shrink-0 bg-sidebar border-r border-sidebar-border flex flex-col p-3 gap-1"
+				class="shrink-0 bg-sidebar border-r border-sidebar-border flex flex-col p-3 gap-1 transition-[width] duration-200 ease-in-out overflow-hidden"
+				:class="sidebarCollapsed ? 'w-14' : 'w-52'"
 			>
-				<div
-					class="flex items-center gap-2 px-1 py-4 mb-1 border-b border-sidebar-border"
-				>
-					<span class="w-2.5 h-2.5 rounded-full bg-destructive shrink-0" />
-					<span class="text-sm font-bold text-sidebar-foreground"
-						>StripchatRecorder</span
-					>
+				<!-- 品牌区 / Brand area -->
+				<div class="flex items-center gap-2 px-1 py-4 mb-1 border-b border-sidebar-border min-w-0">
+					<img src="/icon.png" alt="icon" class="w-5 h-5 shrink-0" />
+					<span
+						class="text-sm font-bold text-sidebar-foreground truncate transition-[opacity,width] duration-200 ease-in-out"
+						:class="sidebarCollapsed ? 'opacity-0 w-0' : 'opacity-100'"
+					>StripchatRecorder</span>
 				</div>
+
+				<!-- 导航项 / Nav items -->
 				<nav class="flex flex-col gap-0.5">
 					<Button
 						v-for="item in navItems"
 						:key="item.to"
 						variant="ghost"
-						class="w-full justify-start text-sm font-normal"
-						:class="
+						class="w-full text-sm font-normal px-2 transition-[justify-content]"
+						:class="[
+							sidebarCollapsed ? 'justify-center gap-0' : 'justify-start gap-2',
 							route.path === item.to
 								? 'bg-sidebar-accent text-sidebar-accent-foreground font-semibold'
 								: 'text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/50'
-						"
+						]"
+						:title="sidebarCollapsed ? t(item.labelKey) : undefined"
 						@click="router.push(item.to)"
 					>
-						{{ t(item.labelKey) }}
+						<component :is="item.icon" class="size-4 shrink-0" />
+						<span v-show="!sidebarCollapsed" class="truncate">{{ t(item.labelKey) }}</span>
 					</Button>
 				</nav>
+
+				<!-- 底部：退出 + 折叠按钮 / Bottom: logout + collapse button -->
+				<div class="mt-auto pt-2 border-t border-sidebar-border flex flex-col gap-0.5">
+					<Button
+						variant="ghost"
+						class="w-full text-sm font-normal px-2 text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/50"
+						:class="sidebarCollapsed ? 'justify-center gap-0' : 'justify-start gap-2'"
+						:title="sidebarCollapsed ? t('login.logout') : undefined"
+						@click="handleLogout"
+					>
+						<LogOut class="size-4 shrink-0" />
+						<span v-show="!sidebarCollapsed" class="truncate">{{ t("login.logout") }}</span>
+					</Button>
+					<Button
+						variant="ghost"
+						class="w-full text-sm font-normal px-2 text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/50"
+						:class="sidebarCollapsed ? 'justify-center gap-0' : 'justify-start gap-2'"
+						:title="sidebarCollapsed ? t('nav.expand') : t('nav.collapse')"
+						@click="sidebarCollapsed = !sidebarCollapsed"
+					>
+						<ChevronsLeft v-if="!sidebarCollapsed" class="size-4 shrink-0" />
+						<ChevronsRight v-else class="size-4 shrink-0" />
+						<span v-show="!sidebarCollapsed" class="truncate">{{ t("nav.collapse") }}</span>
+					</Button>
+				</div>
 			</aside>
 			<main class="flex-1 overflow-hidden">
-				<div ref="mainScrollEl" class="h-full overflow-y-scroll scrollbar-overlay">
+				<div ref="mainScrollEl" class="h-full overflow-y-auto scrollbar-overlay">
 					<RouterView v-slot="{ Component }">
 						<Transition name="page" mode="out-in">
 							<component :is="Component" :key="route.path" />

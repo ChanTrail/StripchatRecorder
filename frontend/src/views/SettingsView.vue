@@ -25,7 +25,9 @@
 	import { onMounted, onUnmounted, reactive, ref, watch, nextTick } from "vue";
 	import { call, on } from "@/lib/api";
 	import { useSettingsStore, type Settings, type MouflonKeysStore } from "../stores/settings";
+	import { useAuthStore } from "../stores/auth";
 	import { useNotify } from "../composables/useNotify";
+	import { useRouter } from "vue-router";
 	import { Button } from "@/components/ui/button";
 	import { Input } from "@/components/ui/input";
 	import { Label } from "@/components/ui/label";
@@ -48,13 +50,15 @@
 		SelectValue,
 	} from "@/components/ui/select";
 	import { useDirectoryBrowser } from "@/composables/useDirectoryBrowser";
-	import { FolderOpen } from "@lucide/vue";
+	import { FolderOpen, Eye, EyeOff } from "@lucide/vue";
 
 	const store = useSettingsStore();
 	const { toast, confirm } = useNotify();
 	const { t, locale } = useI18n();
 	const moduleLocaleStore = useModuleLocaleStore();
 	const localesStore = useLocalesStore();
+	const authStore = useAuthStore();
+	const router = useRouter();
 
 	/** 可用语言列表（从共享 store 读取，由 App.vue 统一维护）
 	 * Available locales (from shared store, maintained by App.vue) */
@@ -84,6 +88,7 @@
 		api_proxy_url: null,
 		cdn_proxy_url: null,
 		sc_mirror_url: null,
+		sc_mirror_scheme: "https",
 		max_concurrent: 0,
 		max_tmp_dir_gb: 50,
 		language: "zh-CN",
@@ -141,6 +146,7 @@
 			auto_record: form.auto_record,
 			max_concurrent: form.max_concurrent,
 			max_tmp_dir_gb: form.max_tmp_dir_gb,
+			sc_mirror_scheme: form.sc_mirror_scheme,
 		}),
 		async () => {
 			if (!initialized) return;
@@ -242,6 +248,8 @@
 	const keyError = ref("");
 	/** 是否正在手动同步 / Whether manual sync is in progress */
 	const syncing = ref(false);
+	/** 是否显示 token 明文 / Whether the sync token is visible */
+	const showToken = ref(false);
 
 	/**
 	 * 从后端加载 Mouflon 密钥列表。
@@ -306,17 +314,111 @@
 		if (!ts) return t("settings.mouflonNever");
 		return new Date(ts).toLocaleString();
 	}
+
+	// ── 当前可见 section 追踪 / Active section tracking ────────────────────────
+	/** section key → 显示名称的映射（顺序即为 DOM 顺序）/ Section key to display name map (in DOM order) */
+	const SECTION_KEYS = ["language", "recording", "network", "mouflonKeys", "security"] as const;
+	type SectionKey = (typeof SECTION_KEYS)[number];
+	/** 当前滚动到的 section key / Currently visible section key */
+	const activeSection = ref<SectionKey | null>(null);
+	/** 各 section 的 h2 元素 ref map / h2 element refs for each section */
+	const sectionRefs = ref<Partial<Record<SectionKey, HTMLElement>>>({});
+	let sectionObserver: IntersectionObserver | null = null;
+
+	function initSectionObserver() {
+		if (sectionObserver) sectionObserver.disconnect();
+		// 用 rootMargin 让 h2 进入顶部 sticky header 高度以下就触发
+		// Use rootMargin so the h2 triggers as it approaches the sticky header
+		sectionObserver = new IntersectionObserver(
+			(entries) => {
+				for (const entry of entries) {
+					const key = entry.target.getAttribute("data-section") as SectionKey;
+					if (entry.isIntersecting) {
+						activeSection.value = key;
+					}
+				}
+			},
+			// 当 h2 上边缘越过视口顶部 -60px（sticky header 高度）时触发
+			{ rootMargin: "-60px 0px -80% 0px", threshold: 0 },
+		);
+		for (const key of SECTION_KEYS) {
+			const el = sectionRefs.value[key];
+			if (el) sectionObserver.observe(el);
+		}
+	}
+
+	// 初始化后启动 observer / Start observer after initialization
+	watch(
+		() => store.loading,
+		(loading) => {
+			if (!loading) nextTick(initSectionObserver);
+		},
+		{ immediate: true },
+	);
+
+	onUnmounted(() => {
+		sectionObserver?.disconnect();
+	});
+
+	// ── 修改密码 / Change password ──────────────────────────────────────────
+	const changePwdForm = reactive({ oldPwd: "", newPwd: "" });
+	const changePwdError = ref("");
+	const changePwdLoading = ref(false);
+
+	async function submitChangePassword() {
+		changePwdError.value = "";
+		if (!changePwdForm.oldPwd || !changePwdForm.newPwd) {
+			changePwdError.value = t("login.passwordRequired");
+			return;
+		}
+		changePwdLoading.value = true;
+		try {
+			await call("change_password", {
+				old_password: changePwdForm.oldPwd,
+				new_password: changePwdForm.newPwd,
+			});
+			toast(t("login.changePassword.success"), "success");
+			// 修改成功：清除 token，跳转登录页
+			// Password changed: clear token and redirect to login
+			await authStore.logout();
+			router.replace("/login");
+		} catch (e: unknown) {
+			const msg = String(e);
+			changePwdError.value = msg.includes("旧密码") || msg.includes("Wrong current")
+				? t("login.changePassword.wrongOld")
+				: msg;
+		} finally {
+			changePwdLoading.value = false;
+		}
+	}
 </script>
 
 <template>
-	<div class="flex flex-col gap-5 max-w-160 px-6 pt-6 pb-6">
-		<h1 class="text-xl font-bold">{{ t("settings.title") }}</h1>
+	<div class="flex flex-col">
+		<!-- sticky 标题区 / Sticky header zone -->
+		<header class="bg-background sticky top-0 z-20 px-6 border-b shrink-0 pt-6 pb-3">
+			<h1 class="text-xl font-bold mb-0.5">{{ t("settings.title") }}</h1>
+			<p class="text-sm text-muted-foreground h-5 relative overflow-hidden">
+				<Transition name="section-label">
+					<span
+						v-if="activeSection"
+						:key="activeSection"
+						class="absolute inset-0 truncate"
+					>
+						{{ t(`settings.sections.${activeSection}`) }}
+					</span>
+				</Transition>
+			</p>
+		</header>
 
+		<div class="flex flex-col gap-5 max-w-160 px-6 pt-5 pb-6">
 		<div v-if="store.loading" class="text-muted-foreground">{{ t("settings.loading") }}</div>
 
-		<form v-else class="flex flex-col gap-7">
+		<section v-else class="flex flex-col gap-7">
 			<section class="flex flex-col gap-3.5">
 				<h2
+					:ref="(el) => { if (el) sectionRefs.language = (el as HTMLElement) }"
+					data-section="language"
 					class="text-xs font-bold uppercase tracking-widest text-muted-foreground pb-2 border-b"
 				>
 					{{ t("settings.sections.language") }}
@@ -345,6 +447,8 @@
 
 			<section class="flex flex-col gap-3.5">
 				<h2
+					:ref="(el) => { if (el) sectionRefs.recording = (el as HTMLElement) }"
+					data-section="recording"
 					class="text-xs font-bold uppercase tracking-widest text-muted-foreground pb-2 border-b"
 				>
 					{{ t("settings.sections.recording") }}
@@ -438,6 +542,8 @@
 
 			<section class="flex flex-col gap-3.5">
 				<h2
+					:ref="(el) => { if (el) sectionRefs.network = (el as HTMLElement) }"
+					data-section="network"
 					class="text-xs font-bold uppercase tracking-widest text-muted-foreground pb-2 border-b"
 				>
 					{{ t("settings.sections.network") }}
@@ -460,16 +566,30 @@
 				</div>
 				<div class="flex flex-col gap-1.5">
 					<Label>{{ t("settings.scMirror.label") }}</Label>
-					<Input
-						:model-value="form.sc_mirror_url ?? ''"
-						:placeholder="t('settings.scMirror.placeholder')"
-						autocomplete="url"
-						@update:model-value="
-							form.sc_mirror_url = ($event as string) || null
-						"
-						@keyup.enter="saveProxy('sc_mirror_url')"
-						@blur="saveProxy('sc_mirror_url')"
-					/>
+					<div class="flex items-center gap-1.5">
+						<Select
+							:model-value="form.sc_mirror_scheme"
+							class="w-28 shrink-0"
+							@update:model-value="(v) => v && (form.sc_mirror_scheme = String(v))"
+						>
+							<SelectTrigger class="w-28">
+								<SelectValue />
+							</SelectTrigger>
+							<SelectContent>
+								<SelectItem value="https">https://</SelectItem>
+								<SelectItem value="http">http://</SelectItem>
+							</SelectContent>
+						</Select>
+						<Input
+							:model-value="form.sc_mirror_url ?? ''"
+							:placeholder="t('settings.scMirror.placeholder')"
+							autocomplete="off"
+							class="flex-1"
+							@update:model-value="form.sc_mirror_url = ($event as string) || null"
+							@keyup.enter="saveProxy('sc_mirror_url')"
+							@blur="saveProxy('sc_mirror_url')"
+						/>
+					</div>
 					<p class="text-xs text-muted-foreground">
 						{{ t("settings.scMirror.hint") }}
 					</p>
@@ -494,6 +614,8 @@
 
 			<section class="flex flex-col gap-3.5">
 				<h2
+					:ref="(el) => { if (el) sectionRefs.mouflonKeys = (el as HTMLElement) }"
+					data-section="mouflonKeys"
 					class="text-xs font-bold uppercase tracking-widest text-muted-foreground pb-2 border-b"
 				>
 					{{ t("settings.sections.mouflonKeys") }}
@@ -519,15 +641,28 @@
 				</div>
 				<div class="flex flex-col gap-1.5">
 					<Label>{{ t("settings.mouflonSyncToken.label") }}</Label>
-					<Input
-						:model-value="form.mouflon_sync_token ?? ''"
-						:placeholder="t('settings.mouflonSyncToken.placeholder')"
-						type="password"
-						autocomplete="current-password"
-						@update:model-value="form.mouflon_sync_token = ($event as string) || null"
-						@keyup.enter="saveProxy('mouflon_sync_token')"
-						@blur="saveProxy('mouflon_sync_token')"
-					/>
+					<div class="flex items-center gap-1.5">
+						<Input
+							:model-value="form.mouflon_sync_token ?? ''"
+							:placeholder="t('settings.mouflonSyncToken.placeholder')"
+							:type="showToken ? 'text' : 'password'"
+							autocomplete="off"
+							class="flex-1"
+							@update:model-value="form.mouflon_sync_token = ($event as string) || null"
+							@keyup.enter="saveProxy('mouflon_sync_token')"
+							@blur="saveProxy('mouflon_sync_token')"
+						/>
+						<Button
+							type="button"
+							variant="outline"
+							size="icon"
+							:title="showToken ? t('common.hide') : t('common.show')"
+							@click="showToken = !showToken"
+						>
+							<EyeOff v-if="showToken" class="size-4" />
+							<Eye v-else class="size-4" />
+						</Button>
+					</div>
 				</div>
 
 				<!-- 同步状态 + 手动同步按钮 / Sync status + manual sync button -->
@@ -605,6 +740,45 @@
 				</div>
 				<p v-if="keyError" class="text-xs text-destructive">{{ keyError }}</p>
 			</section>
-		</form>
+
+			<section class="flex flex-col gap-3.5">
+				<h2
+					:ref="(el) => { if (el) sectionRefs.security = (el as HTMLElement) }"
+					data-section="security"
+					class="text-xs font-bold uppercase tracking-widest text-muted-foreground pb-2 border-b"
+				>
+					{{ t("settings.sections.security") }}
+				</h2>
+				<p class="text-xs text-muted-foreground">{{ t("login.passwordStrengthHint") }}</p>
+				<form class="flex flex-col gap-3.5" @submit.prevent="submitChangePassword">
+					<input type="text" name="username" value="admin" autocomplete="username" class="sr-only" aria-hidden="true" tabindex="-1" />
+					<div class="flex flex-col gap-1.5">
+						<Label>{{ t("login.changePassword.oldLabel") }}</Label>
+						<Input
+							v-model="changePwdForm.oldPwd"
+							type="password"
+							autocomplete="current-password"
+							:placeholder="t('login.changePassword.oldPlaceholder')"
+						/>
+					</div>
+					<div class="flex flex-col gap-1.5">
+						<Label>{{ t("login.changePassword.newLabel") }}</Label>
+						<Input
+							v-model="changePwdForm.newPwd"
+							type="password"
+							autocomplete="new-password"
+							:placeholder="t('login.changePassword.newPlaceholder')"
+						/>
+					</div>
+					<p v-if="changePwdError" class="text-xs text-destructive">{{ changePwdError }}</p>
+					<div>
+						<Button type="submit" variant="outline" :disabled="changePwdLoading">
+							{{ changePwdLoading ? t("login.changePassword.submitting") : t("login.changePassword.submit") }}
+						</Button>
+					</div>
+				</form>
+			</section>
+		</section>
+		</div><!-- /scroll body -->
 	</div>
 </template>

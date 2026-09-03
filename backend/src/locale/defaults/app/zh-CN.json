@@ -6,7 +6,10 @@
     "postprocess": "后处理",
     "relay": "转发流",
     "finder": "主播查找",
-    "settings": "设置"
+    "settings": "设置",
+    "about": "关于",
+    "collapse": "收起",
+    "expand": "展开"
   },
   "common": {
     "confirm": "确认",
@@ -16,7 +19,9 @@
     "save": "保存",
     "loading": "加载中...",
     "noData": "暂无数据",
-    "unknown": "未知"
+    "unknown": "未知",
+    "show": "显示",
+    "hide": "隐藏"
   },
   "notify": {
     "reconnected": "已重新连接到服务器，{n} 秒后刷新页面…",
@@ -249,6 +254,7 @@
       "recording": "录制",
       "network": "网络",
       "mouflonKeys": "Mouflon 解密密钥",
+      "security": "安全",
       "language": "语言"
     },
     "language": {
@@ -347,6 +353,36 @@
       "error": "错误"
     }
   },
+  "login": {
+    "title": "登录",
+    "subtitle": "请输入管理员密码以继续",
+    "initTitle": "设置管理员密码",
+    "initSubtitle": "系统已完成初始化，请先设置一个管理员密码",
+    "passwordLabel": "密码",
+    "passwordPlaceholder": "请输入密码",
+    "initPlaceholder": "请输入密码",
+    "initHint": "设置后每次访问都需要输入此密码",
+    "loginButton": "登录",
+    "initButton": "设置密码并登录",
+    "logout": "退出登录",
+    "passwordRequired": "请输入密码",
+    "passwordTooShort": "密码长度不能少于 6 位",
+    "passwordStrength": "密码需至少 6 位，且包含字母、数字和特殊字符",
+    "passwordStrengthHint": "至少 6 位 · 包含字母 · 包含数字 · 包含特殊字符（如 !#$%）",
+    "wrongPassword": "密码错误，请重试",
+    "statusFetchFailed": "无法连接到服务器，请刷新重试",
+    "changePassword": {
+      "title": "修改密码",
+      "oldLabel": "当前密码",
+      "newLabel": "新密码",
+      "oldPlaceholder": "请输入当前密码",
+      "newPlaceholder": "请输入新密码",
+      "submit": "修改密码",
+      "submitting": "修改中…",
+      "success": "密码已修改，请重新登录",
+      "wrongOld": "当前密码错误"
+    }
+  },
   "setup": {
     "title": "初始配置",
     "subtitle": "首次启动需要完成以下配置，之后可在「设置」页面随时修改",
@@ -368,7 +404,33 @@
     },
     "step3": {
       "title": "网络代理（可选）",
-      "desc": "如果服务器无法直接访问 Stripchat，可在此配置代理。不需要可直接点击「完成配置」"
+      "desc": "如果服务器无法直接访问 Stripchat，可在此配置代理。不需要可直接跳过"
+    },
+    "step4": {
+      "title": "设置管理员密码",
+      "desc": "设置一个访问管理界面的密码（至少 6 位），之后每次访问都需要输入此密码",
+      "placeholder": "请输入密码（至少 6 位）",
+      "hint": "此密码用于保护管理界面，请妥善记录"
     }
+  },
+  "about": {
+    "title": "关于",
+    "version": "版本",
+    "updateCheck": "检查更新",
+    "updateChecking": "检查中...",
+    "updateAvailable": "发现新版本：{version}",
+    "updateNone": "已是最新版本",
+    "updateFailed": "检查更新失败",
+    "download": "下载",
+    "changelog": "更新日志",
+    "releaseNotes": "版本说明",
+    "github": "GitHub 仓库",
+    "license": "开源许可",
+    "licenseValue": "GPL-3.0",
+    "copyright": "版权所有",
+    "contributors": "贡献者",
+    "reportBug": "反馈 Bug",
+    "viewOnGitHub": "在 GitHub 上查看",
+    "links": "相关链接"
   }
 }

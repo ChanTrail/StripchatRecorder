@@ -54,6 +54,7 @@ async fn run_config_check(state: &Arc<AppState>, emitter: &Arc<dyn Emitter>) {
         settings.api_proxy_url.as_deref(),
         settings.cdn_proxy_url.as_deref(),
         settings.sc_mirror_url.as_deref(),
+        Some(settings.sc_mirror_scheme.as_str()),
     ) {
         Ok(a) => a,
         Err(_) => return,
@@ -68,7 +69,7 @@ async fn run_config_check(state: &Arc<AppState>, emitter: &Arc<dyn Emitter>) {
     for s in &streamers {
         let mut confirmed_missing = false;
         for attempt in 1..=MAX_ATTEMPTS {
-            match api.get_stream_info(&s.username, false).await {
+            match api.get_stream_info(&s.username, false, s.model_id).await {
                 Ok(_) => {
                     confirmed_missing = false;
                     break;

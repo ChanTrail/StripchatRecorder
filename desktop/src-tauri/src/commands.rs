@@ -75,6 +75,7 @@ pub async fn add_streamer(
         settings.api_proxy_url.as_deref(),
         settings.cdn_proxy_url.as_deref(),
         settings.sc_mirror_url.as_deref(),
+        Some(settings.sc_mirror_scheme.as_str()),
     )
     .map_err(map_err)?;
     api.get_stream_info(&username, false).await.map_err(map_err)?;
@@ -172,6 +173,7 @@ pub async fn verify_streamer(
         settings.api_proxy_url.as_deref(),
         settings.cdn_proxy_url.as_deref(),
         settings.sc_mirror_url.as_deref(),
+        Some(settings.sc_mirror_scheme.as_str()),
     )
     .map_err(map_err)?;
     match api.get_stream_info(&username, false).await {

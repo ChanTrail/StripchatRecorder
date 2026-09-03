@@ -5,19 +5,22 @@
     Step 1 — 语言选择
     Step 2 — 录制输出目录
     Step 3 — 网络代理（可选）
-    完成后将 setup_done 置为 true 并跳转到主页。
+    Step 4 — 设置管理员密码
+    完成后将 setup_done 置为 true、设置密码并登录，跳转到主页。
 
     Shown when setup_done = false. Guides the user through basic configuration:
     Step 1 — Language
     Step 2 — Recording output directory
     Step 3 — Network proxies (optional)
-    On finish, sets setup_done = true and navigates to the home page.
+    Step 4 — Set admin password
+    On finish, sets setup_done = true, sets password, logs in, and navigates to home.
 -->
 <script setup lang="ts">
 import { ref, computed, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { useSettingsStore } from "@/stores/settings";
+import { useAuthStore } from "@/stores/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -31,11 +34,12 @@ import { FolderOpen } from "@lucide/vue";
 const router = useRouter();
 const { t, locale } = useI18n();
 const store = useSettingsStore();
+const authStore = useAuthStore();
 const moduleLocaleStore = useModuleLocaleStore();
 const localesStore = useLocalesStore();
 
 // ── 步骤控制 / Step control ──────────────────────────────────────────────────
-const TOTAL_STEPS = 3;
+const TOTAL_STEPS = 4;
 const step = ref(1);
 const saving = ref(false);
 const error = ref("");
@@ -49,6 +53,7 @@ const outputDir = ref("");
 const apiProxy = ref("");
 const scMirror = ref("");
 const cdnProxy = ref("");
+const adminPassword = ref("");
 
 /** 可用语言列表（从共享 store 读取，由 App.vue 统一维护）
  * Available locales (from shared store, maintained by App.vue) */
@@ -98,6 +103,7 @@ async function setLanguage(lang: string) {
 // ── 步骤校验 / Step validation ───────────────────────────────────────────────
 const canNext = computed(() => {
 	if (step.value === 2) return outputDir.value.trim().length > 0;
+	if (step.value === 4) return adminPassword.value.trim().length >= 6;
 	return true;
 });
 
@@ -125,9 +131,16 @@ async function finish() {
 		step.value = 2;
 		return;
 	}
+	const pwd = adminPassword.value.trim();
+	if (pwd.length < 6) {
+		error.value = t("login.passwordTooShort");
+		return;
+	}
 	saving.value = true;
 	error.value = "";
 	try {
+		// 1. 保存基础设置并标记 setup_done
+		// 1. Save base settings and mark setup_done
 		await store.saveSettings({
 			...store.settings,
 			language: language.value,
@@ -137,6 +150,12 @@ async function finish() {
 			cdn_proxy_url: cdnProxy.value.trim() || null,
 			setup_done: true,
 		});
+		// 2. 设置管理员密码
+		// 2. Set admin password
+		await authStore.initPassword(pwd);
+		// 3. 登录，获取 token
+		// 3. Login to obtain token
+		await authStore.login(pwd);
 		await router.replace("/");
 	} catch (e: unknown) {
 		error.value = String(e);
@@ -153,7 +172,7 @@ async function finish() {
 			<!-- 标题 / Title -->
 			<div class="flex flex-col gap-1.5">
 				<div class="flex items-center gap-2.5">
-					<span class="w-3 h-3 rounded-full bg-destructive shrink-0" />
+					<img src="/icon.png" alt="icon" class="w-6 h-6 shrink-0" />
 					<span class="text-lg font-bold">StripchatRecorder</span>
 				</div>
 				<h1 class="text-2xl font-bold mt-1">{{ t("setup.title") }}</h1>
@@ -266,6 +285,27 @@ async function finish() {
 							</div>
 						</template>
 
+						<!-- Step 4: 设置管理员密码 / Set admin password -->
+						<template v-if="step === 4">
+							<div class="flex flex-col gap-1.5">
+								<h2 class="text-base font-semibold">{{ t("setup.step4.title") }}</h2>
+								<p class="text-sm text-muted-foreground">{{ t("setup.step4.desc") }}</p>
+							</div>
+							<div class="flex flex-col gap-2">
+								<input type="text" name="username" value="admin" autocomplete="username" class="sr-only" aria-hidden="true" tabindex="-1" />
+								<Label for="admin-password">{{ t("login.passwordLabel") }}</Label>
+								<Input
+									id="admin-password"
+									v-model="adminPassword"
+									type="password"
+									autocomplete="new-password"
+									:placeholder="t('setup.step4.placeholder')"
+									autofocus
+								/>
+								<p class="text-xs text-muted-foreground">{{ t("login.passwordStrengthHint") }}</p>
+							</div>
+						</template>
+
 					</div>
 				</Transition>
 			</div>
@@ -280,13 +320,13 @@ async function finish() {
 				</Button>
 
 				<div class="flex items-center gap-3">
-					<Button v-if="step === 3" variant="ghost" :disabled="saving" @click="finish">
+					<Button v-if="step === 3" variant="ghost" :disabled="saving" @click="next">
 						{{ t("setup.skip") }}
 					</Button>
 					<Button v-if="step < TOTAL_STEPS" :disabled="!canNext" @click="next">
 						{{ t("setup.next") }}
 					</Button>
-					<Button v-if="step === TOTAL_STEPS" :disabled="saving" @click="finish">
+					<Button v-if="step === TOTAL_STEPS" :disabled="saving || !canNext" @click="finish">
 						{{ saving ? t("setup.saving") : t("setup.finish") }}
 					</Button>
 				</div>

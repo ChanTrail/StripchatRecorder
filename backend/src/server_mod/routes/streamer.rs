@@ -76,6 +76,7 @@ pub async fn add_streamer(
             settings.api_proxy_url.as_deref(),
             settings.cdn_proxy_url.as_deref(),
             settings.sc_mirror_url.as_deref(),
+            Some(settings.sc_mirror_scheme.as_str()),
         )
         .map_err(ApiError::from)?,
     );
@@ -103,7 +104,7 @@ pub async fn add_streamer(
         let Ok((username, verify_result)) = res else { continue };
 
         let (ok, skipped_entry, error_msg) = match verify_result {
-            Ok(()) => match s.app_state.add_streamer(&username) {
+            Ok(model_id) => match s.app_state.add_streamer(&username, model_id) {
                 Ok(()) => {
                     s.emitter.emit(
                         "streamer-added",
@@ -216,11 +217,12 @@ pub async fn start_recording(
             settings.api_proxy_url.as_deref(),
             settings.cdn_proxy_url.as_deref(),
             settings.sc_mirror_url.as_deref(),
+            Some(settings.sc_mirror_scheme.as_str()),
         )
         .map_err(ApiError::from)?
         .with_mouflon_keys(s.app_state.get_mouflon_keys());
         let info = api
-            .get_stream_info(&name, true)
+            .get_stream_info(&name, true, None)
             .await
             .map_err(ApiError::from)?;
         info.playlist_url
@@ -259,6 +261,7 @@ pub async fn verify_streamer(
         settings.api_proxy_url.as_deref(),
         settings.cdn_proxy_url.as_deref(),
         settings.sc_mirror_url.as_deref(),
+        Some(settings.sc_mirror_scheme.as_str()),
     )
     .map_err(ApiError::from)?;
     match api.verify_user_exists(&name).await {

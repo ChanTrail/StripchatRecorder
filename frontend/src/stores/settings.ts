@@ -28,6 +28,8 @@ export interface Settings {
 	cdn_proxy_url: string | null;
 	/** Stripchat 镜像站地址 / Stripchat mirror site URL */
 	sc_mirror_url: string | null;
+	/** Stripchat 镜像站协议（"https" 或 "http"）/ Mirror site scheme ("https" or "http") */
+	sc_mirror_scheme: string;
 	/** 最大并发录制数（0 = 不限制）/ Max concurrent recordings (0 = unlimited) */
 	max_concurrent: number;
 	/** 后处理 tmp 目录最大占用（GB，0 = 不限制）/ Max tmp dir size in GB (0 = unlimited) */
@@ -61,6 +63,7 @@ export const useSettingsStore = defineStore("settings", () => {
 		api_proxy_url: null,
 		cdn_proxy_url: null,
 		sc_mirror_url: null,
+		sc_mirror_scheme: "https",
 		max_concurrent: 0,
 		max_tmp_dir_gb: 50,
 		language: "zh-CN",

@@ -12,7 +12,9 @@ use crate::core::emitter::{BroadcastEmitter, Event};
 use crate::recording::recorder::RecorderManager;
 use crate::relay::handler::{RelayState, relay_sessions, stop_relay_handler, stream_handler};
 use crate::relay::state::RelayManager;
+use crate::server_mod::auth::TokenStore;
 use crate::server_mod::routes::{
+    auth::{auth_status, change_password, init_password, login, logout, renew},
     locale::{get_locale_handler, list_locales_handler},
     postprocess::{
         cancel_postprocess, get_module_outputs, get_pipeline, get_postprocess_tasks, list_modules,
@@ -37,6 +39,7 @@ use crate::server_mod::static_files::static_handler;
 use crate::streaming::monitor::StatusMonitor;
 use axum::{
     Router,
+    middleware,
     routing::{delete, get, post},
 };
 use std::sync::Arc;
@@ -58,6 +61,8 @@ pub struct ServerState {
     pub broadcast_tx: broadcast::Sender<Event>,
     /// 转发管理器 / Relay manager
     pub relay_manager: Arc<RelayManager>,
+    /// Session token 存储（登录认证）/ Session token store (login auth)
+    pub token_store: TokenStore,
 }
 
 /// 构建 Axum 路由器，注册所有 API 路由和静态资源回退处理器。
@@ -84,7 +89,23 @@ pub fn build_router(state: ServerState) -> Router {
 
     // 主路由器先固化 state，再合并转发路由
     // Finalize main router state first, then merge relay router
-    let main_router: Router<()> = Router::new()
+
+    // 认证路由 + 公开路由（豁免 auth 中间件）
+    // Auth routes + public routes (exempt from auth middleware)
+    let auth_routes = Router::new()
+        .route("/api/auth/status", get(auth_status))
+        .route("/api/auth/init-password", post(init_password))
+        .route("/api/auth/login", post(login))
+        .route("/api/auth/logout", post(logout))
+        .route("/api/auth/renew", post(renew))
+        // locale 路由公开：未登录时前端也需要加载语言包（否则登录/setup页文字乱码）
+        // Locale routes are public: frontend needs locale data before login (login/setup pages)
+        .route("/api/locale/{locale_code}", get(get_locale_handler))
+        .route("/api/locales", get(list_locales_handler));
+
+    // 需要鉴权的 API 路由
+    // API routes that require authentication
+    let protected_routes = Router::new()
         .route("/api/streamers", get(list_streamers).post(add_streamer))
         .route("/api/streamers/{name}", delete(remove_streamer))
         .route("/api/streamers/{name}/auto-record", post(set_auto_record))
@@ -121,10 +142,17 @@ pub fn build_router(state: ServerState) -> Router {
         .route("/api/modules", get(list_modules))
         .route("/api/postprocess-tasks", get(get_postprocess_tasks))
         .route("/api/recordings/module-outputs", post(get_module_outputs))
-        .route("/api/locale/{locale_code}", get(get_locale_handler))
-        .route("/api/locales", get(list_locales_handler))
         .route("/api/files", get(serve_output_file))
+        .route("/api/auth/change-password", post(change_password))
         .route("/api/events", get(sse_handler))
+        .route_layer(middleware::from_fn_with_state(
+            state.token_store.clone(),
+            crate::server_mod::auth::auth_middleware,
+        ));
+
+    let main_router: Router<()> = Router::new()
+        .merge(auth_routes)
+        .merge(protected_routes)
         .with_state(state)
         .fallback(static_handler);
 
@@ -168,6 +196,7 @@ pub async fn run_server(port: u16) {
         Arc::clone(&recorder),
     );
 
+    let password_configured = app_state.has_admin_password();
     let server_state = ServerState {
         app_state,
         recorder,
@@ -175,6 +204,7 @@ pub async fn run_server(port: u16) {
         emitter,
         broadcast_tx: tx,
         relay_manager: RelayManager::new(),
+        token_store: TokenStore::new(password_configured),
     };
 
     let app = build_router(server_state);

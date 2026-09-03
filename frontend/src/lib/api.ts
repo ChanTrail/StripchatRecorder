@@ -42,6 +42,32 @@ export function onSseDisconnect(cb: () => void): () => void {
 	return () => sseDisconnectCallbacks.delete(cb);
 }
 
+/** Token 自动续期定时器 / Token auto-renew interval */
+let renewTimer: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * 启动 Token 自动续期：每 30 分钟调用一次 /api/auth/renew。
+ * 若续期失败（token 已过期），清除 localStorage token（下次 API 请求会 401）。
+ *
+ * Start token auto-renew: call /api/auth/renew every 30 minutes.
+ * If renewal fails (token expired), clear localStorage so next API call returns 401.
+ */
+export function startTokenRenew() {
+	if (renewTimer) return;
+	const INTERVAL_MS = 30 * 60 * 1000; // 30 分钟 / 30 minutes
+	renewTimer = setInterval(async () => {
+		const token = localStorage.getItem("admin_token");
+		if (!token) return;
+		try {
+			await httpCall("renew_token", {});
+		} catch {
+			// 续期失败说明 token 已过期，清除本地 token
+			// Renewal failed means token expired; clear local token
+			localStorage.removeItem("admin_token");
+		}
+	}, INTERVAL_MS);
+}
+
 /**
  * 确保 SSE 连接已建立。
  * 连接断开后每 3 秒自动重连，并触发相应回调。
@@ -246,6 +272,15 @@ const COMMAND_MAP: Record<
 		method: "POST",
 		url: (a) => `/api/relay/${a.username}/stop`,
 	},
+	change_password: {
+		method: "POST",
+		url: () => "/api/auth/change-password",
+		body: (a) => ({ old_password: a.old_password, new_password: a.new_password }),
+	},
+	renew_token: {
+		method: "POST",
+		url: () => "/api/auth/renew",
+	},
 };
 
 /**
@@ -266,13 +301,26 @@ async function httpCall<T>(
 
 	const url = def.url(args);
 	const hasBody = def.body !== undefined;
+
+	// 从 localStorage 取 token，注入 Authorization 头
+	// Inject Authorization header from localStorage token
+	const token = localStorage.getItem("admin_token");
+	const headers: Record<string, string> = {};
+	if (hasBody) headers["Content-Type"] = "application/json";
+	if (token) headers["Authorization"] = `Bearer ${token}`;
+
 	const res = await fetch(url, {
 		method: def.method,
-		headers: hasBody ? { "Content-Type": "application/json" } : undefined,
+		headers: Object.keys(headers).length ? headers : undefined,
 		body: hasBody ? JSON.stringify(def.body!(args)) : undefined,
 	});
 
 	if (!res.ok) {
+		if (res.status === 401) {
+			// Token 失效，清除本地 token，router 守卫会在下次导航时检测到并跳转登录页
+			// Token invalid; clear local token — router guard will redirect on next navigation
+			localStorage.removeItem("admin_token");
+		}
 		const text = await res.text().catch(() => res.statusText);
 		throw new Error(text);
 	}

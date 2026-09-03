@@ -114,6 +114,10 @@
   * {
     @apply border-border outline-ring/50;
   }
+  html, body {
+    height: 100%;
+    overflow: hidden;
+  }
   body {
     @apply bg-background text-foreground;
   }
@@ -161,6 +165,16 @@
 }
 .scrollbar-overlay.is-scrolling::-webkit-scrollbar-thumb:hover {
   background-color: oklch(0.5 0 0 / 65%);
+}
+
+/* 设置页 section 副标题淡入 / Settings section label fade-in */
+.section-label-enter-active,
+.section-label-leave-active {
+  transition: opacity 0.2s ease;
+}
+.section-label-enter-from,
+.section-label-leave-to {
+  opacity: 0;
 }
 
 /* 页面切换淡入淡出 / Page transition fade */

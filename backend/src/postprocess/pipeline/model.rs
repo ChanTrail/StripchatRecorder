@@ -191,21 +191,12 @@ pub struct PipelineEdge {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct PipelineConfig {
-    /// 配置格式版本号（用于向后兼容和更新检测）
-    /// Configuration format version (for backward compatibility and update detection)
-    #[serde(default = "default_pipeline_version")]
-    pub version: String,
     /// 节点列表 / Node list
     pub nodes: Vec<PipelineNode>,
     /// 虚拟录制输入节点在画布中的位置（仅前端使用，后端透传保存）
     /// Virtual recording input node position on canvas (frontend-only, backend stores as-is)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_node_position: Option<serde_json::Value>,
-}
-
-/// 默认的流水线配置版本号 / Default pipeline configuration version
-fn default_pipeline_version() -> String {
-    "1".to_string()
 }
 
 impl PipelineConfig {

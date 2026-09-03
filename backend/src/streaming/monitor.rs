@@ -185,6 +185,7 @@ impl StatusMonitor {
             settings.api_proxy_url.as_deref(),
             settings.cdn_proxy_url.as_deref(),
             settings.sc_mirror_url.as_deref(),
+            Some(settings.sc_mirror_scheme.as_str()),
             self.recorder.cdn_tld_cache(),
         ) {
             Ok(a) => a.with_mouflon_keys(self.state.get_mouflon_keys()),
@@ -216,6 +217,7 @@ impl StatusMonitor {
             settings.api_proxy_url.as_deref(),
             settings.cdn_proxy_url.as_deref(),
             settings.sc_mirror_url.as_deref(),
+            Some(settings.sc_mirror_scheme.as_str()),
             self.recorder.cdn_tld_cache(),
         ) {
             Ok(a) => Arc::new(a.with_mouflon_keys(self.state.get_mouflon_keys())),
@@ -259,7 +261,7 @@ impl StatusMonitor {
         emitter: &Arc<dyn Emitter>,
         auto_record_global: bool,
     ) {
-        let username = streamer.username.clone();
+        let mut username = streamer.username.clone();
 
         let is_recording = self.recorder.is_recording(&username);
         let (was_online, was_recording) = self
@@ -284,13 +286,61 @@ impl StatusMonitor {
                 });
         }
 
-        let info = match api.get_stream_info(&username, !is_recording).await {
+        let info = match api.get_stream_info(&username, !is_recording, streamer.model_id).await {
             Ok(i) => i,
             Err(e) => {
                 tracing::error!("Poll failed → {}: {}", username, e);
                 return;
             }
         };
+
+        // 首次成功查询且此前尚无 model_id（升级前的旧数据）时，回填 model_id，
+        // 便于日后改名反查有据可依。
+        // On first successful lookup with no model_id yet (pre-upgrade data), backfill
+        // it so future rename lookups have something to fall back on.
+        if streamer.model_id.is_none()
+            && let Some(mid) = info.model_id
+        {
+            self.state.backfill_model_id(&username, mid);
+        }
+
+        if let Some(ref new_username) = info.renamed_to
+            && !is_recording
+        {
+            match self.state.rename_streamer(&username, new_username) {
+                Ok(()) => {
+                    tracing::info!("Streamer renamed: {} -> {}", username, new_username);
+                    // 重新绑定 statuses 缓存的 key，避免旧 key 下的缓存永久残留。
+                    //
+                    // 注意：必须先将 remove 结果存到局部变量再做 insert，不能把两个
+                    // write() 调用写在同一个 `if let` 的条件和 body 里——条件表达式
+                    // 产生的临时值（这里是第一个 write() 的锁守卫）生命周期会延续到
+                    // 整个 if let 语句结束，包括 body，届时 body 里的第二个 write()
+                    // 会试图重新获取同一把已持有的锁，导致自死锁。
+                    //
+                    // Must store the `remove` result in a local first, then `insert` —
+                    // can't have both `write()` calls inside the same `if let`'s
+                    // condition and body: the temporary produced in the condition
+                    // (the first `write()`'s lock guard) lives through the entire
+                    // `if let` including the body, causing a self-deadlock when the
+                    // body tries to acquire the same lock again.
+                    let old_status = self.statuses.write().remove(&username);
+                    if let Some(old_status) = old_status {
+                        self.statuses.write().insert(new_username.clone(), old_status);
+                    }
+                    emitter.emit(
+                        "streamer-renamed",
+                        &serde_json::json!({ "old_username": username, "new_username": new_username }),
+                    );
+                    username = new_username.clone();
+                }
+                Err(e) => {
+                    // 新用户名已存在于追踪列表中，放弃改名，本轮按旧用户名继续处理。
+                    // New username already tracked; abandon rename and keep old username for this round.
+                    tracing::warn!("Streamer rename skipped for {}: {}", username, e);
+                }
+            }
+        }
 
         let status = StreamerStatus {
             username: username.clone(),

@@ -48,6 +48,10 @@ pub struct Settings {
     pub cdn_proxy_url: Option<String>,
     /// Stripchat 镜像站地址 / Stripchat mirror site URL
     pub sc_mirror_url: Option<String>,
+    /// Stripchat 镜像站协议（"https" 或 "http"，默认 "https"）
+    /// Stripchat mirror site scheme ("https" or "http", default "https")
+    #[serde(default = "default_sc_mirror_scheme")]
+    pub sc_mirror_scheme: String,
     /// 最大并发录制数（0 = 不限制）/ Max concurrent recordings (0 = unlimited)
     pub max_concurrent: usize,
     /// 后处理临时目录最大占用（GB，0 = 不限制，默认 50 GB）
@@ -72,11 +76,20 @@ pub struct Settings {
     /// Whether the first-launch setup wizard has been completed (false = show Setup page)
     #[serde(default)]
     pub setup_done: bool,
+    /// 管理员密码的 Argon2 哈希（PHC 格式）。None 表示尚未设置密码（初次使用）。
+    /// Argon2 hash of the admin password (PHC string format). None = password not yet set (first run).
+    #[serde(default)]
+    pub admin_password_hash: Option<String>,
 }
 
 /// Mouflon 同步地址的默认值 / Default value for Mouflon sync URL
 fn default_mouflon_sync_url() -> Option<String> {
     Some("https://mouflon.chantrail.com".to_string())
+}
+
+/// 镜像站协议的默认值 / Default value for mirror site scheme
+fn default_sc_mirror_scheme() -> String {
+    "https".to_string()
 }
 
 /// tmp 目录最大占用的默认值（50 GB）/ Default value for max tmp dir size (50 GB)
@@ -91,7 +104,7 @@ fn default_language() -> String {
 
 /// Server 端口的默认值 / Default value for server port
 fn default_server_port() -> u16 {
-    30301
+    3030
 }
 
 /// 返回可执行文件所在目录，用于定位配置文件和模块目录。
@@ -116,6 +129,7 @@ impl Default for Settings {
             api_proxy_url: None,
             cdn_proxy_url: None,
             sc_mirror_url: None,
+            sc_mirror_scheme: default_sc_mirror_scheme(),
             max_concurrent: 0,
             max_tmp_dir_gb: default_max_tmp_dir_gb(),
             language: default_language(),
@@ -123,6 +137,7 @@ impl Default for Settings {
             mouflon_sync_url: default_mouflon_sync_url(),
             mouflon_sync_token: None,
             setup_done: false,
+            admin_password_hash: None,
         }
     }
 }
@@ -151,6 +166,31 @@ pub struct StreamerData {
     pub auto_record: bool,
     /// 添加时间（RFC 3339 格式）/ Time added (RFC 3339 format)
     pub added_at: String,
+    /// Stripchat 内部主播 ID（首次添加时从 v1/broadcasts/{username} 的 `modelId`
+    /// 字段获取并固定保存）。
+    ///
+    /// 用途：username 是可被主播修改的显示名，而 modelId 是稳定不变的内部标识。
+    /// 当 v1/broadcasts/{username} 查询不到（主播已改名，旧用户名不再解析）时，
+    /// 用这个缓存的 model_id 反查 v2/models/{model_id}/cam 接口获取主播当前
+    /// 的真实用户名，从而在不丢失追踪记录的情况下跟随改名更新。
+    ///
+    /// `Option` 是为了兼容升级前已存在、尚未回填 model_id 的旧数据；这类记录在
+    /// 下一次成功查询到该主播时会被自动回填（见 `StatusMonitor::poll_streamer`）。
+    ///
+    /// Stripchat's internal streamer ID (fetched from v1/broadcasts/{username}'s
+    /// `modelId` field on first add, and persisted permanently).
+    ///
+    /// Purpose: username is a display name the streamer can change, while modelId is a
+    /// stable, unchanging internal identifier. When v1/broadcasts/{username} can't find
+    /// the streamer (renamed, old username no longer resolves), this cached model_id is
+    /// used to query v2/models/{model_id}/cam to discover the streamer's current real
+    /// username, allowing the tracked record to follow the rename without being lost.
+    ///
+    /// `Option` accommodates pre-upgrade data that hasn't backfilled model_id yet; such
+    /// records get it backfilled automatically the next time the streamer is
+    /// successfully queried (see `StatusMonitor::poll_streamer`).
+    #[serde(default)]
+    pub model_id: Option<i64>,
 }
 
 /// 应用运行时全局状态，通过 `Arc<AppState>` 在各模块间共享。
@@ -303,8 +343,16 @@ impl AppState {
     }
 
     /// 添加新主播到追踪列表（若已存在则返回错误）。
+    /// `model_id` 通常来自添加时对 v1/broadcasts/{username} 的查询结果（见
+    /// `streamer::add_streamer` 路由），用于日后改名反查；查询失败时传 `None`
+    /// 也不阻塞添加，仅是后续改名跟随会失效。
+    ///
     /// Add a new streamer to the tracking list (returns error if already exists).
-    pub fn add_streamer(&self, username: &str) -> Result<()> {
+    /// `model_id` typically comes from the v1/broadcasts/{username} lookup performed at
+    /// add time (see the `streamer::add_streamer` route), used later for rename lookups;
+    /// passing `None` when that lookup fails doesn't block adding the streamer, it just
+    /// means rename-following won't work for this entry.
+    pub fn add_streamer(&self, username: &str, model_id: Option<i64>) -> Result<()> {
         let mut data = self.data.write();
         if data.streamers.iter().any(|s| s.username == username) {
             return Err(AppError::Other(format!("模特 {} 已存在", username)));
@@ -314,7 +362,49 @@ impl AppState {
             username: username.to_string(),
             auto_record,
             added_at: chrono::Utc::now().to_rfc3339(),
+            model_id,
         });
+        drop(data);
+        self.save()
+    }
+
+    /// 回填指定主播的 model_id（仅当当前为 `None` 时才写入，避免覆盖已有值）。
+    /// 用于升级前的旧数据在下一次成功查询时补齐 model_id。
+    ///
+    /// Backfill the model_id for a streamer (only writes when currently `None`, to
+    /// avoid overwriting an existing value). Used to backfill model_id for pre-upgrade
+    /// data on its next successful lookup.
+    pub fn backfill_model_id(&self, username: &str, model_id: i64) {
+        let mut data = self.data.write();
+        if let Some(s) = data.streamers.iter_mut().find(|s| s.username == username)
+            && s.model_id.is_none()
+        {
+            s.model_id = Some(model_id);
+            drop(data);
+            let _ = self.save();
+        }
+    }
+
+    /// 将主播记录从旧用户名重命名为新用户名（改名跟随），保留 model_id/auto_record/added_at
+    /// 不变。若新用户名已存在于列表中（如同时手动添加过），则放弃改名，保留原记录不变，
+    /// 避免产生两条指向同一 model_id 的重复记录。
+    ///
+    /// Rename a streamer record from the old username to the new one (rename-following),
+    /// preserving model_id/auto_record/added_at. If the new username already exists in
+    /// the list (e.g. manually added separately), the rename is abandoned and the
+    /// original record is left unchanged, avoiding two records pointing at the same
+    /// model_id.
+    pub fn rename_streamer(&self, old_username: &str, new_username: &str) -> Result<()> {
+        let mut data = self.data.write();
+        if data.streamers.iter().any(|s| s.username == new_username) {
+            return Err(AppError::Other(format!(
+                "无法改名：{} 已存在于追踪列表中",
+                new_username
+            )));
+        }
+        if let Some(s) = data.streamers.iter_mut().find(|s| s.username == old_username) {
+            s.username = new_username.to_string();
+        }
         drop(data);
         self.save()
     }
@@ -488,6 +578,51 @@ impl AppState {
     pub fn update_pipeline(&self, pipeline: crate::postprocess::pipeline::PipelineConfig) -> Result<()> {
         self.data.write().pipeline = pipeline;
         self.save()
+    }
+
+    // ─── 管理员密码 / Admin password ──────────────────────────────────────────
+
+    /// 返回是否已设置管理员密码。
+    /// Returns whether an admin password has been configured.
+    pub fn has_admin_password(&self) -> bool {
+        self.data.read().settings.admin_password_hash.is_some()
+    }
+
+    /// 将明文密码哈希后保存。使用 Argon2id 默认参数。
+    /// Hash the given plaintext password and persist it. Uses Argon2id default params.
+    pub fn set_admin_password(&self, password: &str) -> Result<()> {
+        use argon2::{
+            Argon2,
+            password_hash::{PasswordHasher, SaltString, rand_core::OsRng},
+        };
+        let salt = SaltString::generate(&mut OsRng);
+        let hash = Argon2::default()
+            .hash_password(password.as_bytes(), &salt)
+            .map_err(|e| AppError::Other(format!("密码哈希失败: {e}")))?
+            .to_string();
+        self.data.write().settings.admin_password_hash = Some(hash);
+        self.save()
+    }
+
+    /// 验证明文密码是否与存储的哈希匹配。
+    /// 未设置密码时返回 false。
+    ///
+    /// Verify a plaintext password against the stored hash.
+    /// Returns false if no password has been set.
+    pub fn verify_admin_password(&self, password: &str) -> bool {
+        use argon2::{
+            Argon2,
+            password_hash::{PasswordHash, PasswordVerifier},
+        };
+        let hash_str = match self.data.read().settings.admin_password_hash.clone() {
+            Some(h) => h,
+            None => return false,
+        };
+        let parsed = match PasswordHash::new(&hash_str) {
+            Ok(p) => p,
+            Err(_) => return false,
+        };
+        Argon2::default().verify_password(password.as_bytes(), &parsed).is_ok()
     }
 
 }
