@@ -146,12 +146,6 @@ impl RelayManager {
         }
     }
 
-    /// 获取当前播放列表 URL。
-    #[allow(dead_code)]
-    pub fn get_playlist_url(&self, username: &str) -> Option<String> {
-        self.sessions.read().get(username).and_then(|s| s.playlist_url.clone())
-    }
-
     /// 停止并移除会话。
     pub fn remove(&self, username: &str) {
         if let Some(session) = self.sessions.write().remove(username) {

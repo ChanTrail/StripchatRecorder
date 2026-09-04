@@ -61,10 +61,10 @@ pub fn write_meta(video_path: &Path, meta: &VideoMeta) {
 /// 删除视频文件对应的元数据文件（若存在）。
 /// Delete the metadata file for a video file (if it exists).
 pub fn delete_meta(video_path: &Path) {
-    if let Some(meta_path) = meta_path_for(video_path) {
-        if meta_path.exists() {
-            let _ = std::fs::remove_file(&meta_path);
-        }
+    if let Some(meta_path) = meta_path_for(video_path)
+        && meta_path.exists()
+    {
+        let _ = std::fs::remove_file(&meta_path);
     }
 }
 
@@ -172,10 +172,10 @@ pub fn set_pp_progress(video_path: &Path, mut progress: PpNodeProgress) {
     // 如果新进度的 mod_done 为 0，保留之前的值以避免前端显示"等待进度"
     // If the new progress has mod_done set to 0, preserve the previous value
     // to prevent the frontend from showing "waiting for progress"
-    if progress.mod_done == 0 {
-        if let Some(prev) = &meta.pp_progress {
-            progress.mod_done = prev.mod_done;
-        }
+    if progress.mod_done == 0
+        && let Some(prev) = &meta.pp_progress
+    {
+        progress.mod_done = prev.mod_done;
     }
     
     meta.pp_progress = Some(progress);
@@ -227,10 +227,10 @@ pub fn pp_execution_finish(
 /// Does not overwrite if the meta file already exists; otherwise creates an initial meta
 /// (used as a safety net for leftover segments on startup).
 pub fn ensure_meta(video_path: &Path, started_at: &str) {
-    if let Some(meta_path) = meta_path_for(video_path) {
-        if meta_path.exists() {
-            return;
-        }
+    if let Some(meta_path) = meta_path_for(video_path)
+        && meta_path.exists()
+    {
+        return;
     }
     let size_bytes = std::fs::metadata(video_path).map(|m| m.len()).unwrap_or(0);
     let meta = VideoMeta {

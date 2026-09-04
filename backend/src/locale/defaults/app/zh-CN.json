@@ -9,7 +9,8 @@
     "settings": "设置",
     "about": "关于",
     "collapse": "收起",
-    "expand": "展开"
+    "expand": "展开",
+    "notifications": "通知"
   },
   "common": {
     "confirm": "确认",
@@ -411,6 +412,13 @@
       "desc": "设置一个访问管理界面的密码（至少 6 位），之后每次访问都需要输入此密码",
       "placeholder": "请输入密码（至少 6 位）",
       "hint": "此密码用于保护管理界面，请妥善记录"
+    }
+  },
+  "notifications": {
+    "markAllRead": "全部已读",
+    "empty": "暂无通知",
+    "action": {
+      "remove_streamers": "删除主播"
     }
   },
   "about": {

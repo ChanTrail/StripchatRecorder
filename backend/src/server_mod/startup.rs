@@ -17,12 +17,18 @@ pub fn init_locale_dirs() {
     crate::locale::manager::init_locale_dirs();
 }
 
-/// 检查 ffmpeg 是否在 PATH 中可用，若不可用则记录警告。
+/// 检查 ffmpeg 是否在 PATH 中可用，若不可用则记录警告并写入通知。
 ///
-/// Check if ffmpeg is available on PATH; log a warning if not found.
-pub fn check_ffmpeg() {
+/// Check if ffmpeg is available on PATH; log a warning and push a notification if not found.
+pub fn check_ffmpeg(app_state: &Arc<AppState>, emitter: &Arc<dyn Emitter>) {
     if !crate::recording::ffmpeg_util::ffmpeg_available() {
         tracing::warn!("ffmpeg not found on PATH");
+        app_state.notification_store.emit(
+            emitter.as_ref(),
+            crate::core::notifications::NotificationLevel::Error,
+            "startup",
+            "未检测到 ffmpeg，录制和后处理功能将无法使用。请安装 ffmpeg 并确保其在 PATH 中。",
+        );
     }
 }
 
@@ -60,15 +66,23 @@ pub fn start_fs_watchers(app_state: Arc<AppState>, emitter: Arc<dyn Emitter>) {
 }
 
 /// 一次性迁移旧版扁平 meta 文件（升级前生成、直接平铺于 meta 根目录下）到按主播
-/// 分子目录的新结构。必须在任何其他 meta 扫描/读取（包括下面的定时维护任务）
-/// 发生之前调用，确保扫描逻辑看到的始终是迁移后的最终布局。
+/// 分子目录的新结构。迁移了文件时写入 Info 通知。
 ///
-/// One-shot migration of legacy flat meta files (generated before this change, laid
-/// out directly under the meta root) into the new per-streamer subdirectory layout.
-/// Must be called before any other meta scan/read (including the scheduled maintenance
-/// task below) so scanning logic always sees the post-migration layout.
-pub fn migrate_flat_meta_files() {
-    crate::recording::meta::migrate_flat_meta_files();
+/// One-shot migration of legacy flat meta files into the new per-streamer subdirectory layout.
+/// Pushes an Info notification if any files were migrated.
+pub fn migrate_flat_meta_files(app_state: &Arc<AppState>, emitter: &Arc<dyn Emitter>) {
+    let count = crate::recording::meta::migrate_flat_meta_files();
+    if count > 0 {
+        app_state.notification_store.emit(
+            emitter.as_ref(),
+            crate::core::notifications::NotificationLevel::Info,
+            "startup",
+            format!(
+                "已将 {} 个旧版 meta 文件迁移到按主播子目录的新结构。",
+                count
+            ),
+        );
+    }
 }
 
 /// 在 `run_server()` 中统一执行所有启动时一次性任务。
@@ -85,8 +99,9 @@ pub fn migrate_flat_meta_files() {
 /// startup check — so the startup pass and periodic maintenance share identical logic
 /// without duplicating it here.
 pub fn run_all(app_state: Arc<AppState>, emitter: Arc<dyn Emitter>) {
-    migrate_flat_meta_files();
+    migrate_flat_meta_files(&app_state, &emitter);
     init_locale_dirs();
-    check_ffmpeg();
+    check_ffmpeg(&app_state, &emitter);
+    check_locale_files(Arc::clone(&emitter));
     start_fs_watchers(app_state, emitter);
 }

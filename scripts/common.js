@@ -239,6 +239,19 @@ function checkModules() {
 }
 
 /**
+ * 对所有模块执行 cargo clippy（-D warnings 将 warning 视为错误）。
+ * Run `cargo clippy` for all modules (treat warnings as errors via -D warnings).
+ */
+function clippyModules() {
+  for (const name of listModules()) {
+    run(
+      `cargo clippy --manifest-path "${path.join(MODULES_DIR, name, "Cargo.toml")}" -- -D warnings`,
+      { env: { ...process.env, CARGO_TARGET_DIR: moduleTarget(name) } }
+    );
+  }
+}
+
+/**
  * 构建所有模块并将产物二进制复制到指定目录，复制时文件名附加模块自身
  * Cargo.toml 中的 version 号（如 `notify_telegram-0.5.0.exe`），方便用户在
  * modules/ 目录中直接从文件名分辨版本，不必逐个运行 --describe。
@@ -360,6 +373,7 @@ module.exports = {
   collectBinaries,
   listDir,
   checkModules,
+  clippyModules,
   buildModules,
   copyDir,
   installFrontend,

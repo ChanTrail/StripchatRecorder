@@ -131,11 +131,11 @@ impl TokenStore {
     /// Force-renew: extend expiry to now + TOKEN_TTL (called by frontend via /api/auth/renew).
     pub fn renew(&self, token: &str, ip: IpAddr) -> bool {
         let mut inner = self.0.write();
-        if let Some(s) = &mut inner.session {
-            if s.token == token && s.bound_ip == ip && Instant::now() <= s.expires_at {
-                s.expires_at = Instant::now() + TOKEN_TTL;
-                return true;
-            }
+        if let Some(s) = &mut inner.session
+            && s.token == token && s.bound_ip == ip && Instant::now() <= s.expires_at
+        {
+            s.expires_at = Instant::now() + TOKEN_TTL;
+            return true;
         }
         false
     }
@@ -147,7 +147,7 @@ impl TokenStore {
 
     pub fn is_logged_in(&self) -> bool {
         let inner = self.0.read();
-        inner.session.as_ref().map_or(false, |s| Instant::now() <= s.expires_at)
+        inner.session.as_ref().is_some_and(|s| Instant::now() <= s.expires_at)
     }
 
     pub fn mark_password_configured(&self) {
@@ -172,21 +172,21 @@ impl TokenStore {
         if entry.count >= MAX_FAIL {
             entry.locked_until = Some(Instant::now() + LOCKOUT_DURATION);
         }
-        entry.locked_until.map_or(false, |t| Instant::now() < t)
+        entry.locked_until.is_some_and(|t| Instant::now() < t)
     }
 
     /// 检查 IP 是否正在封禁中。封禁已过期时自动清除记录。
     /// Check whether an IP is currently locked. Auto-clears expired lockouts.
     pub fn is_locked(&self, ip: IpAddr) -> bool {
         let mut inner = self.0.write();
-        if let Some(entry) = inner.fail_map.get_mut(&ip) {
-            if let Some(until) = entry.locked_until {
-                if Instant::now() < until {
-                    return true;
-                }
-                // 封禁已过期，清除 / Lockout expired; clear
-                inner.fail_map.remove(&ip);
+        if let Some(entry) = inner.fail_map.get_mut(&ip)
+            && let Some(until) = entry.locked_until
+        {
+            if Instant::now() < until {
+                return true;
             }
+            // 封禁已过期，清除 / Lockout expired; clear
+            inner.fail_map.remove(&ip);
         }
         false
     }
@@ -195,12 +195,12 @@ impl TokenStore {
     /// Returns remaining lockout seconds for an IP (0 = not locked or expired).
     pub fn lockout_remaining_secs(&self, ip: IpAddr) -> u64 {
         let inner = self.0.read();
-        if let Some(entry) = inner.fail_map.get(&ip) {
-            if let Some(until) = entry.locked_until {
-                let now = Instant::now();
-                if now < until {
-                    return (until - now).as_secs();
-                }
+        if let Some(entry) = inner.fail_map.get(&ip)
+            && let Some(until) = entry.locked_until
+        {
+            let now = Instant::now();
+            if now < until {
+                return (until - now).as_secs();
             }
         }
         0
@@ -229,14 +229,12 @@ fn new_token() -> String {
 pub fn extract_ip(req: &Request<Body>) -> IpAddr {
     // 优先信任反向代理的 X-Forwarded-For 首个地址
     // Prefer first address from X-Forwarded-For (reverse proxy)
-    if let Some(fwd) = req.headers().get("x-forwarded-for") {
-        if let Ok(s) = fwd.to_str() {
-            if let Some(first) = s.split(',').next() {
-                if let Ok(ip) = first.trim().parse::<IpAddr>() {
-                    return ip;
-                }
-            }
-        }
+    if let Some(fwd) = req.headers().get("x-forwarded-for")
+        && let Ok(s) = fwd.to_str()
+        && let Some(first) = s.split(',').next()
+        && let Ok(ip) = first.trim().parse::<IpAddr>()
+    {
+        return ip;
     }
     // 其次用 ConnectInfo / Fall back to ConnectInfo
     req.extensions()

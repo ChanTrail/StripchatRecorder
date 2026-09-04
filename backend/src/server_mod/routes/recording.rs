@@ -18,7 +18,7 @@ pub async fn list_recordings(
     let state = Arc::clone(&s.app_state);
     let recorder = Arc::clone(&s.recorder);
     let files = tokio::task::spawn_blocking(move || {
-        crate::commands::recording_cmd::list_recordings_inner(&state, &recorder)
+        crate::recording::service::list_recordings_inner(&state, &recorder)
     })
     .await
     .map_err(|e| ApiError(e.to_string()))?
@@ -80,7 +80,7 @@ pub async fn delete_recording(
     let state = Arc::clone(&s.app_state);
     let path = body.path.clone();
     tokio::task::spawn_blocking(move || {
-        crate::commands::recording_cmd::delete_recording_inner(&path, &recorder, &state)
+        crate::recording::service::delete_recording_inner(&path, &recorder, &state)
     })
     .await
     .map_err(|e| ApiError(e.to_string()))?

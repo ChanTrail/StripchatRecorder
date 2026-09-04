@@ -123,7 +123,7 @@ pub fn startup_merge_leftover_segments(
             let pp_pipeline = pipeline.clone();
             let video_path_clone = video_path.clone();
             let handle = std::thread::spawn(move || {
-                crate::commands::postprocess_cmd::run_postprocess_for_path(
+                crate::postprocess::service::run_postprocess_for_path(
                     &video_path_clone,
                     &video_path_clone,
                     &pp_pipeline,
@@ -156,7 +156,7 @@ pub fn startup_merge_leftover_segments(
         // 预创建 session_dir 的 meta 文件
         // Pre-create meta file for the session_dir
         let stem = path.file_name().and_then(|n| n.to_str()).unwrap_or("unknown");
-        let started_at = crate::commands::recording_cmd::parse_timestamp_from_stem_pub(stem)
+        let started_at = crate::recording::service::parse_timestamp_from_stem_pub(stem)
             .unwrap_or_else(|| {
                 fs::metadata(path)
                     .ok()
@@ -192,7 +192,7 @@ pub fn startup_merge_leftover_segments(
         let path_clone = path.clone();
         let pp_pipeline = pipeline.clone();
         let handle = std::thread::spawn(move || {
-            crate::commands::postprocess_cmd::run_postprocess_for_path(
+            crate::postprocess::service::run_postprocess_for_path(
                 &path_clone,
                 &path_clone,
                 &pp_pipeline,

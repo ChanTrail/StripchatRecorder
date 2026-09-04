@@ -12,8 +12,9 @@ use crate::core::emitter::{Emitter, EmitterExt};
 use crate::recording::recorder::RecorderManager;
 use crate::config::settings::{AppState, StreamerData};
 use crate::streaming::stripchat::StripchatApi;
+use crate::core::notifications::NotificationLevel;
 use parking_lot::RwLock;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -42,6 +43,9 @@ pub struct StatusMonitor {
     recorder: Arc<RecorderManager>,
     /// 各主播的最新状态缓存 / Latest status cache per streamer
     statuses: RwLock<HashMap<String, StreamerStatus>>,
+    /// 已确认失效（id 也找不到）的主播集合，跳过轮询以节约带宽
+    /// Streamers confirmed dead (not found even by model_id); skipped in polling to save bandwidth
+    pub dead_streamers: RwLock<HashSet<String>>,
     /// 重启轮询循环的通知发送端（发送后立即中断当前 sleep，以新间隔重新开始）
     /// Sender to notify the polling loop to restart (interrupts current sleep, restarts with new interval)
     pub restart_tx: RwLock<Option<mpsc::Sender<()>>>,
@@ -52,9 +56,10 @@ impl StatusMonitor {
     /// Create a new status monitor instance.
     pub fn new(state: Arc<AppState>, recorder: Arc<RecorderManager>) -> Arc<Self> {
         Arc::new(Self {
-            state,
+            state: Arc::clone(&state),
             recorder,
             statuses: RwLock::new(HashMap::new()),
+            dead_streamers: RwLock::new(state.get_dead_streamers()),
             restart_tx: RwLock::new(None),
         })
     }
@@ -74,27 +79,32 @@ impl StatusMonitor {
             .and_then(|s| s.playlist_url.clone())
     }
 
-    /// 启动监控循环（通用版本，接受任意 emitter）。
-    /// Start the monitoring loop (generic version, accepts any emitter).
-    #[allow(dead_code)]
-    pub async fn start_with_emitter(self: Arc<Self>, emitter: Arc<dyn Emitter>) {
-        let (restart_tx, restart_rx) = mpsc::channel(1);
-        *self.restart_tx.write() = Some(restart_tx);
-        self.monitor_loop(emitter, restart_rx).await;
-    }
-
     /// 内部版本：直接接受已创建的 restart_rx（供 server 模式使用）。
     /// Internal version: accepts a pre-created restart_rx (used by server mode).
     pub async fn start_with_emitter_inner(self: Arc<Self>, emitter: Arc<dyn Emitter>, restart_rx: mpsc::Receiver<()>) {
         self.monitor_loop(emitter, restart_rx).await;
     }
 
-    /// 通知监控循环立即中断当前等待，以最新的 poll_interval_secs 重新开始计时。
-    /// Notify the monitor loop to interrupt the current sleep and restart with the latest poll_interval_secs.
-    #[allow(dead_code)]
-    pub fn notify_interval_changed(&self) {
-        if let Some(tx) = self.restart_tx.read().as_ref() {
-            let _ = tx.try_send(());
+    /// 构建 StripchatApi 实例（含代理、镜像站、Mouflon 密钥配置）。
+    /// 出错时向前端发射 `api-error` SSE 事件并返回 Err。
+    ///
+    /// Build a StripchatApi instance (with proxy, mirror, Mouflon key config).
+    /// Emits `api-error` SSE event on failure and returns Err.
+    fn build_api(&self, emitter: &Arc<dyn Emitter>) -> Option<StripchatApi> {
+        let settings = self.state.get_settings();
+        match StripchatApi::new(
+            settings.api_proxy_url.as_deref(),
+            settings.cdn_proxy_url.as_deref(),
+            settings.sc_mirror_url.as_deref(),
+            Some(settings.sc_mirror_scheme.as_str()),
+            self.recorder.cdn_tld_cache(),
+        ) {
+            Ok(a) => Some(a.with_mouflon_keys(self.state.get_mouflon_keys())),
+            Err(e) => {
+                tracing::error!("Failed to create API client: {}", e);
+                emitter.emit("api-error", &serde_json::json!({ "message": e.to_string() }));
+                None
+            }
         }
     }
 
@@ -125,84 +135,6 @@ impl StatusMonitor {
         }
     }
 
-    /// 尝试为所有满足条件的主播启动录制（通用版本）。
-    /// Try to start recordings for all eligible streamers (generic version).
-    pub async fn try_start_pending_with_emitter(self: &Arc<Self>, emitter: &Arc<dyn Emitter>) {
-        let settings = self.state.get_settings();
-        if !settings.auto_record {
-            return;
-        }
-        let streamers = self.state.get_streamers();
-
-        let candidates: Vec<(String, String)> = {
-            let statuses = self.statuses.read();
-            streamers
-                .iter()
-                .filter(|s| s.auto_record && !self.recorder.is_recording(&s.username))
-                .filter_map(|s| {
-                    statuses.get(&s.username).and_then(|cached| {
-                        if cached.is_online {
-                            cached
-                                .playlist_url
-                                .as_ref()
-                                .map(|url| (s.username.clone(), url.clone()))
-                        } else {
-                            None
-                        }
-                    })
-                })
-                .collect()
-        };
-
-        for (username, playlist_url) in candidates {
-            if self.recorder.is_recording(&username) {
-                continue;
-            }
-            tracing::info!("try_start_pending: auto-starting recording → {}", username);
-            let _ = self
-                .recorder
-                .start_recording_with_emitter(&username, &playlist_url, Arc::clone(emitter))
-                .await;
-        }
-    }
-
-    /// 对单个主播执行一次状态轮询（通用版本）。
-    /// Perform a single status poll for one streamer (generic version).
-    pub async fn poll_one_with_emitter(
-        self: &Arc<Self>,
-        username: &str,
-        emitter: &Arc<dyn Emitter>,
-    ) {
-        let settings = self.state.get_settings();
-        let streamers = self.state.get_streamers();
-
-        let streamer = match streamers.into_iter().find(|s| s.username == username) {
-            Some(s) => s,
-            None => return,
-        };
-
-        let api = match StripchatApi::new(
-            settings.api_proxy_url.as_deref(),
-            settings.cdn_proxy_url.as_deref(),
-            settings.sc_mirror_url.as_deref(),
-            Some(settings.sc_mirror_scheme.as_str()),
-            self.recorder.cdn_tld_cache(),
-        ) {
-            Ok(a) => a.with_mouflon_keys(self.state.get_mouflon_keys()),
-            Err(e) => {
-                tracing::error!("Failed to create API client: {}", e);
-                emitter.emit(
-                    "api-error",
-                    &serde_json::json!({ "message": e.to_string() }),
-                );
-                return;
-            }
-        };
-
-        self.poll_streamer(&api, streamer, emitter, settings.auto_record)
-            .await;
-    }
-
     /// 并发轮询所有追踪主播的状态（通用版本）。
     /// Concurrently poll the status of all tracked streamers (generic version).
     pub async fn poll_all_with_emitter(self: &Arc<Self>, emitter: &Arc<dyn Emitter>) {
@@ -213,54 +145,90 @@ impl StatusMonitor {
             return;
         }
 
-        let api = match StripchatApi::new(
-            settings.api_proxy_url.as_deref(),
-            settings.cdn_proxy_url.as_deref(),
-            settings.sc_mirror_url.as_deref(),
-            Some(settings.sc_mirror_scheme.as_str()),
-            self.recorder.cdn_tld_cache(),
-        ) {
-            Ok(a) => Arc::new(a.with_mouflon_keys(self.state.get_mouflon_keys())),
-            Err(e) => {
-                tracing::error!("Failed to create API client: {}", e);
-                emitter.emit(
-                    "api-error",
-                    &serde_json::json!({ "message": e.to_string() }),
-                );
-                return;
-            }
+        let api = match self.build_api(emitter) {
+            Some(a) => Arc::new(a),
+            None => return,
         };
+
+        // 用 channel 收集本轮新发现的死亡主播名，最后合并成一条通知
+        // Use a channel to collect newly-dead streamers from this round, then merge into one notification
+        let (dead_tx, mut dead_rx) = tokio::sync::mpsc::channel::<String>(16);
 
         let tasks: Vec<_> = streamers
             .into_iter()
+            .filter(|s| !self.dead_streamers.read().contains(&s.username))
             .map(|streamer| {
                 let api = Arc::clone(&api);
                 let monitor = Arc::clone(self);
                 let emitter = Arc::clone(emitter);
                 let auto_record_global = settings.auto_record;
+                let dead_tx = dead_tx.clone();
 
                 tokio::spawn(async move {
-                    monitor
+                    let newly_dead = monitor
                         .poll_streamer(&api, streamer, &emitter, auto_record_global)
                         .await;
+                    if let Some(username) = newly_dead {
+                        let _ = dead_tx.send(username).await;
+                    }
                 })
             })
             .collect();
 
+        // 先 drop 发送端，确保 recv 能感知到所有发送端都关闭
+        // Drop the producer side so the receiver can detect all senders are gone
+        drop(dead_tx);
+
         for t in tasks {
             let _ = t.await;
+        }
+
+        // 收集本轮所有新死亡主播，合并成一条通知
+        // Collect all newly-dead streamers and emit a single merged notification
+        let mut newly_dead: Vec<String> = Vec::new();
+        while let Ok(username) = dead_rx.try_recv() {
+            newly_dead.push(username);
+        }
+
+        if !newly_dead.is_empty() {
+            newly_dead.sort();
+            let message = if newly_dead.len() == 1 {
+                format!(
+                    "主播 {} 已无法通过用户名或内部 ID 找到，可能已改名、注销或被封禁，后续将跳过其轮询请求。",
+                    newly_dead[0]
+                )
+            } else {
+                format!(
+                    "以下 {} 个主播已无法找到，可能已改名、注销或被封禁，后续将跳过其轮询请求：{}",
+                    newly_dead.len(),
+                    newly_dead.join("、")
+                )
+            };
+            self.state.notification_store.emit_with_action(
+                emitter,
+                NotificationLevel::Warning,
+                "streamer_dead",
+                message,
+                Some(crate::core::notifications::NotificationAction {
+                    action_type: "remove_streamers".to_string(),
+                    targets: newly_dead,
+                }),
+            );
         }
     }
 
     /// 轮询单个主播的状态，更新缓存，并根据状态变化触发自动录制逻辑。
-    /// Poll a single streamer's status, update the cache, and trigger auto-recording logic based on status changes.
+    /// 若该主播本轮被确认失效（首次），返回其用户名；否则返回 None。
+    ///
+    /// Poll a single streamer's status, update the cache, and trigger auto-recording logic.
+    /// Returns the username if the streamer was newly confirmed dead this round; otherwise None.
     async fn poll_streamer(
         self: &Arc<Self>,
         api: &StripchatApi,
         streamer: StreamerData,
         emitter: &Arc<dyn Emitter>,
         auto_record_global: bool,
-    ) {
+    ) -> Option<String> {
         let mut username = streamer.username.clone();
 
         let is_recording = self.recorder.is_recording(&username);
@@ -288,9 +256,29 @@ impl StatusMonitor {
 
         let info = match api.get_stream_info(&username, !is_recording, streamer.model_id).await {
             Ok(i) => i,
+            Err(crate::core::error::AppError::UserNotFound(_)) => {
+                // 用户名查不到，且 model_id 反查也失败（get_stream_info 已处理改名回退）
+                // Username not found and model_id reverse-lookup also failed
+                // (get_stream_info already handles rename fallback).
+                let already_dead = self.dead_streamers.read().contains(&username);
+                if !already_dead {
+                    // 写入内存 dead set + 持久化到 streamers.json
+                    // Add to in-memory dead set + persist to streamers.json
+                    self.dead_streamers.write().insert(username.clone());
+                    self.state.mark_streamer_dead(&username);
+                    tracing::warn!(
+                        "Streamer {} confirmed dead (not found by username or model_id), skipping future polls",
+                        username
+                    );
+                    // 返回用户名，由 poll_all_with_emitter 统一合并通知
+                    // Return username so poll_all_with_emitter can merge notifications
+                    return Some(username);
+                }
+                return None;
+            }
             Err(e) => {
                 tracing::error!("Poll failed → {}: {}", username, e);
-                return;
+                return None;
             }
         };
 
@@ -393,5 +381,6 @@ impl StatusMonitor {
                 .start_recording_with_emitter(&username, playlist_url, Arc::clone(emitter))
                 .await;
         }
+        None
     }
 }

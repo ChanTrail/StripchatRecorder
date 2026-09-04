@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use crate::core::no_window::NoWindowExt;
 
 /// 节点执行的上下文信息（传给模块的 recording 字段）。
 /// Context information for node execution (passed to module as the `recording` field).
@@ -325,7 +326,8 @@ fn run_node(
     let mut cmd = std::process::Command::new(&module.exe_path);
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        .no_window();
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
@@ -384,7 +386,7 @@ fn run_node(
                 let pid = child.id();
                 let _ = std::process::Command::new("taskkill")
                     .args(["/F", "/T", "/PID", &pid.to_string()])
-                    .stdout(Stdio::null()).stderr(Stdio::null()).status();
+                    .stdout(Stdio::null()).stderr(Stdio::null()).no_window().status();
             }
             let _ = child.kill();
             cancelled = true;
@@ -393,11 +395,11 @@ fn run_node(
         match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(StreamEvent::StdoutLine(line)) => {
                 let trimmed = line.trim();
-                if trimmed.starts_with('{') {
-                    if let Ok(out) = serde_json::from_str::<ModuleOutput>(trimmed) {
-                        final_json = Some(out);
-                        continue;
-                    }
+                if trimmed.starts_with('{')
+                    && let Ok(out) = serde_json::from_str::<ModuleOutput>(trimmed)
+                {
+                    final_json = Some(out);
+                    continue;
                 }
                 if let Some(rest) = trimmed.strip_prefix("PROGRESS:") {
                     let mut parts = rest.splitn(2, '/');

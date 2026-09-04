@@ -180,6 +180,9 @@ pub async fn remove_streamer(
         let _ = std::fs::remove_dir_all(&dir);
     }
     s.app_state.remove_streamer(&name).map_err(ApiError::from)?;
+    // 清除 monitor 内存 dead 集合，避免重新添加同名主播后仍被跳过
+    // Clear monitor in-memory dead set so re-adding the same username isn't skipped
+    s.monitor.dead_streamers.write().remove(&name);
     s.emitter
         .emit("streamer-removed", &serde_json::json!({ "username": name }));
     Ok(Json(serde_json::json!({ "ok": true })))

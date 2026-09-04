@@ -42,7 +42,7 @@ mod model;
 mod scan;
 mod store;
 
-pub use maintenance::{cleanup_orphaned_meta_files, maintain_output_dir, migrate_flat_meta_files, schedule_meta_cleanup, schedule_meta_version_check};
+pub use maintenance::{cleanup_orphaned_meta_files, maintain_output_dir, migrate_flat_meta_files, schedule_meta_version_check};
 pub use model::{
     META_VERSION, PpExecCode, PpExecResult, PpExecutionEntry, PpModuleResult,
     PpNodeProgress, VideoMeta, extract_verified_module_outputs, list_all_meta_paths,

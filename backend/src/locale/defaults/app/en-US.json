@@ -9,7 +9,8 @@
     "settings": "Settings",
     "about": "About",
     "collapse": "Collapse",
-    "expand": "Expand"
+    "expand": "Expand",
+    "notifications": "Notifications"
   },
   "common": {
     "confirm": "Confirm",
@@ -411,6 +412,13 @@
       "desc": "Set a password to protect the admin interface (minimum 6 characters). You will need to enter it each time you access the interface.",
       "placeholder": "Enter password (min 6 characters)",
       "hint": "Keep this password safe — it protects access to the management interface"
+    }
+  },
+  "notifications": {
+    "markAllRead": "Mark all as read",
+    "empty": "No notifications",
+    "action": {
+      "remove_streamers": "Remove"
     }
   },
   "about": {

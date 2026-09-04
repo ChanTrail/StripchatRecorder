@@ -79,7 +79,6 @@ pub struct StreamInfo {
     /// 是否在线 / Whether online
     pub is_online: bool,
     /// 是否可录制（公开秀状态）/ Whether recordable (public show status)
-    #[allow(dead_code)]
     pub is_recordable: bool,
     /// 直播间状态文字（中文）/ Stream status text (Chinese)
     pub status: String,
@@ -256,13 +255,21 @@ impl StripchatApi {
             }
         };
 
-        // "用户不存在"的错误形状：无论 HTTP 状态码是 200 还是 404 都可能出现
-        // "User not found" error shape: can appear under either HTTP 200 or 404
-        if json["title"].as_str() == Some("An error occurred")
-            && json["description"]
-                .as_str()
-                .is_some_and(|d| d.contains("not found"))
-        {
+        // "用户不存在"的错误形状：无论 HTTP 状态码是 200 还是 404 都可能出现。
+        // Stripchat 目前已知的两种形态：
+        //   1. { "title": "An error occurred", "description": "Entity \"Model\" not found" }  (200)
+        //   2. 其他含 "not found" 的 description（404 或 200）
+        // "User not found" error shape: can appear under either HTTP 200 or 404.
+        // Two known variants from Stripchat:
+        //   1. { "title": "An error occurred", "description": "Entity \"Model\" not found" }  (200)
+        //   2. Other descriptions containing "not found" (under 404 or 200)
+        let is_not_found = json["description"]
+            .as_str()
+            .is_some_and(|d| {
+                let lower = d.to_lowercase();
+                lower.contains("not found") || lower.contains("entity") && lower.contains("model")
+            });
+        if is_not_found {
             return Err(AppError::UserNotFound(format!("用户 {} 不存在", username)));
         }
 

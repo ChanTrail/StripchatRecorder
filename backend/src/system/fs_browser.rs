@@ -1,98 +1,13 @@
-//! 磁盘空间查询与目录浏览命令 / Disk Space Query and Directory Browsing Commands
+//! 目录浏览工具 / Directory Browser Utilities
 //!
-//! 提供跨平台的磁盘空间查询，以及供前端"选择目录"浏览器使用的目录列举/创建功能，
-//! 均由 HTTP server 的设置路由复用。
-//! Provides cross-platform disk space querying, plus directory listing/creation for the
-//! frontend's "choose directory" browser. Reused by the settings HTTP route.
+//! 供前端"选择目录"浏览器使用的目录列举、驱动器列举和目录创建功能。
+//! 被 `server_mod/routes/fs.rs` 调用。
+//!
+//! Directory listing, drive listing, and directory creation for the
+//! frontend's "choose directory" browser.
+//! Called by `server_mod/routes/fs.rs`.
 
 use crate::core::error::Result;
-
-/// 磁盘空间信息 / Disk space information
-#[derive(serde::Serialize)]
-pub struct DiskSpace {
-    pub total_bytes: u64,
-    pub available_bytes: u64,
-    pub used_bytes: u64,
-}
-
-/// 获取指定路径所在磁盘的空间信息（跨平台实现）。
-/// Get disk space information for the drive containing the given path (cross-platform implementation).
-pub fn get_disk_space_inner(output_dir: &str) -> Result<DiskSpace> {
-    let path = std::path::Path::new(output_dir);
-
-    let existing = std::iter::successors(Some(path), |p| p.parent())
-        .find(|p| p.exists())
-        .unwrap_or(path);
-
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::ffi::OsStrExt;
-        let wide: Vec<u16> = existing
-            .as_os_str()
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect();
-        let mut free_bytes: u64 = 0;
-        let mut total_bytes: u64 = 0;
-        unsafe extern "system" {
-            fn GetDiskFreeSpaceExW(
-                lp_directory_name: *const u16,
-                lp_free_bytes_available_to_caller: *mut u64,
-                lp_total_number_of_bytes: *mut u64,
-                lp_total_number_of_free_bytes: *mut u64,
-            ) -> i32;
-        }
-        let ok = unsafe {
-            GetDiskFreeSpaceExW(
-                wide.as_ptr(),
-                &mut free_bytes,
-                &mut total_bytes,
-                std::ptr::null_mut(),
-            )
-        };
-        if ok != 0 {
-            return Ok(DiskSpace {
-                total_bytes,
-                available_bytes: free_bytes,
-                used_bytes: total_bytes.saturating_sub(free_bytes),
-            });
-        }
-    }
-
-    #[cfg(unix)]
-    {
-        use std::mem::MaybeUninit;
-        let path_cstr = std::ffi::CString::new(existing.to_string_lossy().as_bytes()).unwrap();
-        let mut stat: MaybeUninit<libc::statvfs> = MaybeUninit::uninit();
-        let ret = unsafe { libc::statvfs(path_cstr.as_ptr(), stat.as_mut_ptr()) };
-        if ret == 0 {
-            let stat = unsafe { stat.assume_init() };
-            #[cfg(target_os = "macos")]
-            let block = stat.f_frsize as u64;
-            #[cfg(not(target_os = "macos"))]
-            let block = stat.f_frsize;
-            #[cfg(target_os = "macos")]
-            let total = stat.f_blocks as u64 * block;
-            #[cfg(not(target_os = "macos"))]
-            let total = stat.f_blocks * block;
-            #[cfg(target_os = "macos")]
-            let avail = stat.f_bavail as u64 * block;
-            #[cfg(not(target_os = "macos"))]
-            let avail = stat.f_bavail * block;
-            return Ok(DiskSpace {
-                total_bytes: total,
-                available_bytes: avail,
-                used_bytes: total.saturating_sub(avail),
-            });
-        }
-    }
-
-    Err(crate::core::error::AppError::Other(
-        "无法获取磁盘空间信息".to_string(),
-    ))
-}
-
-// ─── 目录浏览 / Directory Browsing ────────────────────────────────────────────
 
 /// 目录浏览返回的单个条目 / Single entry returned by directory browsing
 #[derive(serde::Serialize)]
@@ -149,16 +64,9 @@ fn strip_verbatim_prefix(p: &std::path::Path) -> std::path::PathBuf {
 ///
 /// List subdirectories under the given path (directories only, no files), for the
 /// frontend's "choose directory" browser.
-///
-/// Safety: only returns directory name listings, never reads file contents; falls back to
-/// drive roots / user home when the path is empty or doesn't exist, rather than erroring out.
-/// Returned paths have the Windows `\\?\` prefix stripped, presented in the familiar
-/// plain path format.
 pub fn list_dir_inner(path: &str) -> Result<ListDirResult> {
     let requested = std::path::Path::new(path);
 
-    // 空路径或不存在的路径：回退到用户主目录（存在则用），否则回退到当前工作目录
-    // Empty or non-existent path: fall back to the user's home directory, else the cwd
     let dir = if path.trim().is_empty() || !requested.is_dir() {
         dirs::home_dir().unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
     } else {
@@ -168,22 +76,16 @@ pub fn list_dir_inner(path: &str) -> Result<ListDirResult> {
     let canonical_raw = dir
         .canonicalize()
         .map_err(|e| crate::core::error::AppError::Other(format!("无法访问目录: {}", e)))?;
-    // 用于实际文件系统访问（保留 \\?\ 前缀，支持超长路径）；对外展示时再清理前缀
-    // Used for actual filesystem access (keeps \\?\ prefix to support long paths);
-    // the prefix is stripped only when presenting to the outside
     let canonical_clean = strip_verbatim_prefix(&canonical_raw);
 
     let mut dirs_list: Vec<DirEntryInfo> = Vec::new();
     match std::fs::read_dir(&canonical_raw) {
         Ok(entries) => {
             for entry in entries.flatten() {
-                // 跳过因权限问题无法读取元数据的条目，而不是整体报错
-                // Skip entries whose metadata can't be read (permission issues) instead of failing entirely
                 if !entry.path().is_dir() {
                     continue;
                 }
                 let name = entry.file_name().to_string_lossy().to_string();
-                // 跳过隐藏目录（以 . 开头），减少无关噪音 / Skip hidden directories (dotfiles), reduce noise
                 if name.starts_with('.') {
                     continue;
                 }
@@ -200,7 +102,7 @@ pub fn list_dir_inner(path: &str) -> Result<ListDirResult> {
             )));
         }
     }
-    dirs_list.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    dirs_list.sort_by_key(|a| a.name.to_lowercase());
 
     let parent = canonical_clean
         .parent()
@@ -261,8 +163,6 @@ pub fn create_dir_inner(parent: &str, name: &str) -> Result<String> {
             "目录名不能为空".to_string(),
         ));
     }
-    // 禁止路径分隔符和上级目录引用，防止越出 parent 目录
-    // Disallow path separators and parent-dir references to prevent escaping the parent directory
     if trimmed.contains(['/', '\\']) || trimmed == ".." {
         return Err(crate::core::error::AppError::Other(
             "目录名不能包含路径分隔符".to_string(),

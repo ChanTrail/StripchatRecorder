@@ -191,13 +191,21 @@ pub struct StreamerData {
     /// successfully queried (see `StatusMonitor::poll_streamer`).
     #[serde(default)]
     pub model_id: Option<i64>,
+    /// 是否已确认失效（用户名和内部 ID 均无法找到）。
+    /// 失效后跳过轮询请求以节约带宽，前端展示通知提醒用户处理。
+    ///
+    /// Whether this streamer is confirmed dead (not found by username or model_id).
+    /// Dead streamers are skipped in polling to save bandwidth; a notification is shown
+    /// in the frontend for the user to take action.
+    #[serde(default)]
+    pub is_dead: bool,
 }
 
 /// 应用运行时全局状态，通过 `Arc<AppState>` 在各模块间共享。
 /// Global application runtime state, shared across modules via `Arc<AppState>`.
 pub struct AppState {
     /// 持久化数据（受读写锁保护）/ Persisted data (protected by read-write lock)
-    pub data: RwLock<AppData>,
+    pub(crate) data: RwLock<AppData>,
     /// 配置目录路径（exe_dir/config/）/ Config directory path (exe_dir/config/)
     config_dir: PathBuf,
     /// 后处理任务队列（状态表 + 取消标志 + 串行锁），详见 `postprocess::queue`
@@ -211,6 +219,9 @@ pub struct AppState {
     /// 通知 Mouflon 同步调度器立即触发同步的发送端（可选，启动后注入）
     /// Sender to notify the Mouflon sync scheduler to trigger an immediate sync (optional, injected after startup)
     pub mouflon_sync_notify_tx: RwLock<Option<tokio::sync::mpsc::Sender<()>>>,
+    /// 进程内通知存储（定时任务写入，前端上线后拉取）
+    /// In-process notification store (written by scheduled tasks, pulled by frontend on connect)
+    pub notification_store: crate::core::notifications::NotificationStore,
 }
 
 impl AppState {
@@ -253,6 +264,7 @@ impl AppState {
                     params: {
                         let mut m = std::collections::HashMap::new();
                         m.insert("format".to_string(), serde_json::json!("mp4"));
+                        m.insert("split_by_streamer".to_string(), serde_json::json!(true));
                         m
                     },
                     enabled: true,
@@ -283,6 +295,7 @@ impl AppState {
             startup_lock: std::sync::Mutex::new(()),
             poll_interval_notify_tx: RwLock::new(None),
             mouflon_sync_notify_tx: RwLock::new(None),
+            notification_store: crate::core::notifications::NotificationStore::new(),
         }))
     }
 
@@ -363,6 +376,7 @@ impl AppState {
             auto_record,
             added_at: chrono::Utc::now().to_rfc3339(),
             model_id,
+            is_dead: false,
         });
         drop(data);
         self.save()
@@ -409,13 +423,37 @@ impl AppState {
         self.save()
     }
 
+    /// 将主播标记为已失效（is_dead = true）并保存。
+    /// Mark a streamer as dead (is_dead = true) and save.
+    pub fn mark_streamer_dead(&self, username: &str) {
+        let mut data = self.data.write();
+        if let Some(s) = data.streamers.iter_mut().find(|s| s.username == username)
+            && !s.is_dead
+        {
+            s.is_dead = true;
+            drop(data);
+            let _ = self.save();
+        }
+    }
+
+    /// 返回所有已标记为失效的主播用户名集合。
+    /// Returns the set of all usernames marked as dead.
+    pub fn get_dead_streamers(&self) -> std::collections::HashSet<String> {
+        self.data
+            .read()
+            .streamers
+            .iter()
+            .filter(|s| s.is_dead)
+            .map(|s| s.username.clone())
+            .collect()
+    }
+
     /// 从追踪列表中移除主播并保存。
     /// Remove a streamer from the tracking list and save.
     pub fn remove_streamer(&self, username: &str) -> Result<()> {
         let mut data = self.data.write();
         data.streamers.retain(|s| s.username != username);
-        drop(data);
-        self.save()
+        drop(data);        self.save()
     }
 
     /// 设置指定主播的自动录制开关并保存。

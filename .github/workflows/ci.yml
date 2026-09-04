@@ -252,18 +252,18 @@ jobs:
 
   # ── 自动打 Tag / Auto-tag after CI (master only) ─────────────────────────────
   #
-  # 仅在 master 分支且所有构建通过后运行。
+  # 仅在 master 分支且所有构建通过后运行，beta 分支不触发。
   # 从 package.json 读取版本号，若对应 tag 不存在则创建并推送，
   # 从而自动触发 release.yml 工作流。
   #
-  # Only runs on master after all builds pass.
+  # Only runs on master after all builds pass (not on beta).
   # Reads version from package.json; creates and pushes the tag if it doesn't
   # exist yet, which in turn triggers the release.yml workflow.
   auto-tag:
     name: Auto-tag release
     runs-on: ubuntu-22.04
     needs: [build-server, build-desktop]
-    if: (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/beta') && github.event_name == 'push'
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
 
     steps:
       - name: Checkout

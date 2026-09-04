@@ -1,18 +1,18 @@
 //! 后台定时任务调度器 / Background Scheduled Task Launchers
 //!
 //! 该模块汇总了所有需要**周期性运行**或**常驻后台**的任务启动逻辑与其具体实现，
-//! 包括主播状态轮询、配置健全性检查、Mouflon 密钥同步和 meta 文件维护。
+//! 包括主播状态轮询、Mouflon 密钥同步、孤立 meta 文件清理和输出目录维护。
 //! `config::settings` 只负责配置数据结构与持久化，不包含任何定时/周期性逻辑。
 //!
 //! This module collects all **periodic** or **always-on background** task launchers
-//! and their implementations, including streamer status polling, config sanity checks,
-//! Mouflon key sync, and meta file maintenance.
+//! and their implementations, including streamer status polling, Mouflon key sync,
+//! orphaned meta file cleanup, and output directory maintenance.
 //! `config::settings` is limited to config data structures and persistence; it contains
 //! no scheduled/periodic logic.
 
 use crate::config::settings::AppState;
 use crate::core::emitter::{Emitter, EmitterExt};
-use crate::core::error::AppError;
+use crate::core::notifications::NotificationLevel;
 use crate::streaming::monitor::StatusMonitor;
 use std::sync::Arc;
 
@@ -40,104 +40,13 @@ pub fn start_monitor(
     });
 }
 
-/// 执行一次配置检查：验证所有追踪主播是否仍然存在，并检查孤立的后处理记录。
-/// 若发现问题，通过 emitter 向前端发送 `startup-warnings` 事件。
-///
-/// Perform a single config check: verify all tracked streamers still exist,
-/// and check for orphaned post-processing records.
-/// If issues are found, emit a `startup-warnings` event to the frontend via the emitter.
-async fn run_config_check(state: &Arc<AppState>, emitter: &Arc<dyn Emitter>) {
-    let settings = state.get_settings();
-    let streamers = state.get_streamers();
-
-    let api = match crate::streaming::stripchat::StripchatApi::new_api_only(
-        settings.api_proxy_url.as_deref(),
-        settings.cdn_proxy_url.as_deref(),
-        settings.sc_mirror_url.as_deref(),
-        Some(settings.sc_mirror_scheme.as_str()),
-    ) {
-        Ok(a) => a,
-        Err(_) => return,
-    };
-
-    // 每个主播最多重试 3 次，间隔 10 秒，确认不存在后才加入缺失列表
-    // Retry up to 3 times per streamer with 10s delay; only add to missing list after confirmed
-    const MAX_ATTEMPTS: u32 = 3;
-    const RETRY_DELAY: tokio::time::Duration = tokio::time::Duration::from_secs(10);
-
-    let mut missing_streamers = Vec::new();
-    for s in &streamers {
-        let mut confirmed_missing = false;
-        for attempt in 1..=MAX_ATTEMPTS {
-            match api.get_stream_info(&s.username, false, s.model_id).await {
-                Ok(_) => {
-                    confirmed_missing = false;
-                    break;
-                }
-                Err(AppError::UserNotFound(_)) => {
-                    confirmed_missing = true;
-                    break;
-                }
-                Err(_) => {
-                    if attempt < MAX_ATTEMPTS {
-                        tokio::time::sleep(RETRY_DELAY).await;
-                    } else {
-                        confirmed_missing = true;
-                    }
-                }
-            }
-        }
-        if confirmed_missing {
-            missing_streamers.push(s.username.clone());
-        }
-    }
-
-    if !missing_streamers.is_empty() {
-        emitter.emit(
-            "startup-warnings",
-            &serde_json::json!({
-                "missing_streamers": missing_streamers,
-            }),
-        );
-    }
-}
-
-/// 启动配置检查调度器：立即执行一次检查，之后每天午夜执行一次。
-/// Start the config check scheduler: run once immediately, then once every day at midnight.
-async fn schedule_config_checks_inner(state: Arc<AppState>, emitter: Arc<dyn Emitter>) {
-    run_config_check(&state, &emitter).await;
-
-    loop {
-        // 计算到下一个午夜的等待秒数 / Calculate seconds until next midnight
-        let now = chrono::Local::now();
-        let secs_until = {
-            let tomorrow = now.date_naive().succ_opt().unwrap_or(now.date_naive());
-            let midnight = tomorrow.and_hms_opt(0, 0, 0).unwrap();
-            let midnight_local = midnight
-                .and_local_timezone(chrono::Local)
-                .single()
-                .unwrap_or_else(|| now + chrono::Duration::hours(24));
-            (midnight_local - now).num_seconds().max(0) as u64
-        };
-        tokio::time::sleep(tokio::time::Duration::from_secs(secs_until)).await;
-        run_config_check(&state, &emitter).await;
-    }
-}
-
-/// 启动配置健全性检查调度器（立即执行一次，之后每天午夜执行）。
-///
-/// Start the config sanity-check scheduler (runs once immediately, then every midnight).
-pub fn start_config_checks(app_state: Arc<AppState>, emitter: Arc<dyn Emitter>) {
-    tokio::spawn(async move {
-        schedule_config_checks_inner(app_state, emitter).await;
-    });
-}
-
 /// 启动 Mouflon Keys 自动同步调度器：启动时立即同步一次，之后每小时同步一次。
 /// 若 Settings 中未配置 mouflon_sync_url，则静默跳过。
+/// 同步失败超出重试上限时写入错误通知。
 ///
 /// Start the Mouflon Keys auto-sync scheduler: sync once on startup, then every hour.
 /// Silently skips if mouflon_sync_url is not configured in Settings.
+/// Pushes an error notification when sync fails after all retries.
 async fn schedule_mouflon_sync_inner(
     state: Arc<AppState>,
     emitter: Arc<dyn Emitter>,
@@ -172,11 +81,30 @@ async fn schedule_mouflon_sync_inner(
                     Err(e) => {
                         attempt += 1;
                         if attempt >= MAX_RETRIES {
-                            tracing::warn!("Mouflon keys sync failed after {} attempts: {:?}", attempt, e);
+                            tracing::warn!(
+                                "Mouflon keys sync failed after {} attempts: {:?}",
+                                attempt, e
+                            );
+                            // 超出重试上限 → 写入错误通知
+                            // Exceeded retries → push error notification
+                            state.notification_store.emit(
+                                &emitter,
+                                NotificationLevel::Error,
+                                "mouflon_sync",
+                                format!(
+                                    "Mouflon 密钥同步失败（已重试 {} 次）：{}",
+                                    MAX_RETRIES, e
+                                ),
+                            );
                             break;
                         }
-                        tracing::warn!("Mouflon keys sync failed (attempt {}/{}): {:?}, retrying in {}s",
-                            attempt, MAX_RETRIES, e, RETRY_INTERVAL.as_secs());
+                        tracing::warn!(
+                            "Mouflon keys sync failed (attempt {}/{}): {:?}, retrying in {}s",
+                            attempt,
+                            MAX_RETRIES,
+                            e,
+                            RETRY_INTERVAL.as_secs()
+                        );
                         tokio::time::sleep(RETRY_INTERVAL).await;
                     }
                 }
@@ -216,11 +144,30 @@ pub fn start_mouflon_sync(app_state: Arc<AppState>, emitter: Arc<dyn Emitter>) {
 }
 
 /// 启动孤立 meta 文件清理调度器（立即执行一次，之后每小时执行）。
+/// 若清理到孤立文件，写入信息通知。
 ///
 /// Start the orphaned meta file cleanup scheduler (runs once immediately, then every hour).
-pub fn start_meta_cleanup() {
+/// Pushes an info notification if orphaned files were cleaned up.
+pub fn start_meta_cleanup(app_state: Arc<AppState>, emitter: Arc<dyn Emitter>) {
     tokio::spawn(async move {
-        crate::recording::meta::schedule_meta_cleanup().await;
+        loop {
+            let count = tokio::task::spawn_blocking(
+                crate::recording::meta::cleanup_orphaned_meta_files
+            )
+            .await
+            .unwrap_or(0);
+
+            if count > 0 {
+                app_state.notification_store.emit(
+                    &emitter,
+                    NotificationLevel::Info,
+                    "meta_cleanup",
+                    format!("已清理 {} 个孤立的 meta 文件（对应视频已不存在）", count),
+                );
+            }
+
+            tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
+        }
     });
 }
 
@@ -232,20 +179,14 @@ pub fn start_meta_cleanup() {
 /// 程序启动时不再需要单独执行一遍——首次立即执行已覆盖启动时检查的需求。
 ///
 /// Start the output-directory maintenance scheduler (runs once immediately, then every 5 minutes).
-///
-/// This is the single shared entry point for both the startup pass and periodic maintenance:
-/// merges leftover segments, removes empty directories, rebuilds missing/corrupt meta
-/// (including ts_merge's custom output directory), and re-triggers post-processing for
-/// videos left in a stale pp_waiting/pp_running state from a previous restart, as well as
-/// any missed tasks. The startup path no longer needs a separate pass — the immediate first
-/// run already covers it.
 pub fn start_output_dir_maintenance(
     app_state: Arc<AppState>,
     emitter: Arc<dyn Emitter>,
     recorder: Arc<crate::recording::recorder::RecorderManager>,
 ) {
     tokio::spawn(async move {
-        crate::recording::meta::schedule_meta_version_check(app_state, emitter, recorder, 300).await;
+        crate::recording::meta::schedule_meta_version_check(app_state, emitter, recorder, 300)
+            .await;
     });
 }
 
@@ -260,11 +201,10 @@ pub fn start_all(
 ) {
     start_monitor(
         Arc::clone(&app_state),
-        monitor,
+        Arc::clone(&monitor),
         Arc::clone(&emitter),
     );
-    start_config_checks(Arc::clone(&app_state), Arc::clone(&emitter));
     start_mouflon_sync(Arc::clone(&app_state), Arc::clone(&emitter));
-    start_meta_cleanup();
+    start_meta_cleanup(Arc::clone(&app_state), Arc::clone(&emitter));
     start_output_dir_maintenance(app_state, emitter, recorder);
 }

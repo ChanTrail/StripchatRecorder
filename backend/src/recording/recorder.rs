@@ -32,9 +32,6 @@ use tokio::sync::mpsc;
 /// 单个录制会话的状态 / State of a single recording session
 #[derive(Debug, Clone)]
 pub struct RecordingSession {
-    /// 主播用户名 / Streamer username
-    #[allow(dead_code)]
-    pub username: String,
     /// 录制会话目录路径（存放 .ts 分片）/ Recording session directory path (stores .ts segments)
     pub dir_path: PathBuf,
     /// 录制开始时间 / Recording start time
@@ -168,7 +165,6 @@ impl RecorderManager {
         let (stop_tx, stop_rx) = mpsc::channel(1);
 
         let session = RecordingSession {
-            username: username.to_string(),
             dir_path: session_dir.clone(),
             started_at: chrono::Utc::now(),
             stop_tx,
@@ -280,7 +276,7 @@ impl RecorderManager {
                     .and_then(|n| n.to_str())
                     .unwrap_or("unknown");
                 let started_at =
-                    crate::commands::recording_cmd::parse_timestamp_from_stem_pub(stem)
+                    crate::recording::service::parse_timestamp_from_stem_pub(stem)
                         .unwrap_or_else(|| {
                             let local: chrono::DateTime<chrono::Local> = chrono::Utc::now().into();
                             local.to_rfc3339()
@@ -307,7 +303,7 @@ impl RecorderManager {
 
                 // 触发后处理流水线，initial_path = session_dir
                 // Trigger post-processing pipeline; initial_path = session_dir
-                crate::commands::postprocess_cmd::run_postprocess_for_path(
+                crate::postprocess::service::run_postprocess_for_path(
                     &session_dir_clone,
                     &session_dir_clone,
                     &user_pipeline,

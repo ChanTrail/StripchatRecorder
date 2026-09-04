@@ -209,11 +209,6 @@ const COMMAND_MAP: Record<
 		method: "POST",
 		url: () => "/api/mouflon-keys/sync",
 	},
-	remove_missing_pp_results: {
-		method: "POST",
-		url: () => "/api/startup-warnings/pp-results",
-		body: (a) => ({ paths: a.paths }),
-	},
 	get_disk_space: { method: "GET", url: () => "/api/disk-space" },
 	list_dir: {
 		method: "GET",
@@ -280,6 +275,15 @@ const COMMAND_MAP: Record<
 	renew_token: {
 		method: "POST",
 		url: () => "/api/auth/renew",
+	},
+	get_notifications: {
+		method: "GET",
+		url: () => "/api/notifications",
+	},
+	mark_notifications_read: {
+		method: "POST",
+		url: () => "/api/notifications/read",
+		body: (a) => ({ ids: a.ids }),
 	},
 };
 

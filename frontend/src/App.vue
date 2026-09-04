@@ -6,14 +6,13 @@
     - 跟随系统主题自动切换深色/浅色模式
     - 监听 ffmpeg-missing 事件并显示警告
     - 监听 SSE 断开/重连事件，重连后自动刷新页面
-    - 监听 startup-warnings 事件，处理不存在的主播和孤立的后处理记录
+    - 监听 startup-warnings 事件，处理孤立的后处理记录
 
     Provides the overall layout with sidebar navigation and main content area.
     Responsible for:
     - Auto dark/light mode following system theme
     - Listening for ffmpeg-missing events and showing warnings
     - Listening for SSE disconnect/reconnect events, auto-reloading on reconnect
-    - Listening for startup-warnings to handle non-existent streamers and orphaned post-processing records
 -->
 <script setup lang="ts">
 	import { onMounted, onUnmounted, ref } from "vue";
@@ -24,7 +23,7 @@
 	import { call, on, onSseReconnect, onSseDisconnect } from "@/lib/api";
 	import {
 		Users, Video, Clapperboard, Radio, Search, Settings, Info, LogOut,
-		ChevronsLeft, ChevronsRight,
+		ChevronsLeft, ChevronsRight, Bell,
 	} from "@lucide/vue";
 	import { useNotify } from "@/composables/useNotify";
 	import { toast as sonnerToast } from "vue-sonner";
@@ -35,15 +34,25 @@
 	import { useModuleLocaleStore } from "@/stores/moduleLocale";
 	import { useLocalesStore } from "@/stores/locales";
 	import { useAuthStore } from "@/stores/auth";
+	import { useNotificationsStore, type Notification } from "@/stores/notifications";
+	import {
+		Dialog, DialogContent, DialogHeader, DialogTitle,
+	} from "@/components/ui/dialog";
 
 	const router = useRouter();
 	const route = useRoute();
-	const { toast, confirm } = useNotify();
+	const { toast } = useNotify();
 	const streamersStore = useStreamersStore();
 	const { t, locale } = useI18n();
 	const moduleLocaleStore = useModuleLocaleStore();
 	const localesStore = useLocalesStore();
 	const authStore = useAuthStore();
+	const notificationsStore = useNotificationsStore();
+
+	/** 通知面板是否打开 / Whether the notification panel is open */
+	const notificationPanelOpen = ref(false);
+	const notificationScrollEl = ref<HTMLElement | null>(null);
+	useScrollbar(notificationScrollEl);
 
 	const mainScrollEl = ref<HTMLElement | null>(null);
 	useScrollbar(mainScrollEl);
@@ -99,59 +108,41 @@
 	let unlistenFfmpeg: (() => void) | null = null;
 	let unlistenReconnect: (() => void) | null = null;
 	let unlistenDisconnect: (() => void) | null = null;
-	let unlistenWarnings: (() => void) | null = null;
 	let unlistenLocaleWarnings: (() => void) | null = null;
+	let unlistenNotification: (() => void) | null = null;
 
 	/**
-	 * 处理启动时的警告事件：
-	 * 1. 不存在的主播账号 -> 提示用户并自动删除
-	 * 2. 孤立的后处理记录（对应文件已删除）-> 提示用户并清理
-	 *
-	 * Handle startup warning events:
-	 * 1. Non-existent streamer accounts -> prompt user and auto-delete
-	 * 2. Orphaned post-processing records (files deleted) -> prompt user and clean up
+	 * 执行通知面板中的操作按钮（删除主播、清理孤立记录等）。
+	 * Execute an action button in the notification panel.
 	 */
-	async function handleStartupWarnings(payload: unknown) {
-		const w = payload as {
-			missing_streamers: string[];
-			missing_pp_results: string[];
-		};
-
-		if (w.missing_streamers.length > 0) {
-			const ok = await confirm({
-				title: t("notify.missingStreamers.title"),
-				message: t("notify.missingStreamers.message", { list: w.missing_streamers.join("\n") }),
-				confirmText: t("notify.missingStreamers.confirm"),
-				cancelText: t("notify.missingStreamers.ignore"),
-				danger: true,
-			});
-			if (ok) {
-				for (const username of w.missing_streamers) {
+	async function executeNotificationAction(n: Notification) {
+		if (!n.action) return;
+		const { action_type, targets } = n.action;
+		try {
+			if (action_type === "remove_streamers") {
+				for (const username of targets) {
 					await streamersStore.removeStreamer(username).catch(() => {});
 				}
-				toast(t("notify.missingStreamers.done", { count: w.missing_streamers.length }), "success");
+				toast(t("notify.missingStreamers.done", { count: targets.length }), "success");
 			}
+		} catch {
+			// 静默失败
 		}
-
-		if (w.missing_pp_results.length > 0) {
-			const ok = await confirm({
-				title: t("notify.missingPpResults.title"),
-				message: t("notify.missingPpResults.message", { list: w.missing_pp_results.map((p) => p.split(/[\\/]/).pop()).join("\n") }),
-				confirmText: t("notify.missingPpResults.confirm"),
-				cancelText: t("notify.missingPpResults.ignore"),
-			});
-			if (ok) {
-				await call("remove_missing_pp_results", {
-					paths: w.missing_pp_results,
-				}).catch(() => {});
-				toast(t("notify.missingPpResults.done", { count: w.missing_pp_results.length }), "success");
-			}
-		}
+		// 操作完成后标记通知已读
+		await notificationsStore.markRead([n.id]);
 	}
 
 	async function handleLogout() {
 		await authStore.logout();
 		router.push("/login");
+	}
+
+	function notificationLevelClass(level: Notification["level"]): string {
+		return level === "error"
+			? "text-destructive"
+			: level === "warning"
+			? "text-yellow-500 dark:text-yellow-400"
+			: "text-muted-foreground";
 	}
 
 	onMounted(async () => {
@@ -192,6 +183,9 @@
 		// SSE 重连后倒计时 3 秒刷新页面，确保状态与服务器同步
 		// After SSE reconnect, countdown 3 seconds then reload to sync state with server
 		unlistenReconnect = onSseReconnect(() => {
+			// 重连后立即拉取通知（离线期间可能有新通知）
+			// Fetch notifications after reconnect (may have new ones from the offline period)
+			notificationsStore.fetch();
 			const COUNTDOWN = 3;
 			let remaining = COUNTDOWN;
 			const id = "reconnect-reload";
@@ -218,9 +212,6 @@
 			toast(t("notify.disconnected"), "warning");
 		});
 
-		// 监听启动警告 / Listen for startup warnings
-		unlistenWarnings = await on("startup-warnings", handleStartupWarnings);
-
 		// 监听自定义语言文件校验警告 / Listen for custom locale file validation warnings
 		unlistenLocaleWarnings = await on(
 			"locale-warnings",
@@ -236,6 +227,14 @@
 		// 初始加载可用语言列表
 		// Load available locales
 		await localesStore.refresh();
+
+		// 首次加载通知列表 / Fetch notifications on first load
+		await notificationsStore.fetch();
+
+		// 监听实时新通知 / Listen for real-time new notifications
+		unlistenNotification = await on("notification-created", (payload) => {
+			notificationsStore.append(payload as Notification);
+		});
 	});
 
 	onUnmounted(() => {
@@ -244,8 +243,8 @@
 		unlistenFfmpeg?.();
 		unlistenReconnect?.();
 		unlistenDisconnect?.();
-		unlistenWarnings?.();
 		unlistenLocaleWarnings?.();
+		unlistenNotification?.();
 	});
 </script>
 
@@ -300,8 +299,27 @@
 					</Button>
 				</nav>
 
-				<!-- 底部：退出 + 折叠按钮 / Bottom: logout + collapse button -->
+				<!-- 底部：通知 + 退出 + 折叠按钮 / Bottom: notifications + logout + collapse button -->
 				<div class="mt-auto pt-2 border-t border-sidebar-border flex flex-col gap-0.5">
+					<!-- 通知按钮 / Notification button -->
+					<Button
+						variant="ghost"
+						class="w-full text-sm font-normal px-2 text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/50 relative"
+						:class="sidebarCollapsed ? 'justify-center gap-0' : 'justify-start gap-2'"
+						:title="sidebarCollapsed ? t('nav.notifications') : undefined"
+						@click="notificationPanelOpen = true"
+					>
+						<span class="relative shrink-0">
+							<Bell class="size-4" />
+							<span
+								v-if="notificationsStore.unreadCount > 0"
+								class="absolute -top-1.5 -right-1.5 min-w-4 h-4 rounded-full bg-destructive text-destructive-foreground text-[10px] font-bold flex items-center justify-center px-0.5 leading-none"
+							>
+								{{ notificationsStore.unreadCount > 99 ? "99+" : notificationsStore.unreadCount }}
+							</span>
+						</span>
+						<span v-show="!sidebarCollapsed" class="truncate">{{ t("nav.notifications") }}</span>
+					</Button>
 					<Button
 						variant="ghost"
 						class="w-full text-sm font-normal px-2 text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/50"
@@ -336,6 +354,75 @@
 			</main>
 			<NotifyLayer />
 			<DirectoryBrowserDialog />
+
+			<!-- 通知面板 / Notification panel -->
+			<Dialog :open="notificationPanelOpen" @update:open="(v) => (notificationPanelOpen = v)">
+				<DialogContent class="sm:max-w-md flex flex-col max-h-[80vh]">
+					<DialogHeader class="shrink-0">
+						<div class="flex items-center justify-between">
+							<DialogTitle>{{ t("nav.notifications") }}</DialogTitle>
+							<Button
+								v-if="notificationsStore.unreadCount > 0"
+								variant="ghost"
+								size="sm"
+								class="text-xs text-muted-foreground h-7 px-2"
+								@click="notificationsStore.markAllRead()"
+							>
+								{{ t("notifications.markAllRead") }}
+							</Button>
+						</div>
+					</DialogHeader>
+
+					<!-- 通知列表 / Notification list -->
+					<div
+						v-if="notificationsStore.notifications.length > 0"
+						ref="notificationScrollEl"
+						class="flex-1 overflow-y-auto scrollbar-overlay flex flex-col gap-2 pr-1"
+					>
+						<div
+							v-for="n in notificationsStore.notifications"
+							:key="n.id"
+							class="rounded-lg border px-3 py-2.5 flex flex-col gap-1.5"
+						>
+							<div class="flex items-start justify-between gap-2">
+								<p class="text-sm leading-snug flex-1" :class="notificationLevelClass(n.level)">
+									{{ n.message }}
+								</p>
+								<Button
+									variant="ghost"
+									size="sm"
+									class="h-6 w-6 p-0 shrink-0 text-muted-foreground hover:text-foreground"
+									@click="notificationsStore.markRead([n.id])"
+								>
+									×
+								</Button>
+							</div>
+							<div class="flex items-center justify-between gap-2">
+								<p class="text-xs text-muted-foreground">
+									{{ new Date(n.created_at).toLocaleString() }}
+								</p>
+								<Button
+									v-if="n.action"
+									variant="destructive"
+									size="sm"
+									class="h-6 text-xs px-2"
+									@click="executeNotificationAction(n)"
+								>
+									{{ t(`notifications.action.${n.action.action_type}`) }}
+								</Button>
+							</div>
+						</div>
+					</div>
+
+					<!-- 空状态 / Empty state -->
+					<div
+						v-else
+						class="flex-1 flex items-center justify-center text-sm text-muted-foreground py-8"
+					>
+						{{ t("notifications.empty") }}
+					</div>
+				</DialogContent>
+			</Dialog>
 		</div>
 
 	</Transition>

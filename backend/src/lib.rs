@@ -3,7 +3,6 @@
 //! 仅支持 Server 模式（HTTP API + SSE），通过命令行参数或环境变量指定监听端口。
 //! Only supports Server mode (HTTP API + SSE); listen port is specified via CLI arg or env var.
 
-pub mod commands;
 pub mod config;
 pub mod core;
 pub mod locale;
@@ -12,6 +11,7 @@ pub mod recording;
 pub mod relay;
 pub mod server_mod;
 pub mod streaming;
+pub mod system;
 pub mod watcher;
 
 /// 应用程序主入口：从命令行参数或环境变量读取端口，启动 HTTP Server 模式。

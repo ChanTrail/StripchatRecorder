@@ -190,16 +190,6 @@ fn remove_empty_meta_subdirs() {
     }
 }
 
-/// 启动孤立 meta 清理调度器：立即执行一次，之后每小时执行一次。
-/// Start the orphaned meta cleanup scheduler: run once immediately, then once every hour.
-pub async fn schedule_meta_cleanup() {
-    tokio::task::spawn_blocking(cleanup_orphaned_meta_files).await.ok();
-    loop {
-        tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
-        tokio::task::spawn_blocking(cleanup_orphaned_meta_files).await.ok();
-    }
-}
-
 /// 执行一次完整的输出目录维护：清理空目录、重建缺失/损坏的 meta、触发遗漏的后处理。
 /// 程序启动时和定时任务共用同一份逻辑，行为完全一致。
 ///
@@ -280,6 +270,38 @@ pub async fn maintain_output_dir(
         return;
     }
 
+    // pp_pending 不为空说明有上次进程退出时遗留的未完成任务，通知用户
+    // Non-empty pp_pending means there are leftover unfinished tasks from a previous run; notify the user
+    {
+        let count = pp_pending.len();
+        let names: Vec<String> = pp_pending
+            .iter()
+            .map(|p| {
+                p.file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| p.to_string_lossy().into_owned())
+            })
+            .collect();
+        let message = if count == 1 {
+            format!(
+                "发现 1 个未完成的后处理任务（可能由上次异常退出遗留），已重新触发：{}",
+                names[0]
+            )
+        } else {
+            format!(
+                "发现 {} 个未完成的后处理任务（可能由上次异常退出遗留），已重新触发：{}",
+                count,
+                names.join("、")
+            )
+        };
+        app_state.notification_store.emit(
+            emitter.as_ref(),
+            crate::core::notifications::NotificationLevel::Warning,
+            "output_dir_maintenance",
+            message,
+        );
+    }
+
     if !pipeline.nodes.iter().any(|n| n.enabled) {
         tracing::info!(
             "Meta scan: {} video(s) need post-processing but pipeline is empty, skipping",
@@ -304,7 +326,7 @@ pub async fn maintain_output_dir(
         let pp_emitter = Arc::clone(&emitter);
         let pp_pipeline = pipeline.clone();
         tokio::task::spawn_blocking(move || {
-            crate::commands::postprocess_cmd::run_postprocess_for_path(
+            crate::postprocess::service::run_postprocess_for_path(
                 &video_path,
                 &video_path,
                 &pp_pipeline,

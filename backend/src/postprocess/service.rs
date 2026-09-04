@@ -1,10 +1,13 @@
-//! 后处理流水线命令 / Post-processing Pipeline Commands
+//! 后处理流水线业务逻辑 / Post-processing Pipeline Service
 //!
 //! 提供模块发现、流水线配置读写、后处理任务触发/取消、进度查询等功能。
+//! 被 `server_mod/routes/postprocess.rs`、`recording/recorder.rs`、
+//! `recording/meta/maintenance.rs`、`recording/startup_scan.rs` 调用。
+//!
 //! Provides module discovery, pipeline config read/write,
 //! post-processing task triggering/cancellation, and progress queries.
-//!
-//! ## pp_execution 写入时机 / pp_execution write timing
+//! Called by `server_mod/routes/postprocess.rs`, `recording/recorder.rs`,
+//! `recording/meta/maintenance.rs`, and `recording/startup_scan.rs`.
 //!
 //! - 节点开始前：追加 PpExecutionEntry（finished_at/result 为 null，outputs 为空数组）
 //! - 节点完成后：更新对应条目（填入 finished_at、result、outputs）
@@ -313,14 +316,15 @@ pub fn run_postprocess_inner(
             // build_effective_pipeline), on_node_done never fires for it at all, so writing
             // here would leave these two fields permanently unfilled for any recording that
             // was already merged before this logic existed.
-            if result.module_id == "ts_merge" && result.is_success() {
-                if let Some(output_path) = result.outputs.first() {
-                    if let Some(mut meta) = crate::recording::meta::read_meta(&video_path_buf) {
-                        meta.video_path = Some(output_path.to_string_lossy().to_string());
-                        crate::recording::meta::write_meta(&video_path_buf, &meta);
-                    }
-                    *path_str_ref.lock().unwrap() = output_path.to_string_lossy().to_string();
+            if result.module_id == "ts_merge"
+                && result.is_success()
+                && let Some(output_path) = result.outputs.first()
+            {
+                if let Some(mut meta) = crate::recording::meta::read_meta(&video_path_buf) {
+                    meta.video_path = Some(output_path.to_string_lossy().to_string());
+                    crate::recording::meta::write_meta(&video_path_buf, &meta);
                 }
+                *path_str_ref.lock().unwrap() = output_path.to_string_lossy().to_string();
             }
 
             crate::recording::meta::clear_pp_progress(&video_path_buf);

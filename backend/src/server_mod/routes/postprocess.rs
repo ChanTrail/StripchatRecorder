@@ -20,11 +20,11 @@ pub async fn run_postprocess(
         return Err(ApiError("后处理流水线为空".into()));
     }
     let video_path = std::path::PathBuf::from(&body.path);
-    let initial_path = crate::commands::postprocess_cmd::infer_initial_path(&video_path);
+    let initial_path = crate::postprocess::service::infer_initial_path(&video_path);
     let emitter = Arc::clone(&s.emitter);
     let state = Arc::clone(&s.app_state);
     tokio::task::spawn_blocking(move || {
-        crate::commands::postprocess_cmd::run_postprocess_for_path(
+        crate::postprocess::service::run_postprocess_for_path(
             &initial_path,
             &video_path,
             &pipeline,
@@ -50,12 +50,12 @@ pub async fn run_postprocess_batch(
     }
     for path in body.paths {
         let video_path = std::path::PathBuf::from(&path);
-        let initial_path = crate::commands::postprocess_cmd::infer_initial_path(&video_path);
+        let initial_path = crate::postprocess::service::infer_initial_path(&video_path);
         let emitter = Arc::clone(&s.emitter);
         let state = Arc::clone(&s.app_state);
         let pipeline = pipeline.clone();
         tokio::task::spawn_blocking(move || {
-            crate::commands::postprocess_cmd::run_postprocess_for_path(
+            crate::postprocess::service::run_postprocess_for_path(
                 &initial_path,
                 &video_path,
                 &pipeline,

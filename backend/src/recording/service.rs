@@ -1,8 +1,12 @@
-//! 录制文件管理命令 / Recording File Management Commands
+//! 录制文件管理业务逻辑 / Recording File Management Service
 //!
 //! 提供录制文件列表查询、合并状态查询、文件删除等功能。
+//! 被 `server_mod/routes/recording.rs`、`recording/recorder.rs`、
+//! `recording/startup_scan.rs` 调用。
+//!
 //! Provides recording file list queries, merge status queries, and file deletion.
-//! These functions are called directly by the HTTP server handlers in server_mod/server.rs.
+//! Called by `server_mod/routes/recording.rs`, `recording/recorder.rs`,
+//! and `recording/startup_scan.rs`.
 
 use crate::core::error::Result;
 use crate::recording::recorder::RecorderManager;

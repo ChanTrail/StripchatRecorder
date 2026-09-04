@@ -25,10 +25,13 @@ use crate::server_mod::routes::{
         open_recording, serve_output_file,
     },
     settings::{
-        add_mouflon_key, create_dir_handler, get_disk_space_handler, get_settings,
-        get_startup_warnings_handler, list_dir_handler, list_drives_handler, list_mouflon_keys,
-        remove_mouflon_key, save_settings, sync_mouflon_keys,
+        add_mouflon_key, get_settings,
+        list_mouflon_keys, remove_mouflon_key, save_settings, sync_mouflon_keys,
     },
+    fs::{
+        create_dir_handler, get_disk_space_handler, list_dir_handler, list_drives_handler,
+    },
+    notifications::{list_notifications, mark_notifications_read},
     streamer::{
         add_streamer, list_streamers, remove_streamer, set_auto_record, start_recording,
         stop_recording, verify_streamer,
@@ -119,7 +122,8 @@ pub fn build_router(state: ServerState) -> Router {
         )
         .route("/api/mouflon-keys/{pkey}", delete(remove_mouflon_key))
         .route("/api/mouflon-keys/sync", post(sync_mouflon_keys))
-        .route("/api/startup-warnings", get(get_startup_warnings_handler))
+        .route("/api/notifications", get(list_notifications))
+        .route("/api/notifications/read", post(mark_notifications_read))
         .route("/api/disk-space", get(get_disk_space_handler))
         .route("/api/fs/list-dir", get(list_dir_handler))
         .route("/api/fs/list-drives", get(list_drives_handler))
@@ -187,8 +191,8 @@ pub async fn run_server(port: u16) {
     // covered by the scheduled task's immediate first run below, not duplicated here.
     crate::server_mod::startup::run_all(Arc::clone(&app_state), Arc::clone(&emitter));
 
-    // 启动所有后台定时任务（状态轮询、配置检查、密钥同步、输出目录维护）
-    // Launch all background scheduled tasks (status polling, config checks, key sync, output dir maintenance)
+    // 启动所有后台定时任务（状态轮询、密钥同步、meta 清理、输出目录维护）
+    // Launch all background scheduled tasks (status polling, key sync, meta cleanup, output dir maintenance)
     crate::server_mod::scheduler::start_all(
         Arc::clone(&app_state),
         Arc::clone(&monitor),

@@ -495,6 +495,7 @@ fn scan_and_ensure_meta(
 /// Extract the scan root from the ts_merge node's params in the pipeline config.
 /// - `split_by_streamer=true`: returns `output_dir` (the root to scan for per-streamer subdirs)
 /// - `split_by_streamer=false`: returns `output_dir` directly as the flat output location
+///
 /// Returns `None` if the node is absent, disabled, or `output_dir` is empty.
 pub fn ts_merge_output_dir(state: &crate::config::settings::AppState) -> Option<std::path::PathBuf> {
     let pipeline = state.get_pipeline();

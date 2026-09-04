@@ -11,6 +11,7 @@
 
 use super::model::{ModuleInfo, PortType};
 use crate::config::settings::exe_dir;
+use crate::core::no_window::NoWindowExt;
 use std::path::PathBuf;
 use std::process::Stdio;
 
@@ -151,6 +152,7 @@ fn describe_module(exe: &PathBuf) -> crate::core::error::Result<ModuleInfo> {
         .arg("--describe")
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
+        .no_window()
         .output()
         .map_err(|e| crate::core::error::AppError::Other(format!("spawn: {}", e)))?;
     if !output.status.success() {

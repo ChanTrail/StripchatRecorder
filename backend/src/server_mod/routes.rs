@@ -1,5 +1,7 @@
 pub mod auth;
+pub mod fs;
 pub mod locale;
+pub mod notifications;
 pub mod postprocess;
 pub mod recording;
 pub mod settings;

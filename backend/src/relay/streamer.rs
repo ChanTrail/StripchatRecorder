@@ -12,6 +12,7 @@
 
 use super::offline_frame::build_drawtext;
 use super::state::{RelayManager, RelayStreamState};
+use crate::core::no_window::NoWindowExt;
 use crate::config::settings::AppState;
 use crate::recording::hls::{get_url_prefix, parse_playlist};
 use crate::streaming::stripchat::StripchatApi;
@@ -163,6 +164,7 @@ async fn feed_offline(
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .stdin(Stdio::null())
+        .no_window()
         .spawn()
     {
         Ok(c) => c,
@@ -265,6 +267,7 @@ async fn feed_live(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
+        .no_window()
         .spawn()
     {
         Ok(c) => c,
