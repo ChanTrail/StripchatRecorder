@@ -5,7 +5,7 @@
 //! 支持 Mouflon 加密系统：通过 SHA-256 密钥对分片 URL 进行 XOR 解密。
 //!
 //! 本模块只负责纯文本解析，不涉及任何网络请求——播放列表文本的获取（含多 CDN 竞速）
-//! 由 `streaming::stripchat::StripchatApi` 负责，解析后再调用本模块的函数。
+//! 由 `platform::stripchat::StripchatApi` 负责，解析后再调用本模块的函数。
 //!
 //! Parses Stripchat's HLS m3u8 playlists (both media playlists and master playlists),
 //! extracting segment URLs, fMP4 init segment URLs, and the highest-bandwidth variant
@@ -14,7 +14,7 @@
 //!
 //! This module performs pure text parsing only — no network requests. Fetching the
 //! playlist text (including multi-CDN racing) is the responsibility of
-//! `streaming::stripchat::StripchatApi`, which calls into this module's functions
+//! `platform::stripchat::StripchatApi`, which calls into this module's functions
 //! once the text is retrieved.
 
 use crate::core::error::{AppError, Result};

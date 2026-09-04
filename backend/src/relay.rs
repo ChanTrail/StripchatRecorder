@@ -7,4 +7,4 @@
 pub mod handler;
 pub mod offline_frame;
 pub mod state;
-pub mod streamer;
+pub mod worker;

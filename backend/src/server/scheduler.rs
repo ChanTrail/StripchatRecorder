@@ -2,18 +2,18 @@
 //!
 //! 该模块汇总了所有需要**周期性运行**或**常驻后台**的任务启动逻辑与其具体实现，
 //! 包括主播状态轮询、Mouflon 密钥同步、孤立 meta 文件清理和输出目录维护。
-//! `config::settings` 只负责配置数据结构与持久化，不包含任何定时/周期性逻辑。
+//! `config::app_state` 只负责配置数据结构与持久化，不包含任何定时/周期性逻辑。
 //!
 //! This module collects all **periodic** or **always-on background** task launchers
 //! and their implementations, including streamer status polling, Mouflon key sync,
 //! orphaned meta file cleanup, and output directory maintenance.
-//! `config::settings` is limited to config data structures and persistence; it contains
+//! `config::app_state` is limited to config data structures and persistence; it contains
 //! no scheduled/periodic logic.
 
-use crate::config::settings::AppState;
+use crate::config::app_state::AppState;
 use crate::core::emitter::{Emitter, EmitterExt};
 use crate::core::notifications::NotificationLevel;
-use crate::streaming::monitor::StatusMonitor;
+use crate::platform::monitor::StatusMonitor;
 use std::sync::Arc;
 
 /// 启动主播状态监控轮询循环。
@@ -40,11 +40,28 @@ pub fn start_monitor(
     });
 }
 
-/// 启动 Mouflon Keys 自动同步调度器：启动时立即同步一次，之后每小时同步一次。
+/// 计算从现在到本地时区次日 00:00:00 的剩余时长。
+/// 若时钟异常导致结果为零，回退为 24 小时。
+///
+/// Compute the duration from now to the next local midnight (00:00:00).
+/// Falls back to 24 hours if the result is zero due to clock anomalies.
+fn secs_until_midnight() -> tokio::time::Duration {
+    use chrono::{Local, Timelike};
+    let now = Local::now();
+    let tomorrow_midnight = (now + chrono::Duration::days(1))
+        .with_hour(0).unwrap()
+        .with_minute(0).unwrap()
+        .with_second(0).unwrap()
+        .with_nanosecond(0).unwrap();
+    let secs = (tomorrow_midnight - now).num_seconds().max(0) as u64;
+    tokio::time::Duration::from_secs(if secs == 0 { 86400 } else { secs })
+}
+
+/// 启动 Mouflon Keys 自动同步调度器：启动时立即同步一次，之后每天 UTC 00:00 同步一次。
 /// 若 Settings 中未配置 mouflon_sync_url，则静默跳过。
 /// 同步失败超出重试上限时写入错误通知。
 ///
-/// Start the Mouflon Keys auto-sync scheduler: sync once on startup, then every hour.
+/// Start the Mouflon Keys auto-sync scheduler: sync once on startup, then daily at UTC 00:00.
 /// Silently skips if mouflon_sync_url is not configured in Settings.
 /// Pushes an error notification when sync fails after all retries.
 async fn schedule_mouflon_sync_inner(
@@ -52,7 +69,6 @@ async fn schedule_mouflon_sync_inner(
     emitter: Arc<dyn Emitter>,
     mut notify_rx: tokio::sync::mpsc::Receiver<()>,
 ) {
-    const INTERVAL: tokio::time::Duration = tokio::time::Duration::from_secs(3600);
     // 失败后的重试间隔（5 分钟），最多重试 3 次
     // Retry interval after failure (5 minutes), up to 3 retries
     const RETRY_INTERVAL: tokio::time::Duration = tokio::time::Duration::from_secs(300);
@@ -110,10 +126,10 @@ async fn schedule_mouflon_sync_inner(
                 }
             }
         }
-        // 等待 1 小时，或收到立即同步通知
-        // Wait 1 hour, or until an immediate sync notification arrives
+        // 等待到次日 UTC 0 点，或收到立即同步通知
+        // Wait until next UTC midnight, or until an immediate sync notification arrives
         tokio::select! {
-            _ = tokio::time::sleep(INTERVAL) => {}
+            _ = tokio::time::sleep(secs_until_midnight()) => {}
             v = notify_rx.recv() => {
                 if v.is_none() {
                     // 发送端已关闭，退出调度器 / Sender dropped, exit scheduler
@@ -125,12 +141,12 @@ async fn schedule_mouflon_sync_inner(
     }
 }
 
-/// 启动 Mouflon 密钥自动同步调度器（立即执行一次，之后每小时执行）。
+/// 启动 Mouflon 密钥自动同步调度器（启动时立即执行一次，之后每天 UTC 0 点执行）。
 ///
 /// 将通知发送端注入 `AppState`，使手动触发同步（`/api/mouflon-keys/sync`）
 /// 同样能够重置调度器计时器。
 ///
-/// Start the Mouflon key auto-sync scheduler (runs once immediately, then every hour).
+/// Start the Mouflon key auto-sync scheduler (runs once immediately, then daily at UTC midnight).
 ///
 /// The notifier sender is injected into `AppState` so that a manual sync trigger
 /// (`/api/mouflon-keys/sync`) can also reset the scheduler timer.

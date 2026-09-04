@@ -1,11 +1,11 @@
 //! 目录浏览工具 / Directory Browser Utilities
 //!
 //! 供前端"选择目录"浏览器使用的目录列举、驱动器列举和目录创建功能。
-//! 被 `server_mod/routes/fs.rs` 调用。
+//! 被 `server/routes/fs.rs` 调用。
 //!
 //! Directory listing, drive listing, and directory creation for the
 //! frontend's "choose directory" browser.
-//! Called by `server_mod/routes/fs.rs`.
+//! Called by `server/routes/fs.rs`.
 
 use crate::core::error::Result;
 

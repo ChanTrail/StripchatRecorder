@@ -1,8 +1,8 @@
 //! 主播相关路由 handler / Streamer-related route handlers
 
 use crate::core::emitter::EmitterExt;
-use crate::server_mod::error::{ApiError, ApiResult};
-use crate::server_mod::server::ServerState;
+use crate::server::error::{ApiError, ApiResult};
+use crate::server::router::ServerState;
 use axum::{
     Json,
     extract::{Path, State as AxumState},
@@ -72,7 +72,7 @@ pub async fn add_streamer(
     let total = usernames.len();
     let settings = s.app_state.get_settings();
     let api = Arc::new(
-        crate::streaming::stripchat::StripchatApi::new_api_only(
+        crate::platform::stripchat::StripchatApi::new_api_only(
             settings.api_proxy_url.as_deref(),
             settings.cdn_proxy_url.as_deref(),
             settings.sc_mirror_url.as_deref(),
@@ -216,7 +216,7 @@ pub async fn start_recording(
         url
     } else {
         let settings = s.app_state.get_settings();
-        let api = crate::streaming::stripchat::StripchatApi::new_api_only(
+        let api = crate::platform::stripchat::StripchatApi::new_api_only(
             settings.api_proxy_url.as_deref(),
             settings.cdn_proxy_url.as_deref(),
             settings.sc_mirror_url.as_deref(),
@@ -260,7 +260,7 @@ pub async fn verify_streamer(
     Path(name): Path<String>,
 ) -> ApiResult<serde_json::Value> {
     let settings = s.app_state.get_settings();
-    let api = crate::streaming::stripchat::StripchatApi::new_api_only(
+    let api = crate::platform::stripchat::StripchatApi::new_api_only(
         settings.api_proxy_url.as_deref(),
         settings.cdn_proxy_url.as_deref(),
         settings.sc_mirror_url.as_deref(),

@@ -35,7 +35,7 @@
 //!             └── en-US.json
 //! ```
 
-use crate::config::settings::exe_dir;
+use crate::config::app_state::exe_dir;
 use std::path::PathBuf;
 
 /// 返回 locale 根目录路径（`<exe_dir>/locale`）。

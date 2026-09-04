@@ -1,6 +1,6 @@
 //! SSE 实时事件流 handler / SSE real-time event stream handler
 
-use crate::server_mod::server::ServerState;
+use crate::server::router::ServerState;
 use axum::{
     extract::State as AxumState,
     response::sse::{self, Sse},

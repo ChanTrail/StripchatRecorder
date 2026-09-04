@@ -220,7 +220,7 @@ fn remove_empty_meta_subdirs() {
 ///    post-processing for them one at a time
 /// 3. Remove any empty directories left over from the scan
 pub async fn maintain_output_dir(
-    app_state: Arc<crate::config::settings::AppState>,
+    app_state: Arc<crate::config::app_state::AppState>,
     emitter: Arc<dyn crate::core::emitter::Emitter>,
     recorder: Arc<crate::recording::recorder::RecorderManager>,
 ) {
@@ -264,7 +264,7 @@ pub async fn maintain_output_dir(
     if pp_pending.is_empty() {
         // 步骤 3：仍需清理可能遗留的空目录 / Step 3: still clean up any leftover empty dirs
         let _ = tokio::task::spawn_blocking(move || {
-            crate::recording::startup_scan::startup_remove_empty_dirs(&output_dir);
+            crate::recording::segment_merge::startup_remove_empty_dirs(&output_dir);
         })
         .await;
         return;
@@ -315,7 +315,7 @@ pub async fn maintain_output_dir(
                 }
             }
             // 步骤 3 / Step 3
-            crate::recording::startup_scan::startup_remove_empty_dirs(&output_dir);
+            crate::recording::segment_merge::startup_remove_empty_dirs(&output_dir);
         })
         .await;
         return;
@@ -341,7 +341,7 @@ pub async fn maintain_output_dir(
     // 步骤 3：后处理（含 ts_merge 合并）可能遗留空目录，统一清理一次
     // Step 3: post-processing (including ts_merge merges) may leave empty directories; clean up once
     let _ = tokio::task::spawn_blocking(move || {
-        crate::recording::startup_scan::startup_remove_empty_dirs(&output_dir);
+        crate::recording::segment_merge::startup_remove_empty_dirs(&output_dir);
     })
     .await;
 }
@@ -354,7 +354,7 @@ pub async fn maintain_output_dir(
 /// specified interval. Each run is a full [`maintain_output_dir`] pass, identical to the
 /// one-shot check performed at startup — so startup no longer needs a separate pass.
 pub async fn schedule_meta_version_check(
-    app_state: Arc<crate::config::settings::AppState>,
+    app_state: Arc<crate::config::app_state::AppState>,
     emitter: Arc<dyn crate::core::emitter::Emitter>,
     recorder: Arc<crate::recording::recorder::RecorderManager>,
     interval_secs: u64,

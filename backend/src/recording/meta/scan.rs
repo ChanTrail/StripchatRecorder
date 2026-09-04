@@ -137,7 +137,7 @@ fn repair_meta(meta: &VideoMeta, path: &Path) -> Option<VideoMeta> {
 pub fn ensure_meta_files(
     output_dir: &Path,
     extra_dirs: &[&Path],
-    state: &crate::config::settings::AppState,
+    state: &crate::config::app_state::AppState,
     recorder: &crate::recording::recorder::RecorderManager,
 ) -> Vec<std::path::PathBuf> {
     let mut pp_pending: Vec<std::path::PathBuf> = Vec::new();
@@ -164,7 +164,7 @@ pub fn ensure_meta_files(
 fn scan_and_ensure_meta(
     dir: &Path,
     pp_pending: &mut Vec<std::path::PathBuf>,
-    state: &crate::config::settings::AppState,
+    state: &crate::config::app_state::AppState,
     recorder: &crate::recording::recorder::RecorderManager,
 ) {
     // 判断某路径当前状态是否"真实活跃"（不应被本次扫描触碰或重新触发）。
@@ -497,7 +497,7 @@ fn scan_and_ensure_meta(
 /// - `split_by_streamer=false`: returns `output_dir` directly as the flat output location
 ///
 /// Returns `None` if the node is absent, disabled, or `output_dir` is empty.
-pub fn ts_merge_output_dir(state: &crate::config::settings::AppState) -> Option<std::path::PathBuf> {
+pub fn ts_merge_output_dir(state: &crate::config::app_state::AppState) -> Option<std::path::PathBuf> {
     let pipeline = state.get_pipeline();
     let node = pipeline.nodes.iter().find(|n| n.module_id == "ts_merge" && n.enabled)?;
     let dir = node.params.get("output_dir")?.as_str()?.trim();

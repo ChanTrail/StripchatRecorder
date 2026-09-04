@@ -7,10 +7,10 @@
 //! POST /api/auth/renew           — 主动续期（将过期时间延长至 now + TOKEN_TTL）
 //! POST /api/auth/change-password — 修改密码（需已登录）
 
-use crate::server_mod::{
+use crate::server::{
     auth::{extract_ip, validate_password_strength, VerifyResult},
     error::{ApiError, ApiResult},
-    server::ServerState,
+    router::ServerState,
 };
 use axum::{Json, body::Body, extract::State as AxumState, http::Request};
 use serde::{Deserialize, Serialize};

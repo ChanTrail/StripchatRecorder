@@ -24,7 +24,7 @@ pub const META_VERSION: u32 = 4;
 /// (see [`meta_dir_for`]); this function is mainly used to ensure the root exists and
 /// for scenarios that need to recursively scan all meta files (see [`list_all_meta_paths`]).
 pub fn meta_dir() -> PathBuf {
-    crate::config::settings::exe_dir().join("meta")
+    crate::config::app_state::exe_dir().join("meta")
 }
 
 /// 返回指定主播的 meta 子目录（exe_dir/meta/{username}/）。

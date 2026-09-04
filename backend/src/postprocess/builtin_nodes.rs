@@ -81,7 +81,7 @@ pub fn unpack_bundle(bundle: &std::path::Path) -> (PathBuf, Option<PathBuf>) {
 /// falling back to embedded English defaults.
 pub fn builtin_module_infos() -> Vec<ModuleInfo> {
     // 读取当前语言设置 / Read current language setting
-    let locale_code = crate::config::settings::AppState::new()
+    let locale_code = crate::config::app_state::AppState::new()
         .ok()
         .map(|s| s.get_settings().language)
         .unwrap_or_else(|| "en-US".to_string());

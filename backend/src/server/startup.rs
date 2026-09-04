@@ -6,7 +6,7 @@
 //! This module collects all **one-shot** checks, repairs, and warm-up tasks
 //! that must run at startup, keeping the main `run_server()` flow clean.
 
-use crate::config::settings::AppState;
+use crate::config::app_state::AppState;
 use crate::core::emitter::Emitter;
 use std::sync::Arc;
 

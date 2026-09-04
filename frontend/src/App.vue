@@ -47,6 +47,7 @@
 	const moduleLocaleStore = useModuleLocaleStore();
 	const localesStore = useLocalesStore();
 	const authStore = useAuthStore();
+
 	const notificationsStore = useNotificationsStore();
 
 	/** 通知面板是否打开 / Whether the notification panel is open */
@@ -110,7 +111,6 @@
 	let unlistenDisconnect: (() => void) | null = null;
 	let unlistenLocaleWarnings: (() => void) | null = null;
 	let unlistenNotification: (() => void) | null = null;
-
 	/**
 	 * 执行通知面板中的操作按钮（删除主播、清理孤立记录等）。
 	 * Execute an action button in the notification panel.
@@ -357,27 +357,33 @@
 
 			<!-- 通知面板 / Notification panel -->
 			<Dialog :open="notificationPanelOpen" @update:open="(v) => (notificationPanelOpen = v)">
-				<DialogContent class="sm:max-w-md flex flex-col max-h-[80vh]">
+				<DialogContent class="sm:max-w-md flex flex-col">
 					<DialogHeader class="shrink-0">
-						<div class="flex items-center justify-between">
-							<DialogTitle>{{ t("nav.notifications") }}</DialogTitle>
-							<Button
-								v-if="notificationsStore.unreadCount > 0"
-								variant="ghost"
-								size="sm"
-								class="text-xs text-muted-foreground h-7 px-2"
-								@click="notificationsStore.markAllRead()"
-							>
-								{{ t("notifications.markAllRead") }}
-							</Button>
-						</div>
+						<DialogTitle>{{ t("nav.notifications") }}</DialogTitle>
 					</DialogHeader>
 
+					<!-- 全部已读操作行 / Mark-all-read action row -->
+					<div v-if="notificationsStore.unreadCount > 0" class="shrink-0 flex justify-end -mt-1">
+						<Button
+							variant="outline"
+							size="sm"
+							class="h-7 px-3 text-xs"
+							@click="notificationsStore.markAllRead()"
+						>
+							{{ t("notifications.markAllRead") }}
+						</Button>
+					</div>
+
 					<!-- 通知列表 / Notification list -->
+					<!-- 超过 5 条时固定高度并开启滚动；5 条及以内自然撑开 dialog -->
+					<!-- Scrolls when > 5 items; expands naturally otherwise -->
 					<div
 						v-if="notificationsStore.notifications.length > 0"
 						ref="notificationScrollEl"
-						class="flex-1 overflow-y-auto scrollbar-overlay flex flex-col gap-2 pr-1"
+						class="flex flex-col gap-2 pr-1"
+						:class="notificationsStore.notifications.length > 5
+							? 'overflow-y-auto scrollbar-overlay max-h-[60vh]'
+							: 'overflow-visible'"
 					>
 						<div
 							v-for="n in notificationsStore.notifications"
@@ -417,7 +423,7 @@
 					<!-- 空状态 / Empty state -->
 					<div
 						v-else
-						class="flex-1 flex items-center justify-center text-sm text-muted-foreground py-8"
+						class="flex items-center justify-center text-sm text-muted-foreground py-8"
 					>
 						{{ t("notifications.empty") }}
 					</div>

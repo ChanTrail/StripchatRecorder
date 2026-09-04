@@ -1,7 +1,7 @@
 //! 通知 API handlers / Notification API handlers
 
-use crate::server_mod::error::ApiResult;
-use crate::server_mod::server::ServerState;
+use crate::server::error::ApiResult;
+use crate::server::router::ServerState;
 use axum::{Json, extract::State as AxumState};
 use serde::Deserialize;
 

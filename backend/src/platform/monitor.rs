@@ -10,8 +10,8 @@
 
 use crate::core::emitter::{Emitter, EmitterExt};
 use crate::recording::recorder::RecorderManager;
-use crate::config::settings::{AppState, StreamerData};
-use crate::streaming::stripchat::StripchatApi;
+use crate::config::app_state::{AppState, StreamerData};
+use crate::platform::stripchat::StripchatApi;
 use crate::core::notifications::NotificationLevel;
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};

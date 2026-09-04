@@ -9,8 +9,8 @@ pub mod locale;
 pub mod postprocess;
 pub mod recording;
 pub mod relay;
-pub mod server_mod;
-pub mod streaming;
+pub mod server;
+pub mod platform;
 pub mod system;
 pub mod watcher;
 
@@ -29,12 +29,12 @@ pub fn run() {
         .and_then(|s| s.parse().ok())
         .or_else(|| std::env::var("PORT").ok().and_then(|s| s.parse().ok()))
         .or_else(|| {
-            config::settings::AppState::new()
+            config::app_state::AppState::new()
                 .ok()
                 .map(|s| s.get_settings().server_port)
         })
         .unwrap_or(3030);
 
     let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
-    rt.block_on(server_mod::server::run_server(port));
+    rt.block_on(server::router::run_server(port));
 }

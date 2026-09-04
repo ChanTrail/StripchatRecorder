@@ -3,4 +3,4 @@ pub mod hls;
 pub mod meta;
 pub mod recorder;
 pub mod service;
-pub mod startup_scan;
+pub mod segment_merge;

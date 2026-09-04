@@ -21,6 +21,7 @@ use std::process::{Command, Stdio};
 /// - `fontsize`: 时间戳字号 / timestamp font size
 /// - `frame_total`: 期望截取的总帧数（用于进度上报）/ expected total frames (for progress reporting)
 /// - `duration_secs`: 视频时长（秒，用于进度估算）/ video duration in seconds (for progress estimation)
+#[allow(clippy::too_many_arguments)]
 pub fn extract_frames(
     input: &Path,
     out_dir: &Path,

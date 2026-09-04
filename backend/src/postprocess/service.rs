@@ -1,13 +1,13 @@
 //! 后处理流水线业务逻辑 / Post-processing Pipeline Service
 //!
 //! 提供模块发现、流水线配置读写、后处理任务触发/取消、进度查询等功能。
-//! 被 `server_mod/routes/postprocess.rs`、`recording/recorder.rs`、
-//! `recording/meta/maintenance.rs`、`recording/startup_scan.rs` 调用。
+//! 被 `server/routes/postprocess.rs`、`recording/recorder.rs`、
+//! `recording/meta/maintenance.rs`、`recording/segment_merge.rs` 调用。
 //!
 //! Provides module discovery, pipeline config read/write,
 //! post-processing task triggering/cancellation, and progress queries.
-//! Called by `server_mod/routes/postprocess.rs`, `recording/recorder.rs`,
-//! `recording/meta/maintenance.rs`, and `recording/startup_scan.rs`.
+//! Called by `server/routes/postprocess.rs`, `recording/recorder.rs`,
+//! `recording/meta/maintenance.rs`, and `recording/segment_merge.rs`.
 //!
 //! - 节点开始前：追加 PpExecutionEntry（finished_at/result 为 null，outputs 为空数组）
 //! - 节点完成后：更新对应条目（填入 finished_at、result、outputs）
@@ -20,7 +20,7 @@ use crate::postprocess::pipeline::{
 use crate::recording::meta::{
     PpExecCode, PpExecResult, PpExecutionEntry, PpNodeProgress,
 };
-use crate::config::settings::AppState;
+use crate::config::app_state::AppState;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;

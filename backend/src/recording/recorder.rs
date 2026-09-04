@@ -4,23 +4,23 @@
 //! - 启动/停止录制（HLS 分片下载 + fMP4 转 TS，转码委托给 `recording::ffmpeg_util`）
 //! - 录制完成后自动触发后处理流水线
 //!
-//! ffmpeg/ffprobe 底层操作见 `recording::ffmpeg_util`；启动时的遗留分片扫描与
-//! 空目录清理见 `recording::startup_scan`。
+//! ffmpeg/ffprobe 底层操作见 `recording::ffmpeg_util`；遗留分片合并与
+//! 空目录清理见 `recording::segment_merge`。
 //!
 //! Manages the lifecycle of all streamer recording sessions, including:
 //! - Starting/stopping recordings (HLS segment download + fMP4 to TS; transcoding is
 //!   delegated to `recording::ffmpeg_util`)
 //! - Automatically triggering the post-processing pipeline after recording completes
 //!
-//! Low-level ffmpeg/ffprobe operations live in `recording::ffmpeg_util`; startup-time
-//! leftover segment scanning and empty-directory cleanup live in `recording::startup_scan`.
+//! Low-level ffmpeg/ffprobe operations live in `recording::ffmpeg_util`; leftover
+//! segment merging and empty-directory cleanup live in `recording::segment_merge`.
 
-use crate::config::settings::AppState;
+use crate::config::app_state::AppState;
 use crate::core::emitter::{Emitter, EmitterExt};
 use crate::core::error::{AppError, Result};
 use crate::recording::ffmpeg_util::{append_to_m3u8, convert_to_ts, dir_size_bytes};
 use crate::recording::hls::{get_url_prefix, parse_playlist};
-use crate::streaming::stripchat::StripchatApi;
+use crate::platform::stripchat::StripchatApi;
 use chrono::Local;
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
@@ -92,7 +92,7 @@ impl RecorderManager {
 
     /// 获取当前应用设置。
     /// Get the current application settings.
-    pub fn get_settings(&self) -> crate::config::settings::Settings {
+    pub fn get_settings(&self) -> crate::config::app_state::Settings {
         self.state.get_settings()
     }
 

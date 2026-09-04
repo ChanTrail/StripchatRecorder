@@ -2,8 +2,8 @@
 //! Settings and Mouflon Keys handlers
 
 use crate::core::emitter::EmitterExt;
-use crate::server_mod::error::{ApiError, ApiResult};
-use crate::server_mod::server::ServerState;
+use crate::server::error::{ApiError, ApiResult};
+use crate::server::router::ServerState;
 use axum::{
     Json,
     extract::{Path, State as AxumState},
@@ -12,13 +12,13 @@ use serde::Deserialize;
 
 pub async fn get_settings(
     AxumState(s): AxumState<ServerState>,
-) -> ApiResult<crate::config::settings::Settings> {
+) -> ApiResult<crate::config::app_state::Settings> {
     Ok(Json(s.app_state.get_settings()))
 }
 
 pub async fn save_settings(
     AxumState(s): AxumState<ServerState>,
-    Json(new_settings): Json<crate::config::settings::Settings>,
+    Json(new_settings): Json<crate::config::app_state::Settings>,
 ) -> ApiResult<serde_json::Value> {
     s.app_state
         .update_settings(new_settings)

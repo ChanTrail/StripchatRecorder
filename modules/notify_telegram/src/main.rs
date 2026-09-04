@@ -445,10 +445,11 @@ fn build_caption(
 ///    "Access hash" 一节）明确记载的 bot 专属行为：
 ///    > Zero access hash: equal to 0, must be used by bots when only a min access hash
 ///    > (or no access hash) is available locally, but a full access hash is required.
-///    是否成立完全取决于 Telegram 服务端是否已经认可这个 bot 对该 peer 的隐式权限
-///    （例如 bot 是群组成员），本地无法提前判断，必须让真实的 RPC 调用结果说话——
-///    之前版本在本地直接返回自定义错误，反而掩盖了 Telegram 服务端返回的真实错误码
-///    （如 CHANNEL_INVALID/CHANNEL_PRIVATE），不利于用户排查实际原因。
+///
+/// 是否成立完全取决于 Telegram 服务端是否已经认可这个 bot 对该 peer 的隐式权限
+/// （例如 bot 是群组成员），本地无法提前判断，必须让真实的 RPC 调用结果说话——
+/// 之前版本在本地直接返回自定义错误，反而掩盖了 Telegram 服务端返回的真实错误码
+/// （如 CHANNEL_INVALID/CHANNEL_PRIVATE），不利于用户排查实际原因。
 ///
 /// Resolve a Telegram Peer (prefers username resolution, falls back to numeric chat_id).
 ///
@@ -465,12 +466,13 @@ fn build_caption(
 ///    <https://core.telegram.org/api/peers>):
 ///    > Zero access hash: equal to 0, must be used by bots when only a min access hash
 ///    > (or no access hash) is available locally, but a full access hash is required.
-///    Whether this succeeds depends entirely on whether Telegram's server has already
-///    granted this bot implicit authority over the peer (e.g. the bot is a member of the
-///    group) — something that cannot be determined locally, so the real RPC response must
-///    be the final word. The previous version returned a custom local error instead, which
-///    masked Telegram's actual error code (e.g. CHANNEL_INVALID/CHANNEL_PRIVATE) and made
-///    it harder for users to diagnose the real cause.
+///
+/// Whether this succeeds depends entirely on whether Telegram's server has already
+/// granted this bot implicit authority over the peer (e.g. the bot is a member of the
+/// group) — something that cannot be determined locally, so the real RPC response must
+/// be the final word. The previous version returned a custom local error instead, which
+/// masked Telegram's actual error code (e.g. CHANNEL_INVALID/CHANNEL_PRIVATE) and made
+/// it harder for users to diagnose the real cause.
 async fn resolve_peer(
     session: &Arc<SqliteSession>,
     client: &Client,

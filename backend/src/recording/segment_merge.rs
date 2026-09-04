@@ -1,22 +1,24 @@
-//! 启动时扫描 / Startup Scanning
+//! 遗留分片合并与目录清理 / Leftover Segment Merge and Directory Cleanup
 //!
-//! 提供启动时的遗留分片合并触发和输出目录空目录清理，不涉及活跃录制会话的
+//! 提供遗留分片合并触发和输出目录空目录清理，不涉及活跃录制会话的
 //! 生命周期管理（会话生命周期见 `recording::recorder`）。
+//! 由 `recording::meta::maintenance` 周期性调用（含启动时的首次立即执行）。
 //!
 //! 注：`startup_merge_leftover_segments` 目前仅由桌面版（desktop/src-tauri）调用——
 //! Server 模式（backend）已由 `meta::ensure_meta_files` 统一处理 session_dir 和视频
 //! 文件的（重新）触发逻辑，是否需要合并交给流水线首节点（ts_merge）自行判断。
-//! `startup_remove_empty_dirs` 仍在 backend 的启动/定时任务和桌面版中使用。
+//! `startup_remove_empty_dirs` 仍在 backend 的定时任务和桌面版中使用。
 //!
-//! Provides startup-time leftover segment merge triggering and output directory
-//! empty-dir cleanup. Does not manage active recording session lifecycle (see
-//! `recording::recorder` for that).
+//! Provides leftover segment merge triggering and output directory empty-dir cleanup.
+//! Does not manage active recording session lifecycle (see `recording::recorder`).
+//! Called periodically by `recording::meta::maintenance` (including an immediate
+//! first run at startup).
 //!
 //! Note: `startup_merge_leftover_segments` is currently only called by the desktop
 //! app (desktop/src-tauri) — Server mode (backend) now handles (re-)triggering for
 //! both session_dirs and video files uniformly via `meta::ensure_meta_files`, letting
 //! the pipeline's first node (ts_merge) decide whether merging is needed.
-//! `startup_remove_empty_dirs` is still used by backend's startup/scheduled tasks and
+//! `startup_remove_empty_dirs` is still used by backend's scheduled tasks and
 //! by the desktop app.
 
 use crate::core::emitter::{Emitter, EmitterExt};

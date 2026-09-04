@@ -9,7 +9,7 @@
 //! 2. Modules directory watcher: detects module executable additions/removals and emits `modules-changed` events (500ms debounce)
 
 use crate::core::emitter::{Emitter, EmitterExt};
-use crate::config::settings::AppState;
+use crate::config::app_state::AppState;
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;

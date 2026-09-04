@@ -1,6 +1,6 @@
 //! locale 路由 handler / Locale route handlers
 
-use crate::server_mod::error::{ApiError, ApiResult};
+use crate::server::error::{ApiError, ApiResult};
 use axum::{Json, extract::Path};
 
 /// 返回指定语言代码的完整 locale 数据（主程序翻译 + 所有模块翻译覆盖）。

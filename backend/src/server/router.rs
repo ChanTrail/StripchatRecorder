@@ -1,4 +1,4 @@
-//! HTTP 服务器模式 / HTTP Server Mode
+//! HTTP 路由器与服务器 / HTTP Router and Server
 //!
 //! 基于 Axum 构建的 HTTP API 服务器，提供与 Tauri 命令等价的 REST 接口和 SSE 实时事件流。
 //! 同时内嵌前端静态资源（通过 rust-embed 编译进二进制）。
@@ -7,13 +7,13 @@
 //! plus an SSE real-time event stream.
 //! Also embeds frontend static assets (compiled into the binary via rust-embed).
 
-use crate::config::settings::AppState;
+use crate::config::app_state::AppState;
 use crate::core::emitter::{BroadcastEmitter, Event};
 use crate::recording::recorder::RecorderManager;
 use crate::relay::handler::{RelayState, relay_sessions, stop_relay_handler, stream_handler};
 use crate::relay::state::RelayManager;
-use crate::server_mod::auth::TokenStore;
-use crate::server_mod::routes::{
+use crate::server::auth::TokenStore;
+use crate::server::routes::{
     auth::{auth_status, change_password, init_password, login, logout, renew},
     locale::{get_locale_handler, list_locales_handler},
     postprocess::{
@@ -37,9 +37,9 @@ use crate::server_mod::routes::{
         stop_recording, verify_streamer,
     },
 };
-use crate::server_mod::sse::sse_handler;
-use crate::server_mod::static_files::static_handler;
-use crate::streaming::monitor::StatusMonitor;
+use crate::server::sse::sse_handler;
+use crate::server::static_files::static_handler;
+use crate::platform::monitor::StatusMonitor;
 use axum::{
     Router,
     middleware,
@@ -151,7 +151,7 @@ pub fn build_router(state: ServerState) -> Router {
         .route("/api/events", get(sse_handler))
         .route_layer(middleware::from_fn_with_state(
             state.token_store.clone(),
-            crate::server_mod::auth::auth_middleware,
+            crate::server::auth::auth_middleware,
         ));
 
     let main_router: Router<()> = Router::new()
@@ -189,11 +189,11 @@ pub async fn run_server(port: u16) {
     // Run all one-shot startup tasks (locale init, ffmpeg check, FS watchers).
     // Output-directory maintenance (merging leftover segments, rebuilding meta, etc.) is
     // covered by the scheduled task's immediate first run below, not duplicated here.
-    crate::server_mod::startup::run_all(Arc::clone(&app_state), Arc::clone(&emitter));
+    crate::server::startup::run_all(Arc::clone(&app_state), Arc::clone(&emitter));
 
     // 启动所有后台定时任务（状态轮询、密钥同步、meta 清理、输出目录维护）
     // Launch all background scheduled tasks (status polling, key sync, meta cleanup, output dir maintenance)
-    crate::server_mod::scheduler::start_all(
+    crate::server::scheduler::start_all(
         Arc::clone(&app_state),
         Arc::clone(&monitor),
         Arc::clone(&emitter),

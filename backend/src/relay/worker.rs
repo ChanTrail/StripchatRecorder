@@ -13,9 +13,9 @@
 use super::offline_frame::build_drawtext;
 use super::state::{RelayManager, RelayStreamState};
 use crate::core::no_window::NoWindowExt;
-use crate::config::settings::AppState;
+use crate::config::app_state::AppState;
 use crate::recording::hls::{get_url_prefix, parse_playlist};
-use crate::streaming::stripchat::StripchatApi;
+use crate::platform::stripchat::StripchatApi;
 use std::collections::HashSet;
 use std::process::Stdio;
 use std::sync::Arc;

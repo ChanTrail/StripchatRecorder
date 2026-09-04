@@ -10,7 +10,7 @@
 //! `super::model`) or execute the pipeline (see `super::exec`).
 
 use super::model::{ModuleInfo, PortType};
-use crate::config::settings::exe_dir;
+use crate::config::app_state::exe_dir;
 use crate::core::no_window::NoWindowExt;
 use std::path::PathBuf;
 use std::process::Stdio;

@@ -1,7 +1,7 @@
 //! DAG 执行引擎 / DAG Execution Engine
 
 use super::model::{ModuleInfo, ModuleOutput, NodeResult, PipelineConfig, PipelineNode};
-use crate::config::settings::exe_dir;
+use crate::config::app_state::exe_dir;
 use crate::recording::meta::PpExecCode;
 use serde::Serialize;
 use std::collections::HashMap;

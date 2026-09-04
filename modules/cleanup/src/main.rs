@@ -231,8 +231,8 @@ fn run() -> Result<(), String> {
     // (path derived from the exe_dir field, matching the backend's per-streamer
     // meta_dir()/{username}/{stem}.json convention; username is video_dir's directory
     // name, same rule as the backend's username_from_path)
-    if delete_recording_data {
-        if let Some(exe_dir) = input.exe_dir.as_deref() {
+    if delete_recording_data 
+        && let Some(exe_dir) = input.exe_dir.as_deref() {
             let username = video_dir
                 .file_name()
                 .and_then(|n| n.to_str())
@@ -245,7 +245,7 @@ fn run() -> Result<(), String> {
                 try_remove(&meta_path, dry_run, &mut removed);
             }
         }
-    }
+    
     emit_progress_step(3, TOTAL_STEPS);
 
     // 第四步：清理共享临时目录中前缀匹配的残留缓存文件（独立开关，默认开启；
