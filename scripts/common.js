@@ -279,26 +279,49 @@ function clippyModules() {
  *
  * @param {"debug"|"release"} profile  Cargo 构建模式 / Cargo build profile
  * @param {string} outDir              二进制复制目标目录 / Target directory for copied binaries
+ * @param {string|null} [cargoTarget]  Rust target triple（如 "aarch64-unknown-linux-gnu"），
+ *                                     为 null 时使用宿主机原生 target。
+ *                                     Rust target triple (e.g. "aarch64-unknown-linux-gnu");
+ *                                     null means native host target.
+ * @param {string|null} [platform]     平台标识符（如 "linux-aarch64"），用于文件名中。
+ *                                     为 null 时不包含平台段。
+ *                                     Platform identifier (e.g. "linux-aarch64") for filenames.
+ *                                     null means no platform segment.
  */
-function buildModules(profile, outDir) {
-  const releaseFlag = profile === "release" ? " --release" : "";
+function buildModules(profile, outDir, cargoTarget = null, platform = null) {
+  const releaseFlag  = profile === "release" ? " --release" : "";
+  const targetFlag   = cargoTarget ? ` --target ${cargoTarget}` : "";
   fs.mkdirSync(outDir, { recursive: true });
   for (const name of listModules()) {
     console.log(`  → ${name}`);
     const manifestPath = path.join(MODULES_DIR, name, "Cargo.toml");
     run(
-      `cargo build --manifest-path "${manifestPath}" --bins${releaseFlag}`,
+      `cargo build --manifest-path "${manifestPath}" --bins${releaseFlag}${targetFlag}`,
       { env: { ...process.env, CARGO_TARGET_DIR: moduleTarget(name) } }
     );
     const version = readPackageVersion(manifestPath);
-    const bins = collectBinaries(path.join(moduleTarget(name), profile));
+    // 交叉编译时产物在 <target_dir>/<triple>/release/，原生时在 <target_dir>/release/
+    // Cross-compiled artifacts live at <target_dir>/<triple>/release/; native at <target_dir>/release/
+    const binDir = cargoTarget
+      ? path.join(moduleTarget(name), cargoTarget, profile)
+      : path.join(moduleTarget(name), profile);
+    const bins = collectBinaries(binDir);
     for (const bin of bins) {
       const ext = process.platform === "win32" ? ".exe" : "";
       const stem = ext ? bin.slice(0, -ext.length) : bin;
       removeStaleModuleBinaries(outDir, stem);
-      const dstName = version ? `${stem}-${version}${ext}` : bin;
+      // 命名格式：{stem}-{platform}-{version}{ext}，如 notify_telegram-linux-x86_64-0.5.0
+      // Naming format: {stem}-{platform}-{version}{ext}, e.g. notify_telegram-linux-x86_64-0.5.0
+      let dstName;
+      if (platform && version) {
+        dstName = `${stem}-${platform}-${version}${ext}`;
+      } else if (version) {
+        dstName = `${stem}-${version}${ext}`;
+      } else {
+        dstName = bin;
+      }
       const dst = path.join(outDir, dstName);
-      fs.copyFileSync(path.join(moduleTarget(name), profile, bin), dst);
+      fs.copyFileSync(path.join(binDir, bin), dst);
       if (process.platform !== "win32") fs.chmodSync(dst, 0o755);
     }
     console.log(`  ✓ ${name}\n`);

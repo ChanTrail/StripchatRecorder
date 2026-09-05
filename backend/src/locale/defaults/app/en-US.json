@@ -299,6 +299,16 @@
       "placeholder": "socks5://127.0.0.1:10808",
       "hint": "Press Enter or click elsewhere to confirm"
     },
+    "communityProxy": {
+      "label": "Community Module Proxy (for downloading module files, leave empty to disable)",
+      "placeholder": "socks5://127.0.0.1:10808",
+      "hint": "Press Enter or click elsewhere to confirm"
+    },
+    "communityMirror": {
+      "label": "Community Module Accelerator (prepended to GitHub URLs, leave empty to disable)",
+      "placeholder": "https://ghproxy.com",
+      "hint": "When both community proxy and accelerator are set, the accelerator will be accessed via the proxy"
+    },
     "mouflonKeysDesc": "Stripchat encrypts HLS segment filenames (Mouflon system). Enter the corresponding pkey → pdkey pairs here before recording. Keys can be obtained from community channels.",
     "mouflonTable": {
       "pkey": "pkey (Key Identifier)",

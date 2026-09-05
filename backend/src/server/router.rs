@@ -19,6 +19,8 @@ use crate::server::routes::{
     postprocess::{
         cancel_postprocess, get_module_outputs, get_pipeline, get_postprocess_tasks, list_modules,
         run_postprocess, run_postprocess_batch, save_pipeline,
+        install_community_module, uninstall_community_module,
+        get_install_tasks,
     },
     recording::{
         delete_recording, get_merging_dirs_handler, list_recordings, open_output_dir,
@@ -149,6 +151,10 @@ pub fn build_router(state: ServerState) -> Router {
         .route("/api/files", get(serve_output_file))
         .route("/api/auth/change-password", post(change_password))
         .route("/api/events", get(sse_handler))
+        // 社区模块 / Community modules
+        .route("/api/community-modules/tasks", get(get_install_tasks))
+        .route("/api/community-modules/install", post(install_community_module))
+        .route("/api/community-modules/uninstall", post(uninstall_community_module))
         .route_layer(middleware::from_fn_with_state(
             state.token_store.clone(),
             crate::server::auth::auth_middleware,

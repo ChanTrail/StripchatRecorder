@@ -282,7 +282,7 @@ export function ppProgressFromMeta(
 export function usePostprocess() {
 	const ppStore = usePostprocessStore();
 	const ppStatusStore = usePpStatusStore();
-	const { toast } = useNotify();
+	const { toast, notify } = useNotify();
 	const { t } = useI18n();
 
 	/** i18n 标签，传入 makePpProgress / i18n labels passed to makePpProgress */
@@ -397,7 +397,7 @@ export function usePostprocess() {
 
 		if (allOk) {
 			if (!deleted) {
-				toast(t("usePostprocess.doneForFile", { name: fileName }), "success");
+				notify(t("usePostprocess.doneForFile", { name: fileName }), "success");
 			}
 			// moduleOutputs 已通过上面的 onLoad()（内部调用 syncModuleOutputsFromFiles）
 			// 从刷新后的 meta.pp_execution 中提取真实、经校验的输出路径，无需在此
@@ -416,7 +416,7 @@ export function usePostprocess() {
 				const detail = failedModules?.length
 					? failedModules.map((r) => `${r.moduleId}: ${r.message}`).join("; ")
 					: payload.message;
-				toast(
+				notify(
 					detail
 						? t("usePostprocess.failedWithDetail", { name: fileName, detail })
 						: t("usePostprocess.failedGeneric", { name: fileName }),

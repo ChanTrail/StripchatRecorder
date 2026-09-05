@@ -80,6 +80,18 @@ pub fn discover_modules() -> Vec<ModuleInfo> {
             if !is_exec {
                 continue;
             }
+            // 文件名格式校验：必须符合 {name}-{platform}-{version}[.exe]，
+            // 即 stem 部分包含至少两个 '-'（三段：name、platform、version）。
+            // 不符合格式的文件（如用户手动放置的裸二进制）跳过，避免意外执行未知文件。
+            //
+            // Filename format check: must match {name}-{platform}-{version}[.exe],
+            // i.e. the stem contains at least two '-' (three segments: name, platform, version).
+            // Files that don't match (e.g. bare binaries placed manually) are skipped
+            // to avoid accidentally executing unknown files.
+            if !has_valid_module_filename(&path) {
+                tracing::debug!("Skipping {:?}: filename does not match {{name}}-{{platform}}-{{version}} format", path);
+                continue;
+            }
             match describe_module(&path) {
                 Ok(mut info) => {
                     info.exe_path = path.clone();
@@ -171,4 +183,26 @@ fn describe_module(exe: &PathBuf) -> crate::core::error::Result<ModuleInfo> {
         info.output_types = vec![PortType::AnyFile];
     }
     Ok(info)
+}
+
+/// 校验模块可执行文件的文件名是否符合 `{name}-{platform}-{version}[.exe]` 格式。
+///
+/// 规则：去掉 `.exe` 扩展名后的 stem 必须包含至少两个 `-`，即能拆分为三段或更多
+/// （name、platform、version）。这可以过滤掉用户手动放置的裸二进制文件，
+/// 同时兼容 name 或 platform 本身含 `-` 的情况（只要总段数 ≥ 3 即可）。
+///
+/// Check whether a module executable's filename matches the `{name}-{platform}-{version}[.exe]` format.
+///
+/// Rule: the stem (after stripping `.exe`) must contain at least two `-` characters,
+/// i.e. it can be split into three or more segments (name, platform, version).
+/// This filters out bare binaries placed manually, while still accepting names or
+/// platforms that themselves contain `-` (as long as the total segment count is ≥ 3).
+fn has_valid_module_filename(path: &std::path::Path) -> bool {
+    let stem = match path.file_stem().and_then(|s| s.to_str()) {
+        Some(s) => s,
+        None => return false,
+    };
+    // stem 中 '-' 的数量 ≥ 2 即满足三段格式
+    // At least 2 '-' characters in the stem means ≥ 3 segments
+    stem.chars().filter(|&c| c == '-').count() >= 2
 }

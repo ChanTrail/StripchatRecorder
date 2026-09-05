@@ -12,7 +12,8 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
 import { call, on } from "@/lib/api";
-import { toast as sonnerToast } from "vue-sonner";
+import { toast, notify } from "@/composables/useNotify";
+import { useI18n } from "vue-i18n";
 
 /** 主播条目数据结构 / Streamer entry data structure */
 export interface StreamerEntry {
@@ -43,6 +44,7 @@ export interface StatusUpdatePayload {
 }
 
 export const useStreamersStore = defineStore("streamers", () => {
+	const { t } = useI18n();
 	/** 主播列表 / Streamer list */
 	const streamers = ref<StreamerEntry[]>([]);
 	/** 是否正在加载 / Whether loading */
@@ -287,14 +289,14 @@ export const useStreamersStore = defineStore("streamers", () => {
 				const p = payload as { username: string };
 				// 非本地操作时显示提示 / Show notification for non-local actions
 				if (!localActions.has(`add:${p.username}`)) {
-					sonnerToast.info(`其他客户端添加了主播：${p.username}`);
+					toast(t("streamers.otherClientAdded", { username: p.username }));
 				}
 				void fetchStreamers();
 			}),
 			on("streamer-removed", (payload) => {
 				const p = payload as { username: string };
 				if (!localActions.has(`remove:${p.username}`)) {
-					sonnerToast.info(`其他客户端移除了主播：${p.username}`);
+					toast(t("streamers.otherClientRemoved", { username: p.username }));
 				}
 				streamers.value = streamers.value.filter(
 					(s) => s.username !== p.username,
@@ -333,9 +335,11 @@ export const useStreamersStore = defineStore("streamers", () => {
 			on("auto-record-changed", (payload) => {
 				const p = payload as { username: string; enabled: boolean };
 				if (!localActions.has(`auto:${p.username}`)) {
-					sonnerToast.info(
-						`其他客户端${p.enabled ? "开启" : "关闭"}了 ${p.username} 的自动录制`,
+					const action = t(p.enabled
+						? "streamers.otherClientAutoRecordEnable"
+						: "streamers.otherClientAutoRecordDisable",
 					);
+					toast(t("streamers.otherClientAutoRecord", { action, username: p.username }));
 				}
 				const s = streamers.value.find((s) => s.username === p.username);
 				if (s) s.auto_record = p.enabled;
@@ -349,11 +353,11 @@ export const useStreamersStore = defineStore("streamers", () => {
 				const p = payload as { old_username: string; new_username: string };
 				const s = streamers.value.find((s) => s.username === p.old_username);
 				if (s) s.username = p.new_username;
-				sonnerToast.info(`主播 ${p.old_username} 已改名为 ${p.new_username}`);
+				toast(t("streamers.renamed", { oldUsername: p.old_username, newUsername: p.new_username }));
 			}),
 			on("api-error", (payload) => {
 				const p = payload as { message: string };
-				sonnerToast.error(`Stripchat API连接错误: ${p.message}`);
+				notify(t("streamers.apiError", { message: p.message }), "error");
 			}),
 		]);
 	}

@@ -299,6 +299,16 @@
       "placeholder": "socks5://127.0.0.1:10808",
       "hint": "修改后按回车或点击其他区域确认"
     },
+    "communityProxy": {
+      "label": "模块社区代理（下载社区模块文件，留空不使用）",
+      "placeholder": "socks5://127.0.0.1:10808",
+      "hint": "修改后按回车或点击其他区域确认"
+    },
+    "communityMirror": {
+      "label": "模块社区加速站（在 GitHub 地址前加前缀，留空不使用）",
+      "placeholder": "https://ghproxy.com",
+      "hint": "同时填写模块社区代理与加速站时，将通过模块社区代理访问加速站"
+    },
     "mouflonKeysDesc": "Stripchat 对 HLS 分片文件名进行了加密（Mouflon 系统）。录制前需在此填入对应的 pkey → pdkey 密钥对，密钥可从社区渠道获取。",
     "mouflonTable": {
       "pkey": "pkey（密钥标识符）",

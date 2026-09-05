@@ -13,7 +13,7 @@
         progress - 后处理进度数据（运行中或已完成时提供）/ Post-processing progress data (present when running or done)
 -->
 <script setup lang="ts">
-	import { Loader2 } from "@lucide/vue";
+	import { Loader2, Check, X } from "@lucide/vue";
 	import { Progress } from "@/components/ui/progress";
 	import type { PpProgress, PpStatus } from "@/composables/usePostprocess";
 	import { useI18n } from "vue-i18n";
@@ -69,7 +69,8 @@
 				:class="r.success ? 'text-green-500' : 'text-destructive'"
 				:title="r.success ? r.moduleId : `${r.moduleId}: ${r.message}`"
 			>
-				<span class="shrink-0">{{ r.success ? "✓" : "✗" }}</span>
+				<Check v-if="r.success" class="size-3 shrink-0" />
+				<X v-else class="size-3 shrink-0" />
 				<span class="truncate max-w-40">{{ r.moduleId }}</span>
 			</div>
 		</template>

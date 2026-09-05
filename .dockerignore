@@ -1,5 +1,38 @@
+# ── 版本控制 / Version control ─────────────────────────────────────────────────
+.git
+.gitignore
+.github
+
+# ── 编辑器与系统文件 / Editor and system files ─────────────────────────────────
+.vscode
+.idea
+.DS_Store
+*.suo
+*.sw?
+
+# ── 日志 / Logs ─────────────────────────────────────────────────────────────────
+logs/
+*.log
+
+# ── Node 依赖与构建产物（容器内重新生成）/ Node deps and build output (regenerated in container) ──
 node_modules/
 frontend/node_modules/
-.git/
+frontend/dist/
+
+# ── Rust 编译缓存（容器内重新编译）/ Rust build cache (recompiled in container) ──
+backend/target/
+modules/*/target/
+
+# ── 项目构建输出（容器内生成）/ Project build output (generated in container) ──
 build/
 build_tmp/
+
+# ── 桌面端（不参与 server 构建）/ Desktop (not part of server build) ──────────
+desktop/
+
+# ── 文档与杂项（构建不需要）/ Docs and misc (not needed for build) ─────────────
+docs/
+README*.md
+LICENSE
+SCAPI Test/
+StripchatRecorderCommunity/

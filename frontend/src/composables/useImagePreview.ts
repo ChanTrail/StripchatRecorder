@@ -9,7 +9,21 @@
  * and automatically clamps translation to prevent the image from leaving the viewport.
  */
 
-import { ref } from "vue";
+import { ref, watch } from "vue";
+
+/** 当前持有的 blob URL（关闭时需 revoke）/ Current held blob URL (must be revoked on close) */
+let _currentBlobUrl: string | null = null;
+
+/** 用 fetch + Authorization 头加载图片，返回 blob URL / Fetch image with Authorization header, returns blob URL */
+async function fetchAuthImage(url: string): Promise<string> {
+	const token = localStorage.getItem("admin_token");
+	const headers: Record<string, string> = {};
+	if (token) headers["Authorization"] = `Bearer ${token}`;
+	const res = await fetch(url, { headers });
+	if (!res.ok) throw new Error(`Failed to load image: ${res.status}`);
+	const blob = await res.blob();
+	return URL.createObjectURL(blob);
+}
 
 /**
  * 图片预览状态与交互逻辑。
@@ -18,6 +32,16 @@ import { ref } from "vue";
 export function useImagePreview() {
 	/** 预览弹窗是否打开 / Whether the preview dialog is open */
 	const previewOpen = ref(false);
+
+	// 弹窗关闭时释放 blob URL，避免内存泄漏
+	// Revoke blob URL when dialog closes to prevent memory leaks
+	watch(previewOpen, (open) => {
+		if (!open && _currentBlobUrl) {
+			URL.revokeObjectURL(_currentBlobUrl);
+			_currentBlobUrl = null;
+			previewUrl.value = "";
+		}
+	});
 	/** 当前预览图片的 URL / Current preview image URL */
 	const previewUrl = ref("");
 	/** 当前预览图片的标题 / Current preview image title */
@@ -237,11 +261,10 @@ export function useImagePreview() {
 	 * 打开图片预览弹窗。
 	 * Open the image preview dialog.
 	 *
-	 * @param url - 图片 URL / Image URL
+	 * @param url - 图片 URL（会通过 fetch + Authorization 头加载）/ Image URL (loaded via fetch with Authorization header)
 	 * @param title - 图片标题 / Image title
 	 */
-	function openPreview(url: string, title: string) {
-		previewUrl.value = url;
+	async function openPreview(url: string, title: string) {
 		previewTitle.value = title;
 		resetPreviewTransform();
 		// 打开时先用最大尺寸占位，图片加载后再自适应
@@ -251,6 +274,22 @@ export function useImagePreview() {
 			height: `${Math.round(window.innerHeight * 0.9 - 52)}px`,
 		};
 		previewOpen.value = true;
+
+		// 释放上一次的 blob URL / Revoke previous blob URL if any
+		if (_currentBlobUrl) {
+			URL.revokeObjectURL(_currentBlobUrl);
+			_currentBlobUrl = null;
+		}
+
+		try {
+			const blobUrl = await fetchAuthImage(url);
+			_currentBlobUrl = blobUrl;
+			previewUrl.value = blobUrl;
+		} catch {
+			// 加载失败时清空 URL，<img> 会显示 broken 图标
+			// Clear URL on failure; <img> will show broken image icon
+			previewUrl.value = "";
+		}
 	}
 
 	return {

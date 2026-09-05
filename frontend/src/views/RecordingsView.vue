@@ -39,6 +39,7 @@
 		TableHeader,
 		TableRow,
 	} from "@/components/ui/table";
+	import { ChevronRight, ChevronDown } from "@lucide/vue";
 	import RecordingRow from "@/components/RecordingRow.vue";
 	import ImagePreviewDialog from "@/components/ImagePreviewDialog.vue";
 	import { formatSize, formatDuration } from "@/utils/format";
@@ -778,9 +779,10 @@
 								/>
 							</TableCell>
 							<TableCell colspan="9" class="font-semibold">
-								<span class="mr-2 text-muted-foreground text-xs">{{
-									collapsedGroups.has(group.username) ? "▶" : "▼"
-								}}</span>
+								<component
+									:is="collapsedGroups.has(group.username) ? ChevronRight : ChevronDown"
+									class="inline-block size-3.5 mr-1.5 text-muted-foreground align-middle"
+								/>
 								{{ group.username }}
 								<Badge
 									v-if="group.hasRecording"

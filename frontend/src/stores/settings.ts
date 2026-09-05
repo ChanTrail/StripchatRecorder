@@ -40,6 +40,10 @@ export interface Settings {
 	mouflon_sync_url: string | null;
 	/** Mouflon Keys 同步鉴权 Token / Mouflon Keys sync auth token */
 	mouflon_sync_token: string | null;
+	/** 社区模块代理地址 / Community module proxy URL */
+	community_proxy_url: string | null;
+	/** 社区模块镜像站地址 / Community module mirror URL */
+	community_mirror_url: string | null;
 	/** 首次启动向导是否已完成 / Whether the first-launch setup wizard has been completed */
 	setup_done: boolean;
 }
@@ -69,6 +73,8 @@ export const useSettingsStore = defineStore("settings", () => {
 		language: "zh-CN",
 		mouflon_sync_url: null,
 		mouflon_sync_token: null,
+		community_proxy_url: null,
+		community_mirror_url: null,
 		setup_done: false,
 	});
 	/** 是否正在加载 / Whether loading */

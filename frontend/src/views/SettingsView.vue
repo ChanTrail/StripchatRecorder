@@ -94,6 +94,8 @@
 		language: "zh-CN",
 		mouflon_sync_url: null,
 		mouflon_sync_token: null,
+		community_proxy_url: null,
+		community_mirror_url: null,
 		setup_done: true,
 	});
 
@@ -105,6 +107,8 @@
 	const originalScMirror = ref<string | null>(null);
 	const originalMouflonSyncUrl = ref<string | null>(null);
 	const originalMouflonSyncToken = ref<string | null>(null);
+	const originalCommunityProxy = ref<string | null>(null);
+	const originalCommunityMirror = ref<string | null>(null);
 	/** 是否已完成初始化（防止初始化时触发自动保存）/ Whether initialization is complete (prevents auto-save during init) */
 	let initialized = false;
 
@@ -120,6 +124,8 @@
 		originalScMirror.value = form.sc_mirror_url;
 		originalMouflonSyncUrl.value = form.mouflon_sync_url;
 		originalMouflonSyncToken.value = form.mouflon_sync_token;
+		originalCommunityProxy.value = form.community_proxy_url;
+		originalCommunityMirror.value = form.community_mirror_url;
 		await nextTick();
 		initialized = true;
 		await loadKeys();
@@ -170,6 +176,8 @@
 			originalScMirror.value = newSettings.sc_mirror_url;
 			originalMouflonSyncUrl.value = newSettings.mouflon_sync_url;
 			originalMouflonSyncToken.value = newSettings.mouflon_sync_token;
+			originalCommunityProxy.value = newSettings.community_proxy_url;
+			originalCommunityMirror.value = newSettings.community_mirror_url;
 			nextTick(() => {
 				initialized = true;
 			});
@@ -185,7 +193,7 @@
 	 * @param field - 要保存的设置字段名 / Settings field name to save
 	 */
 	async function saveProxy(
-		field: "api_proxy_url" | "cdn_proxy_url" | "sc_mirror_url" | "mouflon_sync_url" | "mouflon_sync_token",
+		field: "api_proxy_url" | "cdn_proxy_url" | "sc_mirror_url" | "mouflon_sync_url" | "mouflon_sync_token" | "community_proxy_url" | "community_mirror_url",
 	) {
 		if (!initialized) return;
 		const originalMap = {
@@ -194,6 +202,8 @@
 			sc_mirror_url: originalScMirror,
 			mouflon_sync_url: originalMouflonSyncUrl,
 			mouflon_sync_token: originalMouflonSyncToken,
+			community_proxy_url: originalCommunityProxy,
+			community_mirror_url: originalCommunityMirror,
 		};
 		const original = originalMap[field];
 		if (form[field] === original.value) return;
@@ -608,6 +618,34 @@
 					/>
 					<p class="text-xs text-muted-foreground">
 						{{ t("settings.cdnProxy.hint") }}
+					</p>
+				</div>
+				<div class="flex flex-col gap-1.5">
+					<Label>{{ t("settings.communityProxy.label") }}</Label>
+					<Input
+						:model-value="form.community_proxy_url ?? ''"
+						:placeholder="t('settings.communityProxy.placeholder')"
+						autocomplete="url"
+						@update:model-value="form.community_proxy_url = ($event as string) || null"
+						@keyup.enter="saveProxy('community_proxy_url')"
+						@blur="saveProxy('community_proxy_url')"
+					/>
+					<p class="text-xs text-muted-foreground">
+						{{ t("settings.communityProxy.hint") }}
+					</p>
+				</div>
+				<div class="flex flex-col gap-1.5">
+					<Label>{{ t("settings.communityMirror.label") }}</Label>
+					<Input
+						:model-value="form.community_mirror_url ?? ''"
+						:placeholder="t('settings.communityMirror.placeholder')"
+						autocomplete="url"
+						@update:model-value="form.community_mirror_url = ($event as string) || null"
+						@keyup.enter="saveProxy('community_mirror_url')"
+						@blur="saveProxy('community_mirror_url')"
+					/>
+					<p class="text-xs text-muted-foreground">
+						{{ t("settings.communityMirror.hint") }}
 					</p>
 				</div>
 			</section>

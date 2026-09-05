@@ -15,7 +15,7 @@
     - Listening for SSE disconnect/reconnect events, auto-reloading on reconnect
 -->
 <script setup lang="ts">
-	import { onMounted, onUnmounted, ref } from "vue";
+	import { onMounted, onUnmounted, ref, computed } from "vue";
 	import { RouterView, useRouter, useRoute } from "vue-router";
 	import NotifyLayer from "./components/NotifyLayer.vue";
 	import DirectoryBrowserDialog from "./components/DirectoryBrowserDialog.vue";
@@ -23,10 +23,13 @@
 	import { call, on, onSseReconnect, onSseDisconnect } from "@/lib/api";
 	import {
 		Users, Video, Clapperboard, Radio, Search, Settings, Info, LogOut,
-		ChevronsLeft, ChevronsRight, Bell,
+		ChevronsLeft, ChevronsRight, Bell, Store, X, WifiOff, Loader2,
 	} from "@lucide/vue";
-	import { useNotify } from "@/composables/useNotify";
-	import { toast as sonnerToast } from "vue-sonner";
+	import {
+		useNotify, notify,
+		frontendNotifications, dismissFrontendNotification, dismissAllFrontendNotifications,
+		type FrontendNotification,
+	} from "@/composables/useNotify";
 	import { useStreamersStore } from "@/stores/streamers";
 	import { useI18n } from "vue-i18n";
 	import { useScrollbar } from "@/composables/useScrollbar";
@@ -50,8 +53,47 @@
 
 	const notificationsStore = useNotificationsStore();
 
+	/**
+	 * 合并后端持久化通知与前端内存通知，按时间倒序排列。
+	 * 后端通知使用 created_at 字段；前端通知使用 timestamp 字段。
+	 *
+	 * Merge backend persistent notifications and frontend in-memory notifications,
+	 * sorted by time descending.
+	 */
+	type MergedNotification =
+		| { source: "backend"; data: Notification }
+		| { source: "frontend"; data: FrontendNotification };
+
+	const mergedNotifications = computed<MergedNotification[]>(() => {
+		const backend: MergedNotification[] = notificationsStore.notifications.map((n) => ({
+			source: "backend",
+			data: n,
+		}));
+		const frontend: MergedNotification[] = frontendNotifications.value.map((n) => ({
+			source: "frontend",
+			data: n,
+		}));
+		return [...backend, ...frontend].sort((a, b) => {
+			const ta = a.source === "backend"
+				? new Date(a.data.created_at).getTime()
+				: a.data.timestamp.getTime();
+			const tb = b.source === "backend"
+				? new Date(b.data.created_at).getTime()
+				: b.data.timestamp.getTime();
+			return tb - ta; // 倒序：最新在上 / descending: newest first
+		});
+	});
+
+	/** 面板通知总数（后端 + 前端内存）/ Total panel notification count (backend + frontend) */
+	const totalNotificationCount = computed(
+		() => notificationsStore.unreadCount + frontendNotifications.value.length,
+	);
+
 	/** 通知面板是否打开 / Whether the notification panel is open */
 	const notificationPanelOpen = ref(false);
+
+	/** SSE 是否已断开连接（显示断连遮罩）/ Whether SSE is disconnected (shows overlay) */
+	const isDisconnected = ref(false);
 	const notificationScrollEl = ref<HTMLElement | null>(null);
 	useScrollbar(notificationScrollEl);
 
@@ -82,6 +124,7 @@
 		{ to: "/postprocess", labelKey: "nav.postprocess", icon: Clapperboard },
 		{ to: "/relay", labelKey: "nav.relay", icon: Radio },
 		{ to: "/finder", labelKey: "nav.finder", icon: Search },
+		{ to: "/community", labelKey: "nav.community", icon: Store },
 		{ to: "/settings", labelKey: "nav.settings", icon: Settings },
 		{ to: "/about", labelKey: "nav.about", icon: Info },
 	];
@@ -145,6 +188,17 @@
 			: "text-muted-foreground";
 	}
 
+	/** 前端内存通知的颜色类（ToastType → CSS class）/ Color class for frontend in-memory notifications */
+	function frontendNotificationClass(type: FrontendNotification["type"]): string {
+		return type === "error"
+			? "text-destructive"
+			: type === "warning"
+			? "text-yellow-500 dark:text-yellow-400"
+			: type === "success"
+			? "text-green-600 dark:text-green-400"
+			: "text-muted-foreground";
+	}
+
 	onMounted(async () => {
 		// 初始化主题并监听系统主题变化 / Initialize theme and listen for system theme changes
 		applyTheme(mq.matches);
@@ -177,39 +231,20 @@
 		// 监听 ffmpeg 缺失警告 / Listen for ffmpeg missing warning
 		unlistenFfmpeg = await on("ffmpeg-missing", (payload) => {
 			const p = payload as { message: string };
-			toast(p.message, "warning");
+			notify(p.message, "warning");
 		});
 
 		// SSE 重连后倒计时 3 秒刷新页面，确保状态与服务器同步
 		// After SSE reconnect, countdown 3 seconds then reload to sync state with server
 		unlistenReconnect = onSseReconnect(() => {
-			// 重连后立即拉取通知（离线期间可能有新通知）
-			// Fetch notifications after reconnect (may have new ones from the offline period)
-			notificationsStore.fetch();
-			const COUNTDOWN = 3;
-			let remaining = COUNTDOWN;
-			const id = "reconnect-reload";
-			sonnerToast.info(t("notify.reconnected", { n: remaining }), {
-				id,
-				duration: (COUNTDOWN + 1) * 1000,
-			});
-			const timer = setInterval(() => {
-				remaining--;
-				if (remaining > 0) {
-					sonnerToast.info(t("notify.reconnected", { n: remaining }), {
-						id,
-						duration: (remaining + 1) * 1000,
-					});
-				} else {
-					clearInterval(timer);
-					window.location.reload();
-				}
-			}, 1000);
+			// 重连成功，立即刷新页面恢复状态 / Reconnected: reload immediately to restore state
+			window.location.reload();
 		});
 
 		// 监听 SSE 断开连接 / Listen for SSE disconnect
 		unlistenDisconnect = onSseDisconnect(() => {
 			toast(t("notify.disconnected"), "warning");
+			isDisconnected.value = true;
 		});
 
 		// 监听自定义语言文件校验警告 / Listen for custom locale file validation warnings
@@ -219,7 +254,7 @@
 				const items = payload as Array<{ path: string; reason: string }>;
 				for (const item of items) {
 					const file = item.path.replace(/\\/g, "/").split("/").pop() ?? item.path;
-					toast(`${t("settings.localeFileInvalid", { file })}: ${item.reason}`, "warning");
+					notify(`${t("settings.localeFileInvalid", { file })}: ${item.reason}`, "warning");
 				}
 			},
 		);
@@ -231,9 +266,10 @@
 		// 首次加载通知列表 / Fetch notifications on first load
 		await notificationsStore.fetch();
 
-		// 监听实时新通知 / Listen for real-time new notifications
+		// 监听实时新通知（用户在线时：同时追加面板 + 弹 toast）
+		// Listen for real-time new notifications (user online: panel + toast)
 		unlistenNotification = await on("notification-created", (payload) => {
-			notificationsStore.append(payload as Notification);
+			notificationsStore.append(payload as Notification, true);
 		});
 	});
 
@@ -312,10 +348,10 @@
 						<span class="relative shrink-0">
 							<Bell class="size-4" />
 							<span
-								v-if="notificationsStore.unreadCount > 0"
+								v-if="totalNotificationCount > 0"
 								class="absolute -top-1.5 -right-1.5 min-w-4 h-4 rounded-full bg-destructive text-destructive-foreground text-[10px] font-bold flex items-center justify-center px-0.5 leading-none"
 							>
-								{{ notificationsStore.unreadCount > 99 ? "99+" : notificationsStore.unreadCount }}
+								{{ totalNotificationCount > 99 ? "99+" : totalNotificationCount }}
 							</span>
 						</span>
 						<span v-show="!sidebarCollapsed" class="truncate">{{ t("nav.notifications") }}</span>
@@ -363,61 +399,86 @@
 					</DialogHeader>
 
 					<!-- 全部已读操作行 / Mark-all-read action row -->
-					<div v-if="notificationsStore.unreadCount > 0" class="shrink-0 flex justify-end -mt-1">
+					<div v-if="totalNotificationCount > 0" class="shrink-0 flex justify-end -mt-1">
 						<Button
 							variant="outline"
 							size="sm"
 							class="h-7 px-3 text-xs"
-							@click="notificationsStore.markAllRead()"
+							@click="notificationsStore.markAllRead(); dismissAllFrontendNotifications()"
 						>
 							{{ t("notifications.markAllRead") }}
 						</Button>
 					</div>
 
-					<!-- 通知列表 / Notification list -->
+					<!-- 合并通知列表 / Merged notification list -->
 					<!-- 超过 5 条时固定高度并开启滚动；5 条及以内自然撑开 dialog -->
 					<!-- Scrolls when > 5 items; expands naturally otherwise -->
 					<div
-						v-if="notificationsStore.notifications.length > 0"
+						v-if="mergedNotifications.length > 0"
 						ref="notificationScrollEl"
 						class="flex flex-col gap-2 pr-1"
-						:class="notificationsStore.notifications.length > 5
+						:class="mergedNotifications.length > 5
 							? 'overflow-y-auto scrollbar-overlay max-h-[60vh]'
 							: 'overflow-visible'"
 					>
-						<div
-							v-for="n in notificationsStore.notifications"
-							:key="n.id"
-							class="rounded-lg border px-3 py-2.5 flex flex-col gap-1.5"
-						>
-							<div class="flex items-start justify-between gap-2">
-								<p class="text-sm leading-snug flex-1" :class="notificationLevelClass(n.level)">
-									{{ n.message }}
-								</p>
-								<Button
-									variant="ghost"
-									size="sm"
-									class="h-6 w-6 p-0 shrink-0 text-muted-foreground hover:text-foreground"
-									@click="notificationsStore.markRead([n.id])"
-								>
-									×
-								</Button>
+						<!-- 后端持久化通知（带 action 按钮）/ Backend persistent notification (with action button) -->
+						<template v-for="item in mergedNotifications" :key="item.source === 'backend' ? `b-${item.data.id}` : `f-${item.data.id}`">
+							<div
+								v-if="item.source === 'backend'"
+								class="rounded-lg border px-3 py-2.5 flex flex-col gap-1.5"
+							>
+								<div class="flex items-start justify-between gap-2">
+									<p class="text-sm leading-snug flex-1" :class="notificationLevelClass(item.data.level)">
+										{{ item.data.message }}
+									</p>
+									<Button
+										variant="ghost"
+										size="sm"
+										class="h-6 w-6 p-0 shrink-0 text-muted-foreground hover:text-foreground"
+										@click="notificationsStore.markRead([item.data.id])"
+									>
+										<X class="size-3.5" />
+									</Button>
+								</div>
+								<div class="flex items-center justify-between gap-2">
+									<p class="text-xs text-muted-foreground">
+										{{ new Date(item.data.created_at).toLocaleString() }}
+									</p>
+									<Button
+										v-if="item.data.action"
+										variant="destructive"
+										size="sm"
+										class="h-6 text-xs px-2"
+										@click="executeNotificationAction(item.data)"
+									>
+										{{ t(`notifications.action.${item.data.action.action_type}`) }}
+									</Button>
+								</div>
 							</div>
-							<div class="flex items-center justify-between gap-2">
+
+							<!-- 前端内存通知（纯展示，刷新后消失）/ Frontend in-memory notification (display only, cleared on refresh) -->
+							<div
+								v-else
+								class="rounded-lg border px-3 py-2.5 flex flex-col gap-1.5"
+							>
+								<div class="flex items-start justify-between gap-2">
+									<p class="text-sm leading-snug flex-1" :class="frontendNotificationClass(item.data.type)">
+										{{ item.data.message }}
+									</p>
+									<Button
+										variant="ghost"
+										size="sm"
+										class="h-6 w-6 p-0 shrink-0 text-muted-foreground hover:text-foreground"
+										@click="dismissFrontendNotification(item.data.id)"
+									>
+										<X class="size-3.5" />
+									</Button>
+								</div>
 								<p class="text-xs text-muted-foreground">
-									{{ new Date(n.created_at).toLocaleString() }}
+									{{ item.data.timestamp.toLocaleString() }}
 								</p>
-								<Button
-									v-if="n.action"
-									variant="destructive"
-									size="sm"
-									class="h-6 text-xs px-2"
-									@click="executeNotificationAction(n)"
-								>
-									{{ t(`notifications.action.${n.action.action_type}`) }}
-								</Button>
 							</div>
-						</div>
+						</template>
 					</div>
 
 					<!-- 空状态 / Empty state -->
@@ -432,4 +493,34 @@
 		</div>
 
 	</Transition>
+
+	<!-- 断连全屏遮罩（叠在所有内容上）/ Disconnect full-screen overlay -->
+	<Transition
+		enter-active-class="transition-opacity duration-300"
+		enter-from-class="opacity-0"
+		enter-to-class="opacity-100"
+		leave-active-class="transition-opacity duration-300"
+		leave-from-class="opacity-100"
+		leave-to-class="opacity-0"
+	>
+		<div
+			v-if="isDisconnected"
+			class="fixed inset-0 z-50 flex flex-col items-center justify-center gap-6 bg-background/95 backdrop-blur-sm text-center px-6"
+		>
+			<div class="relative flex items-center justify-center">
+				<Loader2 class="size-16 animate-spin text-muted-foreground/25" />
+				<WifiOff class="absolute size-7 text-muted-foreground" />
+			</div>
+			<div class="flex flex-col gap-2 max-w-sm">
+				<h1 class="text-lg font-semibold">{{ t("notify.disconnectedPage.title") }}</h1>
+				<p class="text-sm text-muted-foreground leading-relaxed">
+					{{ t("notify.disconnectedPage.subtitle") }}
+				</p>
+				<p class="text-xs text-muted-foreground/50 mt-1">
+					{{ t("notify.disconnectedPage.tip") }}
+				</p>
+			</div>
+		</div>
+	</Transition>
+
 </template>

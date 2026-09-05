@@ -276,6 +276,20 @@ const COMMAND_MAP: Record<
 		method: "POST",
 		url: () => "/api/auth/renew",
 	},
+	install_community_module: {
+		method: "POST",
+		url: () => "/api/community-modules/install",
+		body: (a) => a.module,
+	},
+	get_install_tasks: {
+		method: "GET",
+		url: () => "/api/community-modules/tasks",
+	},
+	uninstall_community_module: {
+		method: "POST",
+		url: () => "/api/community-modules/uninstall",
+		body: (a) => ({ module_id: a.moduleId }),
+	},
 	get_notifications: {
 		method: "GET",
 		url: () => "/api/notifications",

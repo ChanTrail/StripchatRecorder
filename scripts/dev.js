@@ -26,6 +26,16 @@ const {
  *  Target directory for module binaries (loaded by the backend at runtime) */
 const MODULES_OUT = path.join(BACKEND_TARGET, "debug", "modules");
 
+// 平台标识符：按当前宿主机推导（dev 模式始终为原生编译，无需读环境变量）
+// Platform identifier: detected from the current host (dev always compiles natively)
+function detectPlatform() {
+  const archStr = process.arch === "arm64" ? "aarch64" : "x86_64";
+  if (process.platform === "win32")  return `windows-${archStr}`;
+  if (process.platform === "darwin") return `darwin-${archStr}`;
+  return `linux-${archStr}`;
+}
+const platform = detectPlatform();
+
 const TOTAL = 4;
 header("Dev", "check → frontend → modules → run backend (debug)");
 
@@ -43,7 +53,7 @@ run("npm run build", { cwd: FRONTEND });
 
 // ── Step 3: 构建模块并复制 / Build modules & copy binaries ───────────────────
 step(3, TOTAL, "Building modules (debug) → build_tmp/backend/target/debug/modules/");
-buildModules("debug", MODULES_OUT);
+buildModules("debug", MODULES_OUT, null, platform);
 
 // ── Step 4: 启动后端 / Start backend ─────────────────────────────────────────
 step(4, TOTAL, "Starting backend (debug)");

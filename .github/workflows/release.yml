@@ -21,10 +21,27 @@ jobs:
             os: ubuntu-22.04
             artifact-name: StripchatRecorder-server-linux-x86_64
             archive-name: StripchatRecorder-server-linux-x86_64.zip
+
+          - platform: linux-aarch64
+            os: ubuntu-22.04
+            cargo-target: aarch64-unknown-linux-gnu
+            artifact-name: StripchatRecorder-server-linux-aarch64
+            archive-name: StripchatRecorder-server-linux-aarch64.zip
+
           - platform: windows-x86_64
             os: windows-latest
             artifact-name: StripchatRecorder-server-windows-x86_64
             archive-name: StripchatRecorder-server-windows-x86_64.zip
+
+          - platform: darwin-x86_64
+            os: macos-13
+            artifact-name: StripchatRecorder-server-darwin-x86_64
+            archive-name: StripchatRecorder-server-darwin-x86_64.zip
+
+          - platform: darwin-aarch64
+            os: macos-latest
+            artifact-name: StripchatRecorder-server-darwin-aarch64
+            archive-name: StripchatRecorder-server-darwin-aarch64.zip
 
     steps:
       - name: Checkout
@@ -65,38 +82,60 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y pkg-config build-essential libssl-dev
 
+      - name: Install aarch64 cross-compilation toolchain
+        if: matrix.platform == 'linux-aarch64'
+        run: sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Install macOS system dependencies
+        if: startsWith(matrix.os, 'macos')
+        run: brew install pkg-config
+
+      - name: Add Rust cross-compile target
+        if: matrix.cargo-target
+        run: rustup target add ${{ matrix.cargo-target }}
+
       # ── 构建 / Build ──
       - name: Full release build
         run: node scripts/release.js
+        env:
+          CARGO_BUILD_TARGET: ${{ matrix.cargo-target }}
+          CARGO_BUILD_PLATFORM: ${{ matrix.platform }}
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
 
-      # ── 打包（Linux）/ Assemble package (Linux) ──
-      - name: Assemble package (Linux)
-        if: matrix.os == 'ubuntu-22.04'
+      # ── 打包（Linux / macOS）/ Assemble package (Linux / macOS) ──
+      - name: Assemble package (Unix)
+        if: runner.os != 'Windows'
         run: |
-          PKG="${{ matrix.artifact-name }}"
+          VER="${GITHUB_REF_NAME#v}"
+          PKG="${{ matrix.artifact-name }}-${VER}"
+          ARCHIVE="${{ matrix.artifact-name }}-${VER}.zip"
           mkdir -p "$PKG"
           cp -r build/. "$PKG/"
           echo "=== Package contents ==="
           find "$PKG" -type f | sort
-          zip -r "${{ matrix.archive-name }}" "$PKG"
+          zip -r "$ARCHIVE" "$PKG"
+          echo "archive=$ARCHIVE" >> "$GITHUB_ENV"
 
       # ── 打包（Windows）/ Assemble package (Windows) ──
       - name: Assemble package (Windows)
         if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
-          $PKG = "${{ matrix.artifact-name }}"
+          $VER  = ($env:GITHUB_REF_NAME -replace '^v', '')
+          $PKG  = "${{ matrix.artifact-name }}-${VER}"
+          $ARCHIVE = "${{ matrix.artifact-name }}-${VER}.zip"
           New-Item -ItemType Directory -Force -Path $PKG | Out-Null
           Copy-Item -Recurse build\* $PKG\
           Write-Host "=== Package contents ==="
           Get-ChildItem -Recurse $PKG | Select-Object FullName
-          Compress-Archive -Path $PKG -DestinationPath "${{ matrix.archive-name }}"
+          Compress-Archive -Path $PKG -DestinationPath $ARCHIVE
+          "archive=$ARCHIVE" >> $env:GITHUB_ENV
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact-name }}
-          path: ${{ matrix.archive-name }}
+          path: ${{ env.archive }}
           retention-days: 7
 
   # ── 桌面端构建（多平台）/ Desktop build (multi-platform) ────────────────────

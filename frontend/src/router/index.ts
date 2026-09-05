@@ -24,6 +24,7 @@ const router = createRouter({
 		{ path: "/", component: () => import("../views/HomeView.vue") },
 		{ path: "/recordings", component: () => import("../views/RecordingsView.vue") },
 		{ path: "/postprocess", component: () => import("../views/PostprocessView.vue") },
+		{ path: "/community", component: () => import("../views/CommunityView.vue") },
 		{ path: "/settings", component: () => import("../views/SettingsView.vue") },
 		{ path: "/finder", component: () => import("../views/FinderView.vue") },
 		{ path: "/relay", component: () => import("../views/RelayView.vue") },
@@ -46,7 +47,7 @@ router.beforeEach(async (to) => {
 		if (res.status === 401) {
 			// token 失效或 setup 已完成但未登录
 			localStorage.removeItem("admin_token");
-			return "/login";
+			return { path: "/login", query: { redirect: to.path } };
 		}
 
 		if (res.ok) {
@@ -65,7 +66,7 @@ router.beforeEach(async (to) => {
 		if (statusRes.ok) {
 			const status = await statusRes.json() as { password_set: boolean };
 			if (!status.password_set) {
-				// 老版本升级：setup 完成但密码未设置，去登录页设置密码
+				// 老版本升级：setup 完成但密码未设置，去登录页设置密码（不带 redirect，这是初次设置）
 				return "/login";
 			}
 		}
@@ -73,7 +74,7 @@ router.beforeEach(async (to) => {
 		// 放行
 	}
 
-	if (!token) return "/login";
+	if (!token) return { path: "/login", query: { redirect: to.path } };
 
 	return true;
 });

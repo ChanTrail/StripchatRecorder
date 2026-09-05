@@ -53,6 +53,8 @@ const outputDir = ref("");
 const apiProxy = ref("");
 const scMirror = ref("");
 const cdnProxy = ref("");
+const communityProxy = ref("");
+const communityMirror = ref("");
 const adminPassword = ref("");
 
 /** 可用语言列表（从共享 store 读取，由 App.vue 统一维护）
@@ -76,6 +78,8 @@ onMounted(async () => {
 	apiProxy.value = s.api_proxy_url || "";
 	scMirror.value = s.sc_mirror_url || "";
 	cdnProxy.value = s.cdn_proxy_url || "";
+	communityProxy.value = s.community_proxy_url || "";
+	communityMirror.value = s.community_mirror_url || "";
 });
 
 // ── 目录浏览器 / Directory browser ───────────────────────────────────────────
@@ -148,6 +152,8 @@ async function finish() {
 			api_proxy_url: apiProxy.value.trim() || null,
 			sc_mirror_url: scMirror.value.trim() || null,
 			cdn_proxy_url: cdnProxy.value.trim() || null,
+			community_proxy_url: communityProxy.value.trim() || null,
+			community_mirror_url: communityMirror.value.trim() || null,
 			setup_done: true,
 		});
 		// 2. 设置管理员密码
@@ -282,6 +288,15 @@ async function finish() {
 									<Label>{{ t("settings.cdnProxy.label") }}</Label>
 									<Input v-model="cdnProxy" :placeholder="t('settings.cdnProxy.placeholder')" autocomplete="off" />
 								</div>
+								<div class="flex flex-col gap-1.5">
+									<Label>{{ t("settings.communityProxy.label") }}</Label>
+									<Input v-model="communityProxy" :placeholder="t('settings.communityProxy.placeholder')" autocomplete="off" />
+								</div>
+								<div class="flex flex-col gap-1.5">
+									<Label>{{ t("settings.communityMirror.label") }}</Label>
+									<Input v-model="communityMirror" :placeholder="t('settings.communityMirror.placeholder')" autocomplete="off" />
+									<p class="text-xs text-muted-foreground">{{ t("settings.communityMirror.hint") }}</p>
+								</div>
 							</div>
 						</template>
 
@@ -320,9 +335,6 @@ async function finish() {
 				</Button>
 
 				<div class="flex items-center gap-3">
-					<Button v-if="step === 3" variant="ghost" :disabled="saving" @click="next">
-						{{ t("setup.skip") }}
-					</Button>
 					<Button v-if="step < TOTAL_STEPS" :disabled="!canNext" @click="next">
 						{{ t("setup.next") }}
 					</Button>

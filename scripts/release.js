@@ -48,19 +48,38 @@ run("npm run build --prefix frontend", { cwd: ROOT });
 // ── Step 3: 后端 / Backend ───────────────────────────────────────────────────
 step(3, TOTAL, "Building backend (release)");
 if (fs.existsSync(BUILD_OUT)) fs.rmSync(BUILD_OUT, { recursive: true, force: true });
-run(`cargo build --manifest-path "${BACKEND_MANIFEST}" --release`, {
+
+// 支持交叉编译：若环境变量 CARGO_BUILD_TARGET 存在，则加 --target 参数
+// Cross-compilation support: if CARGO_BUILD_TARGET is set, pass --target to cargo
+const cargoTarget = process.env.CARGO_BUILD_TARGET || null;
+const targetFlag  = cargoTarget ? ` --target ${cargoTarget}` : "";
+
+// 平台标识符：优先读环境变量，未设置时按当前宿主机推导
+// Platform identifier: prefer env var, fall back to detecting the current host
+function detectPlatform() {
+  const archStr = process.arch === "arm64" ? "aarch64" : "x86_64";
+  if (process.platform === "win32")  return `windows-${archStr}`;
+  if (process.platform === "darwin") return `darwin-${archStr}`;
+  return `linux-${archStr}`;
+}
+const platform = process.env.CARGO_BUILD_PLATFORM || detectPlatform();
+// 交叉编译时产物在 <target_dir>/<triple>/release/，原生编译时在 <target_dir>/release/
+// Cross-compiled artifacts live at <target_dir>/<triple>/release/; native at <target_dir>/release/
+const backendReleaseDir = cargoTarget
+  ? path.join(BACKEND_TARGET, cargoTarget, "release")
+  : path.join(BACKEND_TARGET, "release");
+
+run(`cargo build --manifest-path "${BACKEND_MANIFEST}" --release${targetFlag}`, {
   env: { ...process.env, CARGO_TARGET_DIR: BACKEND_TARGET },
 });
 
 // ── Step 4: 模块 / Modules ───────────────────────────────────────────────────
 step(4, TOTAL, "Building modules (release) → build/modules/");
 const BUILD_MODULES_OUT = path.join(BUILD_OUT, "modules");
-buildModules("release", BUILD_MODULES_OUT);
+buildModules("release", BUILD_MODULES_OUT, cargoTarget, platform);
 
 // ── Step 5: 收集后端主程序 / Collect backend binary ──────────────────────────
 step(5, TOTAL, "Collecting backend binary → build/");
-
-const backendReleaseDir = path.join(BACKEND_TARGET, "release");
 const backendBins = collectBinaries(backendReleaseDir);
 if (backendBins.length === 0) {
   console.error(`ERROR: No backend binary found in ${backendReleaseDir}`);

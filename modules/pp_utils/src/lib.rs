@@ -426,16 +426,15 @@ impl ModuleInput {
         if let Some(v) = self.params.get(key).and_then(|v| v.as_str()) {
             return v.to_string();
         }
-        if let serde_json::Value::Object(ref map) = self.params {
-            if let Some(v) = map.get(key) {
-                if !matches!(v, serde_json::Value::Null) {
+        if let serde_json::Value::Object(ref map) = self.params
+            && let Some(v) = map.get(key) 
+                && !matches!(v, serde_json::Value::Null) {
                     return match v {
                         serde_json::Value::String(s) => s.clone(),
                         other => other.to_string(),
                     };
                 }
-            }
-        }
+
         fallback.to_string()
     }
 

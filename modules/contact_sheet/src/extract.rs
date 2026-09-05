@@ -58,6 +58,7 @@ pub fn extract_frames(
         .args(["-y", "-i"])
         .arg(input)
         .args(["-vf", &vf])
+        .args(["-fps_mode", "passthrough"])
         .args(["-frames:v", &frame_total.to_string()])
         .arg(&frame_pattern)
         .args(["-progress", "pipe:1"])

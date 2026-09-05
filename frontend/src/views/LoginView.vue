@@ -9,7 +9,7 @@
 -->
 <script setup lang="ts">
 import { ref, onMounted, computed } from "vue";
-import { useRouter } from "vue-router";
+import { useRouter, useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { useAuthStore } from "@/stores/auth";
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 const router = useRouter();
+const route = useRoute();
 const { t } = useI18n();
 const auth = useAuthStore();
 
@@ -57,7 +58,9 @@ async function submit() {
 			await auth.initPassword(pwd);
 		}
 		await auth.login(pwd);
-		await router.replace("/");
+		const redirect = route.query.redirect;
+		const target = typeof redirect === "string" && redirect.startsWith("/") ? redirect : "/";
+		await router.replace(target);
 	} catch (e: unknown) {
 		error.value = isInit.value ? String(e) : t("login.wrongPassword");
 	} finally {

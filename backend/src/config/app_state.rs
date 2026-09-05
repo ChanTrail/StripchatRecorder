@@ -72,6 +72,14 @@ pub struct Settings {
     /// Mouflon Keys sync Worker auth token (corresponds to Worker's AUTH_TOKEN env var)
     #[serde(default)]
     pub mouflon_sync_token: Option<String>,
+    /// 社区模块代理地址（用于下载模块文件，留空不使用）
+    /// Community module proxy URL (for downloading module files, empty = disabled)
+    #[serde(default)]
+    pub community_proxy_url: Option<String>,
+    /// 社区模块镜像站地址（在 github.com URL 前加前缀，如 https://mirror.com/https://github.com/...）
+    /// Community module mirror URL (prepended to github.com URLs, e.g. https://mirror.com/https://github.com/...)
+    #[serde(default)]
+    pub community_mirror_url: Option<String>,
     /// 首次启动向导是否已完成（false = 显示 Setup 页面）
     /// Whether the first-launch setup wizard has been completed (false = show Setup page)
     #[serde(default)]
@@ -136,6 +144,8 @@ impl Default for Settings {
             server_port: default_server_port(),
             mouflon_sync_url: default_mouflon_sync_url(),
             mouflon_sync_token: None,
+            community_proxy_url: None,
+            community_mirror_url: None,
             setup_done: false,
             admin_password_hash: None,
         }
@@ -211,6 +221,12 @@ pub struct AppState {
     /// 后处理任务队列（状态表 + 取消标志 + 串行锁），详见 `postprocess::queue`
     /// Post-processing task queue (status table + cancel flags + serial lock), see `postprocess::queue`
     pub pp_queue: crate::postprocess::queue::PpQueue,
+    /// 社区模块安装任务状态表（模块 ID → 已下载字节数）
+    /// 安装开始时写入，完成/失败时删除；前端重连 SSE 后可通过接口查询恢复状态。
+    /// Community module install tasks (module ID → downloaded bytes).
+    /// Written on install start, removed on complete/fail;
+    /// frontend can query on SSE reconnect to restore in-progress state.
+    pub install_tasks: parking_lot::RwLock<std::collections::HashMap<String, u64>>,
     /// 启动合并锁，防止启动时的合并与正常录制并发 / Startup merge lock preventing concurrent startup merge and normal recording
     pub startup_lock: std::sync::Mutex<()>,
     /// 通知监控器 poll_interval_secs 已变更的发送端（可选，启动后注入）
@@ -292,6 +308,7 @@ impl AppState {
             data: RwLock::new(data),
             config_dir,
             pp_queue: crate::postprocess::queue::PpQueue::new(),
+            install_tasks: parking_lot::RwLock::new(std::collections::HashMap::new()),
             startup_lock: std::sync::Mutex::new(()),
             poll_interval_notify_tx: RwLock::new(None),
             mouflon_sync_notify_tx: RwLock::new(None),
