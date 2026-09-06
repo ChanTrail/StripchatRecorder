@@ -20,6 +20,14 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
+	Dialog,
+	DialogContent,
+	DialogHeader,
+	DialogTitle,
+	DialogDescription,
+	DialogFooter,
+} from "@/components/ui/dialog";
+import {
 	RefreshCw, ExternalLink, Download, Trash2, ArrowUpCircle, PackageOpen,
 	Search, Tag, X, BookOpen, History, Loader2, Check,
 } from "@lucide/vue";
@@ -29,7 +37,14 @@ const store = useCommunityStore();
 const settingsStore = useSettingsStore();
 const { toast } = useNotify();
 
-onMounted(() => {
+onMounted(async () => {
+	// 首次进入检测：settings 可能还未加载，先 fetch 确保拿到最新值
+	// First-visit check: fetch settings to get the latest value
+	if (!settingsStore.settings.setup_done) {
+		await settingsStore.fetchSettings();
+	}
+	showTerms.value = !settingsStore.settings.community_terms_accepted;
+
 	store.fetchModules();
 	document.addEventListener("click", onDocClick);
 });
@@ -37,6 +52,25 @@ onMounted(() => {
 onUnmounted(() => {
 	document.removeEventListener("click", onDocClick);
 });
+
+// ─── 首次进入警告 / First-visit Terms Dialog ──────────────────────────────────
+
+/** 是否显示使用条款弹窗 / Whether to show the terms dialog */
+const showTerms = ref(false);
+
+/** 接受条款：保存设置后关闭弹窗 / Accept terms: save settings then close dialog */
+async function acceptTerms() {
+	await settingsStore.saveSettings({
+		...settingsStore.settings,
+		community_terms_accepted: true,
+	});
+	showTerms.value = false;
+}
+
+/** 拒绝条款：回退到上一页 / Decline terms: go back */
+function declineTerms() {
+	history.back();
+}
 
 // ─── 筛选与搜索 / Filter & Search ─────────────────────────────────────────────
 
@@ -645,6 +679,29 @@ watch(selectedMod, (m) => {
 				</div>
 			</div>
 		</Transition>
+
+		<!-- ── 首次进入警告弹窗 / First-visit Terms Dialog ──────────────────── -->
+		<Dialog :open="showTerms" @update:open="(v) => { if (!v) declineTerms(); }">
+			<DialogContent :show-close-button="false" class="max-w-lg">
+				<DialogHeader>
+					<DialogTitle class="flex items-center gap-2 text-base">
+						<span class="text-amber-500">⚠</span>
+						{{ t("community.terms.title") }}
+					</DialogTitle>
+				</DialogHeader>
+				<DialogDescription as="div" class="text-sm text-foreground/80 leading-relaxed whitespace-pre-line">
+					{{ t("community.terms.body") }}
+				</DialogDescription>
+				<DialogFooter class="flex-col-reverse sm:flex-row gap-2 pt-1">
+					<Button variant="outline" class="sm:flex-none" @click="declineTerms">
+						{{ t("community.terms.decline") }}
+					</Button>
+					<Button class="sm:flex-1" @click="acceptTerms">
+						{{ t("community.terms.accept") }}
+					</Button>
+				</DialogFooter>
+			</DialogContent>
+		</Dialog>
 
 	</div>
 </template>

@@ -80,6 +80,10 @@ pub struct Settings {
     /// Community module mirror URL (prepended to github.com URLs, e.g. https://mirror.com/https://github.com/...)
     #[serde(default)]
     pub community_mirror_url: Option<String>,
+    /// 用户是否已接受社区模块使用条款（false = 首次进入时显示警告弹窗）
+    /// Whether the user has accepted the community module terms (false = show warning dialog on first visit)
+    #[serde(default)]
+    pub community_terms_accepted: bool,
     /// 首次启动向导是否已完成（false = 显示 Setup 页面）
     /// Whether the first-launch setup wizard has been completed (false = show Setup page)
     #[serde(default)]
@@ -112,7 +116,7 @@ fn default_language() -> String {
 
 /// Server 端口的默认值 / Default value for server port
 fn default_server_port() -> u16 {
-    3030
+    30301
 }
 
 /// 返回可执行文件所在目录，用于定位配置文件和模块目录。
@@ -146,6 +150,7 @@ impl Default for Settings {
             mouflon_sync_token: None,
             community_proxy_url: None,
             community_mirror_url: None,
+            community_terms_accepted: false,
             setup_done: false,
             admin_password_hash: None,
         }
@@ -238,6 +243,9 @@ pub struct AppState {
     /// 进程内通知存储（定时任务写入，前端上线后拉取）
     /// In-process notification store (written by scheduled tasks, pulled by frontend on connect)
     pub notification_store: crate::core::notifications::NotificationStore,
+    /// 更新下载/安装进度状态（通过 SSE 广播给前端）
+    /// Update download/install progress state (broadcast to frontend via SSE)
+    pub update_state: crate::update::UpdateStateStore,
 }
 
 impl AppState {
@@ -313,6 +321,7 @@ impl AppState {
             poll_interval_notify_tx: RwLock::new(None),
             mouflon_sync_notify_tx: RwLock::new(None),
             notification_store: crate::core::notifications::NotificationStore::new(),
+            update_state: crate::update::new_update_state(),
         }))
     }
 

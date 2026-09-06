@@ -167,6 +167,9 @@
 					await streamersStore.removeStreamer(username).catch(() => {});
 				}
 				toast(t("notify.missingStreamers.done", { count: targets.length }), "success");
+			} else if (action_type === "view_update") {
+				// 跳转到关于页面查看更新 / Navigate to the About page to view the update
+				router.push("/about");
 			}
 		} catch {
 			// 静默失败
@@ -214,6 +217,7 @@
 				// so the first render already uses the correct language
 				const { modules: moduleLocales } = await loadLocaleFromServer(settings.language);
 				locale.value = settings.language;
+				localStorage.setItem("locale", settings.language);
 				moduleLocaleStore.setLocales(settings.language, moduleLocales);
 			} else {
 				// 无自定义语言，仍加载默认 locale 的服务器覆盖（模块翻译等）
@@ -446,9 +450,11 @@
 									</p>
 									<Button
 										v-if="item.data.action"
-										variant="destructive"
+										:variant="item.data.action.action_type === 'view_update' ? 'default' : 'destructive'"
 										size="sm"
-										class="h-6 text-xs px-2"
+										:class="item.data.action.action_type === 'view_update'
+											? 'h-6 text-xs px-2 bg-green-600 hover:bg-green-700 text-white'
+											: 'h-6 text-xs px-2'"
 										@click="executeNotificationAction(item.data)"
 									>
 										{{ t(`notifications.action.${item.data.action.action_type}`) }}

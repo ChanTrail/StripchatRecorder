@@ -97,6 +97,7 @@ async function setLanguage(lang: string) {
 	// Load messages first, then switch locale to avoid vue-i18n rendering with fallback
 	const { modules: moduleLocales, warning } = await loadLocaleFromServer(lang);
 	locale.value = lang;
+	localStorage.setItem("locale", lang);
 	moduleLocaleStore.setLocales(lang, moduleLocales);
 	if (warning) {
 		// SetupView 没有 toast，用 error ref 展示

@@ -6,3 +6,4 @@ pub mod postprocess;
 pub mod recording;
 pub mod settings;
 pub mod streamer;
+pub mod update;

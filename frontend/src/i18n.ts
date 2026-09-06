@@ -1,27 +1,21 @@
 /**
  * i18n 初始化模块 / i18n Initialization Module
  *
- * 语言数据加载优先级：
- * 1. 从后端 /api/locale/{code} 加载（读取 <exe_dir>/locale/app/{code}.json），允许用户自定义覆盖
- * 2. 内置 TS 翻译（zh-CN / en-US）作为初始消息和 fallback，确保首屏不闪烁
+ * 翻译数据完全来自后端 /api/locale/{code}（读取 <exe_dir>/locale/app/{code}.json）。
+ * 前端不内置任何 fallback 消息，启动时同步阻塞加载后才挂载 Vue。
  *
- * 可用语言列表通过 /api/locales 动态获取，无需修改前端代码即可支持新语言。
- *
- * Locale data loading priority:
- * 1. Load from backend /api/locale/{code}, allowing user customization
- * 2. Built-in TS translations (zh-CN / en-US) as initial messages and fallback
- *
- * Available locale list is fetched dynamically from /api/locales —
- * adding a new language requires no frontend code changes.
+ * All translation data comes from the backend /api/locale/{code}.
+ * No built-in fallback messages in the frontend; Vue is mounted only after
+ * the locale data is loaded synchronously at startup.
  */
 
 import { createI18n } from "vue-i18n";
-import zhCN from "./locales/zh-CN";
-import enUS from "./locales/en-US";
 
-export type MessageSchema = typeof zhCN;
+// MessageSchema 从后端 JSON 的结构推导，运行时类型安全
+// MessageSchema derived from backend JSON structure for runtime type safety
+export type MessageSchema = Record<string, unknown>;
 
-const savedLocale = "zh-CN"; // 初始值，启动后由 App.vue 从后端 settings 同步覆盖
+const savedLocale = localStorage.getItem("locale") || "zh-CN";
 
 /** 可用语言条目（从 /api/locales 获取）/ Available locale entry (from /api/locales) */
 export interface LocaleEntry {
@@ -47,7 +41,7 @@ export async function fetchAvailableLocales(): Promise<LocaleEntry[]> {
 	}
 }
 
-/** 内置 fallback 语言列表（后端不可用时使用）/ Built-in fallback locale list */
+/** 内置语言列表（/api/locales 不可用时的备用）/ Fallback locale list when /api/locales is unavailable */
 function builtinLocales(): LocaleEntry[] {
 	return [
 		{ code: "zh-CN", name: "简体中文" },
@@ -67,17 +61,13 @@ export interface LoadLocaleResult {
 }
 
 /**
- * 从后端 API 获取指定语言的完整 locale 数据，
- * 动态注册到 vue-i18n（若尚未注册），并深度合并覆盖内置消息。
- * 同时返回模块翻译数据和可能的文件校验警告。
+ * 从后端 API 获取指定语言的完整 locale 数据并注册到 vue-i18n。
  *
- * Fetch the full locale data from the backend for the given locale code,
- * dynamically register it in vue-i18n if not already registered,
- * and deep-merge to override built-in messages.
- * Returns module translation overrides and any file validation warning.
+ * Fetch the full locale data from the backend for the given locale code
+ * and register it in vue-i18n.
  *
  * @param localeCode - BCP 47 语言标签 / BCP 47 language tag
- * @returns LoadLocaleResult，失败时 modules 为空对象 / LoadLocaleResult, modules is {} on failure
+ * @returns LoadLocaleResult，失败时 modules 为空对象 / modules is {} on failure
  */
 export async function loadLocaleFromServer(
 	localeCode: string,
@@ -88,8 +78,6 @@ export async function loadLocaleFromServer(
 		const data = await res.json();
 
 		if (data.app && typeof data.app === "object") {
-			// 若 vue-i18n 尚未注册该语言则先用空对象注册，再合并
-			// Register with empty object first if locale not yet known, then merge
 			if (!i18n.global.availableLocales.includes(localeCode as never)) {
 				i18n.global.setLocaleMessage(localeCode as never, data.app);
 			} else {
@@ -106,19 +94,26 @@ export async function loadLocaleFromServer(
 	}
 }
 
-// vue-i18n 实例：用宽泛的 string 类型避免硬编码语言列表，
-// 内置 zh-CN / en-US 作为初始消息确保首屏无闪烁。
-//
-// vue-i18n instance: use loose string type to avoid hardcoding locale list.
-// Built-in zh-CN / en-US provide initial messages to prevent first-frame flash.
+// vue-i18n 实例（空消息，由 initI18n 填充）
+// vue-i18n instance with empty messages, populated by initI18n()
 const i18n = createI18n<false>({
 	legacy: false,
 	locale: savedLocale,
-	fallbackLocale: "zh-CN",
-	messages: {
-		"zh-CN": zhCN,
-		"en-US": enUS,
-	},
+	fallbackLocale: false,
+	messages: {},
+	missing: (_locale, key) => key, // 键缺失时直接返回键名，避免控制台警告
 });
+
+/**
+ * 在 Vue 挂载前调用：从后端加载当前语言数据。
+ * 加载失败时静默处理（页面显示键名），不阻止启动。
+ *
+ * Call before Vue mounts: loads the current locale data from the backend.
+ * Fails silently (keys shown as-is) so the app still starts on error.
+ */
+export async function initI18n(): Promise<void> {
+	await loadLocaleFromServer(savedLocale);
+	i18n.global.locale.value = savedLocale as never;
+}
 
 export default i18n;

@@ -38,6 +38,7 @@ use crate::server::routes::{
         add_streamer, list_streamers, remove_streamer, set_auto_record, start_recording,
         stop_recording, verify_streamer,
     },
+    update::{get_update_info, get_update_status, start_download},
 };
 use crate::server::sse::sse_handler;
 use crate::server::static_files::static_handler;
@@ -155,6 +156,10 @@ pub fn build_router(state: ServerState) -> Router {
         .route("/api/community-modules/tasks", get(get_install_tasks))
         .route("/api/community-modules/install", post(install_community_module))
         .route("/api/community-modules/uninstall", post(uninstall_community_module))
+        // 更新检查与下载安装 / Update check, download, and install
+        .route("/api/update/info", get(get_update_info))
+        .route("/api/update/status", get(get_update_status))
+        .route("/api/update/download", post(start_download))
         .route_layer(middleware::from_fn_with_state(
             state.token_store.clone(),
             crate::server::auth::auth_middleware,

@@ -44,6 +44,8 @@ export interface Settings {
 	community_proxy_url: string | null;
 	/** 社区模块镜像站地址 / Community module mirror URL */
 	community_mirror_url: string | null;
+	/** 用户是否已接受社区模块使用条款 / Whether the user has accepted the community module terms */
+	community_terms_accepted: boolean;
 	/** 首次启动向导是否已完成 / Whether the first-launch setup wizard has been completed */
 	setup_done: boolean;
 }
@@ -75,6 +77,7 @@ export const useSettingsStore = defineStore("settings", () => {
 		mouflon_sync_token: null,
 		community_proxy_url: null,
 		community_mirror_url: null,
+		community_terms_accepted: false,
 		setup_done: false,
 	});
 	/** 是否正在加载 / Whether loading */

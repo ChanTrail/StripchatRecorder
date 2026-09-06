@@ -206,6 +206,92 @@ pub fn start_output_dir_maintenance(
     });
 }
 
+/// 启动版本更新检查调度器（启动后延迟 60 秒执行第一次，之后每 24 小时检查一次）。
+///
+/// 发现新版本时推送 Info 通知，携带 `view_update` action 供前端跳转关于页。
+/// 防重复逻辑：记录上次已通知的版本号，同一版本在进程生命周期内只通知一次。
+/// Docker 环境下仍然通知（提示用户更新镜像），非 Docker 环境同样通知（提示下载）。
+/// 检查失败时静默处理，不写入错误通知，等待下次周期自动重试。
+///
+/// Start the version update check scheduler (runs 60 s after launch, then every 24 h).
+///
+/// Pushes an Info notification with a `view_update` action for the frontend to navigate
+/// to the About page when a new version is found.
+/// Dedup: only notifies once per version per process lifetime.
+/// Silently ignores check failures and retries on the next cycle.
+pub fn start_update_check(app_state: Arc<AppState>, emitter: Arc<dyn Emitter>) {
+    tokio::spawn(async move {
+        // 启动时延迟 60 秒，避免在服务器刚启动、网络尚未就绪时立即查询
+        // Delay 60 s at startup to avoid querying before the network is ready
+        tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
+
+        // 记录本次进程已通知过的版本，避免每 24 小时重复弹同一版本的通知
+        // Track the last notified version to avoid repeated notifications for the same version
+        let mut last_notified_version: Option<String> = None;
+
+        loop {
+            let proxy_url = app_state.get_settings().api_proxy_url;
+
+            match crate::update::fetch_latest_release(proxy_url.as_deref()).await {
+                Ok(release) => {
+                    let current = crate::update::APP_VERSION;
+                    let latest = &release.latest_version;
+
+                    // 语义化版本比较：latest > current 才推通知
+                    // Semantic version comparison: only notify when latest > current
+                    if crate::update::semver_gt(latest, current)
+                        && last_notified_version.as_deref() != Some(latest.as_str())
+                    {
+                        tracing::info!(
+                            "New version available: {} (current: {})",
+                            latest, current
+                        );
+
+                        let is_docker = crate::update::is_docker();
+                        let message = if is_docker {
+                            format!(
+                                "发现新版本 v{}，请更新 Docker 镜像以升级",
+                                latest
+                            )
+                        } else {
+                            format!(
+                                "发现新版本 v{}，前往关于页面下载更新",
+                                latest
+                            )
+                        };
+
+                        app_state.notification_store.emit_with_action(
+                            &emitter,
+                            NotificationLevel::Info,
+                            "update_check",
+                            message,
+                            Some(crate::core::notifications::NotificationAction {
+                                action_type: "view_update".to_string(),
+                                targets: vec![latest.clone()],
+                            }),
+                        );
+
+                        last_notified_version = Some(latest.clone());
+                    } else {
+                        tracing::debug!(
+                            "Update check: already on latest version {}",
+                            current
+                        );
+                    }
+                }
+                Err(e) => {
+                    // 静默处理，等下次周期重试
+                    // Silently ignore; retry next cycle
+                    tracing::debug!("Update check failed (will retry in 24 h): {:?}", e);
+                }
+            }
+
+            // 每 24 小时检查一次 / Check every 24 hours
+            tokio::time::sleep(tokio::time::Duration::from_secs(24 * 3600)).await;
+        }
+    });
+}
+
 /// 在 `run_server()` 中统一启动所有后台定时任务。
 ///
 /// Launch all background scheduled tasks from `run_server()`.
@@ -222,5 +308,6 @@ pub fn start_all(
     );
     start_mouflon_sync(Arc::clone(&app_state), Arc::clone(&emitter));
     start_meta_cleanup(Arc::clone(&app_state), Arc::clone(&emitter));
-    start_output_dir_maintenance(app_state, emitter, recorder);
+    start_output_dir_maintenance(Arc::clone(&app_state), Arc::clone(&emitter), recorder);
+    start_update_check(app_state, emitter);
 }

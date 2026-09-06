@@ -34,3 +34,4 @@ rand = "0.10"
 argon2 = { version = "0.5", features = ["std"] }
 notify = "8"
 libc = "0.2"
+zip = { version = "2", default-features = false, features = ["deflate"] }

@@ -70,6 +70,7 @@
 		// Load messages first, then switch locale to avoid vue-i18n rendering with fallback
 		const { modules: moduleLocales, warning } = await loadLocaleFromServer(lang);
 		locale.value = lang;
+		localStorage.setItem("locale", lang);
 		// 将语言写入 settings 持久化 / Persist language to settings
 		form.language = lang;
 		await store.saveSettings({ ...form, language: lang });
@@ -96,6 +97,7 @@
 		mouflon_sync_token: null,
 		community_proxy_url: null,
 		community_mirror_url: null,
+		community_terms_accepted: false,
 		setup_done: true,
 	});
 

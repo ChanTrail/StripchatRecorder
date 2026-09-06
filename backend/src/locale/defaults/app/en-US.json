@@ -10,7 +10,8 @@
     "about": "About",
     "collapse": "Collapse",
     "expand": "Expand",
-    "notifications": "Notifications"
+    "notifications": "Notifications",
+    "community": "Modules"
   },
   "common": {
     "confirm": "Confirm",
@@ -40,6 +41,11 @@
       "confirm": "Clean Up",
       "ignore": "Ignore",
       "done": "Cleaned up {count} post-processing record(s)"
+    },
+    "disconnectedPage": {
+      "subtitle": "Trying to reconnect to the server, please wait…",
+      "tip": "If it keeps failing, check whether the server is running",
+      "title": "Connection Lost"
     }
   },
   "home": {
@@ -68,6 +74,44 @@
     "relay": {
       "started": "Started relaying {username}'s stream",
       "stopped": "Stopped relaying {username}"
+    },
+    "batch": {
+      "autoRecordDisable": "disabled",
+      "autoRecordDone": "Auto-record {action} for {count} streamer(s)",
+      "autoRecordEnable": "enabled",
+      "autoRecordFailed": "Done, {failed} failed",
+      "deselectAll": "Deselect All",
+      "disableAutoRecord": "Disable Auto ({count})",
+      "enableAutoRecord": "Enable Auto ({count})",
+      "exitSelect": "Exit",
+      "remove": "Remove ({count})",
+      "removeConfirmMessage": "Remove {count} selected streamer(s)? Related recording files will also be deleted.",
+      "removeConfirmTitle": "Batch Remove",
+      "removeDone": "Removed {count} streamer(s)",
+      "removeFailed": "Removal completed, {failed} failed",
+      "selectAll": "Select All",
+      "selected": "{count} selected",
+      "startDone": "Started recording {count} streamer(s)",
+      "startFailed": "Recording started, {failed} failed",
+      "startRecording": "Start Recording ({count})",
+      "stopConfirmMessage": "Stop recording for {count} selected streamer(s)?",
+      "stopConfirmTitle": "Batch Stop Recording",
+      "stopDone": "Stopped recording {count} streamer(s)",
+      "stopFailed": "Stop completed, {failed} failed",
+      "stopRecording": "Stop Recording ({count})"
+    },
+    "filter": {
+      "all": "All",
+      "group": "Group Show",
+      "offline": "Offline",
+      "online": "Online",
+      "p2p": "P2P",
+      "perMinute": "Per-Minute Show",
+      "private": "Private",
+      "public": "Public",
+      "recording": "Recording",
+      "ticket": "Ticket Show",
+      "virtualPrivate": "Virtual Private"
     }
   },
   "streamerCard": {
@@ -90,7 +134,11 @@
     "cancel": "Cancel",
     "submit": "Add",
     "submitting": "Adding...",
-    "done": "Added streamer {name}"
+    "done": "Added streamer {name}",
+    "batchDone": "Successfully added {count} streamer(s)",
+    "batchPartialFailed": "Done: {success} added, {failed} failed",
+    "batchSkipped": "Done: {success} added, {skipped} already exist (skipped)",
+    "inputCount": "{count} item(s)"
   },
   "recordings": {
     "title": "Recordings",
@@ -115,7 +163,8 @@
       "speed": "Speed",
       "segments": "Segments",
       "postprocess": "Post-process",
-      "actions": "Actions"
+      "actions": "Actions",
+      "resolution": "Resolution"
     },
     "group": {
       "fileCount": "{count} file(s)"
@@ -153,7 +202,9 @@
     "segments": {
       "downloaded": "{count} ok",
       "failed": "{count} failed"
-    }
+    },
+    "postprocessEmptyPipeline": "No enabled nodes in the post-processing pipeline are connected to the input",
+    "postprocessNoneSelectable": "All selected files are being processed or recording"
   },
   "postprocess": {
     "title": "Post-processing Pipeline",
@@ -167,7 +218,8 @@
     "node": {
       "skip": "Skip",
       "skipped": "Skipped",
-      "missing": "Module Missing"
+      "missing": "Module Missing",
+      "enable": "Enable"
     },
     "empty": "No post-processing nodes yet, click below to add",
     "addModule": "+ Add Module",
@@ -177,9 +229,15 @@
       "description": "Select a module from the available list to add to the pipeline",
       "noModules": "No modules found.",
       "noModulesHint": "Place module executables in the modules/ folder in the app directory",
-      "allAdded": "All modules already added"
+      "allAdded": "All modules already added",
+      "connectTo": "Connect to…",
+      "noCompatible": "No compatible modules"
     },
-    "updatedByOther": "Post-processing pipeline updated by another client"
+    "updatedByOther": "Post-processing pipeline updated by another client",
+    "fitView": "Fit View",
+    "guide": "Right-click canvas to add modules · Right-drag to pan · Left-drag to marquee select · Delete to remove · ts_merge merges TS segments into a video file — modules with video_file input must come after it",
+    "multiSelected": "{count} nodes selected — press Delete to remove",
+    "snapToGrid": "Snap to Grid"
   },
   "finder": {
     "title": "Streamer Finder",
@@ -335,7 +393,11 @@
     "mouflonAutoSyncedAt": "Source updated: ",
     "mouflonManualUpdatedAt": "Last manual update: ",
     "mouflonNever": "Never",
-    "localeFileInvalid": "Locale file {file} failed validation"
+    "localeFileInvalid": "Locale file {file} failed validation",
+    "mergeFormat": {
+      "hint": "Format for automatically merging segments after recording ends. Changes apply to recordings already in progress.",
+      "label": "Merge Format"
+    }
   },
   "usePostprocess": {
     "processing": "Processing",
@@ -366,33 +428,20 @@
   },
   "login": {
     "title": "Login",
-    "subtitle": "Enter the admin password to continue",
+    "subtitle": "Enter your admin password to continue",
     "initTitle": "Set Admin Password",
-    "initSubtitle": "Setup is complete — please set an admin password before continuing",
+    "initSubtitle": "First run — please set a password to protect the admin interface",
     "passwordLabel": "Password",
     "passwordPlaceholder": "Enter password",
-    "initPlaceholder": "Enter password",
-    "initHint": "You will need this password every time you access the interface",
+    "initPlaceholder": "Enter password (min. 6 characters)",
+    "passwordStrengthHint": "Minimum 6 characters. Keep it somewhere safe.",
     "loginButton": "Login",
-    "initButton": "Set Password & Login",
-    "logout": "Logout",
+    "initButton": "Set password & login",
     "passwordRequired": "Please enter a password",
     "passwordTooShort": "Password must be at least 6 characters",
-    "passwordStrength": "Password must be at least 6 characters and include letters, digits, and special characters",
-    "passwordStrengthHint": "Min 6 chars · letter · digit · special char (e.g. !#$%)",
     "wrongPassword": "Incorrect password, please try again",
-    "statusFetchFailed": "Unable to connect to server, please refresh",
-    "changePassword": {
-      "title": "Change Password",
-      "oldLabel": "Current password",
-      "newLabel": "New password",
-      "oldPlaceholder": "Enter current password",
-      "newPlaceholder": "Enter new password",
-      "submit": "Change Password",
-      "submitting": "Updating…",
-      "success": "Password changed. Please log in again.",
-      "wrongOld": "Current password is incorrect"
-    }
+    "statusFetchFailed": "Unable to connect to the server. Please check that the backend is running.",
+    "logout": "Logout"
   },
   "setup": {
     "title": "Initial Setup",
@@ -428,18 +477,112 @@
     "markAllRead": "Mark all as read",
     "empty": "No notifications",
     "action": {
-      "remove_streamers": "Remove"
+      "remove_streamers": "Remove",
+      "view_update": "Go to About"
     }
+  },
+  "dirBrowser": {
+    "title": "Choose Directory",
+    "pathLabel": "Path",
+    "pathPlaceholder": "Enter a path and press Enter",
+    "thisPc": "This PC",
+    "up": "Up",
+    "refresh": "Refresh",
+    "newFolder": "New Folder",
+    "newFolderPlaceholder": "Folder name",
+    "empty": "No subdirectories here",
+    "loadFailed": "Unable to access this directory",
+    "createFailed": "Failed to create folder",
+    "select": "Select This Directory",
+    "cancel": "Cancel"
+  },
+  "streamers": {
+    "otherClientAdded": "Another client added streamer: {username}",
+    "otherClientRemoved": "Another client removed streamer: {username}",
+    "otherClientAutoRecord": "Another client {action} auto-record for {username}",
+    "otherClientAutoRecordEnable": "enabled",
+    "otherClientAutoRecordDisable": "disabled",
+    "renamed": "Streamer {oldUsername} renamed to {newUsername}",
+    "apiError": "Stripchat API error: {message}"
+  },
+  "community": {
+    "terms": {
+      "title": "Before You Use Community Modules",
+      "body": "Community modules are third-party contributions and are not affiliated with this project.\n\nBy installing and running community modules you agree to accept the associated risks:\n\n• The project makes no guarantees regarding the safety, stability, or correctness of any community module.\n• Community modules run locally on your server and process your recorded files — please verify that the source is trustworthy.\n• It is recommended to review the module's source repository before installing.\n\nIf you understand and accept these risks, you may proceed.",
+      "accept": "I understand, continue",
+      "decline": "Go back"
+    },
+    "author": "Author",
+    "connecting": "Connecting…",
+    "description": "Browse and install community-contributed post-processing modules",
+    "detail": {
+      "author": "Author",
+      "changelog": "Changelog",
+      "installedVersion": "Installed Version",
+      "latestVersion": "Latest Version",
+      "license": "License",
+      "platformNotSupported": "This module is not supported on your platform",
+      "platforms": "Supported Platforms",
+      "readme": "README",
+      "readmeFailed": "Failed to load README",
+      "readmeLoading": "Loading README…",
+      "repo": "Source Repository",
+      "tags": "Tags"
+    },
+    "empty": "No modules available",
+    "fetchError": "Failed to load. Please check your network connection.",
+    "filterAll": "All",
+    "filterByTag": "Tag",
+    "filterInstalled": "Installed",
+    "filterUpdatable": "Updates",
+    "install": "Install",
+    "installed": "Installed",
+    "installedVersion": "Installed version",
+    "installError": "Install failed: {error}",
+    "installing": "Installing…",
+    "installSuccess": "Module {name} installed successfully",
+    "latestVersion": "Latest version",
+    "license": "License",
+    "noResults": "No modules match your filters",
+    "notSupported": "Not supported on this platform",
+    "refresh": "Refresh",
+    "refreshing": "Loading…",
+    "retry": "Retry",
+    "search": "Search modules…",
+    "tags": "Tags",
+    "title": "Module Community",
+    "uninstall": "Uninstall",
+    "uninstallError": "Uninstall failed: {error}",
+    "uninstalling": "Uninstalling…",
+    "uninstallSuccess": "Module {name} uninstalled",
+    "update": "Update",
+    "updateAvailable": "Update available",
+    "updating": "Updating…",
+    "viewRepo": "View source"
   },
   "about": {
     "title": "About",
     "version": "Version",
+    "updates": "Updates",
     "updateCheck": "Check for Updates",
+    "updateRetry": "Retry",
     "updateChecking": "Checking...",
     "updateAvailable": "New version available: {version}",
     "updateNone": "Already up to date",
     "updateFailed": "Failed to check for updates",
-    "download": "Download",
+    "download": "Download Update",
+    "downloadProgress": "Downloading {pct}%",
+    "downloadProgressBytes": "Downloading {mb} MB…",
+    "downloadDone": "Download complete",
+    "downloadDoneHint": "Saved as {filename}. Extract and replace the program files to finish updating.",
+    "downloadFailed": "Download failed, please try again",
+    "downloadNoAsset": "No installer available for this platform. Please download manually from GitHub.",
+    "installing": "Installing, please wait…",
+    "installingHint": "Extracting and replacing program files",
+    "updateDone": "Update complete, restarting…",
+    "updateDoneHint": "The server is restarting. The page will reconnect automatically.",
+    "updateError": "Update failed: {message}",
+    "updateStart": "Update",
     "changelog": "Changelog",
     "releaseNotes": "Release Notes",
     "github": "GitHub Repository",
@@ -447,6 +590,8 @@
     "licenseValue": "GPL-3.0",
     "copyright": "Copyright",
     "contributors": "Contributors",
+    "contributorsFailed": "Failed to load contributors",
+    "dockerUpdateHint": "Update the Docker image",
     "reportBug": "Report a Bug",
     "viewOnGitHub": "View on GitHub",
     "links": "Links"

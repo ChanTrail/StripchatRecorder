@@ -12,6 +12,7 @@ pub mod relay;
 pub mod server;
 pub mod platform;
 pub mod system;
+pub mod update;
 pub mod watcher;
 
 /// 应用程序主入口：从命令行参数或环境变量读取端口，启动 HTTP Server 模式。
@@ -22,6 +23,13 @@ pub mod watcher;
 /// 3. `server_port` field in `config/settings.json`
 /// 4. Default: 3030
 pub fn run() {
+    // 更新重启时延迟等待旧进程释放端口
+    // When restarting after an update, wait for the old process to free the port
+    if let Ok(ms_str) = std::env::var("STRIPCHAT_RESTART_DELAY_MS")
+        && let Ok(ms) = ms_str.parse::<u64>() {
+        std::thread::sleep(std::time::Duration::from_millis(ms));
+    }
+
     // 解析端口：CLI 参数 > 环境变量 > 配置文件 > 默认值
     // Resolve port: CLI arg > env var > config file > default
     let port: u16 = std::env::args()

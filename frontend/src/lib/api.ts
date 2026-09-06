@@ -299,6 +299,19 @@ const COMMAND_MAP: Record<
 		url: () => "/api/notifications/read",
 		body: (a) => ({ ids: a.ids }),
 	},
+	get_update_info: {
+		method: "GET",
+		url: () => "/api/update/info",
+	},
+	get_update_status: {
+		method: "GET",
+		url: () => "/api/update/status",
+	},
+	start_update_download: {
+		method: "POST",
+		url: () => "/api/update/download",
+		body: (a) => ({ download_url: a.download_url }),
+	},
 };
 
 /**

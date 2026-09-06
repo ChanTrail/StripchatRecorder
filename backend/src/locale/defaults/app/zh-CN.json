@@ -10,7 +10,8 @@
     "about": "关于",
     "collapse": "收起",
     "expand": "展开",
-    "notifications": "通知"
+    "notifications": "通知",
+    "community": "模块社区"
   },
   "common": {
     "confirm": "确认",
@@ -40,6 +41,11 @@
       "confirm": "清理",
       "ignore": "忽略",
       "done": "已清理 {count} 条后处理记录"
+    },
+    "disconnectedPage": {
+      "subtitle": "正在尝试重新连接到服务器，请稍候…",
+      "tip": "如果长时间无法连接，请检查服务器是否正常运行",
+      "title": "连接已断开"
     }
   },
   "home": {
@@ -68,6 +74,44 @@
     "relay": {
       "started": "已开始转发 {username} 的直播流",
       "stopped": "已停止转发 {username}"
+    },
+    "batch": {
+      "autoRecordDisable": "关闭",
+      "autoRecordDone": "已为 {count} 位主播{action}自动录制",
+      "autoRecordEnable": "开启",
+      "autoRecordFailed": "操作完成，{failed} 位失败",
+      "deselectAll": "取消全选",
+      "disableAutoRecord": "关闭自动 ({count})",
+      "enableAutoRecord": "开启自动 ({count})",
+      "exitSelect": "退出选择",
+      "remove": "移除 ({count})",
+      "removeConfirmMessage": "确定要移除选中的 {count} 位主播吗？相关录制文件也会被删除。",
+      "removeConfirmTitle": "批量移除主播",
+      "removeDone": "已移除 {count} 位主播",
+      "removeFailed": "移除完成，{failed} 位失败",
+      "selectAll": "全选",
+      "selected": "已选 {count} 位",
+      "startDone": "已开始录制 {count} 位主播",
+      "startFailed": "录制完成，{failed} 位失败",
+      "startRecording": "开始录制 ({count})",
+      "stopConfirmMessage": "确定要停止选中的 {count} 位主播的录制吗？",
+      "stopConfirmTitle": "批量停止录制",
+      "stopDone": "已停止录制 {count} 位主播",
+      "stopFailed": "停止完成，{failed} 位失败",
+      "stopRecording": "停止录制 ({count})"
+    },
+    "filter": {
+      "all": "全部",
+      "group": "群组秀",
+      "offline": "离线",
+      "online": "在线",
+      "p2p": "P2P",
+      "perMinute": "计时秀",
+      "private": "私密秀",
+      "public": "公开秀",
+      "recording": "录制中",
+      "ticket": "票务秀",
+      "virtualPrivate": "虚拟私密"
     }
   },
   "streamerCard": {
@@ -90,7 +134,11 @@
     "cancel": "取消",
     "submit": "确认添加",
     "submitting": "添加中...",
-    "done": "已添加主播 {name}"
+    "done": "已添加主播 {name}",
+    "batchDone": "已成功添加 {count} 位主播",
+    "batchPartialFailed": "添加完成，{success} 位成功，{failed} 位失败",
+    "batchSkipped": "添加完成，{success} 位成功，{skipped} 位已存在（已跳过）",
+    "inputCount": "{count} 个有效条目"
   },
   "recordings": {
     "title": "录制文件",
@@ -115,7 +163,8 @@
       "speed": "录制速度",
       "segments": "分片统计",
       "postprocess": "后处理",
-      "actions": "操作"
+      "actions": "操作",
+      "resolution": "分辨率"
     },
     "group": {
       "fileCount": "{count} 个文件"
@@ -153,7 +202,9 @@
     "segments": {
       "downloaded": "成功 {count} 片",
       "failed": "失败 {count} 片"
-    }
+    },
+    "postprocessEmptyPipeline": "后处理流水线未连接输入节点",
+    "postprocessNoneSelectable": "选中的文件均在处理中或正在录制"
   },
   "postprocess": {
     "title": "后处理流水线",
@@ -167,7 +218,8 @@
     "node": {
       "skip": "跳过",
       "skipped": "已跳过",
-      "missing": "模块缺失"
+      "missing": "模块缺失",
+      "enable": "启用"
     },
     "empty": "暂无后处理节点，点击下方添加",
     "addModule": "+ 添加模块",
@@ -177,9 +229,15 @@
       "description": "从可用模块列表中选择要添加到流水线的模块",
       "noModules": "未找到模块。",
       "noModulesHint": "请将模块可执行文件放入程序目录下的 modules/ 文件夹",
-      "allAdded": "所有模块已添加"
+      "allAdded": "所有模块已添加",
+      "connectTo": "连接到…",
+      "noCompatible": "没有兼容的模块"
     },
-    "updatedByOther": "后处理流水线已由其他客户端更新"
+    "updatedByOther": "后处理流水线已由其他客户端更新",
+    "fitView": "自适应视图",
+    "guide": "右键单击画布添加模块 · 右键拖拽平移 · 左键拖拽框选节点 · 选中后按 Delete 删除 · ts_merge 将 TS 分片合并为视频文件，其他模块（接受 video_file 输入）需置于其后",
+    "multiSelected": "已选中 {count} 个节点，按 Delete 批量删除",
+    "snapToGrid": "对齐网格"
   },
   "finder": {
     "title": "主播查找",
@@ -335,7 +393,11 @@
     "mouflonAutoSyncedAt": "数据源更新：",
     "mouflonManualUpdatedAt": "上次手动更新：",
     "mouflonNever": "从未",
-    "localeFileInvalid": "语言文件 {file} 校验失败"
+    "localeFileInvalid": "语言文件 {file} 校验失败",
+    "mergeFormat": {
+      "hint": "录制结束后自动合并分片为单一文件的格式，修改后对当前录制同样生效",
+      "label": "合并格式"
+    }
   },
   "usePostprocess": {
     "processing": "处理中",
@@ -428,18 +490,112 @@
     "markAllRead": "全部已读",
     "empty": "暂无通知",
     "action": {
-      "remove_streamers": "删除主播"
+      "remove_streamers": "删除主播",
+      "view_update": "前往关于页面"
     }
+  },
+  "dirBrowser": {
+    "title": "选择目录",
+    "pathLabel": "路径",
+    "pathPlaceholder": "输入路径后按回车跳转",
+    "thisPc": "此电脑",
+    "up": "上一级",
+    "refresh": "刷新",
+    "newFolder": "新建文件夹",
+    "newFolderPlaceholder": "文件夹名称",
+    "empty": "此目录下没有子目录",
+    "loadFailed": "无法访问该目录",
+    "createFailed": "创建文件夹失败",
+    "select": "选择此目录",
+    "cancel": "取消"
+  },
+  "streamers": {
+    "otherClientAdded": "其他客户端添加了主播：{username}",
+    "otherClientRemoved": "其他客户端移除了主播：{username}",
+    "otherClientAutoRecord": "其他客户端{action}了 {username} 的自动录制",
+    "otherClientAutoRecordEnable": "开启",
+    "otherClientAutoRecordDisable": "关闭",
+    "renamed": "主播 {oldUsername} 已改名为 {newUsername}",
+    "apiError": "Stripchat API 连接错误：{message}"
+  },
+  "community": {
+    "terms": {
+      "title": "使用社区模块前请注意",
+      "body": "模块社区提供的后处理模块均为第三方社区贡献，与本项目官方无关。\n\n安装并运行社区模块即表示您同意自行承担相关风险：\n\n• 官方不对社区模块的安全性、稳定性或功能完整性作任何保证。\n• 社区模块将在您的服务器本地运行并处理您的录制文件，请确保来源可信。\n• 建议在安装前查看模块源码仓库，了解其具体行为。\n\n如果您理解并接受上述风险，可以继续使用模块社区。",
+      "accept": "我已了解，继续",
+      "decline": "返回"
+    },
+    "author": "作者",
+    "connecting": "连接中…",
+    "description": "浏览并安装社区贡献的后处理模块",
+    "detail": {
+      "author": "作者",
+      "changelog": "更新日志",
+      "installedVersion": "已安装版本",
+      "latestVersion": "最新版本",
+      "license": "许可证",
+      "platformNotSupported": "当前平台不支持此模块",
+      "platforms": "支持平台",
+      "readme": "README",
+      "readmeFailed": "README 加载失败",
+      "readmeLoading": "加载 README 中…",
+      "repo": "源码仓库",
+      "tags": "标签"
+    },
+    "empty": "暂无可用模块",
+    "fetchError": "加载失败，请检查网络连接",
+    "filterAll": "全部",
+    "filterByTag": "按标签",
+    "filterInstalled": "已安装",
+    "filterUpdatable": "可更新",
+    "install": "安装",
+    "installed": "已安装",
+    "installedVersion": "已安装版本",
+    "installError": "安装失败：{error}",
+    "installing": "安装中…",
+    "installSuccess": "模块 {name} 安装成功",
+    "latestVersion": "最新版本",
+    "license": "许可证",
+    "noResults": "没有匹配的模块",
+    "notSupported": "不支持当前平台",
+    "refresh": "刷新列表",
+    "refreshing": "加载中…",
+    "retry": "重试",
+    "search": "搜索模块…",
+    "tags": "标签",
+    "title": "模块社区",
+    "uninstall": "卸载",
+    "uninstallError": "卸载失败：{error}",
+    "uninstalling": "卸载中…",
+    "uninstallSuccess": "模块 {name} 已卸载",
+    "update": "更新",
+    "updateAvailable": "有更新",
+    "updating": "更新中…",
+    "viewRepo": "查看源码"
   },
   "about": {
     "title": "关于",
     "version": "版本",
+    "updates": "版本更新",
     "updateCheck": "检查更新",
+    "updateRetry": "重试",
     "updateChecking": "检查中...",
-    "updateAvailable": "发现新版本：{version}",
+    "updateAvailable": "有新版本：{version}",
     "updateNone": "已是最新版本",
     "updateFailed": "检查更新失败",
-    "download": "下载",
+    "download": "下载更新",
+    "downloadProgress": "下载中 {pct}%",
+    "downloadProgressBytes": "下载中 {mb} MB…",
+    "downloadDone": "下载完成",
+    "downloadDoneHint": "已保存为 {filename}，解压后替换程序文件即可完成更新",
+    "downloadFailed": "下载失败，请重试",
+    "downloadNoAsset": "当前平台暂无可用安装包，请前往 GitHub 手动下载",
+    "installing": "安装中，请稍候…",
+    "installingHint": "正在解压并替换程序文件",
+    "updateDone": "更新完成，正在重启…",
+    "updateDoneHint": "服务器即将重启，页面将自动重新连接",
+    "updateError": "更新失败：{message}",
+    "updateStart": "开始更新",
     "changelog": "更新日志",
     "releaseNotes": "版本说明",
     "github": "GitHub 仓库",
@@ -447,6 +603,8 @@
     "licenseValue": "GPL-3.0",
     "copyright": "版权所有",
     "contributors": "贡献者",
+    "contributorsFailed": "贡献者信息加载失败",
+    "dockerUpdateHint": "请更新 Docker 镜像",
     "reportBug": "反馈 Bug",
     "viewOnGitHub": "在 GitHub 上查看",
     "links": "相关链接"
