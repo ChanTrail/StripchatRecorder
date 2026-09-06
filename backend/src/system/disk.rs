@@ -65,9 +65,6 @@ pub fn get_disk_space_inner(output_dir: &str) -> Result<DiskSpace> {
         let ret = unsafe { libc::statvfs(path_cstr.as_ptr(), stat.as_mut_ptr()) };
         if ret == 0 {
             let stat = unsafe { stat.assume_init() };
-            #[cfg(target_os = "macos")]
-            let block = stat.f_frsize as u64;
-            #[cfg(not(target_os = "macos"))]
             let block = stat.f_frsize;
             #[cfg(target_os = "macos")]
             let total = stat.f_blocks as u64 * block;

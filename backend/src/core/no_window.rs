@@ -15,6 +15,7 @@
 
 /// 抑制 Windows 控制台黑窗的 CREATE_NO_WINDOW 标志值。
 /// CREATE_NO_WINDOW flag value to suppress the Windows console window.
+#[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 /// 为 `std::process::Command` 和 `tokio::process::Command` 提供 `.no_window()` 方法。

@@ -67,10 +67,9 @@ pub fn is_docker() -> bool {
     // 3. /proc/1/cgroup（仅 Linux，cgroup v1）
     //    /proc/1/cgroup (Linux only, cgroup v1)
     #[cfg(target_os = "linux")]
-    if let Ok(content) = std::fs::read_to_string("/proc/1/cgroup") {
-        if content.contains("docker") || content.contains("kubepods") {
-            return true;
-        }
+    if let Ok(content) = std::fs::read_to_string("/proc/1/cgroup")
+        && (content.contains("docker") || content.contains("kubepods")) {
+        return true;
     }
 
     false
