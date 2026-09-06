@@ -38,6 +38,10 @@ export interface Notification {
 	level: NotificationLevel;
 	source: string;
 	message: string;
+	/** i18n 翻译键（优先于 message 使用）/ i18n key (takes priority over message) */
+	message_key?: string;
+	/** i18n 插值参数 / i18n interpolation arguments */
+	message_args?: Record<string, string | number>;
 	created_at: string;
 	action?: NotificationAction;
 }

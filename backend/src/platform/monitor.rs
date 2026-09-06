@@ -192,23 +192,40 @@ impl StatusMonitor {
 
         if !newly_dead.is_empty() {
             newly_dead.sort();
-            let message = if newly_dead.len() == 1 {
-                format!(
-                    "主播 {} 已无法通过用户名或内部 ID 找到，可能已改名、注销或被封禁，后续将跳过其轮询请求。",
-                    newly_dead[0]
+            use std::collections::HashMap;
+            let (message, key, args) = if newly_dead.len() == 1 {
+                let mut a = HashMap::new();
+                a.insert("username".to_string(), serde_json::json!(&newly_dead[0]));
+                (
+                    format!(
+                        "Streamer {} cannot be found by username or internal ID (possibly renamed, deleted, or banned). Future polls will be skipped.",
+                        newly_dead[0]
+                    ),
+                    "notifications.backend.streamerDeadOne",
+                    a,
                 )
             } else {
-                format!(
-                    "以下 {} 个主播已无法找到，可能已改名、注销或被封禁，后续将跳过其轮询请求：{}",
-                    newly_dead.len(),
-                    newly_dead.join("、")
+                let usernames = newly_dead.join(", ");
+                let mut a = HashMap::new();
+                a.insert("count".to_string(), serde_json::json!(newly_dead.len()));
+                a.insert("usernames".to_string(), serde_json::json!(usernames));
+                (
+                    format!(
+                        "{} streamers cannot be found (possibly renamed, deleted, or banned). Future polls will be skipped: {}",
+                        newly_dead.len(),
+                        newly_dead.join(", ")
+                    ),
+                    "notifications.backend.streamerDeadMany",
+                    a,
                 )
             };
-            self.state.notification_store.emit_with_action(
+            self.state.notification_store.emit_i18n_with_action(
                 emitter,
                 NotificationLevel::Warning,
                 "streamer_dead",
                 message,
+                key,
+                Some(args),
                 Some(crate::core::notifications::NotificationAction {
                     action_type: "remove_streamers".to_string(),
                     targets: newly_dead,

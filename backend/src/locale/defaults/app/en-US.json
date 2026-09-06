@@ -4,14 +4,14 @@
     "streamers": "Streamers",
     "recordings": "Recordings",
     "postprocess": "Post-process",
-    "relay": "Relay",
-    "finder": "Finder",
+    "relay": "Relay Stream",
+    "finder": "Streamer Finder",
     "settings": "Settings",
     "about": "About",
     "collapse": "Collapse",
     "expand": "Expand",
     "notifications": "Notifications",
-    "community": "Modules"
+    "community": "Module Community"
   },
   "common": {
     "confirm": "Confirm",
@@ -26,31 +26,31 @@
     "hide": "Hide"
   },
   "notify": {
-    "reconnected": "Reconnected to server, reloading in {n} second(s)…",
-    "disconnected": "Connection to server lost, reconnecting…",
+    "reconnected": "Reconnected to server, page will refresh in {n} seconds…",
+    "disconnected": "Disconnected from server, attempting to reconnect…",
     "missingStreamers": {
-      "title": "Missing Streamers Found",
-      "message": "The following streamer accounts do not exist and will be removed\n\n{list}",
+      "title": "Non-existent streamers found",
+      "message": "The following streamer accounts do not exist and will be removed from the list\n\n{list}",
       "confirm": "Remove",
       "ignore": "Ignore",
-      "done": "Removed {count} missing streamer(s)"
+      "done": "Removed {count} non-existent streamer(s)"
     },
     "missingPpResults": {
-      "title": "Orphaned Post-processing Records Found",
-      "message": "The following files no longer exist but still have post-processing records and will be cleaned up\n\n{list}",
-      "confirm": "Clean Up",
+      "title": "Post-process records for missing files found",
+      "message": "The following files no longer exist but have post-process records; they will be cleaned up\n\n{list}",
+      "confirm": "Clean",
       "ignore": "Ignore",
-      "done": "Cleaned up {count} post-processing record(s)"
+      "done": "Cleaned {count} post-process record(s)"
     },
     "disconnectedPage": {
-      "subtitle": "Trying to reconnect to the server, please wait…",
-      "tip": "If it keeps failing, check whether the server is running",
+      "subtitle": "Attempting to reconnect to the server, please wait…",
+      "tip": "If the connection cannot be restored for a long time, please check if the server is running normally",
       "title": "Connection Lost"
     }
   },
   "home": {
-    "title": "Streamers",
-    "subtitle": "{total} streamer(s), {recording} recording",
+    "title": "Streamer List",
+    "subtitle": "{total} streamers, {recording} recording",
     "addStreamer": "+ Add Streamer",
     "loadingStreamers": "Loading...",
     "noStreamers": "No streamers added yet",
@@ -63,7 +63,7 @@
     },
     "start": {
       "done": "Started recording {username}",
-      "autoStarted": "Started recording {username}"
+      "autoStarted": "Auto-started recording {username}"
     },
     "stop": {
       "title": "Stop Recording",
@@ -76,17 +76,17 @@
       "stopped": "Stopped relaying {username}"
     },
     "batch": {
-      "autoRecordDisable": "disabled",
+      "autoRecordDisable": "Disable",
       "autoRecordDone": "Auto-record {action} for {count} streamer(s)",
-      "autoRecordEnable": "enabled",
-      "autoRecordFailed": "Done, {failed} failed",
+      "autoRecordEnable": "Enable",
+      "autoRecordFailed": "Operation completed, {failed} failed",
       "deselectAll": "Deselect All",
       "disableAutoRecord": "Disable Auto ({count})",
       "enableAutoRecord": "Enable Auto ({count})",
-      "exitSelect": "Exit",
+      "exitSelect": "Exit Selection",
       "remove": "Remove ({count})",
-      "removeConfirmMessage": "Remove {count} selected streamer(s)? Related recording files will also be deleted.",
-      "removeConfirmTitle": "Batch Remove",
+      "removeConfirmMessage": "Are you sure you want to remove the selected {count} streamer(s)? Related recording files will also be deleted.",
+      "removeConfirmTitle": "Batch Remove Streamers",
       "removeDone": "Removed {count} streamer(s)",
       "removeFailed": "Removal completed, {failed} failed",
       "selectAll": "Select All",
@@ -94,7 +94,7 @@
       "startDone": "Started recording {count} streamer(s)",
       "startFailed": "Recording started, {failed} failed",
       "startRecording": "Start Recording ({count})",
-      "stopConfirmMessage": "Stop recording for {count} selected streamer(s)?",
+      "stopConfirmMessage": "Are you sure you want to stop recording for the selected {count} streamer(s)?",
       "stopConfirmTitle": "Batch Stop Recording",
       "stopDone": "Stopped recording {count} streamer(s)",
       "stopFailed": "Stop completed, {failed} failed",
@@ -102,15 +102,15 @@
     },
     "filter": {
       "all": "All",
-      "group": "Group Show",
+      "group": "Group",
       "offline": "Offline",
       "online": "Online",
       "p2p": "P2P",
-      "perMinute": "Per-Minute Show",
+      "perMinute": "Per Minute",
       "private": "Private",
       "public": "Public",
       "recording": "Recording",
-      "ticket": "Ticket Show",
+      "ticket": "Ticket",
       "virtualPrivate": "Virtual Private"
     }
   },
@@ -121,38 +121,38 @@
     "stopRecording": "Stop",
     "autoRecord": "Auto",
     "autoRecordTitle": "Auto-record when online",
-    "removeTitle": "Remove streamer",
-    "streamUrl": "Stream URL",
-    "streamUrlHint": "Open this URL directly in any player to watch",
-    "copyStreamUrl": "Copy stream URL"
+    "removeTitle": "Remove Streamer",
+    "streamUrl": "Relay Stream URL",
+    "streamUrlHint": "Open this URL in a player to watch",
+    "copyStreamUrl": "Copy Relay URL"
   },
   "addStreamer": {
     "title": "Add Streamer",
-    "description": "Enter a Stripchat username or URL to add a streamer to the tracking list",
-    "label": "Stripchat username or URL",
+    "description": "Enter a Stripchat username or link to add the streamer to your watchlist",
+    "label": "Stripchat username or link",
     "placeholder": "e.g. alice or https://stripchat.com/alice",
     "cancel": "Cancel",
     "submit": "Add",
     "submitting": "Adding...",
     "done": "Added streamer {name}",
     "batchDone": "Successfully added {count} streamer(s)",
-    "batchPartialFailed": "Done: {success} added, {failed} failed",
-    "batchSkipped": "Done: {success} added, {skipped} already exist (skipped)",
-    "inputCount": "{count} item(s)"
+    "batchPartialFailed": "Addition completed, {success} succeeded, {failed} failed",
+    "batchSkipped": "Addition completed, {success} succeeded, {skipped} already exist (skipped)",
+    "inputCount": "{count} valid entry(s)"
   },
   "recordings": {
     "title": "Recordings",
     "subtitle": {
-      "total": "{count} file(s)",
+      "total": "{count} files total",
       "recording": "{count} recording",
       "selected": "{count} selected",
-      "totalSpeed": "Total speed"
+      "totalSpeed": "Total recording speed"
     },
     "batchPostprocess": "Batch Post-process ({count})",
     "deleteSelected": "Delete Selected ({count})",
-    "openDir": "Open Directory",
+    "openDir": "Open Folder",
     "loading": "Loading...",
-    "empty": "No recordings yet",
+    "empty": "No recordings",
     "resetZoom": "{pct}% · Reset",
     "table": {
       "filename": "Filename",
@@ -171,109 +171,109 @@
     },
     "status": {
       "recording": "Recording",
-      "waitingMerge": "Waiting Merge",
+      "waitingMerge": "Waiting for merge",
       "merging": "Merging",
-      "waitingMergeVideo": "Waiting to merge video…",
+      "waitingMergeVideo": "Waiting for video merge…",
       "mergingVideo": "Merging video…",
       "waiting": "Waiting…",
       "done": "Done",
       "failed": "Failed",
-      "overallProgress": "Overall",
-      "overallProgressWithLabel": "{label} Overall"
+      "overallProgress": "Overall Progress",
+      "overallProgressWithLabel": "{label} Overall Progress"
     },
     "actions": {
       "play": "Play",
-      "playDisabled": "Cannot play while recording",
+      "playDisabled": "Currently recording, cannot play",
       "postprocess": "Post-process",
       "delete": "Delete",
       "deleteDisabled": "File is being recorded"
     },
     "delete": {
       "title": "Delete Recording",
-      "message": "Are you sure you want to delete {name}? This cannot be undone.",
+      "message": "Are you sure you want to delete {name}? This action cannot be undone.",
       "confirm": "Delete",
       "done": "Deleted {name}",
       "batchTitle": "Batch Delete",
-      "batchMessage": "Are you sure you want to delete {count} selected file(s)? This cannot be undone.",
+      "batchMessage": "Are you sure you want to delete the selected {count} file(s)? This action cannot be undone.",
       "batchDone": "Deleted {count} file(s)",
-      "batchFailed": "Done, {count} file(s) failed"
+      "batchFailed": "Deletion completed, {count} file(s) failed"
     },
-    "otherClientDeleted": "Another client deleted recording: {name}",
+    "otherClientDeleted": "Another client deleted recording file: {name}",
     "segments": {
-      "downloaded": "{count} ok",
-      "failed": "{count} failed"
+      "downloaded": "{count} segments successful",
+      "failed": "{count} segments failed"
     },
-    "postprocessEmptyPipeline": "No enabled nodes in the post-processing pipeline are connected to the input",
-    "postprocessNoneSelectable": "All selected files are being processed or recording"
+    "postprocessEmptyPipeline": "Post-process pipeline has no input node connected",
+    "postprocessNoneSelectable": "Selected files are either being processed or currently recording"
   },
   "postprocess": {
-    "title": "Post-processing Pipeline",
-    "description": "After recording is merged, the video file will be processed by the following modules in order",
+    "title": "Post-process Pipeline",
+    "description": "After recording merge completes, video files will be processed through the following modules in order",
     "saving": "Saving…",
     "saved": "Auto-saved",
     "input": {
       "label": "Input",
-      "description": "TS segment recording directory"
+      "description": "TS segment recording folder"
     },
     "node": {
       "skip": "Skip",
       "skipped": "Skipped",
-      "missing": "Module Missing",
+      "missing": "Module missing",
       "enable": "Enable"
     },
-    "empty": "No post-processing nodes yet, click below to add",
+    "empty": "No post-process nodes. Click below to add.",
     "addModule": "+ Add Module",
-    "stats": "{enabled} active node(s) · {total} total",
+    "stats": "{enabled} active nodes · {total} total",
     "picker": {
       "title": "Select Module",
-      "description": "Select a module from the available list to add to the pipeline",
+      "description": "Choose a module from the available list to add to the pipeline",
       "noModules": "No modules found.",
-      "noModulesHint": "Place module executables in the modules/ folder in the app directory",
+      "noModulesHint": "Place module executables in the modules/ folder under the program directory",
       "allAdded": "All modules already added",
       "connectTo": "Connect to…",
-      "noCompatible": "No compatible modules"
+      "noCompatible": "No compatible module"
     },
-    "updatedByOther": "Post-processing pipeline updated by another client",
+    "updatedByOther": "Post-process pipeline has been updated by another client",
     "fitView": "Fit View",
-    "guide": "Right-click canvas to add modules · Right-drag to pan · Left-drag to marquee select · Delete to remove · ts_merge merges TS segments into a video file — modules with video_file input must come after it",
-    "multiSelected": "{count} nodes selected — press Delete to remove",
+    "guide": "Right-click on canvas to add modules · Right-drag to pan · Left-drag to box-select nodes · Press Delete after selection to remove · ts_merge merges TS segments into a video file; other modules (accepting video_file input) must be placed after it",
+    "multiSelected": "{count} node(s) selected, press Delete to batch remove",
     "snapToGrid": "Snap to Grid"
   },
   "finder": {
     "title": "Streamer Finder",
-    "description": "Find streamers via camgirlfinder.net with face recognition and name search",
+    "description": "Search for streamers via camgirlfinder.net, supports face recognition and name search",
     "tabs": {
       "face": "Face Search",
       "name": "Name Search"
     },
     "face": {
-      "dropzone": "Click to select an image, or drag & drop / paste here",
+      "dropzone": "Click to select an image, or drag & drop / paste an image here",
       "dropzoneHint": "Max 10MB, supports JPG / PNG / WebP etc.",
       "detectedFace": "Detected face",
       "searching": "Searching…",
       "search": "Start Face Search",
-      "results": "Found {count} similar streamer(s)",
+      "results": "Found {count} similar streamers",
       "noResults": "No similar streamers found",
       "invalidFile": "Please upload an image file",
-      "timeout": "Search timed out, please try again",
+      "timeout": "Search timed out, please retry",
       "noFace": "No face detected in the image, please try another",
       "searchFailed": "Search failed"
     },
     "name": {
       "placeholder": "Enter streamer name (at least 3 characters)",
       "searching": "Searching…",
-      "results": "Found {count} streamer(s)",
+      "results": "Found {count} streamers",
       "noResults": "No streamers found, try different keywords"
     },
     "dialog": {
-      "title": "Streamers similar to \"{name}\"",
-      "description": "Find streamers similar to this one using face recognition",
-      "results": "Found {count} similar streamer(s)",
+      "title": "Similar to «{name}»",
+      "description": "Find other streamers similar to this one via face recognition",
+      "results": "Found {count} similar streamers",
       "noResults": "No similar streamers found",
-      "searching": "Searching, please wait…",
-      "noFace": "Could not detect a face from this streamer's image",
-      "profile": "View Profile →",
-      "bgMode": "Background Mode"
+      "searching": "Recognizing, please wait…",
+      "noFace": "No face detected in the streamer's image",
+      "profile": "Go to profile →",
+      "bgMode": "Background image mode"
     },
     "card": {
       "match": "Match: ",
@@ -281,15 +281,15 @@
       "lastSeen": "Last seen: ",
       "firstSeen": "First: ",
       "lastSeenShort": "Last: ",
-      "imageCount": "{count} image(s)",
+      "imageCount": "{count} images",
       "scOnly": "SC only",
-      "notFound": "Streamer not found",
-      "timeout": "Verification timeout",
+      "notFound": "Streamer does not exist",
+      "timeout": "Verification timed out",
       "added": "Added",
       "adding": "Adding…",
       "verifying": "Verifying…",
       "addRecord": "+ Record",
-      "addRecordLong": "+ Add to Record",
+      "addRecordLong": "+ Add Recording",
       "noImage": "No image",
       "addedToast": "Added {username} to recording list",
       "probHigh": "High",
@@ -300,15 +300,15 @@
       "f": "Female",
       "m": "Male",
       "c": "Couple",
-      "t": "Trans"
+      "t": "Transgender"
     }
   },
   "settings": {
     "title": "Settings",
     "loading": "Loading...",
     "saved": "Settings saved",
-    "updatedByOther": "Settings updated by another client",
-    "mouflonUpdatedByOther": "Mouflon Keys updated by another client",
+    "updatedByOther": "Settings have been updated by another client",
+    "mouflonUpdatedByOther": "Mouflon Keys have been updated by another client",
     "sections": {
       "recording": "Recording",
       "network": "Network",
@@ -324,58 +324,58 @@
     "outputDir": {
       "label": "TS Stream Output Directory",
       "placeholder": "/path/to/recordings",
-      "hint": "Where TS segment streams from recordings are stored. Press Enter or click elsewhere to confirm.",
+      "hint": "Location where TS segment streams are stored. Press Enter or click elsewhere to confirm after change.",
       "pick": "Browse",
       "changeTitle": "Change TS Stream Output Directory",
-      "changeMessage": "Change TS stream output directory to:\n{dir}\n\nThis will take effect on the next recording.",
+      "changeMessage": "Change TS stream output directory to:\n{dir}\n\nThis change will take effect on the next recording.",
       "changeConfirm": "Confirm",
       "changeDone": "TS stream output directory updated, will take effect on next recording"
     },
     "maxConcurrent": {
-      "label": "Max Concurrent Recordings",
+      "label": "Maximum Concurrent Recordings",
       "hint": "0 means unlimited"
     },
     "pollInterval": {
-      "label": "Poll Interval (seconds)"
+      "label": "Polling Interval (seconds)"
     },
     "maxTmpDirGb": {
-      "label": "Max Tmp Directory Size (GB)",
-      "hint": "Size limit for temporary files created by post-processing modules. Oldest files are deleted when the limit is exceeded. 0 means unlimited. Default: 50 GB."
+      "label": "Max Temporary Directory Size for Post-process (GB)",
+      "hint": "Upper limit for temporary files generated by post-process modules; when exceeded, oldest files are deleted. 0 means unlimited, default 50 GB"
     },
     "apiProxy": {
-      "label": "API Proxy (for stripchat.com, leave empty to disable)",
+      "label": "API Proxy (for accessing stripchat.com, leave empty to disable)",
       "placeholder": "socks5://127.0.0.1:10808",
-      "hint": "Press Enter or click elsewhere to confirm"
+      "hint": "Press Enter or click elsewhere to confirm after change"
     },
     "scMirror": {
-      "label": "Stripchat Mirror (replaces stripchat.com in API, leave empty to disable)",
+      "label": "Stripchat Mirror (replaces stripchat.com domain in API, leave empty to disable)",
       "placeholder": "stripchat.example.com",
-      "hint": "When both API proxy and mirror are set, the mirror will be accessed via the proxy"
+      "hint": "When both API proxy and mirror are set, the proxy will be used to access the mirror"
     },
     "cdnProxy": {
       "label": "CDN Proxy (for downloading HLS segments, leave empty to disable)",
       "placeholder": "socks5://127.0.0.1:10808",
-      "hint": "Press Enter or click elsewhere to confirm"
+      "hint": "Press Enter or click elsewhere to confirm after change"
     },
     "communityProxy": {
-      "label": "Community Module Proxy (for downloading module files, leave empty to disable)",
+      "label": "Community Proxy (for downloading community module files, leave empty to disable)",
       "placeholder": "socks5://127.0.0.1:10808",
-      "hint": "Press Enter or click elsewhere to confirm"
+      "hint": "Press Enter or click elsewhere to confirm after change"
     },
     "communityMirror": {
-      "label": "Community Module Accelerator (prepended to GitHub URLs, leave empty to disable)",
+      "label": "Community Mirror (prefix for GitHub URLs, leave empty to disable)",
       "placeholder": "https://ghproxy.com",
-      "hint": "When both community proxy and accelerator are set, the accelerator will be accessed via the proxy"
+      "hint": "When both community proxy and mirror are set, the proxy will be used to access the mirror"
     },
-    "mouflonKeysDesc": "Stripchat encrypts HLS segment filenames (Mouflon system). Enter the corresponding pkey → pdkey pairs here before recording. Keys can be obtained from community channels.",
+    "mouflonKeysDesc": "Stripchat encrypts HLS segment filenames (Mouflon system). Before recording, you need to fill in the corresponding pkey → pdkey key pairs here. Keys can be obtained from community sources.",
     "mouflonTable": {
-      "pkey": "pkey (Key Identifier)",
-      "pdkey": "pdkey (Decryption Key)"
+      "pkey": "pkey (key identifier)",
+      "pdkey": "pdkey (decryption key)"
     },
     "noKeys": "No keys",
     "addKey": "Add",
     "keyError": {
-      "empty": "Both pkey and pdkey are required"
+      "empty": "pkey and pdkey cannot be empty"
     },
     "mouflonSyncUrl": {
       "label": "Sync URL",
@@ -383,19 +383,19 @@
     },
     "mouflonSyncToken": {
       "label": "Sync Token (optional)",
-      "placeholder": "Leave empty if not required"
+      "placeholder": "Leave empty if no authentication needed"
     },
     "mouflonSync": "Sync Now",
     "mouflonSyncing": "Syncing…",
     "mouflonSyncDone": "Keys synced successfully",
-    "mouflonSyncUpToDate": "Keys are already up-to-date",
+    "mouflonSyncUpToDate": "Keys are already up to date",
     "mouflonSyncFailed": "Sync failed: {error}",
-    "mouflonAutoSyncedAt": "Source updated: ",
+    "mouflonAutoSyncedAt": "Data source updated: ",
     "mouflonManualUpdatedAt": "Last manual update: ",
     "mouflonNever": "Never",
-    "localeFileInvalid": "Locale file {file} failed validation",
+    "localeFileInvalid": "Locale file {file} validation failed",
     "mergeFormat": {
-      "hint": "Format for automatically merging segments after recording ends. Changes apply to recordings already in progress.",
+      "hint": "Format to automatically merge segments into a single file after recording ends. Changes apply to current recordings as well.",
       "label": "Merge Format"
     }
   },
@@ -403,22 +403,22 @@
     "processing": "Processing",
     "waitingProgress": "Waiting for progress…",
     "fetchOutputFailed": "Failed to fetch module output",
-    "fetchTasksFailed": "Failed to fetch post-processing tasks",
-    "doneForFile": "{name} post-processing done",
-    "failedWithDetail": "{name} post-processing failed: {detail}",
-    "failedGeneric": "{name} post-processing failed"
+    "fetchTasksFailed": "Failed to fetch post-process tasks",
+    "doneForFile": "{name} post-process completed",
+    "failedWithDetail": "{name} post-process failed: {detail}",
+    "failedGeneric": "{name} post-process failed"
   },
   "relay": {
-    "title": "Relay Streams",
-    "subtitle": "{streams} stream(s), {connections} active connection(s)",
-    "hint": "Open the URL below directly in any player — no manual setup needed. Connects to upstream automatically on first access. Streamers not in the recording list can be relayed too.",
+    "title": "Relay Stream",
+    "subtitle": "{streams} relay streams, {connections} active connections",
+    "hint": "Open the following URL in a player to watch; no manual start needed. First access will automatically connect upstream. Streamers not in the recording list can also be relayed.",
     "noSessions": "No active relay streams",
     "noSessionsHint": "Open /stream/{modelname} in a player to auto-start",
-    "connections": "{n} connection(s)",
-    "uptime": "Up {t}",
+    "connections": "{n} connections",
+    "uptime": "Uptime {t}",
     "copyUrl": "Copy URL",
     "stopRelay": "Stop Relay",
-    "desktopUnsupported": "Relay streams are only available in Server mode",
+    "desktopUnsupported": "Relay stream is only available in Server mode",
     "state": {
       "live": "Live",
       "offline": "Offline",
@@ -428,72 +428,95 @@
   },
   "login": {
     "title": "Login",
-    "subtitle": "Enter your admin password to continue",
+    "subtitle": "Enter admin password to continue",
     "initTitle": "Set Admin Password",
-    "initSubtitle": "First run — please set a password to protect the admin interface",
+    "initSubtitle": "System initialized. Please set an admin password first.",
     "passwordLabel": "Password",
     "passwordPlaceholder": "Enter password",
-    "initPlaceholder": "Enter password (min. 6 characters)",
-    "passwordStrengthHint": "Minimum 6 characters. Keep it somewhere safe.",
+    "initPlaceholder": "Enter password",
     "loginButton": "Login",
-    "initButton": "Set password & login",
-    "passwordRequired": "Please enter a password",
-    "passwordTooShort": "Password must be at least 6 characters",
+    "initButton": "Set Password and Login",
+    "logout": "Logout",
+    "passwordRequired": "Please enter password",
+    "passwordStrength": "Password must be at least 6 characters and include letters, numbers, and special characters",
+    "passwordStrengthHint": "At least 6 chars · Contains letters · Contains numbers · Contains special chars (e.g. !#$%)",
     "wrongPassword": "Incorrect password, please try again",
-    "statusFetchFailed": "Unable to connect to the server. Please check that the backend is running.",
-    "logout": "Logout"
+    "statusFetchFailed": "Cannot connect to server, please refresh and retry",
+    "changePassword": {
+      "title": "Change Password",
+      "oldLabel": "Current Password",
+      "newLabel": "New Password",
+      "oldPlaceholder": "Enter current password",
+      "newPlaceholder": "Enter new password",
+      "submit": "Change Password",
+      "submitting": "Changing…",
+      "success": "Password changed, please log in again",
+      "wrongOld": "Current password is incorrect"
+    }
   },
   "setup": {
     "title": "Initial Setup",
-    "subtitle": "Complete the following configuration before getting started. You can change these settings anytime in the Settings page.",
+    "subtitle": "First launch requires the following configuration; you can change it later in Settings",
     "back": "Back",
     "next": "Next",
     "skip": "Skip",
-    "finish": "Finish Setup",
+    "finish": "Finish",
     "saving": "Saving…",
-    "outputDirRequired": "Please enter a recording output directory",
+    "outputDirRequired": "Please enter the recording output directory",
     "step1": {
-      "title": "Choose Language",
-      "desc": "Select your preferred interface language"
+      "title": "Choose Interface Language",
+      "desc": "Select your preferred language"
     },
     "step2": {
       "title": "Recording Output Directory",
-      "desc": "Recordings will be saved to this directory. Make sure there is enough disk space.",
+      "desc": "Recording files will be saved here. Ensure the path has enough disk space.",
       "placeholder": "/path/to/recordings",
       "hint": "Enter an absolute path on the server, e.g. /data/recordings or D:\\recordings"
     },
     "step3": {
-      "title": "Network Proxies (Optional)",
-      "desc": "Configure proxies if the server cannot access Stripchat directly. You can skip this step if not needed."
+      "title": "Network Proxy (optional)",
+      "desc": "If the server cannot directly access Stripchat, configure a proxy here. Skip if not needed."
     },
     "step4": {
       "title": "Set Admin Password",
-      "desc": "Set a password to protect the admin interface (minimum 6 characters). You will need to enter it each time you access the interface.",
-      "placeholder": "Enter password (min 6 characters)",
-      "hint": "Keep this password safe — it protects access to the management interface"
+      "desc": "Set a password to access the admin interface (at least 6 characters). You will need it every time you log in.",
+      "placeholder": "Enter password (at least 6 chars)",
+      "hint": "This password protects the admin interface; please keep it safe."
     }
   },
   "notifications": {
-    "markAllRead": "Mark all as read",
+    "markAllRead": "Mark all read",
     "empty": "No notifications",
     "action": {
-      "remove_streamers": "Remove",
+      "remove_streamers": "Remove streamers",
       "view_update": "Go to About"
+    },
+    "backend": {
+      "ffmpegMissing": "ffmpeg not detected. Recording and post-process features will not work. Please install ffmpeg and ensure it is in PATH.",
+      "metaMigrated": "Migrated {count} legacy meta files to the new per-streamer subdirectory structure.",
+      "mouflonSyncFailed": "Mouflon key sync failed (retried {retries} times): {error}",
+      "metaCleanup": "Cleaned {count} orphaned meta files (corresponding video no longer exists)",
+      "ppRemainingOne": "Found 1 unfinished post-process task (likely left from previous abnormal exit), re-triggered: {name}",
+      "ppRemainingMany": "Found {count} unfinished post-process tasks (likely left from previous abnormal exit), re-triggered: {names}",
+      "streamerDeadOne": "Streamer {username} can no longer be found by username or internal ID; may have changed name, been deactivated or banned. Subsequent polling requests will be skipped.",
+      "streamerDeadMany": "The following {count} streamers can no longer be found, may have changed name, been deactivated or banned. Subsequent polling requests will be skipped: {usernames}",
+      "updateAvailableDocker": "New version v{version} available. Please update the Docker image to upgrade.",
+      "updateAvailable": "New version v{version} available. Go to About page to download and update."
     }
   },
   "dirBrowser": {
-    "title": "Choose Directory",
+    "title": "Select Directory",
     "pathLabel": "Path",
-    "pathPlaceholder": "Enter a path and press Enter",
+    "pathPlaceholder": "Enter path and press Enter to navigate",
     "thisPc": "This PC",
     "up": "Up",
     "refresh": "Refresh",
     "newFolder": "New Folder",
     "newFolderPlaceholder": "Folder name",
-    "empty": "No subdirectories here",
-    "loadFailed": "Unable to access this directory",
+    "empty": "No subdirectories",
+    "loadFailed": "Cannot access this directory",
     "createFailed": "Failed to create folder",
-    "select": "Select This Directory",
+    "select": "Select this directory",
     "cancel": "Cancel"
   },
   "streamers": {
@@ -502,59 +525,59 @@
     "otherClientAutoRecord": "Another client {action} auto-record for {username}",
     "otherClientAutoRecordEnable": "enabled",
     "otherClientAutoRecordDisable": "disabled",
-    "renamed": "Streamer {oldUsername} renamed to {newUsername}",
-    "apiError": "Stripchat API error: {message}"
+    "renamed": "Streamer {oldUsername} has been renamed to {newUsername}",
+    "apiError": "Stripchat API connection error: {message}"
   },
   "community": {
     "terms": {
-      "title": "Before You Use Community Modules",
-      "body": "Community modules are third-party contributions and are not affiliated with this project.\n\nBy installing and running community modules you agree to accept the associated risks:\n\n• The project makes no guarantees regarding the safety, stability, or correctness of any community module.\n• Community modules run locally on your server and process your recorded files — please verify that the source is trustworthy.\n• It is recommended to review the module's source repository before installing.\n\nIf you understand and accept these risks, you may proceed.",
+      "title": "Please Note Before Using Community Modules",
+      "body": "The post-process modules provided by the community are third-party contributions and are not affiliated with this project's official team.\n\nBy installing and running community modules, you agree to bear the associated risks:\n\n• The official team makes no guarantees about the security, stability, or completeness of community modules.\n• Community modules run locally on your server and process your recording files; please ensure the source is trustworthy.\n• It is recommended to review the module source repository to understand its behavior before installation.\n\nIf you understand and accept the above risks, you may proceed to use the module community.",
       "accept": "I understand, continue",
       "decline": "Go back"
     },
     "author": "Author",
     "connecting": "Connecting…",
-    "description": "Browse and install community-contributed post-processing modules",
+    "description": "Browse and install community-contributed post-process modules",
     "detail": {
       "author": "Author",
       "changelog": "Changelog",
-      "installedVersion": "Installed Version",
-      "latestVersion": "Latest Version",
+      "installedVersion": "Installed version",
+      "latestVersion": "Latest version",
       "license": "License",
       "platformNotSupported": "This module is not supported on your platform",
-      "platforms": "Supported Platforms",
+      "platforms": "Supported platforms",
       "readme": "README",
       "readmeFailed": "Failed to load README",
       "readmeLoading": "Loading README…",
-      "repo": "Source Repository",
+      "repo": "Source repository",
       "tags": "Tags"
     },
     "empty": "No modules available",
-    "fetchError": "Failed to load. Please check your network connection.",
+    "fetchError": "Failed to load, please check your network connection",
     "filterAll": "All",
     "filterByTag": "Tag",
     "filterInstalled": "Installed",
-    "filterUpdatable": "Updates",
+    "filterUpdatable": "Updatable",
     "install": "Install",
     "installed": "Installed",
     "installedVersion": "Installed version",
-    "installError": "Install failed: {error}",
+    "installError": "Installation failed: {error}",
     "installing": "Installing…",
     "installSuccess": "Module {name} installed successfully",
     "latestVersion": "Latest version",
     "license": "License",
-    "noResults": "No modules match your filters",
+    "noResults": "No matching modules",
     "notSupported": "Not supported on this platform",
-    "refresh": "Refresh",
+    "refresh": "Refresh list",
     "refreshing": "Loading…",
     "retry": "Retry",
     "search": "Search modules…",
     "tags": "Tags",
     "title": "Module Community",
     "uninstall": "Uninstall",
-    "uninstallError": "Uninstall failed: {error}",
+    "uninstallError": "Uninstallation failed: {error}",
     "uninstalling": "Uninstalling…",
-    "uninstallSuccess": "Module {name} uninstalled",
+    "uninstallSuccess": "Module {name} has been uninstalled",
     "update": "Update",
     "updateAvailable": "Update available",
     "updating": "Updating…",
@@ -564,35 +587,35 @@
     "title": "About",
     "version": "Version",
     "updates": "Updates",
-    "updateCheck": "Check for Updates",
+    "updateCheck": "Check for updates",
     "updateRetry": "Retry",
     "updateChecking": "Checking...",
     "updateAvailable": "New version available: {version}",
     "updateNone": "Already up to date",
-    "updateFailed": "Failed to check for updates",
-    "download": "Download Update",
+    "updateFailed": "Update check failed",
+    "download": "Download update",
     "downloadProgress": "Downloading {pct}%",
     "downloadProgressBytes": "Downloading {mb} MB…",
     "downloadDone": "Download complete",
-    "downloadDoneHint": "Saved as {filename}. Extract and replace the program files to finish updating.",
-    "downloadFailed": "Download failed, please try again",
-    "downloadNoAsset": "No installer available for this platform. Please download manually from GitHub.",
+    "downloadDoneHint": "Saved as {filename}. Extract and replace program files to complete the update.",
+    "downloadFailed": "Download failed, please retry",
+    "downloadNoAsset": "No package available for your platform. Please download manually from GitHub.",
     "installing": "Installing, please wait…",
     "installingHint": "Extracting and replacing program files",
     "updateDone": "Update complete, restarting…",
-    "updateDoneHint": "The server is restarting. The page will reconnect automatically.",
+    "updateDoneHint": "Server will restart shortly, page will reconnect automatically",
     "updateError": "Update failed: {message}",
-    "updateStart": "Update",
+    "updateStart": "Start update",
     "changelog": "Changelog",
-    "releaseNotes": "Release Notes",
+    "releaseNotes": "Release notes",
     "github": "GitHub Repository",
     "license": "License",
     "licenseValue": "GPL-3.0",
     "copyright": "Copyright",
     "contributors": "Contributors",
     "contributorsFailed": "Failed to load contributors",
-    "dockerUpdateHint": "Update the Docker image",
-    "reportBug": "Report a Bug",
+    "dockerUpdateHint": "Please update the Docker image",
+    "reportBug": "Report Bug",
     "viewOnGitHub": "View on GitHub",
     "links": "Links"
   }

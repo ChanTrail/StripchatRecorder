@@ -12,6 +12,7 @@
 use chrono::Utc;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use crate::core::emitter::EmitterExt;
 
 /// 通知级别 / Notification level
@@ -47,8 +48,15 @@ pub struct Notification {
     pub level: NotificationLevel,
     /// 事件来源标签，用于前端图标/颜色区分 / Source tag for frontend icon/color distinction
     pub source: String,
-    /// 消息内容（纯文本）/ Message content (plain text)
+    /// 消息内容（纯文本，作为 fallback）/ Message content (plain text, used as fallback)
     pub message: String,
+    /// i18n 翻译键（前端优先用此键查翻译，未设置时回退到 message）
+    /// i18n translation key (frontend uses this first; falls back to `message` when absent)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_key: Option<String>,
+    /// i18n 插值参数（配合 message_key 使用）/ i18n interpolation arguments (used with message_key)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_args: Option<HashMap<String, serde_json::Value>>,
     /// 发生时间（RFC 3339）/ Timestamp (RFC 3339)
     pub created_at: String,
     /// 可选操作（有值时前端显示操作按钮）/ Optional action (frontend shows action button when present)
@@ -104,6 +112,8 @@ impl NotificationStore {
             level,
             source: source.into(),
             message: message.into(),
+            message_key: None,
+            message_args: None,
             created_at: Utc::now().to_rfc3339(),
             action,
         };
@@ -164,6 +174,56 @@ impl NotificationStore {
         action: Option<NotificationAction>,
     ) -> Notification {
         let n = self.push_with_action(level, source, message, action);
+        emitter.emit("notification-created", &n);
+        n
+    }
+
+    /// 推入一条带 i18n 翻译键的通知，并广播 `notification-created`。
+    /// `message` 作为 fallback，`message_key` + `message_args` 供前端查翻译。
+    ///
+    /// Push a notification with an i18n key, broadcast `notification-created`.
+    /// `message` is the fallback; `message_key` + `message_args` are used by the frontend.
+    pub fn emit_i18n(
+        &self,
+        emitter: &(impl EmitterExt + ?Sized),
+        level: NotificationLevel,
+        source: impl Into<String>,
+        message: impl Into<String>,
+        message_key: impl Into<String>,
+        message_args: Option<HashMap<String, serde_json::Value>>,
+    ) {
+        self.emit_i18n_with_action(emitter, level, source, message, message_key, message_args, None);
+    }
+
+    /// 推入一条带 i18n 翻译键和操作的通知，并广播 `notification-created`。
+    ///
+    /// Push a notification with an i18n key and action, broadcast `notification-created`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn emit_i18n_with_action(
+        &self,
+        emitter: &(impl EmitterExt + ?Sized),
+        level: NotificationLevel,
+        source: impl Into<String>,
+        message: impl Into<String>,
+        message_key: impl Into<String>,
+        message_args: Option<HashMap<String, serde_json::Value>>,
+        action: Option<NotificationAction>,
+    ) -> Notification {
+        let mut inner = self.inner.write();
+        let id = inner.next_id;
+        inner.next_id += 1;
+        let n = Notification {
+            id,
+            level,
+            source: source.into(),
+            message: message.into(),
+            message_key: Some(message_key.into()),
+            message_args,
+            created_at: Utc::now().to_rfc3339(),
+            action,
+        };
+        inner.notifications.push(n.clone());
+        drop(inner);
         emitter.emit("notification-created", &n);
         n
     }

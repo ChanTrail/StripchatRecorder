@@ -103,15 +103,20 @@ async fn schedule_mouflon_sync_inner(
                             );
                             // 超出重试上限 → 写入错误通知
                             // Exceeded retries → push error notification
-                            state.notification_store.emit(
-                                &emitter,
-                                NotificationLevel::Error,
-                                "mouflon_sync",
-                                format!(
-                                    "Mouflon 密钥同步失败（已重试 {} 次）：{}",
-                                    MAX_RETRIES, e
-                                ),
-                            );
+                            {
+                                use std::collections::HashMap;
+                                let mut args = HashMap::new();
+                                args.insert("retries".to_string(), serde_json::json!(MAX_RETRIES));
+                                args.insert("error".to_string(), serde_json::json!(e.to_string()));
+                                state.notification_store.emit_i18n(
+                                    &emitter,
+                                    NotificationLevel::Error,
+                                    "mouflon_sync",
+                                    format!("Mouflon key sync failed after {} retries: {}", MAX_RETRIES, e),
+                                    "notifications.backend.mouflonSyncFailed",
+                                    Some(args),
+                                );
+                            }
                             break;
                         }
                         tracing::warn!(
@@ -174,11 +179,16 @@ pub fn start_meta_cleanup(app_state: Arc<AppState>, emitter: Arc<dyn Emitter>) {
             .unwrap_or(0);
 
             if count > 0 {
-                app_state.notification_store.emit(
+                use std::collections::HashMap;
+                let mut args = HashMap::new();
+                args.insert("count".to_string(), serde_json::json!(count));
+                app_state.notification_store.emit_i18n(
                     &emitter,
                     NotificationLevel::Info,
                     "meta_cleanup",
-                    format!("已清理 {} 个孤立的 meta 文件（对应视频已不存在）", count),
+                    format!("Cleaned up {} orphaned meta file(s) whose video no longer exists.", count),
+                    "notifications.backend.metaCleanup",
+                    Some(args),
                 );
             }
 
@@ -245,23 +255,27 @@ pub fn start_update_check(app_state: Arc<AppState>, emitter: Arc<dyn Emitter>) {
                         );
 
                         let is_docker = crate::update::is_docker();
-                        let message = if is_docker {
-                            format!(
-                                "发现新版本 v{}，请更新 Docker 镜像以升级",
-                                latest
+                        let (message, key) = if is_docker {
+                            (
+                                format!("New version v{} available — update the Docker image to upgrade.", latest),
+                                "notifications.backend.updateAvailableDocker",
                             )
                         } else {
-                            format!(
-                                "发现新版本 v{}，前往关于页面下载更新",
-                                latest
+                            (
+                                format!("New version v{} available — go to the About page to download.", latest),
+                                "notifications.backend.updateAvailable",
                             )
                         };
+                        let mut args = std::collections::HashMap::new();
+                        args.insert("version".to_string(), serde_json::json!(latest));
 
-                        app_state.notification_store.emit_with_action(
+                        app_state.notification_store.emit_i18n_with_action(
                             &emitter,
                             NotificationLevel::Info,
                             "update_check",
                             message,
+                            key,
+                            Some(args),
                             Some(crate::core::notifications::NotificationAction {
                                 action_type: "view_update".to_string(),
                                 targets: vec![latest.clone()],

@@ -45,8 +45,8 @@ async function submit() {
 		error.value = t("login.passwordRequired");
 		return;
 	}
-	if (isInit.value && pwd.length < 6) {
-		error.value = t("login.passwordTooShort");
+	if (isInit.value && (pwd.length < 6 || !/[a-zA-Z]/.test(pwd) || !/[0-9]/.test(pwd) || !/[^a-zA-Z0-9]/.test(pwd))) {
+		error.value = t("login.passwordStrength");
 		return;
 	}
 

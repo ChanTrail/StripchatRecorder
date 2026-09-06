@@ -183,6 +183,22 @@
 		router.push("/login");
 	}
 
+	/**
+	 * 渲染后端通知消息：若有 message_key 则查 i18n，否则直接返回 message。
+	 * Render a backend notification message: use i18n if message_key is present, else fall back to message.
+	 */
+	function renderNotificationMessage(n: Notification): string {
+		if (n.message_key) {
+			const args = n.message_args ?? {};
+			const translated = t(n.message_key, args as Record<string, string | number>);
+			// vue-i18n missing handler returns the key itself when not found — treat that as fallback
+			if (translated && translated !== n.message_key) {
+				return translated;
+			}
+		}
+		return n.message;
+	}
+
 	function notificationLevelClass(level: Notification["level"]): string {
 		return level === "error"
 			? "text-destructive"
@@ -433,7 +449,7 @@
 							>
 								<div class="flex items-start justify-between gap-2">
 									<p class="text-sm leading-snug flex-1" :class="notificationLevelClass(item.data.level)">
-										{{ item.data.message }}
+										{{ renderNotificationMessage(item.data) }}
 									</p>
 									<Button
 										variant="ghost"

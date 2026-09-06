@@ -434,12 +434,10 @@
     "passwordLabel": "密码",
     "passwordPlaceholder": "请输入密码",
     "initPlaceholder": "请输入密码",
-    "initHint": "设置后每次访问都需要输入此密码",
     "loginButton": "登录",
     "initButton": "设置密码并登录",
     "logout": "退出登录",
     "passwordRequired": "请输入密码",
-    "passwordTooShort": "密码长度不能少于 6 位",
     "passwordStrength": "密码需至少 6 位，且包含字母、数字和特殊字符",
     "passwordStrengthHint": "至少 6 位 · 包含字母 · 包含数字 · 包含特殊字符（如 !#$%）",
     "wrongPassword": "密码错误，请重试",
@@ -492,6 +490,18 @@
     "action": {
       "remove_streamers": "删除主播",
       "view_update": "前往关于页面"
+    },
+    "backend": {
+      "ffmpegMissing": "未检测到 ffmpeg，录制和后处理功能将无法使用。请安装 ffmpeg 并确保其在 PATH 中。",
+      "metaMigrated": "已将 {count} 个旧版 meta 文件迁移到按主播子目录的新结构。",
+      "mouflonSyncFailed": "Mouflon 密钥同步失败（已重试 {retries} 次）：{error}",
+      "metaCleanup": "已清理 {count} 个孤立的 meta 文件（对应视频已不存在）",
+      "ppRemainingOne": "发现 1 个未完成的后处理任务（可能由上次异常退出遗留），已重新触发：{name}",
+      "ppRemainingMany": "发现 {count} 个未完成的后处理任务（可能由上次异常退出遗留），已重新触发：{names}",
+      "streamerDeadOne": "主播 {username} 已无法通过用户名或内部 ID 找到，可能已改名、注销或被封禁，后续将跳过其轮询请求。",
+      "streamerDeadMany": "以下 {count} 个主播已无法找到，可能已改名、注销或被封禁，后续将跳过其轮询请求：{usernames}",
+      "updateAvailableDocker": "发现新版本 v{version}，请更新 Docker 镜像以升级",
+      "updateAvailable": "发现新版本 v{version}，前往关于页面下载更新"
     }
   },
   "dirBrowser": {

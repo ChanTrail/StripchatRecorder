@@ -23,11 +23,13 @@ pub fn init_locale_dirs() {
 pub fn check_ffmpeg(app_state: &Arc<AppState>, emitter: &Arc<dyn Emitter>) {
     if !crate::recording::ffmpeg_util::ffmpeg_available() {
         tracing::warn!("ffmpeg not found on PATH");
-        app_state.notification_store.emit(
+        app_state.notification_store.emit_i18n(
             emitter.as_ref(),
             crate::core::notifications::NotificationLevel::Error,
             "startup",
-            "未检测到 ffmpeg，录制和后处理功能将无法使用。请安装 ffmpeg 并确保其在 PATH 中。",
+            "ffmpeg not found. Recording and post-processing will be unavailable.",
+            "notifications.backend.ffmpegMissing",
+            None,
         );
     }
 }
@@ -73,14 +75,16 @@ pub fn start_fs_watchers(app_state: Arc<AppState>, emitter: Arc<dyn Emitter>) {
 pub fn migrate_flat_meta_files(app_state: &Arc<AppState>, emitter: &Arc<dyn Emitter>) {
     let count = crate::recording::meta::migrate_flat_meta_files();
     if count > 0 {
-        app_state.notification_store.emit(
+        use std::collections::HashMap;
+        let mut args = HashMap::new();
+        args.insert("count".to_string(), serde_json::json!(count));
+        app_state.notification_store.emit_i18n(
             emitter.as_ref(),
             crate::core::notifications::NotificationLevel::Info,
             "startup",
-            format!(
-                "已将 {} 个旧版 meta 文件迁移到按主播子目录的新结构。",
-                count
-            ),
+            format!("Migrated {} legacy meta file(s) to per-streamer subdirectory layout.", count),
+            "notifications.backend.metaMigrated",
+            Some(args),
         );
     }
 }

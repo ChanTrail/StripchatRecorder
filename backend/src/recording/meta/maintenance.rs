@@ -282,23 +282,33 @@ pub async fn maintain_output_dir(
                     .unwrap_or_else(|| p.to_string_lossy().into_owned())
             })
             .collect();
-        let message = if count == 1 {
-            format!(
-                "发现 1 个未完成的后处理任务（可能由上次异常退出遗留），已重新触发：{}",
-                names[0]
+        use std::collections::HashMap;
+        let (message, key, args) = if count == 1 {
+            let mut a = HashMap::new();
+            a.insert("name".to_string(), serde_json::json!(&names[0]));
+            (
+                format!("Found 1 unfinished post-processing task (possibly left over from a previous crash), re-triggered: {}", names[0]),
+                "notifications.backend.ppRemainingOne",
+                a,
             )
         } else {
-            format!(
-                "发现 {} 个未完成的后处理任务（可能由上次异常退出遗留），已重新触发：{}",
-                count,
-                names.join("、")
+            let joined = names.join(", ");
+            let mut a = HashMap::new();
+            a.insert("count".to_string(), serde_json::json!(count));
+            a.insert("names".to_string(), serde_json::json!(joined));
+            (
+                format!("Found {} unfinished post-processing tasks (possibly left over from a previous crash), re-triggered: {}", count, joined),
+                "notifications.backend.ppRemainingMany",
+                a,
             )
         };
-        app_state.notification_store.emit(
+        app_state.notification_store.emit_i18n(
             emitter.as_ref(),
             crate::core::notifications::NotificationLevel::Warning,
             "output_dir_maintenance",
             message,
+            key,
+            Some(args),
         );
     }
 

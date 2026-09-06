@@ -137,8 +137,8 @@ async function finish() {
 		return;
 	}
 	const pwd = adminPassword.value.trim();
-	if (pwd.length < 6) {
-		error.value = t("login.passwordTooShort");
+	if (pwd.length < 6 || !/[a-zA-Z]/.test(pwd) || !/[0-9]/.test(pwd) || !/[^a-zA-Z0-9]/.test(pwd)) {
+		error.value = t("login.passwordStrength");
 		return;
 	}
 	saving.value = true;

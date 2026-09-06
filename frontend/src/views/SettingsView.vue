@@ -383,6 +383,11 @@
 			changePwdError.value = t("login.passwordRequired");
 			return;
 		}
+		const newPwd = changePwdForm.newPwd;
+		if (newPwd.length < 6 || !/[a-zA-Z]/.test(newPwd) || !/[0-9]/.test(newPwd) || !/[^a-zA-Z0-9]/.test(newPwd)) {
+			changePwdError.value = t("login.passwordStrength");
+			return;
+		}
 		changePwdLoading.value = true;
 		try {
 			await call("change_password", {
