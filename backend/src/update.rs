@@ -353,7 +353,23 @@ pub async fn download_and_install(
     let mut downloaded: u64 = 0;
     let mut zip_bytes: Vec<u8> = if total > 0 { Vec::with_capacity(total as usize) } else { Vec::new() };
 
-    emit_state!(UpdateProgress::Downloading { downloaded: 0, total, pct: if total > 0 { Some(0) } else { None } });
+    emit_state!(UpdateProgress::Downloading {
+        downloaded: 0,
+        total,
+        pct: if total > 0 { Some(0) } else { None },
+    });
+
+    // 节流策略 / Throttle strategy:
+    // - total 已知：每 1% 或每 200ms 广播一次
+    // - total 未知：每 512 KB 或每 200ms 广播一次
+    // Known total: broadcast every 1% or 200ms
+    // Unknown total: broadcast every 512 KB or 200ms
+    const THROTTLE_MS: u128 = 200;
+    const BYTES_THRESHOLD: u64 = 512 * 1024; // 512 KB
+
+    let mut last_emit = std::time::Instant::now();
+    let mut last_pct: Option<u8> = if total > 0 { Some(0) } else { None };
+    let mut last_emit_bytes: u64 = 0;
 
     let mut stream = resp.bytes_stream();
     while let Some(chunk) = stream.next().await {
@@ -361,16 +377,34 @@ pub async fn download_and_install(
             Ok(bytes) => {
                 zip_bytes.extend_from_slice(&bytes);
                 downloaded += bytes.len() as u64;
-                let pct = if total > 0 {
-                    downloaded.checked_div(total).map(|r| (r * 100).min(100) as u8)
-                } else {
-                    None
-                };
-                emit_state!(UpdateProgress::Downloading { downloaded, total, pct });
+
+                let pct = (downloaded * 100)
+                    .checked_div(total)
+                    .map(|r| r.min(100) as u8);
+
+                let elapsed = last_emit.elapsed().as_millis() >= THROTTLE_MS;
+                let pct_changed = pct != last_pct;
+                let bytes_threshold = total == 0 && (downloaded - last_emit_bytes) >= BYTES_THRESHOLD;
+
+                if elapsed || pct_changed || bytes_threshold {
+                    emit_state!(UpdateProgress::Downloading { downloaded, total, pct });
+                    last_emit = std::time::Instant::now();
+                    last_pct = pct;
+                    last_emit_bytes = downloaded;
+                }
             }
             Err(e) => bail!(format!("下载中断: {}", e)),
         }
     }
+
+    // 确保最终状态一定广播
+    // Always broadcast the final download state
+    let final_pct = if total > 0 { Some(100u8) } else { None };
+    emit_state!(UpdateProgress::Downloading { downloaded, total, pct: final_pct });
+
+    // 给 SSE 推送一点时间让前端收到最终下载状态，再进入安装阶段
+    // Give SSE a moment to deliver the final download state before moving to install
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
     // ── 2. 解压 + 替换 / Extract + replace ───────────────────────────────────
     emit_state!(UpdateProgress::Installing);
@@ -428,10 +462,23 @@ pub async fn download_and_install(
     };
 
     #[cfg(not(target_os = "windows"))]
-    let spawn_result = std::process::Command::new(&exe)
-        .args(&args)
-        .env("STRIPCHAT_RESTART_DELAY_MS", "2000")
-        .spawn();
+    let spawn_result = {
+        use std::os::unix::process::CommandExt;
+        // setsid：创建新会话，脱离父进程的进程组和控制终端
+        // 保证父进程退出后新进程不会收到 SIGHUP
+        // setsid: create a new session, detach from parent's process group and controlling terminal
+        // Ensures the new process doesn't receive SIGHUP when the parent exits
+        unsafe {
+            std::process::Command::new(&exe)
+                .args(&args)
+                .env("STRIPCHAT_RESTART_DELAY_MS", "2000")
+                .pre_exec(|| {
+                    libc::setsid();
+                    Ok(())
+                })
+                .spawn()
+        }
+    };
 
     match &spawn_result {
         Ok(child) => tracing::info!("新版本进程已启动 PID={}", child.id()),

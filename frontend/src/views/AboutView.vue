@@ -172,7 +172,8 @@
 	async function startUpdate() {
 		const url = updateInfo.value?.release?.download_url;
 		if (!url) return;
-		updateProgress.value = { state: "downloading", downloaded: 0, total: 0, pct: null };
+		// 初始状态 pct=0，进度条从 0 开始
+		updateProgress.value = { state: "downloading", downloaded: 0, total: 0, pct: 0 };
 		try {
 			await call("start_update_download", { download_url: url });
 		} catch (e) {
@@ -381,12 +382,7 @@
 									<!-- 下载中 -->
 									<span v-else-if="updateProgress.state === 'downloading'"
 										class="text-xs text-muted-foreground">
-										<template v-if="updateProgress.pct !== null">
-											{{ t("about.downloadProgress", { pct: updateProgress.pct }) }}
-										</template>
-										<template v-else>
-											{{ (updateProgress.downloaded / 1024 / 1024).toFixed(1) }} MB
-										</template>
+										{{ t("about.downloadProgress", { pct: updateProgress.pct ?? 0 }) }}
 									</span>
 
 									<!-- 安装中 -->
@@ -410,21 +406,12 @@
 						<div v-if="updateProgress.state === 'downloading' && !updateInfo.is_docker"
 							class="px-4 pb-3">
 							<div class="w-full h-1.5 bg-muted rounded-full overflow-hidden">
-								<!-- 知道总大小：精确进度条 / Known size: exact progress bar -->
-								<div v-if="updateProgress.pct !== null"
-									class="h-full bg-green-600 rounded-full transition-all duration-150"
-									:style="{ width: `${updateProgress.pct}%` }" />
-								<!-- 不知道总大小：脉冲动画 / Unknown size: indeterminate pulse -->
-								<div v-else
-									class="h-full w-1/3 bg-green-600 rounded-full animate-pulse" />
+								<div class="h-full bg-green-600 rounded-full transition-all duration-300"
+									:class="updateProgress.pct === null ? 'animate-pulse' : ''"
+									:style="{ width: `${updateProgress.pct ?? 0}%` }" />
 							</div>
 							<p class="mt-1 text-xs text-muted-foreground">
-								<template v-if="updateProgress.pct !== null">
-									{{ t("about.downloadProgress", { pct: updateProgress.pct }) }}
-								</template>
-								<template v-else>
-									{{ t("about.downloadProgressBytes", { mb: (updateProgress.downloaded / 1024 / 1024).toFixed(1) }) }}
-								</template>
+								{{ t("about.downloadProgress", { pct: updateProgress.pct ?? 0 }) }}
 							</p>
 						</div>
 

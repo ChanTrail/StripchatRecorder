@@ -221,9 +221,6 @@ pub fn start_output_dir_maintenance(
 /// Silently ignores check failures and retries on the next cycle.
 pub fn start_update_check(app_state: Arc<AppState>, emitter: Arc<dyn Emitter>) {
     tokio::spawn(async move {
-        // 启动时延迟 60 秒，避免在服务器刚启动、网络尚未就绪时立即查询
-        // Delay 60 s at startup to avoid querying before the network is ready
-        tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
 
         // 记录本次进程已通知过的版本，避免每 24 小时重复弹同一版本的通知
         // Track the last notified version to avoid repeated notifications for the same version
