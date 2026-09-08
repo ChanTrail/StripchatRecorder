@@ -12,6 +12,7 @@ A self-hosted Stripchat live stream recorder with a web-based management UI. Sup
 ## Features
 
 - Monitor multiple streamers and auto-record when they go live
+- Automatic file rotation: set **Recording File Duration (seconds)** in Settings to `1800` for 30-minute files, or `0` (default) for unlimited recording. The value auto-saves and applies to active recordings based on downloaded media duration. Completed files merge in the background while recording continues. Cuts preserve whole HLS chunks, so files can exceed the limit by one chunk; lowering the limit rotates an already-over-limit file when the next chunk arrives.
 - Web UI for managing streamers, recordings, and post-processing
 - **Streamer Finder**: discover streamers via [camgirlfinder.net](https://camgirlfinder.net), supporting:
   - Face search: upload an image, auto-detect a face, and find similar streamers

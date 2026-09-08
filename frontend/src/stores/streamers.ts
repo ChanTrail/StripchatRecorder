@@ -216,7 +216,8 @@ export const useStreamersStore = defineStore("streamers", () => {
 				if (s) s.is_recording = true;
 			}),
 			on("recording-stopped", (payload) => {
-				const p = payload as { username: string };
+				const p = payload as { username: string; is_recording?: boolean };
+				if (p.is_recording) return;
 				stoppingSet.value.delete(p.username);
 				const s = streamers.value.find((s) => s.username === p.username);
 				if (s) s.is_recording = false;

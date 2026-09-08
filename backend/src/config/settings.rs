@@ -76,6 +76,9 @@ pub struct Settings {
     pub sc_mirror_url: Option<String>,
     /// 最大并发录制数（0 = 不限制）/ Max concurrent recordings (0 = unlimited)
     pub max_concurrent: usize,
+    /// Per-file recording duration in seconds (0 = unlimited).
+    #[serde(default)]
+    pub max_recording_duration_secs: u64,
     /// 录制片段合并格式（默认 "mp4"）/ Recording segment merge format (default "mp4")
     #[serde(default = "default_merge_format")]
     pub merge_format: String,
@@ -162,6 +165,7 @@ impl Default for Settings {
             cdn_proxy_url: None,
             sc_mirror_url: None,
             max_concurrent: 0,
+            max_recording_duration_secs: 0,
             merge_format: default_merge_format(),
             preferred_resolution: 0,
             resolution_preference: default_resolution_preference(),
@@ -171,6 +175,32 @@ impl Default for Settings {
             mouflon_sync_url: default_mouflon_sync_url(),
             mouflon_sync_token: None,
             setup_done: false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod duration_settings_tests {
+    use super::*;
+
+    #[test]
+    fn duration_setting_is_backward_compatible_and_round_trips() {
+        let mut value = serde_json::to_value(Settings::default()).unwrap();
+        value.as_object_mut().unwrap().remove("max_recording_duration_secs");
+        let mut settings: Settings = serde_json::from_value(value).unwrap();
+        assert_eq!(settings.max_recording_duration_secs, 0);
+        settings.max_recording_duration_secs = 1800;
+        let saved = serde_json::to_string(&settings).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Settings>(&saved)
+                .unwrap()
+                .max_recording_duration_secs,
+            1800
+        );
+        let mut invalid = serde_json::to_value(settings).unwrap();
+        for value in [serde_json::json!(-1), serde_json::json!(1.5)] {
+            invalid["max_recording_duration_secs"] = value;
+            assert!(serde_json::from_value::<Settings>(invalid.clone()).is_err());
         }
     }
 }

@@ -260,6 +260,10 @@ export default {
 			changeConfirm: "Confirm",
 			changeDone: "Output directory updated, will take effect on next recording",
 		},
+		recordingDuration: {
+			label: "Recording File Duration (seconds)",
+			hint: "0 = unlimited; 1800 = 30 minutes. Auto-saved and applied to active recordings. Starts a new file at the next HLS chunk boundary after the limit; files may be a few seconds longer.",
+		},
 		maxConcurrent: {
 			label: "Max Concurrent Recordings",
 			hint: "0 means unlimited",
