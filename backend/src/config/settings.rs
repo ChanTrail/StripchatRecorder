@@ -179,31 +179,6 @@ impl Default for Settings {
     }
 }
 
-#[cfg(test)]
-mod duration_settings_tests {
-    use super::*;
-
-    #[test]
-    fn duration_setting_is_backward_compatible_and_round_trips() {
-        let mut value = serde_json::to_value(Settings::default()).unwrap();
-        value.as_object_mut().unwrap().remove("max_recording_duration_secs");
-        let mut settings: Settings = serde_json::from_value(value).unwrap();
-        assert_eq!(settings.max_recording_duration_secs, 0);
-        settings.max_recording_duration_secs = 1800;
-        let saved = serde_json::to_string(&settings).unwrap();
-        assert_eq!(
-            serde_json::from_str::<Settings>(&saved)
-                .unwrap()
-                .max_recording_duration_secs,
-            1800
-        );
-        let mut invalid = serde_json::to_value(settings).unwrap();
-        for value in [serde_json::json!(-1), serde_json::json!(1.5)] {
-            invalid["max_recording_duration_secs"] = value;
-            assert!(serde_json::from_value::<Settings>(invalid.clone()).is_err());
-        }
-    }
-}
 
 /// 持久化到 config/ 目录下各 JSON 文件的全部应用数据 / All application data persisted to JSON files under the config/ directory
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

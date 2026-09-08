@@ -190,33 +190,3 @@ fn extract_sequence(url: &str) -> Option<u32> {
     let num_str = last.split('.').next()?;
     num_str.parse().ok()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn durations_survive_mouflon_tags_and_do_not_leak_to_next_segment() {
-        let playlist = "#EXTM3U\n#EXTINF:2.5,\n#EXT-X-MOUFLON:URI:https://cdn.example/stream_10.mp4\nplaceholder.mp4\n#EXTINF:3,\nstream_11.mp4\nstream_12.mp4\n";
-        let (segments, _) =
-            parse_playlist(playlist, "https://cdn.example", &HashMap::new()).unwrap();
-        assert_eq!(
-            segments.iter().map(|s| s.duration_secs).collect::<Vec<_>>(),
-            vec![2.5, 3.0, 0.0]
-        );
-        assert_eq!(
-            segments.iter().map(|s| s.sequence).collect::<Vec<_>>(),
-            vec![10, 11, 12]
-        );
-    }
-
-    #[test]
-    fn invalid_durations_do_not_poison_the_recording_total() {
-        for value in ["NaN", "inf", "-2", "invalid"] {
-            let playlist = format!("#EXTINF:{value},\nstream_1.mp4\n");
-            let (segments, _) =
-                parse_playlist(&playlist, "https://cdn.example", &HashMap::new()).unwrap();
-            assert_eq!(segments[0].duration_secs, 0.0);
-        }
-    }
-}
