@@ -52,8 +52,28 @@ fn build_client(proxy_url: Option<&str>) -> Result<Client> {
 /// 构建用于 API 请求的 HTTP 客户端（支持代理，不启用 keepalive）。
 /// Build an HTTP client for API requests (supports proxy, no keepalive).
 fn build_api_client(proxy_url: Option<&str>) -> Result<Client> {
+    // Match the browser headers verified to work without session cookies.
+    let mut headers = reqwest::header::HeaderMap::new();
+    for (name, value) in [
+        ("accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"),
+        ("accept-language", "en-US,en;q=0.6"),
+        ("cache-control", "max-age=0"),
+        ("priority", "u=0, i"),
+        ("sec-ch-ua", "\"Not=A?Brand\";v=\"99\", \"Brave\";v=\"151\", \"Chromium\";v=\"151\""),
+        ("sec-ch-ua-mobile", "?0"),
+        ("sec-ch-ua-platform", "\"Linux\""),
+        ("sec-fetch-dest", "document"),
+        ("sec-fetch-mode", "navigate"),
+        ("sec-fetch-site", "none"),
+        ("sec-fetch-user", "?1"),
+        ("sec-gpc", "1"),
+        ("upgrade-insecure-requests", "1"),
+    ] {
+        headers.insert(name, reqwest::header::HeaderValue::from_static(value));
+    }
     let mut builder = Client::builder()
-        .user_agent(USER_AGENT)
+        .user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36")
+        .default_headers(headers)
         .timeout(std::time::Duration::from_secs(30));
 
     if let Some(proxy) = proxy_url
