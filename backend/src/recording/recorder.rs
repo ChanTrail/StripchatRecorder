@@ -201,6 +201,7 @@ impl RecorderManager {
         );
 
         let result_path = session_dir.to_string_lossy().to_string();
+        let mut session_dir = session_dir;
         let manager = Arc::clone(self);
         let username = username.to_string();
         let playlist_url = playlist_url.to_string();
@@ -210,13 +211,13 @@ impl RecorderManager {
                 .recording_loop(
                     &username,
                     &playlist_url,
-                    &session_dir,
+                    &mut session_dir,
                     stop_rx,
                     Arc::clone(&emitter),
                 )
                 .await
             {
-                tracing::error!("Recording error → {}: {}", username, e);
+        tracing::error!("{}", crate::tl!("recorder.recordingError", username = username, error = e));
             }
 
             let record_duration_secs = manager.sessions.read().get(&username).map(|s| {
@@ -323,6 +324,144 @@ impl RecorderManager {
         Ok(result_path)
     }
 
+    /// 文件轮转：在 HLS 分片边界创建新会话目录，将旧目录提交给后处理流水线，
+    /// 同时继续向新目录写入后续分片（不中断录制会话）。
+    ///
+    /// File rotation: create a new session directory at an HLS segment boundary,
+    /// submit the old directory to the post-processing pipeline, and continue writing
+    /// subsequent segments to the new directory (recording session uninterrupted).
+    fn rotate_session(
+        self: &Arc<Self>,
+        username: &str,
+        session_dir: &mut PathBuf,
+        emitter: &Arc<dyn Emitter>,
+    ) -> Result<()> {
+        let timestamp = Local::now().format("%Y%m%d_%H%M%S");
+        let parent = session_dir
+            .parent()
+            .ok_or_else(|| AppError::Other("session_dir has no parent".to_string()))?
+            .to_path_buf();
+
+        // 生成不冲突的新目录名，格式与初始会话目录一致（username_timestamp）
+        // Generate a conflict-free new directory name in the same format as the initial session dir
+        let candidate = parent.join(format!("{}_{}", username, timestamp));
+        let next_dir = if !candidate.exists() {
+            fs::create_dir_all(&candidate)?;
+            candidate
+        } else {
+            // 同一秒内触发多次轮转时加后缀避免冲突
+            // Add a numeric suffix when multiple rotations happen within the same second
+            let mut n = 2u64;
+            loop {
+                let c = parent.join(format!("{}_{}_{}", username, timestamp, n));
+                if !c.exists() {
+                    fs::create_dir_all(&c)?;
+                    break c;
+                }
+                n += 1;
+            }
+        };
+
+        // 更新 sessions 表中的 dir_path，并记录开始时间
+        let now = chrono::Utc::now();
+        {
+            let mut sessions = self.sessions.write();
+            if let Some(session) = sessions.get_mut(username) {
+                session.dir_path = next_dir.clone();
+                session.started_at = now;
+            }
+        }
+
+        // 创建新 meta（recording 状态）
+        {
+            let started_at = chrono::Local::now().to_rfc3339();
+            let meta = crate::recording::meta::VideoMeta {
+                meta_version: crate::recording::meta::META_VERSION,
+                status: "recording".to_string(),
+                started_at,
+                size_bytes: 0,
+                video_duration_secs: None,
+                video_resolution: None,
+                pp_execution: None,
+                segments_downloaded: None,
+                segments_failed: None,
+                video_path: None,
+                pp_progress: None,
+            };
+            crate::recording::meta::write_meta(&next_dir, &meta);
+        }
+
+        emitter.emit(
+            "recording-started",
+            &serde_json::json!({
+                "username": username,
+                "dir_path": next_dir.to_string_lossy(),
+            }),
+        );
+
+        // 旧目录提交给后处理流水线（异步，不阻塞录制）
+        let old_dir = std::mem::replace(session_dir, next_dir);
+        let manager = Arc::clone(self);
+        let username_owned = username.to_string();
+        let emitter_owned = Arc::clone(emitter);
+
+        tokio::task::spawn_blocking(move || {
+            let _startup_guard = manager
+                .state
+                .startup_lock
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+
+            let user_pipeline = manager.state.get_pipeline();
+            if !user_pipeline.nodes.iter().any(|n| n.enabled) {
+                return;
+            }
+
+            let stem = old_dir
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown");
+            let started_at =
+                crate::recording::service::parse_timestamp_from_stem_pub(stem)
+                    .unwrap_or_else(|| {
+                        let local: chrono::DateTime<chrono::Local> = chrono::Utc::now().into();
+                        local.to_rfc3339()
+                    });
+
+            crate::recording::meta::ensure_meta(&old_dir, &started_at);
+
+            manager
+                .waiting_merge_dirs
+                .write()
+                .insert(old_dir.clone());
+            emitter_owned.emit(
+                "recording-pp-waiting",
+                &serde_json::json!({
+                    "username": username_owned,
+                    "session_dir": old_dir.to_string_lossy(),
+                    "video_path": old_dir.to_string_lossy(),
+                }),
+            );
+
+            crate::postprocess::service::run_postprocess_for_path(
+                &old_dir,
+                &old_dir,
+                &user_pipeline,
+                &emitter_owned,
+                &manager.state,
+            );
+
+            manager
+                .waiting_merge_dirs
+                .write()
+                .remove(&old_dir);
+        });
+
+        tracing::info!("{}", crate::tl!("recorder.started", username = username, dir = session_dir.display())
+        );
+        Ok(())
+    }
+
     /// 手动停止录制（标记为手动停止，防止自动重录）。
     /// Manually stop recording (marks as manually stopped to prevent auto-restart).
     pub async fn stop_recording(self: &Arc<Self>, username: &str) -> Result<()> {
@@ -357,10 +496,10 @@ impl RecorderManager {
     /// converts to TS format, and writes to the session directory.
     /// Proxy settings and Mouflon keys are read dynamically each iteration and take effect immediately.
     async fn recording_loop(
-        &self,
+        self: &Arc<Self>,
         username: &str,
         playlist_url: &str,
-        session_dir: &PathBuf,
+        session_dir: &mut PathBuf,
         mut stop_rx: mpsc::Receiver<()>,
         emitter: Arc<dyn Emitter>,
     ) -> Result<()> {
@@ -389,13 +528,18 @@ impl RecorderManager {
             Some(last_settings.sc_mirror_scheme.as_str()),
             Arc::clone(&self.preferred_tld_by_node),
         )?
-        .with_mouflon_keys(self.state.get_mouflon_keys());
+        .with_mouflon_keys(self.state.get_mouflon_keys())
+        .with_resolution_selection(
+            last_settings.preferred_resolution,
+            &last_settings.resolution_preference,
+        );
         let mut current_playlist_url = playlist_url.to_string();
         let mut url_prefix = get_url_prefix(&current_playlist_url);
 
         let mut downloaded_sequences: HashSet<u32> = HashSet::new();
         let mut mp4_header: Option<Vec<u8>> = None;
         let mut cached_init_url: Option<String> = None;
+        let mut recorded_secs = 0.0f64;
         let mut retry_count = 0;
         let mut playlist_refresh_failures = 0;
         let mut consecutive_cdn_failures: usize = 0;
@@ -408,7 +552,7 @@ impl RecorderManager {
         const MAX_PLAYLIST_REFRESH_FAILURES: u32 = 5;
         const CDN_FAILURE_REFRESH_THRESHOLD: usize = 3;
 
-        tracing::info!("Started recording {} → {:?}", username, session_dir);
+        tracing::info!("{}", crate::tl!("recorder.started", username = username, dir = session_dir.display()));
 
         loop {
             // 检测代理/密钥设置变更，变更时重建 api 实例使其立即生效
@@ -419,8 +563,11 @@ impl RecorderManager {
                 || current_settings.cdn_proxy_url != last_settings.cdn_proxy_url
                 || current_settings.sc_mirror_url != last_settings.sc_mirror_url
                 || current_settings.sc_mirror_scheme != last_settings.sc_mirror_scheme;
+            let resolution_changed = current_settings.preferred_resolution
+                != last_settings.preferred_resolution
+                || current_settings.resolution_preference != last_settings.resolution_preference;
             let keys_changed = current_mouflon_keys != *api.mouflon_keys();
-            if proxy_changed || keys_changed {
+            if proxy_changed || resolution_changed || keys_changed {
                 match StripchatApi::new(
                     current_settings.api_proxy_url.as_deref(),
                     current_settings.cdn_proxy_url.as_deref(),
@@ -429,11 +576,16 @@ impl RecorderManager {
                     Arc::clone(&self.preferred_tld_by_node),
                 ) {
                     Ok(new_api) => {
-                        api = new_api.with_mouflon_keys(current_mouflon_keys);
-                        tracing::info!("Recording {}: api client rebuilt due to settings change", username);
+                        api = new_api
+                            .with_mouflon_keys(current_mouflon_keys)
+                            .with_resolution_selection(
+                                current_settings.preferred_resolution,
+                                &current_settings.resolution_preference,
+                            );
+                        tracing::info!("{}", crate::tl!("recorder.apiRebuilt", username = username));
                     }
                     Err(e) => {
-                        tracing::warn!("Recording {}: failed to rebuild api client: {}", username, e);
+                        tracing::warn!("{}", crate::tl!("recorder.apiRebuildFailed", username = username, error = e));
                     }
                 }
                 last_settings = current_settings.clone();
@@ -443,10 +595,10 @@ impl RecorderManager {
             let mut wait_next_round = true;
             tokio::select! {
                 _ = stop_rx.recv() => {
-                    tracing::info!("Stop signal received → {}", username);
+                    tracing::info!("{}", crate::tl!("recorder.stopSignal", username = username));
                     break;
                 }
-                result = Self::fetch_segments(
+                result = self.fetch_segments(
                     &api,
                     &current_playlist_url,
                     &url_prefix,
@@ -456,6 +608,8 @@ impl RecorderManager {
                     &mut downloaded_sequences,
                     &mut mp4_header,
                     &mut cached_init_url,
+                    &mut recorded_secs,
+                    &emitter,
                 ) => {
                     match result {
                         Ok((n, cdn_fail)) => {
@@ -467,7 +621,7 @@ impl RecorderManager {
                                 consecutive_cdn_failures = 0;
                                 retry_count = 0;
                                 total_downloaded += n as u64;
-                                let size_bytes = dir_size_bytes(session_dir).unwrap_or(0);
+                                let size_bytes = dir_size_bytes(&*session_dir).unwrap_or(0);
                                 let now = std::time::Instant::now();
                                 let speed_bps = last_size_snapshot.map(|(prev_size, prev_time)| {
                                     let dt = now.duration_since(prev_time).as_secs_f64();
@@ -522,71 +676,69 @@ impl RecorderManager {
                                 retry_count += 1;
                             }
                             if consecutive_cdn_failures >= CDN_FAILURE_REFRESH_THRESHOLD {
-                                tracing::error!(
-                                    "Fetch error → {}: {} consecutive CDN failures, refreshing playlist",
-                                    username, consecutive_cdn_failures
+                                tracing::error!("{}", crate::tl!("recorder.fetchErrCdnRefresh", username = username, count = consecutive_cdn_failures)
                                 );
                                 consecutive_cdn_failures = 0;
                                 match api.get_stream_info(username, true, known_model_id()).await {
                                     Ok(info) => {
                                         if let Some(new_url) = info.playlist_url {
-                                            tracing::info!("Refreshed playlist URL → {}", username);
+                                            tracing::info!("{}", crate::tl!("recorder.playlistRefreshed", username = username));
                                             url_prefix = get_url_prefix(&new_url);
                                             current_playlist_url = new_url;
                                             playlist_refresh_failures = 0;
                                             retry_count = 0;
                                             wait_next_round = false;
                                         } else if !info.is_recordable {
-                                            tracing::warn!("Stream no longer recordable → {} (status: {}), stopping", username, info.status);
+                                            tracing::warn!("{}", crate::tl!("recorder.streamNotRecordable", username = username, status = info.status));
                                             break;
                                         } else {
                                             playlist_refresh_failures += 1;
                                         }
                                     }
                                     Err(refresh_err) => {
-                                        tracing::error!("Playlist refresh failed → {}: {}", username, refresh_err);
+                                        tracing::error!("{}", crate::tl!("recorder.playlistRefreshFailed", username = username, error = refresh_err));
                                         playlist_refresh_failures += 1;
                                     }
                                 }
                                 if playlist_refresh_failures >= MAX_PLAYLIST_REFRESH_FAILURES {
-                                    tracing::warn!("Stream ended → {} (playlist refresh failed {} times)", username, playlist_refresh_failures);
+                                    tracing::warn!("{}", crate::tl!("recorder.streamEndedPlaylistFail", username = username, count = playlist_refresh_failures));
                                     break;
                                 }
                             }
                         }
                         Err(e) => {
-                            tracing::error!("Fetch error → {}: {}, attempting playlist refresh", username, e);
+                            tracing::error!("{}", crate::tl!("recorder.fetchErrRefresh", username = username, error = e));
                             consecutive_cdn_failures = 0;
                             match api.get_stream_info(username, true, known_model_id()).await {
                                 Ok(info) => {
                                     if let Some(new_url) = info.playlist_url {
-                                        tracing::info!("Refreshed playlist URL → {}", username);
+                                        tracing::info!("{}", crate::tl!("recorder.playlistRefreshed", username = username));
                                         url_prefix = get_url_prefix(&new_url);
                                         current_playlist_url = new_url;
                                         playlist_refresh_failures = 0;
                                         retry_count = 0;
                                         wait_next_round = false;
                                     } else if !info.is_recordable {
-                                        tracing::warn!("Stream no longer recordable → {} (status: {}), stopping", username, info.status);
+                                        tracing::warn!("{}", crate::tl!("recorder.streamNotRecordableNoUrl", username = username, status = info.status));
                                         break;
                                     } else {
-                                        tracing::warn!("No playlist URL yet → {} (status: {}), retrying", username, info.status);
+                                        tracing::warn!("{}", crate::tl!("recorder.noPlaylistUrl", username = username, status = info.status));
                                         playlist_refresh_failures += 1;
                                     }
                                 }
                                 Err(refresh_err) => {
-                                    tracing::error!("Playlist refresh failed → {}: {}", username, refresh_err);
+                                    tracing::error!("{}", crate::tl!("recorder.playlistRefreshFailed", username = username, error = refresh_err));
                                     playlist_refresh_failures += 1;
                                 }
                             }
                             if playlist_refresh_failures >= MAX_PLAYLIST_REFRESH_FAILURES {
-                                tracing::warn!("Stream ended → {} (playlist refresh failed {} times)", username, playlist_refresh_failures);
+                                tracing::warn!("{}", crate::tl!("recorder.streamEndedPlaylistFail", username = username, count = playlist_refresh_failures));
                                 break;
                             }
                         }
                     }
                     if retry_count >= MAX_RETRIES {
-                        tracing::warn!("Stream ended → {} (max retries)", username);
+                        tracing::warn!("{}", crate::tl!("recorder.streamEndedMaxRetries", username = username));
                         break;
                     }
                     if wait_next_round {
@@ -596,7 +748,7 @@ impl RecorderManager {
             }
         }
 
-        tracing::info!("Finished recording {} → {:?}", username, session_dir);
+        tracing::info!("{}", crate::tl!("recorder.finished", username = username, dir = session_dir.display()));
         Ok(())
     }
 
@@ -607,15 +759,18 @@ impl RecorderManager {
     /// Returns `(number of segments written, number of CDN failures)`.
     #[allow(clippy::too_many_arguments)]
     async fn fetch_segments(
+        self: &Arc<Self>,
         api: &StripchatApi,
         playlist_url: &str,
         url_prefix: &str,
         mouflon_keys: &HashMap<String, String>,
-        session_dir: &std::path::Path,
+        session_dir: &mut PathBuf,
         username: &str,
         downloaded_sequences: &mut HashSet<u32>,
         mp4_header: &mut Option<Vec<u8>>,
         cached_init_url: &mut Option<String>,
+        recorded_secs: &mut f64,
+        emitter: &Arc<dyn Emitter>,
     ) -> Result<(usize, usize)> {
         let playlist = api.fetch_playlist(playlist_url).await?;
         let (segments, init_url) = parse_playlist(&playlist, url_prefix, mouflon_keys)?;
@@ -627,14 +782,12 @@ impl RecorderManager {
         {
             match api.download_segment(url).await {
                 Ok(data) => {
-                    tracing::info!("Cached init segment → {} ({} bytes)", username, data.len());
+                    tracing::info!("{}", crate::tl!("recorder.initSegmentCached", username = username, bytes = data.len()));
                     *mp4_header = Some(data);
                     *cached_init_url = Some(url.clone());
                 }
                 Err(e) => {
-                    tracing::error!(
-                        "Failed to download init segment: {}, skipping this round",
-                        e
+                    tracing::error!("{}", crate::tl!("recorder.initSegmentFailed", error = e)
                     );
                     return Ok((0, 0));
                 }
@@ -654,6 +807,21 @@ impl RecorderManager {
             match api.download_segment(&segment.url).await {
                 Ok(data) => {
                     if data.len() > 1000 {
+                        // 检查是否需要轮转（在写入前检查，确保在 HLS 分片边界切换）
+                        // Check rotation before writing, ensuring switch at an HLS segment boundary
+                        let limit = self.state.get_settings().max_recording_duration_secs;
+                        if limit > 0 && *recorded_secs >= limit as f64 {
+                            if let Err(e) = self.rotate_session(username, session_dir, emitter) {
+                                tracing::warn!("{}", crate::tl!("recorder.rotateFailed", username = username, error = e));
+                            } else {
+                                *recorded_secs = 0.0;
+                                // 重置 init 缓存，让新会话目录重新写入 init 分片头
+                                // Reset init cache so the new session directory gets a fresh init header
+                                *mp4_header = None;
+                                *cached_init_url = None;
+                            }
+                        }
+
                         let ts_path = session_dir
                             .join(format!("{}_segment{:06}.ts", username, segment.sequence));
 
@@ -669,22 +837,20 @@ impl RecorderManager {
 
                         match convert_to_ts(fmp4, &ts_path).await {
                             Ok(_) => {
-                                append_to_m3u8(session_dir, &ts_path);
+                                append_to_m3u8(&*session_dir, &ts_path);
                                 downloaded_sequences.insert(segment.sequence);
                                 written += 1;
+                                *recorded_secs += segment.duration_secs;
                             }
                             Err(e) => {
-                                tracing::error!(
-                                    "ffmpeg convert failed → segment {}: {}",
-                                    segment.sequence,
-                                    e
+                                tracing::error!("{}", crate::tl!("recorder.ffmpegConvertFailed", seq = segment.sequence, error = e)
                                 );
                             }
                         }
                     }
                 }
                 Err(e) => {
-                    tracing::error!("Failed to download segment {}: {}", segment.sequence, e);
+                    tracing::error!("{}", crate::tl!("recorder.segmentDownloadFailed", seq = segment.sequence, error = e));
                     cdn_failures += 1;
                 }
             }

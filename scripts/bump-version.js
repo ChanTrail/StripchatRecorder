@@ -12,6 +12,7 @@
  *   - desktop/package.json
  *   - desktop/src-tauri/Cargo.toml
  *   - desktop/src-tauri/tauri.conf.json
+ *   - Dockerfile                          (两处 LABEL version=)
  *
  * 用法 / Usage:
  *   node scripts/bump-version.js <new-version>
@@ -117,7 +118,22 @@ function patchCargoToml(filePath, newVersion) {
   return oldVersion;
 }
 
-// ── 主流程 / Main ─────────────────────────────────────────────────────────────
+/**
+ * 更新 Dockerfile 中所有 LABEL version="..." 行。
+ * Update all LABEL version="..." lines in the Dockerfile.
+ */
+function patchDockerfile(filePath, newVersion) {
+  const raw = fs.readFileSync(filePath, "utf8");
+  const oldVersions = [];
+  const out = raw.replace(/^(\s*version=)"([^"]+)"/mg, (_, prefix, old) => {
+    if (!oldVersions.includes(old)) oldVersions.push(old);
+    return `${prefix}"${newVersion}"`;
+  });
+  fs.writeFileSync(filePath, out, "utf8");
+  return oldVersions[0] ?? null;
+}
+
+
 
 const newVersion = process.argv[2];
 
@@ -137,12 +153,13 @@ const ROOT = path.resolve(__dirname, "..");
 // 需要更新的文件列表 / List of files to update
 // 每项: { rel: 相对路径, type: "json" | "cargo", label: 显示名 }
 const targets = [
-  { rel: "package.json",                      type: "json",  label: "package.json (root workspace)" },
-  { rel: "frontend/package.json",             type: "json",  label: "frontend/package.json" },
-  { rel: "backend/Cargo.toml",                type: "cargo", label: "backend/Cargo.toml" },
-  { rel: "desktop/package.json",              type: "json",  label: "desktop/package.json" },
-  { rel: "desktop/src-tauri/Cargo.toml",      type: "cargo", label: "desktop/src-tauri/Cargo.toml" },
-  { rel: "desktop/src-tauri/tauri.conf.json", type: "json",  label: "desktop/src-tauri/tauri.conf.json" },
+  { rel: "package.json",                      type: "json",       label: "package.json (root workspace)" },
+  { rel: "frontend/package.json",             type: "json",       label: "frontend/package.json" },
+  { rel: "backend/Cargo.toml",                type: "cargo",      label: "backend/Cargo.toml" },
+  { rel: "desktop/package.json",              type: "json",       label: "desktop/package.json" },
+  { rel: "desktop/src-tauri/Cargo.toml",      type: "cargo",      label: "desktop/src-tauri/Cargo.toml" },
+  { rel: "desktop/src-tauri/tauri.conf.json", type: "json",       label: "desktop/src-tauri/tauri.conf.json" },
+  { rel: "Dockerfile",                        type: "dockerfile", label: "Dockerfile (LABEL version)" },
 ];
 
 console.log(`\n${C.cyan}${"═".repeat(60)}${C.reset}`);
@@ -161,6 +178,8 @@ for (const t of targets) {
     let oldVersion;
     if (t.type === "json") {
       oldVersion = patchJson(filePath, newVersion);
+    } else if (t.type === "dockerfile") {
+      oldVersion = patchDockerfile(filePath, newVersion);
     } else {
       oldVersion = patchCargoToml(filePath, newVersion);
     }

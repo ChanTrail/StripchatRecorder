@@ -56,12 +56,22 @@ fn build_client(proxy_url: Option<&str>) -> Result<Client> {
     Ok(builder.build()?)
 }
 
-/// 构建用于 API 请求的 HTTP 客户端（支持代理，不启用 keepalive）。
-/// Build an HTTP client for API requests (supports proxy, no keepalive).
+/// 构建用于 API 请求的 HTTP 客户端（支持代理，HTTP/2，附加请求优先级头）。
+/// Build an HTTP client for API requests (supports proxy, HTTP/2, request priority header).
 fn build_api_client(proxy_url: Option<&str>) -> Result<Client> {
     let mut builder = Client::builder()
         .user_agent(USER_AGENT)
-        .timeout(std::time::Duration::from_secs(30));
+        .timeout(std::time::Duration::from_secs(30))
+        .http2_prior_knowledge()
+        // Priority: u=0, i — 最高用户可见优先级，非增量，降低 CDN/WAF 对非浏览器请求的
+        // 识别率，减少 403 响应概率。
+        // Priority: u=0, i — highest user-visible urgency, non-incremental; reduces CDN/WAF
+        // fingerprinting of non-browser requests, lowering the chance of 403 responses.
+        .default_headers({
+            let mut headers = reqwest::header::HeaderMap::new();
+            headers.insert("Priority", reqwest::header::HeaderValue::from_static("u=0, i"));
+            headers
+        });
 
     if let Some(proxy) = proxy_url
         && !proxy.is_empty() {
@@ -119,6 +129,10 @@ pub struct StripchatApi {
     preferred_tld_by_node: Arc<parking_lot::Mutex<std::collections::HashMap<String, String>>>,
     /// Mouflon 解密密钥（pkey -> pdkey），用于 playlist URL 匹配 / Mouflon decryption keys (pkey -> pdkey) for playlist URL matching
     mouflon_keys: HashMap<String, String>,
+    /// 首选分辨率高度（0 = 原始/最高画质）/ Preferred resolution height (0 = original/highest quality)
+    preferred_resolution: u32,
+    /// 首选分辨率缺失时是否优先向上选择 / Whether to prefer a higher resolution when the target is unavailable
+    prefers_higher_resolution: bool,
 }
 
 impl StripchatApi {
@@ -141,6 +155,8 @@ impl StripchatApi {
                 .to_string(),
             preferred_tld_by_node,
             mouflon_keys: HashMap::new(),
+            preferred_resolution: 0,
+            prefers_higher_resolution: false,
         })
     }
 
@@ -168,10 +184,32 @@ impl StripchatApi {
         self
     }
 
+    /// 设置首选分辨率和回退方向，返回 self 以支持链式调用。
+    /// Set the preferred resolution and fallback direction, returning self for method chaining.
+    pub fn with_resolution_selection(
+        mut self,
+        preferred_resolution: u32,
+        resolution_preference: &str,
+    ) -> Self {
+        self.preferred_resolution = preferred_resolution;
+        self.prefers_higher_resolution = resolution_preference == "higher";
+        self
+    }
+
     /// 获取当前 Mouflon 解密密钥的引用。
     /// Get a reference to the current Mouflon decryption keys.
     pub fn mouflon_keys(&self) -> &HashMap<String, String> {
         &self.mouflon_keys
+    }
+
+    /// 获取当前首选分辨率。/ Get the current preferred resolution.
+    pub fn preferred_resolution(&self) -> u32 {
+        self.preferred_resolution
+    }
+
+    /// 返回是否优先选择更高分辨率。/ Return whether higher resolutions are preferred.
+    pub fn prefers_higher_resolution(&self) -> bool {
+        self.prefers_higher_resolution
     }
 
     /// 将 stripchat.com 域名替换为镜像站域名（若已配置），并替换协议。
@@ -341,11 +379,7 @@ impl StripchatApi {
                     tasks.abort_all();
                     let preferred = self.preferred_tld_by_node.lock().get(&node_id).cloned();
                     if preferred.as_deref() != Some(tld.as_str()) {
-                        tracing::debug!(
-                            "CDN [{}] {} -> {}",
-                            node_id,
-                            preferred.as_deref().unwrap_or(src_tld),
-                            tld
+                        tracing::debug!("{}", crate::tl!("stripchat.cdnTldChanged", node = node_id, from = preferred.as_deref().unwrap_or(src_tld), to = tld)
                         );
                         self.preferred_tld_by_node.lock().insert(node_id, tld);
                     }
@@ -361,7 +395,7 @@ impl StripchatApi {
         }
 
         for (tld, err) in &errors {
-            tracing::error!("CDN [{}] {}", tld, err);
+            tracing::error!("{}", crate::tl!("stripchat.cdnTldFailed", tld = tld, error = err));
         }
         Err(AppError::Other(format!("All CDN TLDs failed → {}", url)))
     }
@@ -517,9 +551,7 @@ impl StripchatApi {
                 let model_id = known_model_id.unwrap();
                 match self.lookup_username_by_model_id(model_id).await {
                     Some(new_username) if new_username.to_lowercase() != username.to_lowercase() => {
-                        tracing::info!(
-                            "Streamer renamed detected: {} -> {} (model_id={})",
-                            username, new_username, model_id
+                        tracing::info!("{}", crate::tl!("stripchat.streamerRenamed", username = username, newUsername = new_username, modelId = model_id)
                         );
                         let mut info = self
                             .fetch_stream_info_by_username(&new_username, fetch_playlist)
@@ -690,7 +722,7 @@ impl StripchatApi {
             match result {
                 Ok(resp) if resp.status().is_success() => {
                     tasks.abort_all();
-                    tracing::debug!("auto.m3u8 via CDN TLD: {}", tld);
+                    tracing::debug!("{}", crate::tl!("stripchat.autoM3u8TldSuccess", tld = tld));
                     return Ok(resp.text().await?);
                 }
                 Ok(resp) => {
@@ -703,7 +735,7 @@ impl StripchatApi {
         }
 
         for (url, err) in &errors {
-            tracing::error!("auto.m3u8 fetch failed [{}]: {}", url, err);
+            tracing::error!("{}", crate::tl!("stripchat.autoM3u8Failed", url = url, error = err));
         }
         Err(AppError::Other(format!(
             "All CDN TLDs failed for model {} _auto.m3u8",
@@ -712,12 +744,12 @@ impl StripchatApi {
     }
 
     /// 获取主播的 HLS 播放列表 URL。
-    /// 直接对所有 CDN TLD 竞速请求 `{model_id}_auto.m3u8`，解析最高清晰度流。
+    /// 直接对所有 CDN TLD 竞速请求 `{model_id}_auto.m3u8`，按配置选择流。
     /// 若 playlist 包含 Mouflon 加密参数，则按用户配置的 Mouflon Keys 顺序逐一比对，
     /// 取第一个匹配的 pkey 对应的 psch 拼入 URL。
     ///
     /// Get the HLS playlist URL for a streamer.
-    /// Races all CDN TLDs for `{model_id}_auto.m3u8` and picks the highest-quality stream.
+    /// Races all CDN TLDs for `{model_id}_auto.m3u8` and selects a stream using the configured resolution preference.
     /// If the playlist contains Mouflon encryption parameters, iterates through the user-configured
     /// Mouflon Keys in order and uses the first matching pkey's psch in the URL.
     async fn get_playlist_url(
@@ -731,7 +763,11 @@ impl StripchatApi {
 
         let playlist_text = self.fetch_auto_playlist(model_id).await?;
 
-        let parsed = crate::recording::hls::parse_master_playlist(&playlist_text);
+        let parsed = crate::recording::hls::parse_master_playlist(
+            &playlist_text,
+            self.preferred_resolution,
+            self.prefers_higher_resolution,
+        );
 
         let (url, mouflon_pairs) =
             parsed.ok_or_else(|| AppError::StreamOffline(username.to_string()))?;
@@ -762,7 +798,7 @@ impl StripchatApi {
             }
         };
 
-        tracing::info!("Using the URL: {}", final_url);
+        tracing::info!("{}", crate::tl!("stripchat.usingUrl", url = final_url));
 
         Ok(final_url)
     }

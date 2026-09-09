@@ -187,7 +187,7 @@ pub fn run_unpack(effective_id: &str, inputs: &[PathBuf]) -> NodeResult {
         if img.exists() {
             outputs.push(img);
         } else {
-            tracing::warn!("unpack: image path not found (skipping port 1): {}", img.display());
+            tracing::warn!("{}", crate::tl!("postprocess.builtinUnpackImageNotFound", path = img.display()));
         }
     }
 

@@ -62,6 +62,12 @@ pub fn module_locale_dir(module_id: &str) -> PathBuf {
     modules_locale_dir().join(module_id)
 }
 
+/// 返回后端日志翻译目录（`<exe_dir>/locale/log`）。
+/// Returns the backend log locale directory (`<exe_dir>/locale/log`).
+pub fn log_locale_dir() -> PathBuf {
+    locale_dir().join("log")
+}
+
 /// 默认的主程序中文翻译 JSON。
 /// Default app Chinese (zh-CN) translation JSON.
 const APP_ZH_CN: &str = include_str!("defaults/app/zh-CN.json");
@@ -69,6 +75,14 @@ const APP_ZH_CN: &str = include_str!("defaults/app/zh-CN.json");
 /// 默认的主程序英文翻译 JSON。
 /// Default app English (en-US) translation JSON.
 const APP_EN_US: &str = include_str!("defaults/app/en-US.json");
+
+/// 默认的后端日志中文翻译 JSON。
+/// Default backend log Chinese (zh-CN) translation JSON.
+const LOG_ZH_CN: &str = include_str!("defaults/log/zh-CN.json");
+
+/// 默认的后端日志英文翻译 JSON。
+/// Default backend log English (en-US) translation JSON.
+const LOG_EN_US: &str = include_str!("defaults/log/en-US.json");
 
 /// 内置模块的默认 locale 数据（模块 ID, 语言代码, JSON 内容）。
 /// 包含外部可执行模块和内置节点（`__builtin__*`）。
@@ -150,10 +164,11 @@ pub fn init_locale_dirs() {
     // 创建目录结构 / Create directory structure
     let app_dir = app_locale_dir();
     let modules_dir = modules_locale_dir();
+    let log_dir = log_locale_dir();
 
-    for dir in [&app_dir, &modules_dir] {
+    for dir in [&app_dir, &modules_dir, &log_dir] {
         if let Err(e) = std::fs::create_dir_all(dir) {
-            tracing::warn!("Failed to create locale dir {:?}: {}", dir, e);
+            tracing::warn!(dir = ?dir, error = %e, "Failed to create locale dir {:?}: {}", dir, e);
         }
     }
 
@@ -169,6 +184,18 @@ pub fn init_locale_dirs() {
         );
     }
 
+    // 后端日志翻译文件：不存在则创建，存在但 JSON 解析失败则重建
+    // Backend log locale files: create if missing, rebuild if JSON parse fails
+    for (locale_code, default_content) in [("zh-CN", LOG_ZH_CN), ("en-US", LOG_EN_US)] {
+        let path = log_dir.join(format!("{}.json", locale_code));
+        write_or_rebuild_if_invalid(
+            &path,
+            default_content,
+            validate_log_locale,
+            &format!("log/{}", locale_code),
+        );
+    }
+
     // 模块内置语言文件：不存在则创建，存在但校验失败则重建
     // `__builtin__` 是按节点分组的嵌套结构，需要用专门的校验函数（见
     // validate_builtin_locale 的文档），其余常规模块用扁平结构的校验函数。
@@ -179,7 +206,7 @@ pub fn init_locale_dirs() {
     for (module_id, locale_code, content) in MODULE_DEFAULTS {
         let dir = module_locale_dir(module_id);
         if let Err(e) = std::fs::create_dir_all(&dir) {
-            tracing::warn!("Failed to create module locale dir {:?}: {}", dir, e);
+            tracing::warn!(dir = ?dir, error = %e, "Failed to create module locale dir {:?}: {}", dir, e);
             continue;
         }
         let file_path = dir.join(format!("{}.json", locale_code));
@@ -197,6 +224,45 @@ pub fn init_locale_dirs() {
     }
 
     tracing::info!("Locale dirs initialized at {:?}", locale_dir());
+}
+
+/// 校验后端日志翻译文件：必须是 JSON object，且包含至少一个子 object（对应一个日志模块分组）。
+/// 只验证顶层结构，不做深层 key 检查——用户可以按需定制各日志分组的翻译。
+///
+/// Validate a backend log locale file: must be a JSON object with at least one sub-object
+/// (corresponding to a log module group). Only checks top-level structure.
+fn validate_log_locale(value: &serde_json::Value, _default_content: &str) -> Result<(), String> {
+    let obj = value
+        .as_object()
+        .ok_or_else(|| "not a JSON object".to_string())?;
+    if obj.is_empty() {
+        return Err("must contain at least one log group entry".to_string());
+    }
+    Ok(())
+}
+
+/// 读取后端日志翻译文件（`locale/log/<locale_code>.json`）。
+/// 若文件不存在则回退内置默认值；若指定语言不存在则回退 en-US。
+///
+/// Read the backend log locale file (`locale/log/<locale_code>.json`).
+/// Falls back to embedded default if file doesn't exist; falls back to en-US if locale not found.
+pub fn read_log_locale(locale_code: &str) -> serde_json::Value {
+    let dir = log_locale_dir();
+    // 优先读取指定语言文件 / Try the requested locale first
+    if let Some(v) = read_locale_file(&dir.join(format!("{}.json", locale_code))) {
+        return v;
+    }
+    // 回退到 en-US 磁盘文件 / Fall back to en-US on disk
+    if locale_code != "en-US"
+        && let Some(v) = read_locale_file(&dir.join("en-US.json")) {
+        return v;
+    }
+    // 最终回退到内置默认值 / Final fallback to embedded defaults
+    let content = match locale_code {
+        "zh-CN" => LOG_ZH_CN,
+        _ => LOG_EN_US,
+    };
+    serde_json::from_str(content).unwrap_or(serde_json::Value::Object(Default::default()))
 }
 
 /// 校验主程序语言文件：
@@ -339,7 +405,7 @@ fn write_or_rebuild_if_invalid(
     if !path.exists() {
         // 文件不存在，直接写入 / File missing, write it
         if let Err(e) = std::fs::write(path, default_content) {
-            tracing::warn!("Failed to write locale file {:?}: {}", path, e);
+            tracing::warn!(path = ?path, error = %e, "Failed to write locale file {:?}: {}", path, e);
         }
         return;
     }
@@ -360,15 +426,18 @@ fn write_or_rebuild_if_invalid(
         Err(reason) => {
             // 校验失败，重建文件 / Validation failed, rebuild the file
             tracing::warn!(
+                path = ?path,
+                label = label,
+                reason = reason,
                 "Locale file {:?} failed validation ({}): \"{}\". Rebuilding from default.",
                 path,
                 label,
                 reason
             );
             if let Err(e) = std::fs::write(path, default_content) {
-                tracing::warn!("Failed to rebuild locale file {:?}: {}", path, e);
+                tracing::warn!(path = ?path, error = %e, "Failed to rebuild locale file {:?}: {}", path, e);
             } else {
-                tracing::info!("Rebuilt locale file {:?}", path);
+                tracing::info!(path = ?path, "Rebuilt locale file {:?}", path);
             }
         }
     }
@@ -565,12 +634,12 @@ fn read_locale_file(path: &std::path::Path) -> Option<serde_json::Value> {
         Ok(content) => match serde_json::from_str(&content) {
             Ok(v) => Some(v),
             Err(e) => {
-                tracing::warn!("Failed to parse locale file {:?}: {}", path, e);
+                tracing::warn!(path = ?path, error = %e, "Failed to parse locale file {:?}: {}", path, e);
                 None
             }
         },
         Err(e) => {
-            tracing::warn!("Failed to read locale file {:?}: {}", path, e);
+            tracing::warn!(path = ?path, error = %e, "Failed to read locale file {:?}: {}", path, e);
             None
         }
     }
@@ -614,6 +683,7 @@ pub fn get_full_locale(locale_code: &str) -> serde_json::Value {
     serde_json::json!({
         "app": app,
         "modules": serde_json::Value::Object(modules_obj),
+        "log": read_log_locale(locale_code),
     })
 }
 
@@ -671,4 +741,61 @@ pub fn list_available_locales() -> Vec<LocaleEntry> {
     }
 
     entries
+}
+
+// ─── 后端日志翻译运行时 / Backend log translation runtime ──────────────────
+
+use std::sync::OnceLock;
+use parking_lot::RwLock as ParkingRwLock;
+
+/// 当前生效的日志翻译 JSON（从 `locale/log/<lang>.json` 加载）。
+/// Current active log translation JSON (loaded from `locale/log/<lang>.json`).
+static LOG_TRANSLATIONS: OnceLock<ParkingRwLock<serde_json::Value>> = OnceLock::new();
+
+fn log_translations() -> &'static ParkingRwLock<serde_json::Value> {
+    LOG_TRANSLATIONS.get_or_init(|| {
+        ParkingRwLock::new(serde_json::Value::Object(Default::default()))
+    })
+}
+
+/// 加载指定语言的日志翻译到全局缓存。在设置语言后（`init_locale_dirs` 之后）调用一次。
+/// Load the log translations for the given locale into the global cache.
+/// Call once after the language is determined (after `init_locale_dirs`).
+pub fn load_log_translations(locale_code: &str) {
+    let value = read_log_locale(locale_code);
+    *log_translations().write() = value;
+}
+
+/// 通过点分 key 在翻译 JSON 中查找字符串，进行 `{varName}` 参数插值后返回。
+/// 若 key 不存在则返回 key 本身（透明 fallback）。
+///
+/// Look up a string in the log translation JSON by dot-separated key,
+/// perform `{varName}` interpolation, and return the result.
+/// Returns the key itself if not found (transparent fallback).
+///
+/// `key` 示例 / Example key: `"recorder.started"`
+/// `params` 示例 / Example params: `&[("username", "alice"), ("dir", "/tmp/rec")]`
+pub fn tl_log(key: &str, params: &[(&str, &str)]) -> String {
+    let guard = log_translations().read();
+    // 按 '.' 逐层下钻 / Descend level by level on '.'
+    let mut node: &serde_json::Value = &guard;
+    for part in key.split('.') {
+        match node.get(part) {
+            Some(v) => node = v,
+            None => return key.to_string(),
+        }
+    }
+    let template = match node.as_str() {
+        Some(s) => s.to_string(),
+        None => return key.to_string(),
+    };
+    // 参数插值：把 {varName} 替换为对应值 / Interpolate {varName} → value
+    if params.is_empty() {
+        return template;
+    }
+    let mut result = template;
+    for (name, value) in params {
+        result = result.replace(&format!("{{{}}}", name), value);
+    }
+    result
 }

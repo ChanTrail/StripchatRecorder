@@ -11,7 +11,8 @@
     "collapse": "收起",
     "expand": "展开",
     "notifications": "通知",
-    "community": "模块社区"
+    "community": "模块社区",
+    "more": "更多"
   },
   "common": {
     "confirm": "确认",
@@ -237,7 +238,8 @@
     "fitView": "自适应视图",
     "guide": "右键单击画布添加模块 · 右键拖拽平移 · 左键拖拽框选节点 · 选中后按 Delete 删除 · ts_merge 将 TS 分片合并为视频文件，其他模块（接受 video_file 输入）需置于其后",
     "multiSelected": "已选中 {count} 个节点，按 Delete 批量删除",
-    "snapToGrid": "对齐网格"
+    "snapToGrid": "对齐网格",
+    "mobileHint": "后处理流水线编辑器需要鼠标操作，请在 PC 端浏览器中使用此功能。"
   },
   "finder": {
     "title": "主播查找",
@@ -337,6 +339,21 @@
     },
     "pollInterval": {
       "label": "轮询间隔（秒）"
+    },
+    "preferredResolution": {
+      "label": "首选录制分辨率",
+      "original": "原始画质（最高）",
+      "hint": "选择目标画质，并设置该画质不可用时的搜索方向。"
+    },
+    "resolutionPreference": {
+      "label": "回退方向",
+      "lower": "优先较低画质",
+      "higher": "优先较高画质",
+      "hint": "先使用该方向最接近的画质；若不存在，则使用反方向最接近的画质，不会因缺少精确画质而失败。"
+    },
+    "recordingDuration": {
+      "label": "录制文件时长（秒）",
+      "hint": "0 = 不限制；1800 = 30 分钟。自动保存并应用于正在录制的文件。达到时长后在下一个 HLS 分片边界开始新文件，实际时长可能多几秒。"
     },
     "maxTmpDirGb": {
       "label": "后处理临时目录最大占用（GB）",

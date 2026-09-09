@@ -1,7 +1,7 @@
 FROM debian:latest AS builder
 
 LABEL maintainer="chantrail@chantrail.com" \
-      version="0.3.1" \
+      version="0.4.0" \
       description="Stripchat Recorder Docker builder"
 
 RUN sed -i 's/deb.debian.org/mirrors.ustc.edu.cn/g' /etc/apt/sources.list.d/debian.sources
@@ -47,7 +47,7 @@ RUN . /root/.cargo/env && npm run build
 FROM debian:latest
 
 LABEL maintainer="chantrail@chantrail.com" \
-      version="0.3.1" \
+      version="0.4.0" \
       description="Stripchat Recorder"
 
 RUN sed -i 's/deb.debian.org/mirrors.ustc.edu.cn/g' /etc/apt/sources.list.d/debian.sources
@@ -59,9 +59,11 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /app/stripchat-recorder/logs \
+             /app/stripchat-recorder/ts_fragment \
              /app/stripchat-recorder/recordings \
              /app/stripchat-recorder/modules.default \
              /app/stripchat-recorder/modules \
+             /app/stripchat-recorder/meta \
              /app/stripchat-recorder/config
 WORKDIR /app
 
@@ -89,7 +91,7 @@ RUN printf '%s\n' \
     'exec /app/stripchat-recorder/stripchat-recorder "$@"' \
     > /entrypoint.sh && chmod +x /entrypoint.sh
 
-VOLUME ["/app/stripchat-recorder/logs", "/app/stripchat-recorder/recordings", "/app/stripchat-recorder/modules", "/app/stripchat-recorder/config"]
+VOLUME ["/app/stripchat-recorder/logs", "/app/stripchat-recorder/ts_fragment", "/app/stripchat-recorder/recordings", "/app/stripchat-recorder/modules", "/app/stripchat-recorder/meta", "/app/stripchat-recorder/config"]
 
 EXPOSE ${PORT:-3030}
 

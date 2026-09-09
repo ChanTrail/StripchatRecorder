@@ -1,0 +1,174 @@
+{
+  "recorder": {
+    "started": "Started recording {username} → {dir}",
+    "finished": "Finished recording {username} → {dir}",
+    "stopSignal": "Stop signal received → {username}",
+    "apiRebuilt": "Recording {username}: API client rebuilt due to settings change",
+    "apiRebuildFailed": "Recording {username}: failed to rebuild API client: {error}",
+    "playlistRefreshed": "Refreshed playlist URL → {username}",
+    "streamNotRecordable": "Stream no longer recordable → {username} (status: {status}), stopping",
+    "streamNotRecordableNoUrl": "Stream no longer recordable → {username} (status: {status}), stopping",
+    "noPlaylistUrl": "No playlist URL yet → {username} (status: {status}), retrying",
+    "streamEndedMaxRetries": "Stream ended → {username} (max retries)",
+    "streamEndedPlaylistFail": "Stream ended → {username} (playlist refresh failed {count} times)",
+    "fetchErrCdnRefresh": "Fetch error → {username}: {count} consecutive CDN failures, refreshing playlist",
+    "fetchErrRefresh": "Fetch error → {username}: {error}, attempting playlist refresh",
+    "playlistRefreshFailed": "Playlist refresh failed → {username}: {error}",
+    "initSegmentCached": "Cached init segment → {username} ({bytes} bytes)",
+    "initSegmentFailed": "Failed to download init segment: {error}, skipping this round",
+    "rotateFailed": "Recording {username}: failed to rotate session: {error}",
+    "ffmpegConvertFailed": "ffmpeg convert failed → segment {seq}: {error}",
+    "segmentDownloadFailed": "Failed to download segment {seq}: {error}",
+    "recordingError": "Recording error → {username}: {error}"
+  },
+  "relay": {
+    "workerStarted": "Relay worker started for {username}",
+    "workerStopped": "Relay worker stopped for {username}",
+    "workerIdle": "Relay worker: idle, stopping for {username}",
+    "apiClientError": "Relay: API client error for {username}: {error}",
+    "upstreamLive": "Relay worker [{username}]: upstream live",
+    "upstreamOffline": "Relay worker [{username}]: upstream offline ({status})",
+    "streamInfoFailed": "Relay worker [{username}]: get_stream_info failed: {error}",
+    "offlineStatus": "Relay offline [{username}]: status={status} playlist={hasPlaylist}",
+    "offlineSwitching": "Relay offline [{username}]: upstream live → switching",
+    "offlineCheckFailed": "Relay offline [{username}]: check failed: {error}",
+    "offlineFfmpegFailed": "Relay offline [{username}]: failed to spawn ffmpeg: {error}",
+    "liveConverterFailed": "Relay live [{username}]: failed to spawn converter: {error}",
+    "liveConverterClosed": "Relay live [{username}]: converter stdout closed",
+    "liveIdle": "Relay live [{username}]: idle, stopping",
+    "livePollFailed": "Relay live [{username}]: poll failed ({cur}/{max}): {error}",
+    "liveSegmentFailed": "Relay: failed to download segment {seq} for {username}: {error}"
+  },
+  "monitor": {
+    "apiClientFailed": "Failed to create API client: {error}",
+    "pollIntervalRestarted": "Monitor: poll interval changed, restarting timer",
+    "streamNotRecordable": "Stream no longer recordable → {username} (is_online={isOnline}, is_recordable={isRecordable}, status={status}), stopping recording",
+    "autoStart": "Auto-starting recording → {username} (just_online={justOnline}, dropped={dropped}, natural_stop={naturalStop}, should_be={shouldBe})",
+    "streamerDead": "Streamer {username} confirmed dead (not found by username or model_id), skipping future polls",
+    "pollFailed": "Poll failed → {username}: {error}",
+    "streamerRenamed": "Streamer renamed: {oldUsername} -> {newUsername}",
+    "streamerRenameSkipped": "Streamer rename skipped for {username}: {error}"
+  },
+  "meta": {
+    "migrationCreateDirFailed": "Meta migration: failed to create dir {dir}: {error}",
+    "migrationTargetExists": "Meta migration: target already exists, skipping {path}",
+    "migrationMoved": "Meta migration: moved {from} -> {to}",
+    "migrationMoveFailed": "Meta migration: failed to move {path}: {error}",
+    "migrationDone": "Meta migration: moved {count} legacy flat meta file(s) into per-streamer subdirectories",
+    "cleanupDeleteFailed": "Meta cleanup: failed to delete {name}: {error}",
+    "cleanupDeleted": "Meta cleanup: deleted orphaned meta {name}",
+    "cleanupDone": "Meta cleanup: deleted {count} orphaned meta file(s)",
+    "scanSkipEmpty": "Meta scan: {count} video(s) need post-processing but pipeline is empty, skipping",
+    "scanPpPending": "Meta scan: {count} path(s) need post-processing (re-)triggered",
+    "scanCreatedVideo": "Meta scan: created pp_waiting meta for video {path}",
+    "scanCorruptVideo": "Meta scan: corrupt meta for video {path} — recreating as pp_waiting",
+    "scanStaleVideo": "Meta scan: stale {status} status for video {path} (not tracked by this process) — re-triggering post-processing",
+    "scanRepairedVideo": "Meta scan: repaired fields for video {path}",
+    "scanUnrepairableVideo": "Meta scan: unrepairable meta for video {path} — rebuilding as pp_waiting",
+    "scanCreatedSessionDir": "Meta scan: created pp_waiting meta for session_dir {path}",
+    "scanCorruptSessionDir": "Meta scan: corrupt meta for session_dir {path} — recreating as pp_waiting",
+    "scanStaleSessionDir": "Meta scan: stale {status} status for session_dir {path} (not tracked by this process) — re-triggering post-processing",
+    "scanRepairedSessionDir": "Meta scan: repaired fields for session_dir {path}",
+    "scanUnrepairableSessionDir": "Meta scan: unrepairable meta for session_dir {path} — rebuilding as pp_waiting",
+    "writeMetaFailed": "Failed to write meta file {path}: {error}",
+    "serializeMetaFailed": "Failed to serialize meta for {path}: {error}"
+  },
+  "scheduler": {
+    "mouflonSynced": "Mouflon keys synced from {url}",
+    "mouflonUpToDate": "Mouflon keys up-to-date, skipped",
+    "mouflonSyncFailed": "Mouflon keys sync failed after {retries} attempts: {error}",
+    "mouflonSyncRetrying": "Mouflon keys sync failed (attempt {attempt}/{max}): {error}, retrying in {secs}s",
+    "mouflonSettingsChanged": "Mouflon sync: settings changed, triggering immediate sync",
+    "updateAvailable": "New version available: {latest} (current: {current})",
+    "updateUpToDate": "Update check: already on latest version {current}",
+    "updateCheckFailed": "Update check failed (will retry in 24 h): {error}"
+  },
+  "watcher": {
+    "recordingsCreateDirFailed": "Failed to create watch dir {dir}: {error}",
+    "recordingsWatching": "Watching recordings dir: {dir}",
+    "recordingsWatchFailed": "Failed to watch recordings dir {dir}: {error}",
+    "recordingsWatcherFailed": "Failed to create watcher: {error}",
+    "recordingsEventError": "recordings watcher event error: {error}",
+    "recordingsDisconnected": "recordings watcher channel disconnected",
+    "localeWatchFailed": "Failed to watch locale dir {dir}: {error}",
+    "localeWatching": "Watching locale dir: {dir}",
+    "localeWatcherFailed": "Failed to create locale dir watcher: {error}",
+    "localeEventError": "locale watcher error: {error}",
+    "modulesWatchFailed": "Failed to watch modules dir: {error}",
+    "modulesWatching": "Watching modules dir: {dir}",
+    "modulesWatcherFailed": "Failed to create modules watcher: {error}",
+    "modulesEventError": "modules watcher error: {error}"
+  },
+  "locale": {
+    "createDirFailed": "Failed to create locale dir {dir}: {error}",
+    "writeFileFailed": "Failed to write locale file {path}: {error}",
+    "validationFailed": "Locale file {path} failed validation ({label}): \"{reason}\". Rebuilding from default.",
+    "rebuiltFile": "Rebuilt locale file {path}",
+    "rebuildFailed": "Failed to rebuild locale file {path}: {error}",
+    "parseFileFailed": "Failed to parse locale file {path}: {error}",
+    "readFileFailed": "Failed to read locale file {path}: {error}"
+  },
+  "startup": {
+    "ffmpegMissing": "ffmpeg not found on PATH",
+    "localeFileWarning": "Custom locale file validation warnings: {payload}"
+  },
+  "sse": {
+    "broadcastLagged": "SSE broadcast lagged, {count} events dropped"
+  },
+  "update": {
+    "installDone": "Update installation complete, launching new version",
+    "exePathFailed": "Failed to get executable path: {error}, please restart manually",
+    "launching": "Launching new version: {exe} {args}",
+    "launchSuccess": "New version process started PID={pid}",
+    "launchFailed": "Failed to launch new version: {error}, please restart manually",
+    "unzipped": "Extracted: {path}",
+    "unzipDone": "zip extraction complete, all files replaced"
+  },
+  "segment": {
+    "startupRemovedEmpty": "Startup: removed {count} empty directories under {dir}"
+  },
+  "postprocess": {
+    "nodeSkipped": "Node {id} skipped (unchanged, succeeded previously), passing through",
+    "nodeDisabled": "Node {id} disabled, passing through {count} input(s) unchanged",
+    "portNotAvailable": "Node {from} output port {port} not available, skipping edge to {to}",
+    "moduleStdout": "[{module}] {line}",
+    "moduleStderr": "[{module}] stderr: {line}",
+    "communityInstallFailed": "Community module '{id}' installation failed: {error}",
+    "serviceSkipNode": "pp re-run: skipping node {id} (module: {module}) — succeeded previously and unchanged",
+    "serviceStalePreFill": "pp re-run: node {id} (module: {module}) expected unchanged but recorded output(s) no longer exist; dropping stale pre-fill",
+    "serviceStaleMerge": "pp re-run: node {id} (module: {module}) expected unchanged but recorded output(s) no longer exist; dropping stale result",
+    "discoverySkipFormat": "Skipping {path}: filename does not match {name}-{platform}-{version} format",
+    "discoveryDupKeepHigher": "Module id {id} declared by multiple executables ({a} and {b}); keeping higher version ({va} >= {vb})",
+    "discoveryDupReplace": "Module id {id} declared by multiple executables ({a} and {b}); keeping higher version ({va} > {vb})",
+    "discoveryDescribeFailed": "Failed to describe module {path}: {error}",
+    "builtinUnpackImageNotFound": "unpack: image path not found (skipping port 1): {path}"
+  },
+  "ffmpegUtil": {
+    "openPlaylistFailed": "Failed to open playlist.m3u8: {error}",
+    "writeM3u8HeaderFailed": "Failed to write M3U8 header: {error}",
+    "updateM3u8Failed": "Failed to update playlist.m3u8: {error}"
+  },
+  "stripchat": {
+    "cdnTldChanged": "CDN [{node}] {from} -> {to}",
+    "cdnTldFailed": "CDN [{tld}] {error}",
+    "streamerRenamed": "Streamer renamed detected: {username} -> {newUsername} (model_id={modelId})",
+    "autoM3u8TldSuccess": "auto.m3u8 via CDN TLD: {tld}",
+    "autoM3u8Failed": "auto.m3u8 fetch failed [{url}]: {error}",
+    "usingUrl": "Using the URL: {url}"
+  },
+  "community": {
+    "downloading": "Downloading module {id} v{version}...",
+    "sha256Passed": "Module {id} sha256 checksum passed",
+    "sha256Skipped": "Module {id} has no sha256 checksum, skipping verification",
+    "installSuccess": "Module {id} v{version} installed successfully: {path}",
+    "uninstalled": "Module {id} uninstalled",
+    "removeOldFile": "Removing old module file: {path}",
+    "proxyInvalid": "Invalid download proxy {proxy}: {error}"
+  },
+  "emitter": {
+    "serializeError": "emit serialize error: {error}"
+  },
+  "logging": {
+    "initialized": "Logging initialized → {path}"
+  }
+}

@@ -92,6 +92,25 @@ pub fn run_postprocess_inner(
         return;
     }
 
+    // 锁等待期间用户可能已更新流水线，获取锁后重新读取最新配置，
+    // 确保本次执行使用的是当前最新的流水线，而不是入队时的快照。
+    // 如果 state 里的流水线为空（nodes 全为空），保守地回退到传入参数。
+    //
+    // The user may have updated the pipeline while this task was waiting for the serial
+    // lock. Re-read the current pipeline after acquiring the lock so this run uses the
+    // latest configuration rather than the snapshot captured at enqueue time.
+    // Fall back to the passed-in parameter when state's pipeline has no nodes.
+    let refreshed_pipeline: PipelineConfig;
+    let pipeline: &PipelineConfig = {
+        let from_state = state.get_pipeline();
+        if from_state.nodes.is_empty() {
+            pipeline
+        } else {
+            refreshed_pipeline = from_state;
+            &refreshed_pipeline
+        }
+    };
+
     let modules = discover_modules();
 
     // 从 meta 读取上次的 pp_execution，用于重新后处理时跳过已成功且配置未变的节点
@@ -112,8 +131,21 @@ pub fn run_postprocess_inner(
     // and startup/scheduled re-triggers call this function, so they share this same logic.
     let dirty_nodes = compute_dirty_nodes(pipeline, &prev_execution);
 
-    // 构建实际需要执行的流水线：过滤掉未变更且已成功的节点，但保留边关系
-    // Build effective pipeline: filter out unchanged, previously-succeeded nodes; preserve edges
+    // 构建本次不需要重新执行的节点集合：在完整流水线里、已启用、不在 dirty_nodes 中。
+    // 这些节点的上次输出已通过 pre_collected 预填给了下游，执行引擎遇到它们时做透传。
+    // 同时用 effective_pipeline（只含 dirty 节点）做模块存在性预检和计算进度总数。
+    //
+    // Build the set of nodes to skip this run: enabled nodes in the full pipeline that
+    // are not in dirty_nodes. Their previous outputs are pre-filled via pre_collected;
+    // the execution engine will pass-through when it encounters them.
+    // effective_pipeline (dirty nodes only) is used solely for module existence pre-check
+    // and total-count calculation.
+    let skip_nodes: std::collections::HashSet<String> = pipeline
+        .nodes
+        .iter()
+        .filter(|n| n.enabled && !dirty_nodes.contains(n.effective_id()))
+        .map(|n| n.effective_id().to_string())
+        .collect();
     let effective_pipeline = build_effective_pipeline(pipeline, &dirty_nodes);
 
     // 预检：确认所有启用节点的模块都存在 / Pre-check: verify all enabled nodes have modules
@@ -235,12 +267,13 @@ pub fn run_postprocess_inner(
 
     let results = run_pipeline(
         &[initial_path.to_path_buf()],
-        &effective_pipeline,
+        pipeline,
         &modules,
         &recording_ctx,
         Some(cancel_flag),
         max_tmp_dir_gb,
         pre_collected,
+        &skip_nodes,
         // on_node_start：追加 pp_execution 条目（result=null），写入初始 pp_progress，推送 meta 快照
         // on_node_start: append pp_execution entry (result=null), write initial pp_progress, push meta snapshot
         &|effective_id, module_id, inputs| {
@@ -746,9 +779,7 @@ fn build_effective_pipeline(pipeline: &PipelineConfig, dirty_nodes: &HashSet<Str
         if !n.enabled { return true; }
         let skip = !dirty_nodes.contains(n.effective_id());
         if skip {
-            tracing::info!(
-                "pp re-run: skipping node {} (module: {}) — succeeded previously and unchanged",
-                n.effective_id(), n.module_id
+            tracing::info!("{}", crate::tl!("postprocess.serviceSkipNode", id = n.effective_id(), module = n.module_id)
             );
         }
         !skip
@@ -784,11 +815,7 @@ fn build_pre_collected(
         // against a future change accidentally bypassing that check and reintroducing
         // the same bug.
         if !all_recorded_outputs_exist(&entry.outputs) {
-            tracing::warn!(
-                "pp re-run: node {} (module: {}) was expected unchanged but its recorded \
-                 output(s) no longer exist on disk; skipping stale pre-fill (should have \
-                 been caught as dirty already)",
-                entry.effective_id(), entry.module_id
+            tracing::warn!("{}", crate::tl!("postprocess.serviceStalePreFill", id = entry.effective_id(), module = entry.module_id)
             );
             continue;
         }
@@ -811,15 +838,33 @@ fn merge_with_prev_results(
     dirty_nodes: &HashSet<String>,
 ) -> Vec<NodeResult> {
     let mut merged: Vec<NodeResult> = Vec::new();
-    for node in pipeline.nodes.iter().filter(|n| n.enabled) {
-        let eid = node.effective_id();
-        if let Some(r) = new_results.iter().find(|r| r.effective_id == eid) {
+    // 按连线拓扑顺序遍历（由 model 层的 topological_order 保证，顺序由连线决定
+    // 而非节点存储顺序），使 pp_execution 记录顺序与实际执行顺序一致。
+    // 过滤掉禁用节点——它们不应出现在 meta.pp_execution 中。
+    //
+    // Iterate in wiring-defined topological order (guaranteed by model's topological_order,
+    // which is determined by wiring, not node storage order) so pp_execution entries are
+    // recorded in actual execution order. Filter out disabled nodes — they must not appear
+    // in meta.pp_execution.
+    let enabled_ids: HashSet<&str> = pipeline
+        .nodes
+        .iter()
+        .filter(|n| n.enabled)
+        .map(|n| n.effective_id())
+        .collect();
+    let topo: Vec<String> = pipeline
+        .topological_order()
+        .into_iter()
+        .filter(|id| enabled_ids.contains(id.as_str()))
+        .collect();
+    for eid in &topo {
+        if let Some(r) = new_results.iter().find(|r| &r.effective_id == eid) {
             merged.push(r.clone());
             continue;
         }
-        if dirty_nodes.contains(eid) { continue; }
+        if dirty_nodes.contains(eid.as_str()) { continue; }
         if let Some(prev) = prev_execution.iter().find(|e| {
-            e.effective_id() == eid
+            e.effective_id() == eid.as_str()
                 && matches!(
                     e.result.as_ref().map(|r| &r.code),
                     Some(PpExecCode::Ok | PpExecCode::Done | PpExecCode::Skipped)
@@ -839,11 +884,7 @@ fn merge_with_prev_results(
             // no longer actually exists" record end up in the final pp_execution
             // written back to meta.
             if !all_recorded_outputs_exist(&prev.outputs) {
-                tracing::warn!(
-                    "pp re-run: node {} (module: {}) was expected unchanged but its recorded \
-                     output(s) no longer exist on disk; dropping stale result (should have \
-                     been caught as dirty already)",
-                    eid, prev.module_id
+                tracing::warn!("{}", crate::tl!("postprocess.serviceStaleMerge", id = eid, module = prev.module_id)
                 );
                 continue;
             }

@@ -51,12 +51,12 @@ async fn worker_loop(
     mut stop_rx: mpsc::Receiver<()>,
     ts_tx: broadcast::Sender<Arc<Vec<u8>>>,
 ) {
-    tracing::info!("Relay worker started for {}", username);
+    tracing::info!("{}", crate::tl!("relay.workerStarted", username = username));
 
     loop {
         if stop_rx.try_recv().is_ok() { break; }
         if relay_manager.is_idle(&username, IDLE_STOP_SECS) {
-            tracing::info!("Relay worker: idle, stopping for {}", username);
+            tracing::info!("{}", crate::tl!("relay.workerIdle", username = username));
             break;
         }
 
@@ -67,9 +67,15 @@ async fn worker_loop(
             settings.sc_mirror_url.as_deref(),
             Some(settings.sc_mirror_scheme.as_str()),
         ) {
-            Ok(a) => Arc::new(a.with_mouflon_keys(app_state.get_mouflon_keys())),
+            Ok(a) => Arc::new(
+                a.with_mouflon_keys(app_state.get_mouflon_keys())
+                    .with_resolution_selection(
+                        settings.preferred_resolution,
+                        &settings.resolution_preference,
+                    ),
+            ),
             Err(e) => {
-                tracing::error!("Relay: API client error for {}: {}", username, e);
+                tracing::error!("{}", crate::tl!("relay.apiClientError", username = username, error = e));
                 relay_manager.set_state(&username, RelayStreamState::Error { message: e.to_string() });
                 tokio::select! {
                     _ = stop_rx.recv() => break,
@@ -84,7 +90,7 @@ async fn worker_loop(
         match api.get_stream_info(&username, true, None).await {
             Ok(info) if info.playlist_url.is_some() => {
                 let playlist_url = info.playlist_url.unwrap();
-                tracing::info!("Relay worker [{}]: upstream live", username);
+                tracing::info!("{}", crate::tl!("relay.upstreamLive", username = username));
                 relay_manager.set_playlist_url(&username, Some(playlist_url.clone()));
                 relay_manager.set_state(&username, RelayStreamState::Live);
                 relay_manager.set_streamer_status(&username, info.is_online, info.status);
@@ -98,7 +104,7 @@ async fn worker_loop(
             }
             Ok(info) => {
                 let status_text = info.status.clone();
-                tracing::info!("Relay worker [{}]: upstream offline ({})", username, status_text);
+                tracing::info!("{}", crate::tl!("relay.upstreamOffline", username = username, status = status_text));
                 relay_manager.set_state(&username, RelayStreamState::Offline { status: status_text.clone() });
                 relay_manager.set_streamer_status(&username, info.is_online, info.status);
 
@@ -109,7 +115,7 @@ async fn worker_loop(
                 if !cont { break; }
             }
             Err(e) => {
-                tracing::warn!("Relay worker [{}]: get_stream_info failed: {}", username, e);
+                tracing::warn!("{}", crate::tl!("relay.streamInfoFailed", username = username, error = e));
                 relay_manager.set_state(&username, RelayStreamState::Error { message: e.to_string() });
 
                 let cont = feed_offline(
@@ -129,7 +135,7 @@ async fn worker_loop(
     }
 
     relay_manager.remove(&username);
-    tracing::info!("Relay worker stopped for {}", username);
+    tracing::info!("{}", crate::tl!("relay.workerStopped", username = username));
 }
 
 /// 离线阶段：直接用 lavfi ffmpeg 输出 MPEG-TS，无中间层。
@@ -169,7 +175,7 @@ async fn feed_offline(
     {
         Ok(c) => c,
         Err(e) => {
-            tracing::error!("Relay offline [{}]: failed to spawn ffmpeg: {}", username, e);
+            tracing::error!("{}", crate::tl!("relay.offlineFfmpegFailed", username = username, error = e));
             tokio::select! {
                 _ = stop_rx.recv() => return false,
                 _ = tokio::time::sleep(tokio::time::Duration::from_secs(5)) => {}
@@ -203,19 +209,24 @@ async fn feed_offline(
                         settings.sc_mirror_url.as_deref(),
                         Some(settings.sc_mirror_scheme.as_str()),
                     ) {
-                        let api = api.with_mouflon_keys(state.get_mouflon_keys());
+                        let api = api
+                            .with_mouflon_keys(state.get_mouflon_keys())
+                            .with_resolution_selection(
+                                settings.preferred_resolution,
+                                &settings.resolution_preference,
+                            );
                         match api.get_stream_info(username, true, None).await {
                             Ok(info) => {
-                                tracing::info!("Relay offline [{}]: status={} playlist={}", username, info.status, info.playlist_url.is_some());
+                                tracing::info!("{}", crate::tl!("relay.offlineStatus", username = username, status = info.status, hasPlaylist = info.playlist_url.is_some()));
                                 if info.playlist_url.is_some() {
-                                    tracing::info!("Relay offline [{}]: upstream live → switching", username);
+                                    tracing::info!("{}", crate::tl!("relay.offlineSwitching", username = username));
                                     relay_manager.set_streamer_status(username, info.is_online, info.status);
                                     break true;
                                 }
                                 relay_manager.set_streamer_status(username, info.is_online, info.status.clone());
                                 relay_manager.set_state(username, RelayStreamState::Offline { status: info.status });
                             }
-                            Err(e) => tracing::warn!("Relay offline [{}]: check failed: {}", username, e),
+                            Err(e) => tracing::warn!("{}", crate::tl!("relay.offlineCheckFailed", username = username, error = e)),
                         }
                     }
                 }
@@ -272,7 +283,7 @@ async fn feed_live(
     {
         Ok(c) => c,
         Err(e) => {
-            tracing::error!("Relay live [{}]: failed to spawn converter: {}", username, e);
+            tracing::error!("{}", crate::tl!("relay.liveConverterFailed", username = username, error = e));
             return true;
         }
     };
@@ -302,7 +313,7 @@ async fn feed_live(
                 Ok(n) => { let _ = ts_tx_clone.send(Arc::new(buf[..n].to_vec())); }
             }
         }
-        tracing::info!("Relay live [{}]: converter stdout closed", username_conv);
+        tracing::info!("{}", crate::tl!("relay.liveConverterClosed", username = username_conv));
     });
 
     let mut last_settings = app_state.get_settings();
@@ -312,7 +323,12 @@ async fn feed_live(
         last_settings.sc_mirror_url.as_deref(),
         Some(last_settings.sc_mirror_scheme.as_str()),
     ) {
-        Ok(a) => a.with_mouflon_keys(app_state.get_mouflon_keys()),
+        Ok(a) => a
+            .with_mouflon_keys(app_state.get_mouflon_keys())
+            .with_resolution_selection(
+                last_settings.preferred_resolution,
+                &last_settings.resolution_preference,
+            ),
         Err(_) => {
             drop(conv_in_tx);
             let _ = conv_stdin_task.await;
@@ -334,7 +350,7 @@ async fn feed_live(
     let should_continue = loop {
         if stop_rx.try_recv().is_ok() { break false; }
         if relay_manager.is_idle(username, IDLE_STOP_SECS) {
-            tracing::info!("Relay live [{}]: idle, stopping", username);
+            tracing::info!("{}", crate::tl!("relay.liveIdle", username = username));
             break false;
         }
 
@@ -345,14 +361,22 @@ async fn feed_live(
             || current_settings.cdn_proxy_url != last_settings.cdn_proxy_url
             || current_settings.sc_mirror_url != last_settings.sc_mirror_url
             || current_settings.sc_mirror_scheme != last_settings.sc_mirror_scheme;
-        if proxy_changed || current_mouflon_keys != last_mouflon_keys {
+        let resolution_changed = current_settings.preferred_resolution
+            != last_settings.preferred_resolution
+            || current_settings.resolution_preference != last_settings.resolution_preference;
+        if proxy_changed || resolution_changed || current_mouflon_keys != last_mouflon_keys {
             if let Ok(new_api) = StripchatApi::new_api_only(
                 current_settings.api_proxy_url.as_deref(),
                 current_settings.cdn_proxy_url.as_deref(),
                 current_settings.sc_mirror_url.as_deref(),
                 Some(current_settings.sc_mirror_scheme.as_str()),
             ) {
-                api = new_api.with_mouflon_keys(current_mouflon_keys.clone());
+                api = new_api
+                    .with_mouflon_keys(current_mouflon_keys.clone())
+                    .with_resolution_selection(
+                        current_settings.preferred_resolution,
+                        &current_settings.resolution_preference,
+                    );
             }
             last_settings = current_settings;
             last_mouflon_keys = current_mouflon_keys;
@@ -373,7 +397,7 @@ async fn feed_live(
             }
             Err(e) => {
                 consecutive_failures += 1;
-                tracing::warn!("Relay live [{}]: poll failed ({}/{}): {}", username, consecutive_failures, MAX_FAILURES, e);
+                tracing::warn!("{}", crate::tl!("relay.livePollFailed", username = username, cur = consecutive_failures, max = MAX_FAILURES, error = e));
 
                 if consecutive_failures >= MAX_FAILURES { break true; }
 
@@ -449,7 +473,7 @@ async fn poll_and_feed(
             Ok(d) if d.len() > 1000 => d,
             Ok(_) => continue,
             Err(e) => {
-                tracing::warn!("Relay: failed to download segment {} for {}: {}", seg.sequence, username, e);
+                tracing::warn!("{}", crate::tl!("relay.liveSegmentFailed", seq = seg.sequence, username = username, error = e));
                 continue;
             }
         };

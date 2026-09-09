@@ -38,7 +38,7 @@ impl<E: Emitter + ?Sized> EmitterExt for E {
     fn emit<T: Serialize>(&self, event: &str, payload: &T) {
         match serde_json::to_string(payload) {
             Ok(s) => self.emit_raw(event, &s),
-            Err(e) => tracing::error!("emit serialize error: {}", e),
+            Err(e) => tracing::error!("{}", crate::tl!("emitter.serializeError", error = e)),
         }
     }
 }

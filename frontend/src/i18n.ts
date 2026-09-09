@@ -106,14 +106,46 @@ const i18n = createI18n<false>({
 
 /**
  * 在 Vue 挂载前调用：从后端加载当前语言数据。
- * 加载失败时静默处理（页面显示键名），不阻止启动。
  *
- * Call before Vue mounts: loads the current locale data from the backend.
- * Fails silently (keys shown as-is) so the app still starts on error.
+ * 语言优先级：
+ * 1. 后端 /api/settings 的 language 字段（无需登录，即使缓存被清空也能获取正确语言）
+ * 2. localStorage 缓存值（后端请求失败时使用）
+ * 3. 硬编码 fallback "zh-CN"
+ *
+ * 取到后端语言后同步写入 localStorage，保持一致。
+ *
+ * Call before Vue mounts: load locale data from the backend.
+ *
+ * Language priority:
+ * 1. backend /api/settings language field (no auth needed; survives cache clear)
+ * 2. localStorage cached value (fallback when backend request fails)
+ * 3. hardcoded fallback "zh-CN"
+ *
+ * The resolved locale is written back to localStorage to keep it in sync.
  */
 export async function initI18n(): Promise<void> {
-	await loadLocaleFromServer(savedLocale);
-	i18n.global.locale.value = savedLocale as never;
+	let resolvedLocale = savedLocale; // localStorage 或 "zh-CN" / localStorage or "zh-CN"
+
+	// 尝试从后端读取语言设置（/api/settings 不需要 token，setup/login 阶段也可用）
+	// Try reading language from backend (/api/settings needs no token, works during setup/login)
+	try {
+		const res = await fetch("/api/settings");
+		if (res.ok) {
+			const data = await res.json() as { language?: string };
+			if (data.language && typeof data.language === "string") {
+				resolvedLocale = data.language;
+				// 同步写回 localStorage，后续切换语言时仍能读到正确值
+				// Write back to localStorage so subsequent locale switches read the right value
+				localStorage.setItem("locale", resolvedLocale);
+			}
+		}
+	} catch {
+		// 后端未就绪（冷启动）时静默使用 localStorage/fallback
+		// Backend not ready (cold start): silently use localStorage/fallback
+	}
+
+	await loadLocaleFromServer(resolvedLocale);
+	i18n.global.locale.value = resolvedLocale as never;
 }
 
 export default i18n;

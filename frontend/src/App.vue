@@ -24,6 +24,7 @@
 	import {
 		Users, Video, Clapperboard, Radio, Search, Settings, Info, LogOut,
 		ChevronsLeft, ChevronsRight, Bell, Store, X, WifiOff, Loader2,
+		Menu,
 	} from "@lucide/vue";
 	import {
 		useNotify, notify,
@@ -33,6 +34,7 @@
 	import { useStreamersStore } from "@/stores/streamers";
 	import { useI18n } from "vue-i18n";
 	import { useScrollbar } from "@/composables/useScrollbar";
+	import { useMobileLayout } from "@/composables/useMobileLayout";
 	import { loadLocaleFromServer } from "@/i18n";
 	import { useModuleLocaleStore } from "@/stores/moduleLocale";
 	import { useLocalesStore } from "@/stores/locales";
@@ -100,6 +102,8 @@
 	const mainScrollEl = ref<HTMLElement | null>(null);
 	useScrollbar(mainScrollEl);
 
+	const { isMobile } = useMobileLayout();
+
 	/**
 	 * 侧边栏导航项配置。
 	 *
@@ -131,6 +135,28 @@
 
 	/** 侧边栏是否折叠 / Whether the sidebar is collapsed */
 	const sidebarCollapsed = ref(false);
+
+	/** 移动端抽屉是否打开 / Whether the mobile drawer is open */
+	const mobileDrawerOpen = ref(false);
+
+	/**
+	 * 移动端底部 Tab 栏的固定 5 项：最常用的 4 项 + "更多"。
+	 * 点击"更多"打开抽屉，展示全部导航项。
+	 *
+	 * Fixed 5 items for the mobile bottom tab bar: 4 most-used + "More".
+	 * Tapping "More" opens the drawer to show all nav items.
+	 */
+	const bottomTabItems = [
+		{ to: "/",           labelKey: "nav.streamers",  icon: Users },
+		{ to: "/recordings", labelKey: "nav.recordings", icon: Video },
+		{ to: "/finder",     labelKey: "nav.finder",     icon: Search },
+		{ to: "/settings",   labelKey: "nav.settings",   icon: Settings },
+	];
+
+	function mobileNavTo(path: string) {
+		router.push(path);
+		mobileDrawerOpen.value = false;
+	}
 
 	/**
 	 * 根据参数切换文档根元素的 dark 类，实现深色/浅色主题切换。
@@ -254,11 +280,43 @@
 			notify(p.message, "warning");
 		});
 
-		// SSE 重连后倒计时 3 秒刷新页面，确保状态与服务器同步
-		// After SSE reconnect, countdown 3 seconds then reload to sync state with server
-		unlistenReconnect = onSseReconnect(() => {
-			// 重连成功，立即刷新页面恢复状态 / Reconnected: reload immediately to restore state
-			window.location.reload();
+		// SSE 重连后主动验证 token 有效性，若 session 已失效（如后端重启）则跳转登录页。
+		// 不再用硬刷新（window.location.reload），避免后端刚启动时路由守卫被 catch 放行。
+		//
+		// After SSE reconnect, verify token validity. If the backend session is gone
+		// (e.g. backend restarted), redirect to login. Using router.push instead of
+		// window.location.reload avoids the auth bypass when the backend just started.
+		unlistenReconnect = onSseReconnect(async () => {
+			isDisconnected.value = false;
+			try {
+				const token = localStorage.getItem("admin_token");
+				const statusRes = await fetch("/api/auth/status", {
+					headers: token ? { Authorization: `Bearer ${token}` } : {},
+				});
+				if (statusRes.ok) {
+					const status = await statusRes.json() as { password_set: boolean; logged_in: boolean };
+					if (status.password_set && token && !status.logged_in) {
+						// 后端重启后 session 消失：清除失效 token，跳转登录页
+						// Backend restarted, session gone: clear stale token and redirect to login
+						localStorage.removeItem("admin_token");
+						await router.push({ path: "/login", query: { redirect: router.currentRoute.value.fullPath } });
+						return;
+					}
+				}
+				// session 有效，重新同步语言和数据
+				// Session valid, re-sync locale and data
+				const settings = await call<{ language?: string }>("get_settings");
+				if (settings?.language) {
+					const { modules: moduleLocales } = await loadLocaleFromServer(settings.language);
+					locale.value = settings.language;
+					localStorage.setItem("locale", settings.language);
+					moduleLocaleStore.setLocales(settings.language, moduleLocales);
+				}
+				// 重新加载通知 / Reload notifications
+				await notificationsStore.fetch();
+			} catch {
+				// 静默，后端可能仍未完全就绪 / Silently ignore, backend may not be fully ready
+			}
 		});
 
 		// 监听 SSE 断开连接 / Listen for SSE disconnect
@@ -323,7 +381,10 @@
 		<div v-else key="main" class="flex h-screen overflow-hidden">
 			<aside
 				class="shrink-0 bg-sidebar border-r border-sidebar-border flex flex-col p-3 gap-1 transition-[width] duration-200 ease-in-out overflow-hidden"
-				:class="sidebarCollapsed ? 'w-14' : 'w-52'"
+				:class="[
+					isMobile ? 'hidden' : 'flex',
+					sidebarCollapsed ? 'w-14' : 'w-52',
+				]"
 			>
 				<!-- 品牌区 / Brand area -->
 				<div class="flex items-center gap-2 px-1 py-4 mb-1 border-b border-sidebar-border min-w-0">
@@ -403,13 +464,142 @@
 				<div ref="mainScrollEl" class="h-full overflow-y-auto scrollbar-overlay">
 					<RouterView v-slot="{ Component }">
 						<Transition name="page" mode="out-in">
-							<component :is="Component" :key="route.path" />
+							<component :is="Component" :key="route.path" :class="isMobile ? 'pb-16' : ''" />
 						</Transition>
 					</RouterView>
 				</div>
 			</main>
 			<NotifyLayer />
 			<DirectoryBrowserDialog />
+
+			<!-- ── 移动端底部 Tab 栏 / Mobile bottom tab bar ── -->
+			<nav
+				v-if="isMobile"
+				class="fixed bottom-0 inset-x-0 z-30 bg-sidebar border-t border-sidebar-border flex items-stretch pb-safe"
+				style="height: calc(4rem + env(safe-area-inset-bottom, 0px))"
+			>
+				<!-- 4 个固定导航 Tab -->
+				<button
+					v-for="item in bottomTabItems"
+					:key="item.to"
+					class="flex-1 flex flex-col items-center justify-center gap-0.5 text-[10px] leading-tight transition-colors rounded-md mx-0.5"
+					:class="route.path === item.to
+						? 'bg-sidebar-accent text-sidebar-accent-foreground font-semibold'
+						: 'text-sidebar-foreground/60 active:bg-sidebar-accent/50 active:text-sidebar-foreground'"
+					@click="mobileNavTo(item.to)"
+				>
+					<component :is="item.icon" class="size-5 shrink-0" />
+					<span>{{ t(item.labelKey) }}</span>
+				</button>
+
+				<!-- 更多按钮（通知角标 + 汉堡）/ More button (notification badge + hamburger) -->
+				<button
+					class="flex-1 flex flex-col items-center justify-center gap-0.5 text-[10px] leading-tight transition-colors rounded-md mx-0.5 relative"
+					:class="mobileDrawerOpen
+						? 'bg-sidebar-accent text-sidebar-accent-foreground font-semibold'
+						: 'text-sidebar-foreground/60 active:bg-sidebar-accent/50 active:text-sidebar-foreground'"
+					@click="mobileDrawerOpen = !mobileDrawerOpen"
+				>
+					<span class="relative">
+						<Menu class="size-5 shrink-0" />
+						<span
+							v-if="totalNotificationCount > 0"
+							class="absolute -top-1.5 -right-1.5 min-w-4 h-4 rounded-full bg-destructive text-destructive-foreground text-[10px] font-bold flex items-center justify-center px-0.5 leading-none"
+						>
+							{{ totalNotificationCount > 99 ? "99+" : totalNotificationCount }}
+						</span>
+					</span>
+					<span>{{ t("nav.more") }}</span>
+				</button>
+			</nav>
+
+			<!-- ── 移动端抽屉 / Mobile drawer ── -->
+			<!-- 遮罩独立淡入淡出 / Backdrop fades independently -->
+			<Transition
+				enter-active-class="transition-opacity duration-200 ease-out"
+				enter-from-class="opacity-0"
+				enter-to-class="opacity-100"
+				leave-active-class="transition-opacity duration-200 ease-in"
+				leave-from-class="opacity-100"
+				leave-to-class="opacity-0"
+			>
+				<div
+					v-if="isMobile && mobileDrawerOpen"
+					class="fixed inset-0 z-40 bg-black/40"
+					@click="mobileDrawerOpen = false"
+				/>
+			</Transition>
+
+			<!-- 面板独立滑入滑出 / Panel slides independently -->
+			<Transition
+				enter-active-class="transition-transform duration-250 ease-out"
+				enter-from-class="translate-x-full"
+				enter-to-class="translate-x-0"
+				leave-active-class="transition-transform duration-200 ease-in"
+				leave-from-class="translate-x-0"
+				leave-to-class="translate-x-full"
+			>
+				<div
+					v-if="isMobile && mobileDrawerOpen"
+					class="fixed inset-y-0 right-0 z-50 w-72 max-w-[85vw] bg-sidebar flex flex-col p-4 gap-1 overflow-y-auto scrollbar-overlay"
+				>
+					<!-- 顶部品牌 + 关闭 / Brand + close -->
+					<div class="flex items-center justify-between mb-3 pb-3 border-b border-sidebar-border">
+						<div class="flex items-center gap-2">
+							<img src="/icon.png" alt="icon" class="w-5 h-5 shrink-0" />
+							<span class="text-sm font-bold text-sidebar-foreground">StripchatRecorder</span>
+						</div>
+						<button
+							class="p-1 rounded text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent/50"
+							@click="mobileDrawerOpen = false"
+						>
+							<X class="size-5" />
+						</button>
+					</div>
+
+					<!-- 全部导航项 / All nav items -->
+					<nav class="flex flex-col gap-0.5">
+						<button
+							v-for="item in navItems"
+							:key="item.to"
+							class="flex items-center gap-3 w-full px-3 py-2.5 rounded-md text-sm transition-colors text-left"
+							:class="route.path === item.to
+								? 'bg-sidebar-accent text-sidebar-accent-foreground font-semibold'
+								: 'text-sidebar-foreground/70 active:bg-sidebar-accent/50'"
+							@click="mobileNavTo(item.to)"
+						>
+							<component :is="item.icon" class="size-4 shrink-0" />
+							{{ t(item.labelKey) }}
+						</button>
+					</nav>
+
+					<!-- 底部：通知 + 退出 / Bottom: notifications + logout -->
+					<div class="mt-auto pt-3 border-t border-sidebar-border flex flex-col gap-0.5">
+						<button
+							class="flex items-center gap-3 w-full px-3 py-2.5 rounded-md text-sm text-sidebar-foreground/70 active:bg-sidebar-accent/50 transition-colors"
+							@click="notificationPanelOpen = true; mobileDrawerOpen = false"
+						>
+							<span class="relative">
+								<Bell class="size-4 shrink-0" />
+								<span
+									v-if="totalNotificationCount > 0"
+									class="absolute -top-1.5 -right-1.5 min-w-4 h-4 rounded-full bg-destructive text-destructive-foreground text-[10px] font-bold flex items-center justify-center px-0.5 leading-none"
+								>
+									{{ totalNotificationCount > 99 ? "99+" : totalNotificationCount }}
+								</span>
+							</span>
+							{{ t("nav.notifications") }}
+						</button>
+						<button
+							class="flex items-center gap-3 w-full px-3 py-2.5 rounded-md text-sm text-sidebar-foreground/70 active:bg-sidebar-accent/50 transition-colors"
+							@click="handleLogout"
+						>
+							<LogOut class="size-4 shrink-0" />
+							{{ t("login.logout") }}
+						</button>
+					</div>
+				</div>
+			</Transition>
 
 			<!-- 通知面板 / Notification panel -->
 			<Dialog :open="notificationPanelOpen" @update:open="(v) => (notificationPanelOpen = v)">
@@ -432,14 +622,11 @@
 
 					<!-- 合并通知列表 / Merged notification list -->
 					<!-- 超过 5 条时固定高度并开启滚动；5 条及以内自然撑开 dialog -->
-					<!-- Scrolls when > 5 items; expands naturally otherwise -->
+					<!-- Always scroll when content overflows, regardless of item count -->
 					<div
 						v-if="mergedNotifications.length > 0"
 						ref="notificationScrollEl"
-						class="flex flex-col gap-2 pr-1"
-						:class="mergedNotifications.length > 5
-							? 'overflow-y-auto scrollbar-overlay max-h-[60vh]'
-							: 'overflow-visible'"
+						class="flex flex-col gap-2 pr-1 overflow-y-auto scrollbar-overlay max-h-[60vh]"
 					>
 						<!-- 后端持久化通知（带 action 按钮）/ Backend persistent notification (with action button) -->
 						<template v-for="item in mergedNotifications" :key="item.source === 'backend' ? `b-${item.data.id}` : `f-${item.data.id}`">

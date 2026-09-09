@@ -131,7 +131,7 @@ pub async fn install_module(
     let final_name = format!("{}-{}-{}{}", module.id, platform, module.latest_version, file_ext);
     let final_path = modules_dir.join(&final_name);
 
-    tracing::info!("正在下载模块 {} v{} ...", module.id, module.latest_version);
+    tracing::info!("{}", crate::tl!("community.downloading", id = module.id, version = module.latest_version));
     let effective_url = apply_mirror(download_url, mirror_url.as_deref());
     let data = download_file_with_progress(&effective_url, proxy_url, on_progress).await?;
 
@@ -149,9 +149,9 @@ pub async fn install_module(
                 module.id, expected, actual
             )));
         }
-        tracing::info!("模块 {} sha256 校验通过", module.id);
+        tracing::info!("{}", crate::tl!("community.sha256Passed", id = module.id));
     } else {
-        tracing::warn!("模块 {} 没有提供 sha256 校验值，跳过校验", module.id);
+        tracing::warn!("{}", crate::tl!("community.sha256Skipped", id = module.id));
     }
 
     std::fs::write(&tmp_path, &data)
@@ -174,11 +174,7 @@ pub async fn install_module(
             .map_err(|e| crate::core::error::AppError::Other(e.to_string()))?;
     }
 
-    tracing::info!(
-        "模块 {} v{} 安装成功：{}",
-        module.id,
-        module.latest_version,
-        final_path.display()
+    tracing::info!("{}", crate::tl!("community.installSuccess", id = module.id, version = module.latest_version, path = final_path.display())
     );
     Ok(())
 }
@@ -193,7 +189,7 @@ pub async fn install_module(
 pub fn uninstall_module(module_id: &str) -> crate::core::error::Result<()> {
     let modules_dir = crate::postprocess::pipeline::modules_dir();
     remove_module_files(module_id, &modules_dir);
-    tracing::info!("模块 {} 已卸载", module_id);
+    tracing::info!("{}", crate::tl!("community.uninstalled", id = module_id));
     Ok(())
 }
 
@@ -207,7 +203,7 @@ fn remove_module_files(module_id: &str, modules_dir: &std::path::Path) {
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_file() && is_module_file(module_id, &path) {
-            tracing::debug!("删除旧模块文件: {}", path.display());
+            tracing::debug!("{}", crate::tl!("community.removeOldFile", path = path.display()));
             let _ = std::fs::remove_file(&path);
         }
     }
@@ -253,7 +249,7 @@ async fn download_file_with_progress(
     if let Some(proxy) = proxy_url.as_deref().filter(|s| !s.is_empty()) {
         match reqwest::Proxy::all(proxy) {
             Ok(p) => builder = builder.proxy(p),
-            Err(e) => tracing::warn!("下载代理地址无效 {}: {}", proxy, e),
+            Err(e) => tracing::warn!("{}", crate::tl!("community.proxyInvalid", proxy = proxy, error = e)),
         }
     }
     let client = builder

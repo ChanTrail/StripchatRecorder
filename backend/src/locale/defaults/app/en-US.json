@@ -11,7 +11,8 @@
     "collapse": "Collapse",
     "expand": "Expand",
     "notifications": "Notifications",
-    "community": "Module Community"
+    "community": "Module Community",
+    "more": "More"
   },
   "common": {
     "confirm": "Confirm",
@@ -237,7 +238,8 @@
     "fitView": "Fit View",
     "guide": "Right-click on canvas to add modules · Right-drag to pan · Left-drag to box-select nodes · Press Delete after selection to remove · ts_merge merges TS segments into a video file; other modules (accepting video_file input) must be placed after it",
     "multiSelected": "{count} node(s) selected, press Delete to batch remove",
-    "snapToGrid": "Snap to Grid"
+    "snapToGrid": "Snap to Grid",
+    "mobileHint": "The post-processing pipeline editor requires mouse interaction. Please use this feature in a desktop browser."
   },
   "finder": {
     "title": "Streamer Finder",
@@ -337,6 +339,21 @@
     },
     "pollInterval": {
       "label": "Polling Interval (seconds)"
+    },
+    "preferredResolution": {
+      "label": "Preferred Recording Resolution",
+      "original": "Original (highest)",
+      "hint": "Select a target quality, then choose which direction to search when it is unavailable."
+    },
+    "resolutionPreference": {
+      "label": "Fallback Direction",
+      "lower": "Prefer lower",
+      "higher": "Prefer higher",
+      "hint": "Uses the nearest quality in this direction first, then the nearest quality in the other direction instead of failing."
+    },
+    "recordingDuration": {
+      "label": "Recording File Duration (seconds)",
+      "hint": "0 = unlimited; 1800 = 30 minutes. Auto-saved and applied to active recordings. Starts a new file at the next HLS chunk boundary after the limit; files may be a few seconds longer."
     },
     "maxTmpDirGb": {
       "label": "Max Temporary Directory Size for Post-process (GB)",

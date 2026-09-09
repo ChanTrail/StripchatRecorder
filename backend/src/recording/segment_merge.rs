@@ -223,10 +223,7 @@ pub fn startup_remove_empty_dirs(output_dir: &std::path::Path) {
 
     let removed = remove_empty_dirs_recursive(output_dir, false);
     if removed > 0 {
-        tracing::info!(
-            "Startup: removed {} empty directories under {:?}",
-            removed,
-            output_dir
+        tracing::info!("{}", crate::tl!("segment.startupRemovedEmpty", count = removed, dir = output_dir.display())
         );
     }
 }

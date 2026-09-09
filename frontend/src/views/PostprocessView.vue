@@ -19,6 +19,7 @@
 -->
 <script setup lang="ts">
 import { onMounted, computed, ref, onUnmounted, nextTick } from "vue";
+import { useMobileLayout } from "@/composables/useMobileLayout";
 import {
 	usePostprocessStore,
 	nodeEffectiveId,
@@ -35,13 +36,14 @@ import RecordingInputNode from "@/components/RecordingInputNode.vue";
 import PipelineNodeCard from "@/components/PipelineNodeCard.vue";
 import ModulePickerMenu from "@/components/ModulePickerMenu.vue";
 import { Badge } from "@/components/ui/badge";
-import { Maximize2, Grid2x2 } from "@lucide/vue";
+import { Maximize2, Grid2x2, Clapperboard } from "@lucide/vue";
 import { useI18n } from "vue-i18n";
 import type { PortRef } from "@/composables/usePortWiring";
 
 const store = usePostprocessStore();
 const { toast } = useNotify();
 const { t } = useI18n();
+const { isMobile } = useMobileLayout();
 
 // ─── 画布变换 / Canvas Transform ─────────────────────────────────────────────
 const canvasRef = ref<HTMLElement | null>(null);
@@ -311,6 +313,19 @@ const inputPortConnected = computed(() =>
 
 <template>
 	<div class="flex flex-col h-full gap-0">
+		<!-- 移动端提示 / Mobile notice -->
+		<div
+			v-if="isMobile"
+			class="flex flex-col items-center justify-center h-full gap-4 px-8 text-center"
+		>
+			<Clapperboard class="size-12 text-muted-foreground/40" />
+			<h2 class="text-base font-semibold">{{ t("postprocess.title") }}</h2>
+			<p class="text-sm text-muted-foreground leading-relaxed max-w-xs">
+				{{ t("postprocess.mobileHint") }}
+			</p>
+		</div>
+
+		<template v-else>
 		<!-- 顶部工具栏 / Top toolbar -->
 		<header class="flex items-start justify-between gap-4 shrink-0 pb-4 bg-background sticky top-0 z-20 px-6 pt-6 border-b">
 			<div>
@@ -506,6 +521,7 @@ const inputPortConnected = computed(() =>
 				<span class="text-xs">{{ t("postprocess.guide") }}</span>
 			</template>
 		</div>
+		</template><!-- end v-else (desktop) -->
 	</div>
 </template>
 

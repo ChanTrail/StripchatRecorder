@@ -224,7 +224,7 @@ pub async fn install_community_module(
             Ok(Json(serde_json::json!({ "ok": true })))
         }
         Err(e) => {
-            tracing::error!("社区模块 '{}' 安装失败: {}", module.id, e);
+            tracing::error!("{}", crate::tl!("postprocess.communityInstallFailed", id = module.id, error = e));
             s.emitter.emit(
                 "community-module-install-done",
                 &serde_json::json!({ "moduleId": module.id, "success": false, "error": e.to_string() }),

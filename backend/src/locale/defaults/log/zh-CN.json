@@ -1,0 +1,174 @@
+{
+  "recorder": {
+    "started": "开始录制 {username} → {dir}",
+    "finished": "录制完成 {username} → {dir}",
+    "stopSignal": "收到停止信号 → {username}",
+    "apiRebuilt": "录制 {username}：API 客户端因设置变更已重建",
+    "apiRebuildFailed": "录制 {username}：重建 API 客户端失败：{error}",
+    "playlistRefreshed": "已刷新播放列表 URL → {username}",
+    "streamNotRecordable": "直播不再可录制 → {username}（状态：{status}），停止录制",
+    "streamNotRecordableNoUrl": "直播不再可录制 → {username}（状态：{status}），停止录制",
+    "noPlaylistUrl": "暂无播放列表 URL → {username}（状态：{status}），重试中",
+    "streamEndedMaxRetries": "直播结束 → {username}（达到最大重试次数）",
+    "streamEndedPlaylistFail": "直播结束 → {username}（播放列表刷新失败 {count} 次）",
+    "fetchErrCdnRefresh": "获取错误 → {username}：{count} 次连续 CDN 失败，刷新播放列表",
+    "fetchErrRefresh": "获取错误 → {username}：{error}，尝试刷新播放列表",
+    "playlistRefreshFailed": "播放列表刷新失败 → {username}：{error}",
+    "initSegmentCached": "已缓存 init 分片 → {username}（{bytes} 字节）",
+    "initSegmentFailed": "下载 init 分片失败：{error}，跳过本轮",
+    "rotateFailed": "录制 {username}：轮转会话失败：{error}",
+    "ffmpegConvertFailed": "ffmpeg 转换失败 → 分片 {seq}：{error}",
+    "segmentDownloadFailed": "下载分片 {seq} 失败：{error}",
+    "recordingError": "录制错误 → {username}：{error}"
+  },
+  "relay": {
+    "workerStarted": "Relay worker 已启动，主播：{username}",
+    "workerStopped": "Relay worker 已停止，主播：{username}",
+    "workerIdle": "Relay worker：空闲，停止，主播：{username}",
+    "apiClientError": "Relay：主播 {username} 的 API 客户端错误：{error}",
+    "upstreamLive": "Relay worker [{username}]：上游直播中",
+    "upstreamOffline": "Relay worker [{username}]：上游离线（{status}）",
+    "streamInfoFailed": "Relay worker [{username}]：获取直播信息失败：{error}",
+    "offlineStatus": "Relay 离线 [{username}]：状态={status} 播放列表={hasPlaylist}",
+    "offlineSwitching": "Relay 离线 [{username}]：上游上线 → 切换",
+    "offlineCheckFailed": "Relay 离线 [{username}]：检查失败：{error}",
+    "offlineFfmpegFailed": "Relay 离线 [{username}]：启动 ffmpeg 失败：{error}",
+    "liveConverterFailed": "Relay 直播 [{username}]：启动转换器失败：{error}",
+    "liveConverterClosed": "Relay 直播 [{username}]：转换器 stdout 已关闭",
+    "liveIdle": "Relay 直播 [{username}]：空闲，停止",
+    "livePollFailed": "Relay 直播 [{username}]：轮询失败（{cur}/{max}）：{error}",
+    "liveSegmentFailed": "Relay：主播 {username} 的分片 {seq} 下载失败：{error}"
+  },
+  "monitor": {
+    "apiClientFailed": "创建 API 客户端失败：{error}",
+    "pollIntervalRestarted": "监控器：轮询间隔已变更，重置计时器",
+    "streamNotRecordable": "直播不再可录制 → {username}（is_online={isOnline}, is_recordable={isRecordable}, status={status}），停止录制",
+    "autoStart": "自动开始录制 → {username}（just_online={justOnline}, dropped={dropped}, natural_stop={naturalStop}, should_be={shouldBe}）",
+    "streamerDead": "主播 {username} 已确认失效（用户名和 model_id 均无法找到），后续将跳过轮询",
+    "pollFailed": "轮询失败 → {username}：{error}",
+    "streamerRenamed": "主播已改名：{oldUsername} → {newUsername}",
+    "streamerRenameSkipped": "主播改名跳过 {username}：{error}"
+  },
+  "meta": {
+    "migrationCreateDirFailed": "Meta 迁移：创建目录 {dir} 失败：{error}",
+    "migrationTargetExists": "Meta 迁移：目标已存在，跳过 {path}",
+    "migrationMoved": "Meta 迁移：已移动 {from} → {to}",
+    "migrationMoveFailed": "Meta 迁移：移动 {path} 失败：{error}",
+    "migrationDone": "Meta 迁移：已将 {count} 个旧版扁平 meta 文件移入按主播子目录的新结构",
+    "cleanupDeleteFailed": "Meta 清理：删除 {name} 失败：{error}",
+    "cleanupDeleted": "Meta 清理：已删除孤立 meta {name}",
+    "cleanupDone": "Meta 清理：已删除 {count} 个孤立 meta 文件",
+    "scanSkipEmpty": "Meta 扫描：{count} 个视频需要后处理，但流水线为空，跳过",
+    "scanPpPending": "Meta 扫描：{count} 个路径需要（重新）触发后处理",
+    "scanCreatedVideo": "Meta 扫描：已为视频 {path} 创建 pp_waiting meta",
+    "scanCorruptVideo": "Meta 扫描：视频 {path} 的 meta 损坏，重新创建为 pp_waiting",
+    "scanStaleVideo": "Meta 扫描：视频 {path} 的 {status} 状态已陈旧（本进程未追踪），重新触发后处理",
+    "scanRepairedVideo": "Meta 扫描：已修复视频 {path} 的字段",
+    "scanUnrepairableVideo": "Meta 扫描：视频 {path} 的 meta 无法修复，重建为 pp_waiting",
+    "scanCreatedSessionDir": "Meta 扫描：已为 session_dir {path} 创建 pp_waiting meta",
+    "scanCorruptSessionDir": "Meta 扫描：session_dir {path} 的 meta 损坏，重新创建为 pp_waiting",
+    "scanStaleSessionDir": "Meta 扫描：session_dir {path} 的 {status} 状态已陈旧（本进程未追踪），重新触发后处理",
+    "scanRepairedSessionDir": "Meta 扫描：已修复 session_dir {path} 的字段",
+    "scanUnrepairableSessionDir": "Meta 扫描：session_dir {path} 的 meta 无法修复，重建为 pp_waiting",
+    "writeMetaFailed": "写入 meta 文件 {path} 失败：{error}",
+    "serializeMetaFailed": "序列化 {path} 的 meta 失败：{error}"
+  },
+  "scheduler": {
+    "mouflonSynced": "Mouflon 密钥已从 {url} 同步",
+    "mouflonUpToDate": "Mouflon 密钥已是最新，跳过",
+    "mouflonSyncFailed": "Mouflon 密钥同步失败（已重试 {retries} 次）：{error}",
+    "mouflonSyncRetrying": "Mouflon 密钥同步失败（第 {attempt}/{max} 次）：{error}，{secs} 秒后重试",
+    "mouflonSettingsChanged": "Mouflon 同步：设置已变更，立即触发同步",
+    "updateAvailable": "发现新版本：{latest}（当前：{current}）",
+    "updateUpToDate": "版本检查：已是最新版本 {current}",
+    "updateCheckFailed": "版本检查失败（将在 24 小时后重试）：{error}"
+  },
+  "watcher": {
+    "recordingsCreateDirFailed": "创建监控目录 {dir} 失败：{error}",
+    "recordingsWatching": "正在监控录制目录：{dir}",
+    "recordingsWatchFailed": "监控录制目录 {dir} 失败：{error}",
+    "recordingsWatcherFailed": "创建录制目录监控器失败：{error}",
+    "recordingsEventError": "录制目录监控事件错误：{error}",
+    "recordingsDisconnected": "录制目录监控通道已断开",
+    "localeWatchFailed": "监控 locale 目录 {dir} 失败：{error}",
+    "localeWatching": "正在监控 locale 目录：{dir}",
+    "localeWatcherFailed": "创建 locale 目录监控器失败：{error}",
+    "localeEventError": "locale 目录监控错误：{error}",
+    "modulesWatchFailed": "监控模块目录失败：{error}",
+    "modulesWatching": "正在监控模块目录：{dir}",
+    "modulesWatcherFailed": "创建模块目录监控器失败：{error}",
+    "modulesEventError": "模块目录监控错误：{error}"
+  },
+  "locale": {
+    "createDirFailed": "创建 locale 目录 {dir} 失败：{error}",
+    "writeFileFailed": "写入 locale 文件 {path} 失败：{error}",
+    "validationFailed": "Locale 文件 {path} 校验失败（{label}）：\"{reason}\"，从默认内容重建",
+    "rebuiltFile": "已重建 locale 文件 {path}",
+    "rebuildFailed": "重建 locale 文件 {path} 失败：{error}",
+    "parseFileFailed": "解析 locale 文件 {path} 失败：{error}",
+    "readFileFailed": "读取 locale 文件 {path} 失败：{error}"
+  },
+  "startup": {
+    "ffmpegMissing": "未检测到 ffmpeg，录制和后处理功能将不可用",
+    "localeFileWarning": "自定义 locale 文件校验警告：{payload}"
+  },
+  "sse": {
+    "broadcastLagged": "SSE 广播队列溢出，丢失 {count} 条事件"
+  },
+  "update": {
+    "installDone": "更新安装完成，准备启动新版本",
+    "exePathFailed": "无法获取可执行文件路径：{error}，请手动重启",
+    "launching": "正在启动新版本：{exe} {args}",
+    "launchSuccess": "新版本进程已启动 PID={pid}",
+    "launchFailed": "启动新版本失败：{error}，请手动重启",
+    "unzipped": "已解压：{path}",
+    "unzipDone": "zip 解压完成，所有文件已替换"
+  },
+  "segment": {
+    "startupRemovedEmpty": "启动：已移除 {dir} 下 {count} 个空目录"
+  },
+  "postprocess": {
+    "nodeSkipped": "节点 {id} 已跳过（配置未变且上次成功），直接透传",
+    "nodeDisabled": "节点 {id} 已禁用，直接透传 {count} 个输入",
+    "portNotAvailable": "节点 {from} 的输出端口 {port} 不可用，跳过到 {to} 的连线",
+    "moduleStdout": "[{module}] {line}",
+    "moduleStderr": "[{module}] stderr：{line}",
+    "communityInstallFailed": "社区模块 '{id}' 安装失败：{error}",
+    "serviceSkipNode": "后处理重跑：跳过节点 {id}（模块：{module}）— 上次成功且配置未变",
+    "serviceStalePreFill": "后处理重跑：节点 {id}（模块：{module}）预期无变化，但其历史输出已不在磁盘上；丢弃陈旧结果（预填充）",
+    "serviceStaleMerge": "后处理重跑：节点 {id}（模块：{module}）预期无变化，但其历史输出已不在磁盘上；丢弃陈旧结果（合并）",
+    "discoverySkipFormat": "跳过 {path}：文件名不符合 {name}-{platform}-{version} 格式",
+    "discoveryDupKeepHigher": "模块 ID {id} 被多个可执行文件声明（{a} 和 {b}）；保留版本较高者（{va} >= {vb}）",
+    "discoveryDupReplace": "模块 ID {id} 被多个可执行文件声明（{a} 和 {b}）；保留版本较高者（{va} > {vb}）",
+    "discoveryDescribeFailed": "描述模块 {path} 失败：{error}",
+    "builtinUnpackImageNotFound": "unpack：图片路径未找到（跳过端口 1）：{path}"
+  },
+  "ffmpegUtil": {
+    "openPlaylistFailed": "打开 playlist.m3u8 失败：{error}",
+    "writeM3u8HeaderFailed": "写入 M3U8 头部失败：{error}",
+    "updateM3u8Failed": "更新 playlist.m3u8 失败：{error}"
+  },
+  "stripchat": {
+    "cdnTldChanged": "CDN [{node}] {from} -> {to}",
+    "cdnTldFailed": "CDN [{tld}] {error}",
+    "streamerRenamed": "检测到主播改名：{username} -> {newUsername}（model_id={modelId}）",
+    "autoM3u8TldSuccess": "auto.m3u8 通过 CDN TLD 获取成功：{tld}",
+    "autoM3u8Failed": "auto.m3u8 获取所有 CDN TLD 均失败 [{url}]：{error}",
+    "usingUrl": "使用 URL：{url}"
+  },
+  "community": {
+    "downloading": "正在下载模块 {id} v{version}...",
+    "sha256Passed": "模块 {id} sha256 校验通过",
+    "sha256Skipped": "模块 {id} 没有提供 sha256 校验值，跳过校验",
+    "installSuccess": "模块 {id} v{version} 安装成功：{path}",
+    "uninstalled": "模块 {id} 已卸载",
+    "removeOldFile": "删除旧模块文件：{path}",
+    "proxyInvalid": "下载代理地址无效 {proxy}：{error}"
+  },
+  "emitter": {
+    "serializeError": "事件序列化错误：{error}"
+  },
+  "logging": {
+    "initialized": "日志系统初始化完成 → {path}"
+  }
+}

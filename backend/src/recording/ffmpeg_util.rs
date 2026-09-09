@@ -90,7 +90,7 @@ pub(crate) fn append_to_m3u8(session_dir: &std::path::Path, ts_path: &std::path:
     {
         Ok(f) => f,
         Err(e) => {
-            tracing::error!("Failed to open playlist.m3u8: {}", e);
+            tracing::error!("{}", crate::tl!("ffmpegUtil.openPlaylistFailed", error = e));
             return;
         }
     };
@@ -98,14 +98,14 @@ pub(crate) fn append_to_m3u8(session_dir: &std::path::Path, ts_path: &std::path:
     if needs_header
         && let Err(e) = file.write_all(b"#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-MEDIA-SEQUENCE:0\n")
     {
-        tracing::error!("Failed to write M3U8 header: {}", e);
+        tracing::error!("{}", crate::tl!("ffmpegUtil.writeM3u8HeaderFailed", error = e));
         return;
     }
 
     // 写入分片条目（时长占位为 0，实际时长未知）/ Write segment entry (duration placeholder 0, actual duration unknown)
     let line = format!("#EXTINF:0,\n{}\n", filename);
     if let Err(e) = file.write_all(line.as_bytes()) {
-        tracing::error!("Failed to update playlist.m3u8: {}", e);
+        tracing::error!("{}", crate::tl!("ffmpegUtil.updateM3u8Failed", error = e));
     }
 }
 

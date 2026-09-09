@@ -49,11 +49,11 @@ pub fn write_meta(video_path: &Path, meta: &VideoMeta) {
     match serde_json::to_string_pretty(&meta) {
         Ok(json) => {
             if let Err(e) = std::fs::write(&meta_path, json) {
-                tracing::warn!("Failed to write meta {:?}: {}", meta_path, e);
+                tracing::warn!("{}", crate::tl!("meta.writeMetaFailed", path = meta_path.display(), error = e));
             }
         }
         Err(e) => {
-            tracing::warn!("Failed to serialize meta for {:?}: {}", video_path, e);
+            tracing::warn!("{}", crate::tl!("meta.serializeMetaFailed", path = video_path.display(), error = e));
         }
     }
 }

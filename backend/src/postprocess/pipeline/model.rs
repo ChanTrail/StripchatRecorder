@@ -266,13 +266,17 @@ impl PipelineConfig {
     }
 
     /// 返回从 `node_id` 出发的所有下游边及其目标节点。
+    /// 按 `from_port` 升序排列，保证端口 0 的下游先于端口 1 的下游入队，
+    /// 使执行顺序与连线顺序一致。
     ///
     /// 不按目标节点的 `enabled` 过滤：被禁用的下游节点仍需被 `exec::run_pipeline`
     /// 当作有效的分发目标接收输入（原因同 [`Self::root_nodes`] 的文档说明）——
     /// 否则任何一条分支上出现禁用节点，都会导致该分支自身以及其后所有节点被整个
     /// 从执行队列中排除，而不仅仅是禁用节点自身不运行。
     ///
-    /// Returns all outgoing edges from `node_id` and their target nodes.
+    /// Returns all outgoing edges from `node_id` and their target nodes,
+    /// sorted ascending by `from_port` so port-0 successors are queued before port-1,
+    /// keeping execution order consistent with wiring order.
     ///
     /// Does NOT filter by the target node's `enabled`: a disabled downstream node still
     /// needs to be a valid dispatch target for `exec::run_pipeline` to receive input
@@ -280,7 +284,10 @@ impl PipelineConfig {
     /// node anywhere along a branch would exclude that entire branch (and everything
     /// after it) from the execution queue, not just the disabled node itself.
     pub fn successors(&self, node_id: &str) -> Vec<(PipelineEdge, &PipelineNode)> {
-        let edges = self.resolved_edges();
+        let mut edges = self.resolved_edges();
+        // 按 from_port 升序，保证连线顺序决定下游入队顺序
+        // Sort by from_port ascending so wiring order determines downstream queue order
+        edges.sort_by_key(|e| e.from_port);
         edges
             .into_iter()
             .filter(|e| e.from_node_id == node_id)
@@ -291,6 +298,129 @@ impl PipelineConfig {
                     .map(|n| (e, n))
             })
             .collect()
+    }
+
+    /// 返回所有节点按 DAG 连线顺序（BFS Kahn 算法）排列的 effective_id 列表。
+    ///
+    /// 排序规则完全由连线（`nodes[].inputs`）决定，与节点在 `nodes` 数组中的存储
+    /// 顺序无关。具体地：
+    /// - 根节点（`inputs` 中有来自 "0" 的连接，或无入边但有出边）按其**被下游
+    ///   引用的最小输入端口号**升序排列（无下游引用则排末尾）。
+    /// - 同一上游节点的多个下游，按下游节点接收该上游的**输入端口号**升序排列。
+    ///
+    /// 孤立节点（无任何入边也无出边）不纳入结果。
+    ///
+    /// 供执行引擎（[`super::exec::run_pipeline`]）和 meta 记录排序
+    /// （`service::topological_order`）共用，消除重复实现。
+    ///
+    /// Returns the effective_ids of all nodes in DAG wiring order (BFS Kahn's algorithm).
+    ///
+    /// Ordering is determined entirely by wiring (`nodes[].inputs`), independent of the
+    /// node storage order in the `nodes` array. Specifically:
+    /// - Root nodes are sorted ascending by the smallest input port number they are
+    ///   referenced from a downstream node (nodes with no downstream reference go last).
+    /// - Multiple successors of the same upstream node are sorted ascending by the
+    ///   input port number on which they receive that upstream's output.
+    ///
+    /// Isolated nodes (no edges at all) are excluded from the result.
+    ///
+    /// Shared by the execution engine ([`super::exec::run_pipeline`]) and meta record
+    /// ordering (`service::topological_order`) to avoid duplicate implementations.
+    pub fn topological_order(&self) -> Vec<String> {
+        use std::collections::{HashMap, HashSet, VecDeque};
+
+        let edges = self.resolved_edges();
+
+        // 入度表（只计入非根边，即 from_node_id != "0" 且目标在 nodes 中）
+        // In-degree map (only non-root edges whose target exists in nodes)
+        let mut in_degree: HashMap<String, usize> = HashMap::new();
+        // 邻接表：from_node_id -> [(from_port, to_node_id, to_port)]，按 from_port 排序保证连线顺序
+        // Adjacency list: from_node_id -> [(from_port, to_node_id, to_port)], sorted by from_port
+        let mut adj: HashMap<String, Vec<(usize, String, usize)>> = HashMap::new();
+
+        // 所有有连线的节点先初始化入度为 0
+        for node in &self.nodes {
+            let eid = node.effective_id().to_string();
+            in_degree.entry(eid).or_insert(0);
+        }
+
+        for edge in &edges {
+            *in_degree.entry(edge.to_node_id.clone()).or_insert(0) += 1;
+            adj.entry(edge.from_node_id.clone())
+                .or_default()
+                .push((edge.from_port, edge.to_node_id.clone(), edge.to_port));
+        }
+
+        // 每个节点的邻接表按 from_port 升序排列（保证同一上游多个下游按连线端口顺序入队）
+        // Sort each adjacency list by from_port ascending
+        for succs in adj.values_mut() {
+            succs.sort_by_key(|(fp, _, _)| *fp);
+        }
+
+        // 收集根节点：inputs 里有来自 "0" 的连接，或者入度为 0 但有出边
+        // Collect root nodes: connected to input node "0", or in-degree 0 with outgoing edges
+        let has_outgoing: HashSet<&str> = edges.iter().map(|e| e.from_node_id.as_str()).collect();
+        let mut roots: Vec<String> = self
+            .nodes
+            .iter()
+            .filter(|n| {
+                let connected_to_input = n.inputs.values().any(|r| r.node_id == "0");
+                let eid = n.effective_id();
+                let deg = in_degree.get(eid).copied().unwrap_or(0);
+                connected_to_input || (deg == 0 && has_outgoing.contains(eid))
+            })
+            .map(|n| n.effective_id().to_string())
+            .collect();
+
+        // 根节点排序：按"被下游以最小输入端口号引用"升序，使连线顺序决定根节点顺序
+        // Sort root nodes by the minimum to_port that references them from a downstream node
+        let root_min_port: HashMap<String, usize> = {
+            let mut m: HashMap<String, usize> = HashMap::new();
+            for node in &self.nodes {
+                for input_ref in node.inputs.values() {
+                    // 找到根节点上游是 "0" 的那一步：此处我们需要的是根节点自身被下游
+                    // 连接时的端口，但根节点没有下游定义它"应该在第几位"——
+                    // 实际上用根节点自身 inputs 里来自 "0" 的 port 作为排序键：
+                    // 上游为 "0" 表示它直接连接录制输入，port 即该根节点接收录制输入的端口号
+                    if input_ref.node_id == "0" {
+                        let eid = node.effective_id().to_string();
+                        let e = m.entry(eid).or_insert(usize::MAX);
+                        if input_ref.port < *e {
+                            *e = input_ref.port;
+                        }
+                    }
+                }
+            }
+            m
+        };
+        roots.sort_by_key(|id| root_min_port.get(id).copied().unwrap_or(usize::MAX));
+
+        // BFS Kahn 算法
+        let mut queue: VecDeque<String> = roots.into_iter().collect();
+        let mut visited: HashSet<String> = HashSet::new();
+        let mut ordered: Vec<String> = Vec::new();
+
+        while let Some(id) = queue.pop_front() {
+            if visited.contains(&id) {
+                continue;
+            }
+            visited.insert(id.clone());
+            ordered.push(id.clone());
+
+            if let Some(succs) = adj.get(&id) {
+                for (_fp, succ_id, _tp) in succs {
+                    let deg = in_degree.entry(succ_id.clone()).or_insert(0);
+                    if *deg > 0 {
+                        *deg -= 1;
+                    }
+                    if *deg == 0 && !visited.contains(succ_id) {
+                        queue.push_back(succ_id.clone());
+                    }
+                }
+            }
+        }
+
+        ordered
     }
 }
 

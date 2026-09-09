@@ -49,6 +49,7 @@
 		SelectTrigger,
 		SelectValue,
 	} from "@/components/ui/select";
+	import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 	import { useDirectoryBrowser } from "@/composables/useDirectoryBrowser";
 	import { FolderOpen, Eye, EyeOff } from "@lucide/vue";
 
@@ -59,6 +60,8 @@
 	const localesStore = useLocalesStore();
 	const authStore = useAuthStore();
 	const router = useRouter();
+
+	const resolutionDirections = ["lower", "higher"] as const;
 
 	/** 可用语言列表（从共享 store 读取，由 App.vue 统一维护）
 	 * Available locales (from shared store, maintained by App.vue) */
@@ -91,6 +94,9 @@
 		sc_mirror_url: null,
 		sc_mirror_scheme: "https",
 		max_concurrent: 0,
+		max_recording_duration_secs: 0,
+		preferred_resolution: 0,
+		resolution_preference: "lower" as "lower" | "higher",
 		max_tmp_dir_gb: 50,
 		language: "zh-CN",
 		mouflon_sync_url: null,
@@ -153,6 +159,9 @@
 			poll_interval_secs: form.poll_interval_secs,
 			auto_record: form.auto_record,
 			max_concurrent: form.max_concurrent,
+			max_recording_duration_secs: form.max_recording_duration_secs,
+			preferred_resolution: form.preferred_resolution,
+			resolution_preference: form.resolution_preference,
 			max_tmp_dir_gb: form.max_tmp_dir_gb,
 			sc_mirror_scheme: form.sc_mirror_scheme,
 		}),
@@ -495,6 +504,73 @@
 					<p class="text-xs text-muted-foreground">
 						{{ t("settings.outputDir.hint") }}
 					</p>
+				</div>
+
+				<div class="flex flex-col gap-1.5">
+					<Label>{{ t("settings.preferredResolution.label") }}</Label>
+					<Select
+						:model-value="String(form.preferred_resolution)"
+						@update:model-value="form.preferred_resolution = Number($event ?? 0)"
+					>
+						<SelectTrigger class="w-48">
+							<SelectValue />
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value="0">{{ t("settings.preferredResolution.original") }}</SelectItem>
+							<SelectItem
+								v-for="res in [2160, 1440, 1080, 720, 540, 480, 360, 240]"
+								:key="res"
+								:value="String(res)"
+							>
+								{{ res }}p
+							</SelectItem>
+						</SelectContent>
+					</Select>
+					<p class="text-xs text-muted-foreground">
+						{{ t("settings.preferredResolution.hint") }}
+					</p>
+				</div>
+
+				<div v-if="form.preferred_resolution > 0" class="flex flex-col gap-1.5">
+					<Label>{{ t("settings.resolutionPreference.label") }}</Label>
+					<RadioGroup
+						:model-value="form.resolution_preference"
+						class="flex flex-row gap-4"
+						@update:model-value="(v) => v && (form.resolution_preference = v as 'lower' | 'higher')"
+					>
+						<div
+							v-for="dir in resolutionDirections"
+							:key="dir"
+							class="flex items-center gap-2"
+						>
+							<RadioGroupItem :id="`resolution-${dir}`" :value="dir" />
+							<Label :for="`resolution-${dir}`" class="cursor-pointer">
+								{{ t(`settings.resolutionPreference.${dir}`) }}
+							</Label>
+						</div>
+					</RadioGroup>
+					<p class="text-xs text-muted-foreground">
+						{{ t("settings.resolutionPreference.hint") }}
+					</p>
+				</div>
+
+				<div class="flex flex-col gap-1.5">
+					<Label>{{ t("settings.recordingDuration.label") }}</Label>
+					<NumberField
+						:model-value="form.max_recording_duration_secs"
+						:min="0"
+						:max="Number.MAX_SAFE_INTEGER"
+						:step="1"
+						class="w-40"
+						@update:model-value="(v) => v !== undefined && Number.isSafeInteger(v) && (form.max_recording_duration_secs = Math.max(0, v))"
+					>
+						<NumberFieldContent>
+							<NumberFieldDecrement />
+							<NumberFieldInput />
+							<NumberFieldIncrement />
+						</NumberFieldContent>
+					</NumberField>
+					<p class="text-xs text-muted-foreground">{{ t("settings.recordingDuration.hint") }}</p>
 				</div>
 
 				<div class="flex flex-col gap-1.5">

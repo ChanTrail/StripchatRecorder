@@ -11,10 +11,16 @@ use crate::core::emitter::Emitter;
 use std::sync::Arc;
 
 /// 初始化 locale 目录，首次运行时写入内置默认语言文件。
+/// 同时根据当前设置的语言加载日志翻译到全局缓存。
 ///
 /// Initialize locale directories, writing built-in default locale files on first run.
-pub fn init_locale_dirs() {
+/// Also loads log translations for the current language into the global cache.
+pub fn init_locale_dirs(app_state: &Arc<AppState>) {
     crate::locale::manager::init_locale_dirs();
+    // 读取当前语言，加载对应的日志翻译到全局缓存供 tl! 宏使用
+    // Load log translations for the current language into the global cache for tl! macro
+    let locale_code = app_state.get_settings().language;
+    crate::locale::manager::load_log_translations(&locale_code);
 }
 
 /// 检查 ffmpeg 是否在 PATH 中可用，若不可用则记录警告并写入通知。
@@ -22,7 +28,7 @@ pub fn init_locale_dirs() {
 /// Check if ffmpeg is available on PATH; log a warning and push a notification if not found.
 pub fn check_ffmpeg(app_state: &Arc<AppState>, emitter: &Arc<dyn Emitter>) {
     if !crate::recording::ffmpeg_util::ffmpeg_available() {
-        tracing::warn!("ffmpeg not found on PATH");
+        tracing::warn!("{}", crate::tl!("startup.ffmpegMissing"));
         app_state.notification_store.emit_i18n(
             emitter.as_ref(),
             crate::core::notifications::NotificationLevel::Error,
@@ -50,7 +56,7 @@ pub fn check_locale_files(emitter: Arc<dyn Emitter>) {
             .into_iter()
             .map(|(path, reason)| serde_json::json!({ "path": path, "reason": reason }))
             .collect();
-        tracing::warn!("Custom locale file validation warnings: {:?}", payload);
+        tracing::warn!("{}", crate::tl!("startup.localeFileWarning", payload = format!("{:?}", payload)));
         emitter.emit("locale-warnings", &payload);
     });
 }
@@ -104,7 +110,7 @@ pub fn migrate_flat_meta_files(app_state: &Arc<AppState>, emitter: &Arc<dyn Emit
 /// without duplicating it here.
 pub fn run_all(app_state: Arc<AppState>, emitter: Arc<dyn Emitter>) {
     migrate_flat_meta_files(&app_state, &emitter);
-    init_locale_dirs();
+    init_locale_dirs(&app_state);
     check_ffmpeg(&app_state, &emitter);
     check_locale_files(Arc::clone(&emitter));
     start_fs_watchers(app_state, emitter);

@@ -152,9 +152,7 @@ pub fn ensure_meta_files(
     }
 
     if !pp_pending.is_empty() {
-        tracing::info!(
-            "Meta scan: {} path(s) need post-processing (re-)triggered",
-            pp_pending.len()
+        tracing::info!("{}", crate::tl!("meta.scanPpPending", count = pp_pending.len())
         );
     }
 
@@ -175,6 +173,13 @@ fn scan_and_ensure_meta(
     // - "pp_waiting" / "pp_running"：由 pp_queue 管理，用 `is_tracked` 区分
     //   真实活跃（本进程内存中确实有记录）与陈旧状态（上次异常退出遗留，无人追踪）。
     //
+    //   注意：pp_queue 追踪的 key 是最初传入 run_postprocess_for_path 的 video_path
+    //   字符串（session_dir 或原始视频路径）。ts_merge 完成后会在磁盘上生成同名视频
+    //   文件，scan 此时可能扫描到这个新文件，用新文件路径查 is_tracked 会找不到，
+    //   因为队列里存的仍是原始路径。因此对 pp_waiting/pp_running，需要额外用
+    //   meta.video_path（后处理正在使用的权威路径）做兜底查询，两者任一被追踪即视为
+    //   真实活跃。
+    //
     // Determine whether a path's current status is "genuinely active" (should not be
     // touched or re-triggered by this scan).
     //
@@ -184,9 +189,30 @@ fn scan_and_ensure_meta(
     // - "pp_waiting" / "pp_running": managed by pp_queue; `is_tracked` distinguishes
     //   genuinely active (has an in-memory record) from stale (leftover from a previous
     //   abnormal exit, untracked).
-    let is_genuinely_active = |path: &Path, status: &str| match status {
+    //
+    //   Important: the key stored in pp_queue is the video_path string originally passed to
+    //   run_postprocess_for_path (either a session_dir or the original video file path).
+    //   After ts_merge completes it creates a same-stem video file on disk, which a
+    //   concurrent scan may encounter; looking up that new file path via is_tracked returns
+    //   false because the queue still holds the original path. Therefore, for pp_waiting/
+    //   pp_running we also fall back to checking meta.video_path (the authoritative path
+    //   used by the active post-processing task) — the status is genuinely active if either
+    //   path is tracked.
+    let is_genuinely_active = |path: &Path, status: &str, meta_video_path: Option<&str>| match status {
         "recording" => recorder.is_file_locked(path),
-        "pp_waiting" | "pp_running" => state.pp_queue.is_tracked(&path.to_string_lossy()),
+        "pp_waiting" | "pp_running" => {
+            // 先查当前扫描路径，找不到再用 meta.video_path 兜底
+            // Check the scanned path first; fall back to meta.video_path if not found
+            if state.pp_queue.is_tracked(&path.to_string_lossy()) {
+                return true;
+            }
+            if let Some(vp) = meta_video_path
+                && state.pp_queue.is_tracked(vp)
+            {
+                return true;
+            }
+            false
+        }
         _ => false,
     };
     let entries = match std::fs::read_dir(dir) {
@@ -240,12 +266,12 @@ fn scan_and_ensure_meta(
                     pp_progress: None,
                 };
                 write_meta(&path, &meta);
-                tracing::info!("Meta scan: created pp_waiting meta for video {:?}", path);
+                tracing::info!("{}", crate::tl!("meta.scanCreatedVideo", path = path.display()));
                 pp_pending.push(path.clone());
             } else if meta_path.exists() && read_meta(&path).is_none() {
                 // meta 文件存在但解析失败（JSON 损坏）→ 重新创建
                 // Meta file exists but failed to parse (corrupt JSON) → recreate
-                tracing::warn!("Meta scan: corrupt meta for {:?} — recreating as pp_waiting", path);
+                tracing::warn!("{}", crate::tl!("meta.scanCorruptVideo", path = path.display()));
                 let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
                 let started_at = parse_timestamp_from_stem(stem).unwrap_or_else(|| {
                     std::fs::metadata(&path).ok().and_then(|m| m.modified().ok())
@@ -273,13 +299,11 @@ fn scan_and_ensure_meta(
                 // 无人追踪）需要重新触发后处理，而不是继续等待
                 // Skip genuinely active states; stale recording/pp_waiting/pp_running (leftover
                 // from a previous abnormal exit, untracked) needs to be re-triggered, not left waiting
-                if is_genuinely_active(&path, meta.status.as_str()) {
+                if is_genuinely_active(&path, meta.status.as_str(), meta.video_path.as_deref()) {
                     continue;
                 }
                 if matches!(meta.status.as_str(), "recording" | "pp_waiting" | "pp_running") {
-                    tracing::warn!(
-                        "Meta scan: stale {} status for {:?} (not tracked by this process) — re-triggering post-processing",
-                        meta.status, path
+                    tracing::warn!("{}", crate::tl!("meta.scanStaleVideo", path = path.display(), status = meta.status)
                     );
                     pp_pending.push(path.clone());
                     continue;
@@ -294,13 +318,13 @@ fn scan_and_ensure_meta(
                         // 无需修改 / No changes needed
                     }
                     Some(repaired) => {
-                        tracing::info!("Meta scan: repaired fields for {:?}", path);
+                        tracing::info!("{}", crate::tl!("meta.scanRepairedVideo", path = path.display()));
                         write_meta(&path, &repaired);
                     }
                     None => {
                         // status 非法，无法推断 → 重建为 pp_waiting，触发后处理
                         // Invalid status, cannot infer → rebuild as pp_waiting, trigger pp
-                        tracing::warn!("Meta scan: unrepairable meta for {:?} — rebuilding as pp_waiting", path);
+                        tracing::warn!("{}", crate::tl!("meta.scanUnrepairableVideo", path = path.display()));
                         let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
                         let started_at = parse_timestamp_from_stem(stem).unwrap_or_else(|| {
                             std::fs::metadata(&path).ok().and_then(|m| m.modified().ok())
@@ -395,12 +419,12 @@ fn scan_and_ensure_meta(
                     pp_progress: None,
                 };
                 write_meta(&path, &meta);
-                tracing::info!("Meta scan: created pp_waiting meta for session_dir {:?}", path);
+                tracing::info!("{}", crate::tl!("meta.scanCreatedSessionDir", path = path.display()));
                 pp_pending.push(path.clone());
             } else if meta_path.exists() && read_meta(&path).is_none() {
                 // meta 文件存在但 JSON 损坏 → 重建并加入待后处理列表
                 // Meta file exists but JSON is corrupt → rebuild and add to pending list
-                tracing::warn!("Meta scan: corrupt meta for session_dir {:?} — recreating as pp_waiting", path);
+                tracing::warn!("{}", crate::tl!("meta.scanCorruptSessionDir", path = path.display()));
                 let started_at = parse_timestamp_from_stem(name).unwrap_or_else(|| {
                     std::fs::metadata(&path).ok().and_then(|m| m.modified().ok())
                         .map(|t| { let dt: chrono::DateTime<chrono::Local> = t.into(); dt.to_rfc3339() })
@@ -431,13 +455,11 @@ fn scan_and_ensure_meta(
                 // Genuinely active states are skipped (recording via is_file_locked was
                 // already checked at branch entry; here we only need pp_waiting/pp_running's
                 // is_tracked check); stale states need to be re-triggered, not left waiting
-                if is_genuinely_active(&path, meta.status.as_str()) {
+                if is_genuinely_active(&path, meta.status.as_str(), meta.video_path.as_deref()) {
                     continue;
                 }
                 if matches!(meta.status.as_str(), "recording" | "pp_waiting" | "pp_running") {
-                    tracing::warn!(
-                        "Meta scan: stale {} status for session_dir {:?} (not tracked by this process) — re-triggering post-processing",
-                        meta.status, path
+                    tracing::warn!("{}", crate::tl!("meta.scanStaleSessionDir", path = path.display(), status = meta.status)
                     );
                     pp_pending.push(path.clone());
                     continue;
@@ -448,11 +470,11 @@ fn scan_and_ensure_meta(
                         && repaired.video_path == meta.video_path
                         && repaired.size_bytes == meta.size_bytes => {}
                     Some(repaired) => {
-                        tracing::info!("Meta scan: repaired fields for session_dir {:?}", path);
+                        tracing::info!("{}", crate::tl!("meta.scanRepairedSessionDir", path = path.display()));
                         write_meta(&path, &repaired);
                     }
                     None => {
-                        tracing::warn!("Meta scan: unrepairable meta for session_dir {:?} — rebuilding as pp_waiting", path);
+                        tracing::warn!("{}", crate::tl!("meta.scanUnrepairableSessionDir", path = path.display()));
                         let started_at = parse_timestamp_from_stem(name).unwrap_or_else(|| {
                             std::fs::metadata(&path).ok().and_then(|m| m.modified().ok())
                                 .map(|t| { let dt: chrono::DateTime<chrono::Local> = t.into(); dt.to_rfc3339() })

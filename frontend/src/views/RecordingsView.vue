@@ -39,15 +39,19 @@
 		TableHeader,
 		TableRow,
 	} from "@/components/ui/table";
-	import { ChevronRight, ChevronDown } from "@lucide/vue";
+	import { ChevronRight, ChevronDown, Image, Loader2 } from "@lucide/vue";
 	import RecordingRow from "@/components/RecordingRow.vue";
 	import ImagePreviewDialog from "@/components/ImagePreviewDialog.vue";
+	import SegmentStatsBadges from "@/components/SegmentStatsBadges.vue";
+	import PostprocessProgressCell from "@/components/PostprocessProgressCell.vue";
 	import { formatSize, formatDuration } from "@/utils/format";
 	import { useI18n } from "vue-i18n";
+	import { useMobileLayout } from "@/composables/useMobileLayout";
 
 	const { toast, confirm } = useNotify();
 	const { t } = useI18n();
 	const ppStore = usePostprocessStore();
+	const { isMobile } = useMobileLayout();
 	/** 事件取消订阅函数列表 / Event unsubscribe function list */
 	const unlisteners: (() => void)[] = [];
 	/** 本地已发起删除的文件路径集合（用于过滤 recording-deleted 事件通知）/ Locally deleted paths (to filter recording-deleted notifications) */
@@ -561,6 +565,17 @@
 				ppProgress.value[p.path] = ppProgressFromMeta(
 					p.meta.pp_execution, p.meta.pp_progress, countPipelineTotal(ppStore.pipeline),
 					{ processing: t("usePostprocess.processing"), waiting: t("usePostprocess.waitingProgress") },
+					// 传入当前流水线的节点 ID 集合，过滤掉已删除节点的历史记录——
+					// 此时 set_pp_done 尚未写入最终 meta，meta 里可能还有旧记录
+					//
+					// Pass the current pipeline's node ID set to filter out stale records
+					// of deleted nodes — set_pp_done hasn't written the final meta yet,
+					// so meta may still contain old entries
+					ppStore.pipeline?.nodes
+						? new Set(ppStore.pipeline.nodes
+							.filter((n) => n.enabled && !n.moduleId.includes("__builtin__"))
+							.map((n) => n.nodeId ?? n.moduleId))
+						: undefined,
 				);
 				// 直接使用后端已验证的模块输出路径（result.code === "ok" 且文件当前确实
 				// 存在于磁盘上，见 extract_verified_module_outputs），实时反映新完成节点
@@ -587,6 +602,7 @@
 					p,
 					async () => {
 						await load();
+						syncPpStateFromFiles();
 						syncModuleOutputsFromFiles();
 					},
 					() => wasCancelledByDelete,
@@ -621,7 +637,7 @@
 
 		<header
 			ref="headerEl"
-			class="flex items-start justify-between gap-4 shrink-0 pb-4 bg-background sticky top-0 z-20 px-6 pt-6 border-b"
+			class="flex items-start justify-between gap-4 shrink-0 pb-4 bg-background sticky top-0 z-20 px-4 pt-5 border-b"
 		>
 			<div class="flex-1 min-w-0">
 				<h1 class="text-xl font-bold mb-0.5">{{ t("recordings.title") }}</h1>
@@ -667,7 +683,7 @@
 					</span>
 				</div>
 			</div>
-			<div class="flex gap-2 shrink-0">
+			<div class="flex gap-2 shrink-0" :class="isMobile ? 'flex-col items-end' : ''">
 				<Tooltip
 					v-if="selectedCount > 0"
 					:content="
@@ -698,7 +714,7 @@
 			</div>
 		</header>
 
-		<div class="px-6 flex-1 overflow-y-auto">
+		<div class="px-4 flex-1 overflow-y-auto">
 			<div
 				v-if="loading && files.length === 0"
 				class="text-center text-muted-foreground py-16"
@@ -712,7 +728,8 @@
 				{{ t("recordings.empty") }}
 			</div>
 
-			<Table v-else>
+			<!-- ── 桌面端：表格视图 / Desktop: table view ── -->
+			<Table v-else-if="!isMobile">
 				<TableHeader
 					class="sticky top-0 z-10 bg-background"
 				>
@@ -826,6 +843,142 @@
 					</template>
 				</TableBody>
 			</Table>
+
+			<!-- ── 移动端：卡片列表 / Mobile: card list ── -->
+			<div v-else class="flex flex-col gap-3 py-3">
+				<!-- 全选行 / Select-all row -->
+				<div class="flex items-center gap-3 px-1 pb-1 border-b">
+					<Checkbox
+						:model-value="getAllChecked()"
+						@update:model-value="setAllChecked"
+					/>
+					<span class="text-sm text-muted-foreground">
+						{{ selectedCount > 0
+							? t("recordings.subtitle.selected", { count: selectedCount })
+							: t("recordings.subtitle.total", { count: files.length }) }}
+					</span>
+				</div>
+
+				<template v-for="group in groups" :key="group.username">
+					<!-- 分组标题 / Group header -->
+					<div class="flex items-center gap-2 px-1 py-1">
+						<Checkbox
+							:model-value="getGroupChecked(group)"
+							@update:model-value="setGroupChecked(group)"
+							@click.stop
+						/>
+						<button
+							class="flex items-center gap-2 flex-1 text-left min-w-0"
+							@click="toggleGroup(group.username)"
+						>
+							<component
+								:is="collapsedGroups.has(group.username) ? ChevronRight : ChevronDown"
+								class="size-4 text-muted-foreground shrink-0"
+							/>
+							<span class="font-semibold text-sm truncate">{{ group.username }}</span>
+							<Badge
+								v-if="group.hasRecording"
+								variant="destructive"
+								class="text-[10px] shrink-0"
+							>{{ t("recordings.status.recording") }}</Badge>
+						</button>
+						<span class="text-xs text-muted-foreground shrink-0">
+							{{ t("recordings.group.fileCount", { count: group.files.length }) }}
+							· {{ formatSize(group.totalSize) }}
+						</span>
+					</div>
+
+					<template v-if="!collapsedGroups.has(group.username)">
+						<div
+							v-for="f in group.files"
+							:key="f.path"
+							class="rounded-lg border bg-card px-4 py-3 flex flex-col gap-2"
+						>
+							<!-- 文件名 + 录制角标 -->
+							<div class="flex items-start gap-2">
+								<Checkbox
+									:model-value="getFileChecked(f.path)"
+									:disabled="f.is_recording"
+									class="mt-0.5 shrink-0"
+									@update:model-value="setFileChecked(f.path)"
+								/>
+								<div class="flex-1 min-w-0">
+									<span class="text-sm font-medium break-all leading-snug">{{ f.name }}</span>
+									<Badge
+										v-if="f.is_recording"
+										variant="destructive"
+										class="ml-1.5 text-[10px] align-middle"
+									>{{ t("recordings.status.recording") }}</Badge>
+								</div>
+							</div>
+
+							<!-- 元数据行 / Metadata row -->
+							<div class="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground pl-6">
+								<span>
+									<span class="font-medium text-foreground tabular-nums">{{ formatSize(f.size_bytes) }}</span>
+								</span>
+								<span class="tabular-nums">{{ new Date(f.started_at).toLocaleString() }}</span>
+								<span v-if="f.is_recording" class="text-destructive tabular-nums">
+									{{ formatDuration(elapsed[f.path] ?? 0) }}
+								</span>
+								<span v-else-if="f.video_duration_secs != null" class="tabular-nums">
+									{{ formatDuration(f.video_duration_secs) }}
+								</span>
+								<span v-if="f.video_resolution" class="font-mono tabular-nums">{{ f.video_resolution }}</span>
+								<span v-if="f.is_recording && recordingSpeed[f.path] != null" class="tabular-nums">
+									{{ formatSize(recordingSpeed[f.path]!) }}/s
+								</span>
+							</div>
+
+							<!-- 分片统计 / Segment stats -->
+							<div v-if="(segmentStats[f.path]?.downloaded ?? f.segments_downloaded) != null" class="pl-6">
+								<SegmentStatsBadges
+									:downloaded="segmentStats[f.path]?.downloaded ?? f.segments_downloaded ?? 0"
+									:failed="segmentStats[f.path]?.failed ?? f.segments_failed ?? 0"
+								/>
+							</div>
+
+							<!-- 后处理进度 / Post-process progress -->
+							<div v-if="!f.is_recording && ppStatus[f.path]" class="pl-6 text-xs">
+								<PostprocessProgressCell :status="ppStatus[f.path]" :progress="ppProgress[f.path]" />
+							</div>
+
+							<!-- 操作按钮 / Action buttons -->
+							<div class="flex gap-2 pl-6 flex-wrap">
+								<Button
+									size="sm"
+									variant="outline"
+									:disabled="f.is_recording"
+									@click="openFile(f.path)"
+								>{{ t("recordings.actions.play") }}</Button>
+								<Button
+									v-if="moduleOutputs[f.path]?.['contact_sheet']"
+									size="sm"
+									variant="outline"
+									@click="openModuleOutput(f.path, 'contact_sheet')"
+								>
+									<Image class="size-3.5" />
+								</Button>
+								<Button
+									size="sm"
+									variant="outline"
+									:disabled="f.is_recording || ppStatus[f.path] === 'running' || ppStatus[f.path] === 'waiting' || !hasPipelineNodes"
+									@click="runPostprocess(f.path)"
+								>
+									<Loader2 v-if="ppStatus[f.path] === 'running'" class="size-3.5 animate-spin" />
+									<span v-else>{{ t("recordings.actions.postprocess") }}</span>
+								</Button>
+								<Button
+									size="sm"
+									variant="destructive"
+									:disabled="f.is_recording"
+									@click="deleteFile(f)"
+								>{{ t("recordings.actions.delete") }}</Button>
+							</div>
+						</div>
+					</template>
+				</template>
+			</div>
 		</div>
 	</div>
 </template>

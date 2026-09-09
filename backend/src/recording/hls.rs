@@ -36,6 +36,8 @@ pub struct HlsSegment {
     pub url: String,
     /// 分片序号（用于去重）/ Segment sequence number (for deduplication)
     pub sequence: u32,
+    /// 分片时长（秒，来自 #EXTINF 标签，未知时为 0）/ Segment duration in seconds (from #EXTINF tag, 0 if unknown)
+    pub duration_secs: f64,
 }
 
 /// 解析 HLS m3u8 播放列表，返回分片列表和 fMP4 初始化段 URL。
@@ -56,6 +58,7 @@ pub fn parse_playlist(
     let mut segments = Vec::new();
     let mut mp4_header_url = None;
     let mut current_pkey: Option<&str> = None;
+    let mut pending_duration: f64 = 0.0;
 
     let lines: Vec<&str> = playlist.lines().collect();
 
@@ -68,6 +71,16 @@ pub fn parse_playlist(
                 let pkey = parts[3];
                 current_pkey = mouflon_keys.get(pkey).map(|s| s.as_str());
             }
+        }
+
+        // 解析 EXTINF 时长（格式：#EXTINF:6.00000,）
+        // Parse EXTINF duration (format: #EXTINF:6.00000,)
+        if let Some(rest) = line.strip_prefix("#EXTINF:") {
+            pending_duration = rest
+                .split(',')
+                .next()
+                .and_then(|v| v.parse::<f64>().ok())
+                .unwrap_or(0.0);
         }
 
         // 解析 fMP4 初始化段 URL（EXT-X-MAP）
@@ -120,25 +133,37 @@ pub fn parse_playlist(
         };
 
         let sequence = extract_sequence(&url).unwrap_or(segments.len() as u32);
-        segments.push(HlsSegment { url, sequence });
+        segments.push(HlsSegment { url, sequence, duration_secs: pending_duration });
+        pending_duration = 0.0;
     }
 
     Ok((segments, mp4_header_url))
 }
 
-/// 从主播放列表（master playlist）文本中解析出 BANDWIDTH 最高的变体流 URL，
+/// 从主播放列表（master playlist）文本中按配置选择变体流 URL，
 /// 以及所有 Mouflon PSCH 参数对。
 ///
-/// 与 [`parse_playlist`] 的区别：主播放列表列出多个不同码率的变体流供选择，
-/// 而 [`parse_playlist`] 解析的是某个变体流自身的媒体播放列表（分片列表）。
+/// - `preferred_resolution == 0`：按带宽选最高画质（原有行为）。
+/// - `preferred_resolution > 0`：选最接近目标高度的流；`prefers_higher` 控制
+///   目标不可用时优先向上还是向下回退。
 ///
-/// Parse the variant stream URL with the highest BANDWIDTH from master playlist text,
-/// along with all Mouflon PSCH parameter pairs.
+/// Parse the variant stream URL from a master playlist using the configured resolution
+/// preference, along with all Mouflon PSCH parameter pairs.
 ///
-/// Distinction from [`parse_playlist`]: a master playlist lists multiple variant
-/// streams at different bitrates to choose from, whereas [`parse_playlist`] parses
-/// a single variant's own media playlist (the segment list).
-pub fn parse_master_playlist(playlist: &str) -> Option<(String, Vec<(String, String)>)> {
+/// - `preferred_resolution == 0`: pick highest bandwidth (original behaviour).
+/// - `preferred_resolution > 0`: pick the stream closest to the target height;
+///   `prefers_higher` controls fallback direction when the exact target is unavailable.
+pub fn parse_master_playlist(
+    playlist: &str,
+    preferred_resolution: u32,
+    prefers_higher: bool,
+) -> Option<(String, Vec<(String, String)>)> {
+    struct Variant {
+        url: String,
+        bandwidth: u64,
+        height: Option<u32>,
+    }
+
     // 先把 \r\n 统一成 \n，再按 \n 分割
     let normalized = playlist.replace("\r\n", "\n").replace('\r', "\n");
     let lines: Vec<&str> = normalized.split('\n').map(|l| l.trim()).collect();
@@ -152,31 +177,65 @@ pub fn parse_master_playlist(playlist: &str) -> Option<(String, Vec<(String, Str
         }
     }
 
-    // 解析 BANDWIDTH 最高的流
-    let mut best_bandwidth: u64 = 0;
-    let mut best_url: Option<String> = None;
-    let mut pending_bandwidth: Option<u64> = None;
+    // 解析所有变体流
+    let mut variants: Vec<Variant> = Vec::new();
+    let mut pending: Option<(u64, Option<u32>)> = None;
 
     for &line in &lines {
         if let Some(attrs) = line.strip_prefix("#EXT-X-STREAM-INF:") {
-            // 去掉标签前缀后再按逗号分割，避免标签名干扰 BANDWIDTH= 匹配
-            pending_bandwidth = attrs
+            let bandwidth = attrs
                 .split(',')
-                .find(|seg| seg.trim_start().starts_with("BANDWIDTH="))
-                .and_then(|seg| seg.trim_start().strip_prefix("BANDWIDTH="))
-                .and_then(|v| v.parse::<u64>().ok());
+                .find_map(|seg| seg.trim().strip_prefix("BANDWIDTH="))
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(0);
+            let height = attrs
+                .split(',')
+                .find_map(|seg| seg.trim().strip_prefix("RESOLUTION="))
+                .and_then(|v| v.split_once('x'))
+                .and_then(|(w, h)| Some((w.parse::<u32>().ok()?, h.parse::<u32>().ok()?)))
+                .map(|(w, h)| w.min(h));
+            pending = Some((bandwidth, height));
         } else if !line.is_empty() && !line.starts_with('#') {
-            if let Some(bw) = pending_bandwidth.take()
-                && bw > best_bandwidth {
-                best_bandwidth = bw;
-                best_url = Some(line.to_string());
+            if let Some((bandwidth, height)) = pending.take() {
+                variants.push(Variant { url: line.to_string(), bandwidth, height });
             }
         } else {
-            pending_bandwidth = None;
+            pending = None;
         }
     }
 
-    best_url.map(|url| (url, mouflon_pairs))
+    let selected = if preferred_resolution == 0 {
+        variants.iter().max_by_key(|v| v.bandwidth)
+    } else {
+        let at_or_below = || {
+            variants
+                .iter()
+                .filter(|v| v.height.is_some_and(|h| h <= preferred_resolution))
+                .max_by_key(|v| (v.height.unwrap_or(0), v.bandwidth))
+        };
+        let at_or_above = || {
+            variants
+                .iter()
+                .filter(|v| v.height.is_some_and(|h| h >= preferred_resolution))
+                .min_by(|a, b| {
+                    a.height
+                        .cmp(&b.height)
+                        .then_with(|| b.bandwidth.cmp(&a.bandwidth))
+                })
+        };
+
+        let chosen = if prefers_higher {
+            at_or_above().or_else(at_or_below)
+        } else {
+            at_or_below().or_else(at_or_above)
+        };
+
+        // 若所有流均缺少 RESOLUTION 属性，退回到带宽最高的流
+        // If no stream has a RESOLUTION attribute, fall back to highest bandwidth
+        chosen.or_else(|| variants.iter().max_by_key(|v| v.bandwidth))
+    };
+
+    selected.map(|v| (v.url.clone(), mouflon_pairs))
 }
 
 /// 从完整 URL 中提取 URL 前缀（去掉最后一个路径段）。

@@ -20,9 +20,15 @@ pub async fn save_settings(
     AxumState(s): AxumState<ServerState>,
     Json(new_settings): Json<crate::config::app_state::Settings>,
 ) -> ApiResult<serde_json::Value> {
+    // 若语言发生变化，重新加载日志翻译 / Reload log translations if language changed
+    let old_lang = s.app_state.get_settings().language;
+    let new_lang = new_settings.language.clone();
     s.app_state
         .update_settings(new_settings)
         .map_err(ApiError::from)?;
+    if old_lang != new_lang {
+        crate::locale::manager::load_log_translations(&new_lang);
+    }
     s.emitter
         .emit("settings-updated", &s.app_state.get_settings());
     Ok(Json(serde_json::json!({ "ok": true })))

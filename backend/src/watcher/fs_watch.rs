@@ -60,26 +60,23 @@ pub fn start_recordings_dir_watcher(state: Arc<AppState>, emitter: Arc<dyn Emitt
             // 若输出目录发生变化，重新创建监控器 / If output dir changed, recreate the watcher
             if current_dir != watched_dir {
                 if let Err(e) = std::fs::create_dir_all(&current_dir) {
-                    tracing::error!("Failed to create watch dir {:?}: {}", current_dir, e);
+                    tracing::error!("{}", crate::tl!("watcher.recordingsCreateDirFailed", dir = current_dir.display(), error = e));
                 }
 
                 match RecommendedWatcher::new(tx.clone(), Config::default()) {
                     Ok(mut w) => match w.watch(&current_dir, RecursiveMode::Recursive) {
                         Ok(()) => {
-                            tracing::info!("Watching recordings dir: {:?}", current_dir);
+                            tracing::info!("{}", crate::tl!("watcher.recordingsWatching", dir = current_dir.display()));
                             watched_dir = current_dir;
                             _watcher = Some(w);
                         }
                         Err(e) => {
-                            tracing::error!(
-                                "Failed to watch recordings dir {:?}: {}",
-                                current_dir,
-                                e
+                            tracing::error!("{}", crate::tl!("watcher.recordingsWatchFailed", dir = current_dir.display(), error = e)
                             );
                         }
                     },
                     Err(e) => {
-                        tracing::error!("Failed to create watcher: {}", e);
+                        tracing::error!("{}", crate::tl!("watcher.recordingsWatcherFailed", error = e));
                     }
                 }
             }
@@ -103,10 +100,10 @@ pub fn start_recordings_dir_watcher(state: Arc<AppState>, emitter: Arc<dyn Emitt
                         }),
                     );
                 }
-                Ok(Err(e)) => tracing::error!("recordings watcher event error: {}", e),
+                Ok(Err(e)) => tracing::error!("{}", crate::tl!("watcher.recordingsEventError", error = e)),
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    tracing::error!("recordings watcher channel disconnected");
+                    tracing::error!("{}", crate::tl!("watcher.recordingsDisconnected"));
                     break;
                 }
             }
@@ -136,14 +133,14 @@ pub fn start_locale_dir_watcher(emitter: Arc<dyn Emitter>) {
                 // 只监控 locale/app/ 目录本身，不递归（只关心顶层 .json 文件的增删）
                 // Watch only the locale/app/ dir itself, non-recursive (only top-level .json changes matter)
                 if let Err(e) = w.watch(&locale_dir, RecursiveMode::NonRecursive) {
-                    tracing::error!("Failed to watch locale dir {:?}: {}", locale_dir, e);
+                    tracing::error!("{}", crate::tl!("watcher.localeWatchFailed", dir = locale_dir.display(), error = e));
                 } else {
-                    tracing::info!("Watching locale dir: {:?}", locale_dir);
+                    tracing::info!("{}", crate::tl!("watcher.localeWatching", dir = locale_dir.display()));
                 }
                 w
             }
             Err(e) => {
-                tracing::error!("Failed to create locale dir watcher: {}", e);
+                tracing::error!("{}", crate::tl!("watcher.localeWatcherFailed", error = e));
                 return;
             }
         };
@@ -170,7 +167,7 @@ pub fn start_locale_dir_watcher(emitter: Arc<dyn Emitter>) {
                     last_emit = Instant::now();
                     emitter.emit("locale-files-changed", &serde_json::json!({}));
                 }
-                Ok(Err(e)) => tracing::error!("locale watcher error: {}", e),
+                Ok(Err(e)) => tracing::error!("{}", crate::tl!("watcher.localeEventError", error = e)),
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
@@ -197,14 +194,14 @@ pub fn start_modules_dir_watcher(emitter: Arc<dyn Emitter>) {
             Ok(mut w) => {
                 // 只监控模块目录本身，不递归 / Watch only the modules dir itself, non-recursive
                 if let Err(e) = w.watch(&modules_dir, RecursiveMode::NonRecursive) {
-                    tracing::error!("Failed to watch modules dir: {}", e);
+                    tracing::error!("{}", crate::tl!("watcher.modulesWatchFailed", error = e));
                 } else {
-                    tracing::info!("Watching modules dir: {:?}", modules_dir);
+                    tracing::info!("{}", crate::tl!("watcher.modulesWatching", dir = modules_dir.display()));
                 }
                 w
             }
             Err(e) => {
-                tracing::error!("Failed to create modules watcher: {}", e);
+                tracing::error!("{}", crate::tl!("watcher.modulesWatcherFailed", error = e));
                 return;
             }
         };
@@ -223,7 +220,7 @@ pub fn start_modules_dir_watcher(emitter: Arc<dyn Emitter>) {
                     last_emit = Instant::now();
                     emitter.emit("modules-changed", &serde_json::json!({}));
                 }
-                Ok(Err(e)) => tracing::error!("modules watcher error: {}", e),
+                Ok(Err(e)) => tracing::error!("{}", crate::tl!("watcher.modulesEventError", error = e)),
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }

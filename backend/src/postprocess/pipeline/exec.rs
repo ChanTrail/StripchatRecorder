@@ -22,6 +22,16 @@ pub struct RecordingContext {
 
 /// 执行整个 DAG 流水线，支持分叉。
 /// Execute the full DAG pipeline with fork support.
+///
+/// `skip_nodes`：本次不需要重新执行的节点集合（上次已成功且配置未变）。
+/// 这些节点的上游输出已通过 `pre_collected` 预填给了它们的下游；执行引擎
+/// 遇到 skip 节点时直接透传输入（与 disabled 节点的处理方式相同），保证
+/// 整条链路的边关系不被截断。
+///
+/// `skip_nodes`: set of nodes that don't need to re-run (succeeded previously with
+/// unchanged config). Their upstream outputs are pre-filled into their downstreams via
+/// `pre_collected`; the execution engine passes input through skip nodes unchanged
+/// (same as disabled nodes), keeping the full edge chain intact.
 #[allow(clippy::too_many_arguments)]
 pub fn run_pipeline(
     initial_inputs: &[PathBuf],
@@ -31,6 +41,7 @@ pub fn run_pipeline(
     cancel: Option<Arc<AtomicBool>>,
     max_tmp_dir_gb: f64,
     pre_collected: HashMap<String, Vec<(usize, PathBuf)>>,
+    skip_nodes: &std::collections::HashSet<String>,
     on_node_start: &dyn Fn(&str, &str, &[PathBuf]),  // (effective_id, module_id, inputs)
     on_node_done: &dyn Fn(NodeResult),
     on_progress: &dyn Fn(&str, u32, u32, &str),      // (effective_id, done, total, status)
@@ -43,27 +54,43 @@ pub fn run_pipeline(
         std::collections::VecDeque::new();
     let mut enqueued: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-    // 初始化根节点 / Initialize root nodes
-    for root_id in pipeline.root_nodes() {
-        if !enqueued.contains(root_id) {
-            enqueued.insert(root_id.to_string());
-            queue.push_back((root_id.to_string(), initial_inputs.to_vec()));
+    // 初始化根节点，按连线拓扑顺序（topological_order 的前段即为根节点）入队，
+    // 保证执行顺序由连线决定，而不是 pipeline.nodes 数组的存储顺序。
+    //
+    // Initialize root nodes in wiring-defined topological order (the leading portion
+    // of topological_order() is the root nodes), so execution order is determined by
+    // wiring rather than the node storage order in pipeline.nodes.
+    let topo_roots: Vec<String> = pipeline
+        .topological_order()
+        .into_iter()
+        .filter(|id| pipeline.root_nodes().contains(&id.as_str()))
+        .collect();
+    for root_id in &topo_roots {
+        if !enqueued.contains(root_id.as_str()) {
+            enqueued.insert(root_id.clone());
+            queue.push_back((root_id.clone(), initial_inputs.to_vec()));
         }
     }
 
-    // 检查 pre_collected 中已有足够输入的非根节点。
+    // 检查 pre_collected 中已有足够输入的非根节点，按拓扑顺序遍历以保持连线顺序。
     // 不按 enabled 过滤（原因同 root_nodes/successors 的文档说明）——禁用节点
     // 同样需要进入队列以便被当作"跳过（透传）"节点处理，继续驱动 DAG。
     //
-    // Enqueue non-root nodes with sufficient pre-filled inputs.
+    // Enqueue non-root nodes with sufficient pre-filled inputs, iterating in
+    // topological order to preserve wiring order.
     // Not filtered by enabled (same reasoning as root_nodes/successors's doc comments) —
     // a disabled node still needs to enter the queue so it can be handled as a
     // "skip (pass-through)" node, keeping the DAG moving.
-    for node in pipeline.nodes.iter() {
-        let eid = node.effective_id();
-        if enqueued.contains(eid) {
+    let topo_all = pipeline.topological_order();
+    for topo_id in &topo_all {
+        if enqueued.contains(topo_id.as_str()) {
             continue;
         }
+        let node = match pipeline.nodes.iter().find(|n| n.effective_id() == topo_id.as_str()) {
+            Some(n) => n,
+            None => continue,
+        };
+        let eid = node.effective_id();
         let slot = match collected.get(eid) {
             Some(s) => s,
             None => continue,
@@ -90,6 +117,24 @@ pub fn run_pipeline(
             Some(n) => n,
             None => continue,
         };
+
+        // 节点在跳过集合中（上次已成功且配置未变，本次不重新执行）：
+        // 与 disabled 节点的处理方式完全一致——透传输入给下游，不记录执行结果。
+        // pre_collected 已经把该节点上次的输出预填给了它的下游，所以下游节点
+        // 通常会在队列初始化阶段（pre_collected 扫描）就已入队，不依赖这里的透传。
+        // 但若下游是本次新增的节点（尚未在 pre_collected 里），仍需透传驱动。
+        //
+        // Node is in the skip set (succeeded previously with unchanged config, no re-run):
+        // handled identically to a disabled node — pass input through to successors,
+        // no execution record. pre_collected already pre-filled this node's previous
+        // output into its downstreams, so they're typically already queued from the
+        // pre_collected scan. However, if a downstream is newly added (not yet in
+        // pre_collected), the pass-through here still drives it.
+        if skip_nodes.contains(&eid) {
+            tracing::debug!("{}", crate::tl!("postprocess.nodeSkipped", id = eid));
+            dispatch_to_successors(pipeline, modules, &eid, &inputs, &mut collected, &mut enqueued, &mut queue);
+            continue;
+        }
 
         // 节点被禁用：本节点不执行任何实际处理，但必须原样把输入透传给下游，
         // 而不是 `continue` 直接从队列中消失——`continue` 会导致该节点的所有
@@ -141,7 +186,7 @@ pub fn run_pipeline(
         // disabling it can't produce the second port it would normally split out — an
         // inherent semantic gap for that class of node when disabled, out of scope here.
         if !node.enabled {
-            tracing::debug!("Node {} disabled, passing through {} input(s) unchanged", eid, inputs.len());
+            tracing::debug!("{}", crate::tl!("postprocess.nodeDisabled", id = eid, count = inputs.len()));
             dispatch_to_successors(pipeline, modules, &eid, &inputs, &mut collected, &mut enqueued, &mut queue);
             continue;
         }
@@ -257,9 +302,7 @@ fn dispatch_to_successors(
         let path = match output_for_port {
             Some(p) => p,
             None => {
-                tracing::warn!(
-                    "Node {} output port {} not available, skipping edge to {}",
-                    from_eid, edge.from_port, edge.to_node_id
+                tracing::warn!("{}", crate::tl!("postprocess.portNotAvailable", from = from_eid, port = edge.from_port, to = edge.to_node_id)
                 );
                 continue;
             }
@@ -412,7 +455,7 @@ fn run_node(
                     on_log("status", st.trim());
                     on_status(st.trim());
                 } else if !trimmed.is_empty() {
-                    tracing::info!("[{}] {}", node.module_id, trimmed);
+                    tracing::info!("{}", crate::tl!("postprocess.moduleStdout", module = node.module_id, line = trimmed));
                     on_log("stdout", trimmed);
                     last_message = trimmed.to_string();
                 }
@@ -421,7 +464,7 @@ fn run_node(
                 let t = line.trim();
                 if t.is_empty() || t.starts_with("note: run with `RUST_BACKTRACE") { continue; }
                 if t.contains("panicked at") && panic_msg.is_empty() { panic_msg = t.to_string(); }
-                tracing::warn!("[{}] stderr: {}", node.module_id, t);
+                tracing::warn!("{}", crate::tl!("postprocess.moduleStderr", module = node.module_id, line = t));
                 on_log("stderr", t);
                 stderr_msg = t.to_string();
             }

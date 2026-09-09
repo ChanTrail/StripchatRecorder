@@ -22,7 +22,7 @@ pub async fn sse_handler(
                 Err(broadcast::error::RecvError::Lagged(n)) => {
                     // 队列溢出，丢失了 n 条事件；断开连接让前端重连并恢复状态
                     // Queue overflow, lost n events; close connection so frontend reconnects and restores state
-                    tracing::warn!("SSE broadcast lagged, {} events dropped", n);
+                    tracing::warn!("{}", crate::tl!("sse.broadcastLagged", count = n));
                     let data = r#"{"event":"sse-lagged","payload":{}}"#;
                     yield Ok(sse::Event::default().data(data));
                     break;

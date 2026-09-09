@@ -11,6 +11,8 @@ services:
       - "${PORT:-3030}:${PORT:-3030}"
     volumes:
       - ./data/logs:/app/stripchat-recorder/logs
+      - ./data/ts_fragment:/app/stripchat-recorder/ts_fragment
       - ./data/recordings:/app/stripchat-recorder/recordings
       - ./data/modules:/app/stripchat-recorder/modules
+      - ./data/meta:/app/stripchat-recorder/meta
       - ./data/config:/app/stripchat-recorder/config

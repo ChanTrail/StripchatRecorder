@@ -83,7 +83,7 @@ async fn schedule_mouflon_sync_inner(
             loop {
                 match state.sync_mouflon_keys_from_worker(&url, token.as_deref()).await {
                     Ok(true) => {
-                        tracing::info!("Mouflon keys synced from {}", url);
+                        tracing::info!("{}", crate::tl!("scheduler.mouflonSynced", url = url));
                         emitter.emit(
                             "mouflon-keys-updated",
                             &state.get_mouflon_keys_store(),
@@ -91,15 +91,13 @@ async fn schedule_mouflon_sync_inner(
                         break;
                     }
                     Ok(false) => {
-                        tracing::debug!("Mouflon keys up-to-date, skipped");
+                        tracing::debug!("{}", crate::tl!("scheduler.mouflonUpToDate"));
                         break;
                     }
                     Err(e) => {
                         attempt += 1;
                         if attempt >= MAX_RETRIES {
-                            tracing::warn!(
-                                "Mouflon keys sync failed after {} attempts: {:?}",
-                                attempt, e
+                            tracing::warn!("{}", crate::tl!("scheduler.mouflonSyncFailed", retries = attempt, error = format!("{:?}", e))
                             );
                             // 超出重试上限 → 写入错误通知
                             // Exceeded retries → push error notification
@@ -119,12 +117,7 @@ async fn schedule_mouflon_sync_inner(
                             }
                             break;
                         }
-                        tracing::warn!(
-                            "Mouflon keys sync failed (attempt {}/{}): {:?}, retrying in {}s",
-                            attempt,
-                            MAX_RETRIES,
-                            e,
-                            RETRY_INTERVAL.as_secs()
+                        tracing::warn!("{}", crate::tl!("scheduler.mouflonSyncRetrying", attempt = attempt, max = MAX_RETRIES, error = format!("{:?}", e), secs = RETRY_INTERVAL.as_secs())
                         );
                         tokio::time::sleep(RETRY_INTERVAL).await;
                     }
@@ -140,7 +133,7 @@ async fn schedule_mouflon_sync_inner(
                     // 发送端已关闭，退出调度器 / Sender dropped, exit scheduler
                     break;
                 }
-                tracing::info!("Mouflon sync: settings changed, triggering immediate sync");
+                tracing::info!("{}", crate::tl!("scheduler.mouflonSettingsChanged"));
             }
         }
     }
@@ -249,9 +242,7 @@ pub fn start_update_check(app_state: Arc<AppState>, emitter: Arc<dyn Emitter>) {
                     if crate::update::semver_gt(latest, current)
                         && last_notified_version.as_deref() != Some(latest.as_str())
                     {
-                        tracing::info!(
-                            "New version available: {} (current: {})",
-                            latest, current
+                        tracing::info!("{}", crate::tl!("scheduler.updateAvailable", latest = latest, current = current)
                         );
 
                         let is_docker = crate::update::is_docker();
@@ -284,16 +275,14 @@ pub fn start_update_check(app_state: Arc<AppState>, emitter: Arc<dyn Emitter>) {
 
                         last_notified_version = Some(latest.clone());
                     } else {
-                        tracing::debug!(
-                            "Update check: already on latest version {}",
-                            current
+                        tracing::debug!("{}", crate::tl!("scheduler.updateUpToDate", current = current)
                         );
                     }
                 }
                 Err(e) => {
                     // 静默处理，等下次周期重试
                     // Silently ignore; retry next cycle
-                    tracing::debug!("Update check failed (will retry in 24 h): {:?}", e);
+                    tracing::debug!("{}", crate::tl!("scheduler.updateCheckFailed", error = format!("{:?}", e)));
                 }
             }
 

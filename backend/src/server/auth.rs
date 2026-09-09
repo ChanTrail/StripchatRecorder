@@ -283,6 +283,11 @@ pub async fn auth_middleware(
     if path.starts_with("/api/locale/") || path == "/api/locales" {
         return next.run(req).await;
     }
+    // GET /api/settings 公开只读：前端需在登录前读取 language 字段决定界面语言
+    // GET /api/settings is public read-only: frontend needs the language field before login
+    if path == "/api/settings" && req.method() == axum::http::Method::GET {
+        return next.run(req).await;
+    }
     if !store.has_password() {
         return next.run(req).await;
     }

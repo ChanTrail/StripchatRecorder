@@ -89,7 +89,7 @@ pub fn discover_modules() -> Vec<ModuleInfo> {
             // Files that don't match (e.g. bare binaries placed manually) are skipped
             // to avoid accidentally executing unknown files.
             if !has_valid_module_filename(&path) {
-                tracing::debug!("Skipping {:?}: filename does not match {{name}}-{{platform}}-{{version}} format", path);
+                tracing::debug!("{}", crate::tl!("postprocess.discoverySkipFormat", path = path.display()));
                 continue;
             }
             match describe_module(&path) {
@@ -97,15 +97,11 @@ pub fn discover_modules() -> Vec<ModuleInfo> {
                     info.exe_path = path.clone();
                     match by_id.get(&info.id) {
                         Some(existing) if compare_versions(&existing.version, &info.version) >= 0 => {
-                            tracing::warn!(
-                                "Module id {:?} declared by multiple executables ({:?} and {:?}); keeping the higher version ({} >= {})",
-                                info.id, existing.exe_path, path, existing.version, info.version
+                            tracing::warn!("{}", crate::tl!("postprocess.discoveryDupKeepHigher", id = info.id, a = existing.exe_path.display(), b = path.display(), va = existing.version, vb = info.version)
                             );
                         }
                         Some(existing) => {
-                            tracing::warn!(
-                                "Module id {:?} declared by multiple executables ({:?} and {:?}); keeping the higher version ({} > {})",
-                                info.id, path, existing.exe_path, info.version, existing.version
+                            tracing::warn!("{}", crate::tl!("postprocess.discoveryDupReplace", id = info.id, a = path.display(), b = existing.exe_path.display(), va = info.version, vb = existing.version)
                             );
                             by_id.insert(info.id.clone(), info);
                         }
@@ -114,7 +110,7 @@ pub fn discover_modules() -> Vec<ModuleInfo> {
                         }
                     }
                 }
-                Err(e) => tracing::error!("Failed to describe module {:?}: {}", path, e),
+                Err(e) => tracing::error!("{}", crate::tl!("postprocess.discoveryDescribeFailed", path = path.display(), error = e)),
             }
         }
     }

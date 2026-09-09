@@ -121,6 +121,10 @@
   body {
     @apply bg-background text-foreground;
   }
+  /* 移动端底部安全区（iOS 主页条）/ Mobile bottom safe area (iOS home indicator) */
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
   button, [role="button"], label[for], a, select,
   [data-slot="switch"], [data-slot="number-field-increment"],
   [data-slot="number-field-decrement"] {

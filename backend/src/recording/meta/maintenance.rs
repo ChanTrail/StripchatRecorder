@@ -71,30 +71,28 @@ pub fn migrate_flat_meta_files() -> usize {
         let username = username_from_path(Path::new(video_path_str));
         let target_dir = meta_dir_for(&username);
         if let Err(e) = std::fs::create_dir_all(&target_dir) {
-            tracing::warn!("Meta migration: failed to create dir {:?}: {}", target_dir, e);
+            tracing::warn!("{}", crate::tl!("meta.migrationCreateDirFailed", dir = target_dir.display(), error = e));
             continue;
         }
         let Some(file_name) = path.file_name() else { continue };
         let target_path = target_dir.join(file_name);
         if target_path.exists() {
-            tracing::warn!("Meta migration: target already exists, skipping {:?}", path);
+            tracing::warn!("{}", crate::tl!("meta.migrationTargetExists", path = path.display()));
             continue;
         }
         match std::fs::rename(&path, &target_path) {
             Ok(()) => {
-                tracing::info!("Meta migration: moved {:?} -> {:?}", path, target_path);
+                tracing::info!("{}", crate::tl!("meta.migrationMoved", from = path.display(), to = target_path.display()));
                 migrated += 1;
             }
             Err(e) => {
-                tracing::warn!("Meta migration: failed to move {:?}: {}", path, e);
+                tracing::warn!("{}", crate::tl!("meta.migrationMoveFailed", path = path.display(), error = e));
             }
         }
     }
 
     if migrated > 0 {
-        tracing::info!(
-            "Meta migration: moved {} legacy flat meta file(s) into per-streamer subdirectories",
-            migrated
+        tracing::info!("{}", crate::tl!("meta.migrationDone", count = migrated)
         );
     }
     migrated
@@ -154,15 +152,15 @@ pub fn cleanup_orphaned_meta_files() -> usize {
         }
 
         if let Err(e) = std::fs::remove_file(&path) {
-            tracing::warn!("Meta cleanup: failed to delete {}: {}", name, e);
+            tracing::warn!("{}", crate::tl!("meta.cleanupDeleteFailed", name = name, error = e));
         } else {
-            tracing::info!("Meta cleanup: deleted orphaned meta {}", name);
+            tracing::info!("{}", crate::tl!("meta.cleanupDeleted", name = name));
             count += 1;
         }
     }
 
     if count > 0 {
-        tracing::info!("Meta cleanup: deleted {} orphaned meta file(s)", count);
+        tracing::info!("{}", crate::tl!("meta.cleanupDone", count = count));
         remove_empty_meta_subdirs();
     }
     count
@@ -269,7 +267,6 @@ pub async fn maintain_output_dir(
         .await;
         return;
     }
-
     // pp_pending 不为空说明有上次进程退出时遗留的未完成任务，通知用户
     // Non-empty pp_pending means there are leftover unfinished tasks from a previous run; notify the user
     {
@@ -313,9 +310,7 @@ pub async fn maintain_output_dir(
     }
 
     if !pipeline.nodes.iter().any(|n| n.enabled) {
-        tracing::info!(
-            "Meta scan: {} video(s) need post-processing but pipeline is empty, skipping",
-            pp_pending.len()
+        tracing::info!("{}", crate::tl!("meta.scanSkipEmpty", count = pp_pending.len())
         );
         let _ = tokio::task::spawn_blocking(move || {
             for path in &pp_pending {

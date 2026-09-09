@@ -32,6 +32,12 @@ export interface Settings {
 	sc_mirror_scheme: string;
 	/** 最大并发录制数（0 = 不限制）/ Max concurrent recordings (0 = unlimited) */
 	max_concurrent: number;
+	/** 每文件录制时长上限（秒，0 = 不限制）/ Per-file recording duration in seconds (0 = unlimited) */
+	max_recording_duration_secs: number;
+	/** 首选录制分辨率高度（0 = 原始/最高画质）/ Preferred recording resolution height (0 = original/highest quality) */
+	preferred_resolution: number;
+	/** 首选分辨率缺失时的回退方向 / Fallback direction when preferred resolution is unavailable */
+	resolution_preference: "lower" | "higher";
 	/** 后处理 tmp 目录最大占用（GB，0 = 不限制）/ Max tmp dir size in GB (0 = unlimited) */
 	max_tmp_dir_gb: number;
 	/** 界面语言 / UI language */
@@ -71,6 +77,9 @@ export const useSettingsStore = defineStore("settings", () => {
 		sc_mirror_url: null,
 		sc_mirror_scheme: "https",
 		max_concurrent: 0,
+		max_recording_duration_secs: 0,
+		preferred_resolution: 0,
+		resolution_preference: "lower",
 		max_tmp_dir_gb: 50,
 		language: "zh-CN",
 		mouflon_sync_url: null,

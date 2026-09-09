@@ -291,3 +291,59 @@ jobs:
           prerelease: ${{ contains(steps.tag.outputs.tag, '-') }}
           generate_release_notes: true
           files: artifacts/**/*
+
+  # ── Docker 镜像构建与推送 / Docker image build and push ──────────────────────
+  # Docker 镜像在 CI 中从源码独立构建（复用 Dockerfile），不依赖 build-server 产物，
+  # 因此可与 release job 完全并行。
+  # The Docker image is built from source in CI (reusing the Dockerfile) and does not
+  # depend on build-server artifacts, so it runs fully in parallel with the release job.
+  docker:
+    name: Build and push Docker image
+    needs: [build-server]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/stripchat-recorder
+            ghcr.io/${{ github.repository_owner }}/stripchat-recorder
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

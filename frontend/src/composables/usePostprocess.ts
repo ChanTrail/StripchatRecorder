@@ -194,6 +194,21 @@ export function ppProgressFromMeta(
 	ppProgress: PpNodeProgress | null | undefined,
 	pipelineTotal: number,
 	labels: PpProgressLabels = DEFAULT_LABELS,
+	/**
+	 * 可选：当前流水线中存在的节点有效 ID 集合（`node_id ?? module_id`）。
+	 * 传入时会过滤掉不在集合里的历史记录——用于后处理运行中的实时快照（
+	 * `postprocess-meta-update`），避免流水线删除某节点后、`set_pp_done`
+	 * 还没写入最终 meta 之前，那个节点的旧记录仍然出现在进度列表里。
+	 * 不传时不过滤（用于从已落盘的最终 meta 还原，那里的记录已经是干净的）。
+	 *
+	 * Optional: set of effective IDs (node_id ?? module_id) of nodes that currently
+	 * exist in the pipeline. When provided, entries for nodes absent from this set are
+	 * filtered out — used for real-time snapshots during execution
+	 * (postprocess-meta-update) to prevent stale records of deleted nodes from
+	 * appearing in the progress list before set_pp_done writes the final clean meta.
+	 * Omit when restoring from the final persisted meta (already clean).
+	 */
+	knownNodeIds?: Set<string>,
 ): PpProgress {
 	const entries = ppExecution ?? [];
 
@@ -212,7 +227,13 @@ export function ppProgressFromMeta(
 		if (e.module_id.includes("__builtin__")) continue;
 		dedup.set(e.node_id ?? e.module_id, e);
 	}
-	const userNodes = Array.from(dedup.values());
+	// 若传入了当前流水线的节点 ID 集合，过滤掉已不在流水线中的历史记录
+	// If the current pipeline's node ID set is provided, filter out stale records
+	// for nodes that no longer exist in the pipeline
+	let userNodes = Array.from(dedup.values());
+	if (knownNodeIds) {
+		userNodes = userNodes.filter((e) => knownNodeIds.has(e.node_id ?? e.module_id));
+	}
 
 	// 统计已完成的节点数；总数使用当前流水线配置的节点数（权威来源）
 	// Count completed nodes; total uses the current pipeline config's node count (authoritative)

@@ -432,7 +432,7 @@ pub async fn download_and_install(
 
     // ── 3. 完成，spawn 新进程后立即退出 / Done, spawn new process then exit immediately ──
     emit_state!(UpdateProgress::Done);
-    tracing::info!("更新安装完成，准备启动新版本");
+    tracing::info!("{}", crate::tl!("update.installDone"));
 
     // 等待 SSE 推送完成
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
@@ -440,13 +440,13 @@ pub async fn download_and_install(
     let exe = match std::env::current_exe() {
         Ok(p) => p,
         Err(e) => {
-            tracing::error!("无法获取可执行文件路径: {}，请手动重启", e);
+            tracing::error!("{}", crate::tl!("update.exePathFailed", error = e));
             std::process::exit(0);
         }
     };
     let args: Vec<String> = std::env::args().skip(1).collect();
 
-    tracing::info!("正在启动新版本: {} {:?}", exe.display(), args);
+    tracing::info!("{}", crate::tl!("update.launching", exe = exe.display(), args = format!("{:?}", args)));
 
     #[cfg(target_os = "windows")]
     let spawn_result = {
@@ -481,8 +481,8 @@ pub async fn download_and_install(
     };
 
     match &spawn_result {
-        Ok(child) => tracing::info!("新版本进程已启动 PID={}", child.id()),
-        Err(e) => tracing::error!("启动新版本失败: {}，请手动重启", e),
+        Ok(child) => tracing::info!("{}", crate::tl!("update.launchSuccess", pid = child.id())),
+        Err(e) => tracing::error!("{}", crate::tl!("update.launchFailed", error = e)),
     }
 
     // 立即退出，释放端口，让新进程能绑定
@@ -574,9 +574,9 @@ fn extract_and_replace(
             }
         }
 
-        tracing::debug!("已解压: {}", dest.display());
+        tracing::debug!("{}", crate::tl!("update.unzipped", path = dest.display()));
     }
 
-    tracing::info!("zip 解压完成，所有文件已替换");
+    tracing::info!("{}", crate::tl!("update.unzipDone"));
     Ok(())
 }

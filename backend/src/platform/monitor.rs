@@ -32,6 +32,12 @@ pub struct StreamerStatus {
     /// HLS 播放列表 URL（不序列化，仅供内部使用）/ HLS playlist URL (not serialized, internal use only)
     #[serde(skip)]
     pub playlist_url: Option<String>,
+    /// 获取该播放列表时使用的首选分辨率 / Preferred resolution used to fetch this playlist
+    #[serde(skip)]
+    pub playlist_resolution: u32,
+    /// 获取该播放列表时是否优先向上选择 / Whether higher resolution was preferred for this playlist
+    #[serde(skip)]
+    pub playlist_prefers_higher: bool,
 }
 
 /// 主播状态监控器，管理轮询循环和自动录制逻辑。
@@ -73,9 +79,15 @@ impl StatusMonitor {
     /// 获取指定主播缓存的 HLS 播放列表 URL（用于快速开始录制，避免重复 API 请求）。
     /// Get the cached HLS playlist URL for a streamer (for fast recording start, avoiding repeated API requests).
     pub fn get_cached_playlist_url(&self, username: &str) -> Option<String> {
+        let settings = self.state.get_settings();
+        let prefers_higher = settings.resolution_preference == "higher";
         self.statuses
             .read()
             .get(username)
+            .filter(|s| {
+                s.playlist_resolution == settings.preferred_resolution
+                    && s.playlist_prefers_higher == prefers_higher
+            })
             .and_then(|s| s.playlist_url.clone())
     }
 
@@ -99,9 +111,15 @@ impl StatusMonitor {
             Some(settings.sc_mirror_scheme.as_str()),
             self.recorder.cdn_tld_cache(),
         ) {
-            Ok(a) => Some(a.with_mouflon_keys(self.state.get_mouflon_keys())),
+            Ok(a) => Some(
+                a.with_mouflon_keys(self.state.get_mouflon_keys())
+                    .with_resolution_selection(
+                        settings.preferred_resolution,
+                        &settings.resolution_preference,
+                    ),
+            ),
             Err(e) => {
-                tracing::error!("Failed to create API client: {}", e);
+                tracing::error!("{}", crate::tl!("monitor.apiClientFailed", error = e));
                 emitter.emit("api-error", &serde_json::json!({ "message": e.to_string() }));
                 None
             }
@@ -125,7 +143,7 @@ impl StatusMonitor {
                 _ = restart_rx.recv() => {
                     // poll_interval_secs 已变更，立即以新间隔重新开始计时（不立即轮询）
                     // poll_interval_secs changed; restart timer with new interval (no immediate poll)
-                    tracing::info!("Monitor: poll interval changed, restarting timer");
+                    tracing::info!("{}", crate::tl!("monitor.pollIntervalRestarted"));
                     continue;
                 }
                 _ = tokio::time::sleep(poll_interval) => {
@@ -268,6 +286,8 @@ impl StatusMonitor {
                     status: String::new(),
                     thumbnail_url: None,
                     playlist_url: None,
+                    playlist_resolution: 0,
+                    playlist_prefers_higher: false,
                 });
         }
 
@@ -283,9 +303,7 @@ impl StatusMonitor {
                     // Add to in-memory dead set + persist to streamers.json
                     self.dead_streamers.write().insert(username.clone());
                     self.state.mark_streamer_dead(&username);
-                    tracing::warn!(
-                        "Streamer {} confirmed dead (not found by username or model_id), skipping future polls",
-                        username
+                    tracing::warn!("{}", crate::tl!("monitor.streamerDead", username = username)
                     );
                     // 返回用户名，由 poll_all_with_emitter 统一合并通知
                     // Return username so poll_all_with_emitter can merge notifications
@@ -294,7 +312,7 @@ impl StatusMonitor {
                 return None;
             }
             Err(e) => {
-                tracing::error!("Poll failed → {}: {}", username, e);
+                tracing::error!("{}", crate::tl!("monitor.pollFailed", username = username, error = e));
                 return None;
             }
         };
@@ -314,7 +332,7 @@ impl StatusMonitor {
         {
             match self.state.rename_streamer(&username, new_username) {
                 Ok(()) => {
-                    tracing::info!("Streamer renamed: {} -> {}", username, new_username);
+                    tracing::info!("{}", crate::tl!("monitor.streamerRenamed", oldUsername = username, newUsername = new_username));
                     // 重新绑定 statuses 缓存的 key，避免旧 key 下的缓存永久残留。
                     //
                     // 注意：必须先将 remove 结果存到局部变量再做 insert，不能把两个
@@ -342,7 +360,7 @@ impl StatusMonitor {
                 Err(e) => {
                     // 新用户名已存在于追踪列表中，放弃改名，本轮按旧用户名继续处理。
                     // New username already tracked; abandon rename and keep old username for this round.
-                    tracing::warn!("Streamer rename skipped for {}: {}", username, e);
+                    tracing::warn!("{}", crate::tl!("monitor.streamerRenameSkipped", username = username, error = e));
                 }
             }
         }
@@ -366,6 +384,8 @@ impl StatusMonitor {
             status: info.status.clone(),
             thumbnail_url: info.thumbnail_url.clone(),
             playlist_url: info.playlist_url.clone(),
+            playlist_resolution: api.preferred_resolution(),
+            playlist_prefers_higher: api.prefers_higher_resolution(),
         };
 
         emitter.emit("status-update", &status);
@@ -374,9 +394,7 @@ impl StatusMonitor {
 
         let stream_no_longer_recordable = is_recording && !info.is_recordable;
         if stream_no_longer_recordable {
-            tracing::info!(
-                "Stream no longer recordable → {} (is_online={}, is_recordable={}, status={}), stopping recording",
-                username, info.is_online, info.is_recordable, info.status
+            tracing::info!("{}", crate::tl!("monitor.streamNotRecordable", username = username, isOnline = info.is_online, isRecordable = info.is_recordable, status = info.status)
             );
             let _ = self.recorder.stop_recording_auto(&username).await;
         }
@@ -391,8 +409,19 @@ impl StatusMonitor {
             && auto_record_global
             && !is_recording
             && let Some(ref playlist_url) = info.playlist_url
+            && {
+                let settings = self.state.get_settings();
+                let prefers_higher = settings.resolution_preference == "higher";
+                // 分辨率设置已通过 build_api 传入 api，此处校验缓存 playlist 是否仍与当前设置匹配
+                // Resolution was passed into api via build_api; verify the cached playlist still matches current settings
+                self.statuses.read().get(&username).is_none_or(|s| {
+                    s.playlist_resolution == settings.preferred_resolution
+                        && s.playlist_prefers_higher == prefers_higher
+                })
+            }
         {
-            tracing::info!("Auto-starting recording → {} (just_online={}, dropped={}, natural_stop={}, should_be={})", username, just_came_online, recording_dropped, naturally_stopped, should_be_recording);
+            tracing::info!("{}", crate::tl!("monitor.autoStart", username = username, justOnline = just_came_online, dropped = recording_dropped, naturalStop = naturally_stopped, shouldBe = should_be_recording)
+            );
             let _ = self
                 .recorder
                 .start_recording_with_emitter(&username, playlist_url, Arc::clone(emitter))

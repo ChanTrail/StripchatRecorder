@@ -50,7 +50,7 @@ pub fn init_logging(log_dir: &PathBuf) -> std::io::Result<()> {
         .with(file_layer)
         .init();
 
-    tracing::info!("Logging initialized → {:?}", log_path);
+    tracing::info!("{}", crate::tl!("logging.initialized", path = log_path.display()));
 
     Ok(())
 }

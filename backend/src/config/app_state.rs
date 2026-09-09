@@ -54,6 +54,15 @@ pub struct Settings {
     pub sc_mirror_scheme: String,
     /// 最大并发录制数（0 = 不限制）/ Max concurrent recordings (0 = unlimited)
     pub max_concurrent: usize,
+    /// 每文件录制时长上限（秒，0 = 不限制）/ Per-file recording duration in seconds (0 = unlimited)
+    #[serde(default)]
+    pub max_recording_duration_secs: u64,
+    /// 首选录制分辨率高度（0 = 原始/最高画质）/ Preferred recording resolution height (0 = original/highest quality)
+    #[serde(default)]
+    pub preferred_resolution: u32,
+    /// 首选分辨率不可用时的回退方向（"lower" 或 "higher"）/ Fallback direction when preferred resolution is unavailable ("lower" or "higher")
+    #[serde(default = "default_resolution_preference")]
+    pub resolution_preference: String,
     /// 后处理临时目录最大占用（GB，0 = 不限制，默认 50 GB）
     /// Max size of the post-processing tmp directory in GB (0 = unlimited, default 50 GB)
     #[serde(default = "default_max_tmp_dir_gb")]
@@ -99,6 +108,11 @@ fn default_mouflon_sync_url() -> Option<String> {
     Some("https://mouflon.chantrail.com".to_string())
 }
 
+/// 分辨率回退方向的默认值 / Default resolution fallback direction
+fn default_resolution_preference() -> String {
+    "lower".to_string()
+}
+
 /// 镜像站协议的默认值 / Default value for mirror site scheme
 fn default_sc_mirror_scheme() -> String {
     "https".to_string()
@@ -130,19 +144,22 @@ pub fn exe_dir() -> PathBuf {
 
 impl Default for Settings {
     fn default() -> Self {
-        // 默认输出目录为可执行文件同目录下的 recordings 文件夹（存放 TS 分片流）
-        // Default output directory is the recordings folder next to the executable (for TS segment streams)
-        let output_dir = exe_dir().join("recordings").to_string_lossy().to_string();
+        // 默认输出目录为可执行文件同目录下的 ts_fragment 文件夹（存放 TS 分片流）
+        // Default output directory is the ts_fragment folder next to the executable (for TS segment streams)
+        let output_dir = exe_dir().join("ts_fragment").to_string_lossy().to_string();
 
         Self {
             output_dir,
-            poll_interval_secs: 30,
+            poll_interval_secs: 60,
             auto_record: true,
             api_proxy_url: None,
             cdn_proxy_url: None,
             sc_mirror_url: None,
             sc_mirror_scheme: default_sc_mirror_scheme(),
             max_concurrent: 0,
+            max_recording_duration_secs: 0,
+            preferred_resolution: 0,
+            resolution_preference: default_resolution_preference(),
             max_tmp_dir_gb: default_max_tmp_dir_gb(),
             language: default_language(),
             server_port: default_server_port(),
@@ -282,12 +299,22 @@ impl AppState {
             // On first startup (pipeline.json absent), inject default ts_merge node
             if raw.is_none() {
                 let mut p = PipelineConfig::default();
+                // ts_merge 的 output_dir 默认指向程序所在目录下的 recordings 文件夹，
+                // 与录制输出目录（ts_fragment）分离，便于区分原始分片和合并后视频。
+                // ts_merge output_dir defaults to the recordings folder next to the executable,
+                // separate from the TS segment output dir (ts_fragment), making it easy to
+                // distinguish raw segments from merged videos.
+                let default_output_dir = exe_dir()
+                    .join("recordings")
+                    .to_string_lossy()
+                    .to_string();
                 p.nodes.push(crate::postprocess::pipeline::PipelineNode {
                     node_id: None,
                     module_id: "ts_merge".to_string(),
                     params: {
                         let mut m = std::collections::HashMap::new();
                         m.insert("format".to_string(), serde_json::json!("mp4"));
+                        m.insert("output_dir".to_string(), serde_json::json!(default_output_dir));
                         m.insert("split_by_streamer".to_string(), serde_json::json!(true));
                         m
                     },

@@ -44,7 +44,7 @@ const DESCRIBE: &str = r#"{
             "label": "合并输出目录",
             "type": "dir",
             "default": "",
-            "description": "合并后视频文件的输出目录。留空则与 TS 分片目录的父目录相同。"
+            "description": "合并后视频文件的输出目录。留空则与 TS 分片目录的父目录相同。首次启动时默认设为程序目录下的 recordings 文件夹。"
         },
         {
             "key": "split_by_streamer",
