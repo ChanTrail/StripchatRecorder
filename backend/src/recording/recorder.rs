@@ -258,7 +258,7 @@ impl RecorderManager {
         let merge_format_clone = merge_format.clone();
         let state_clone = Arc::clone(&manager.state);
         let emitter_clone = Arc::clone(&emitter);
-        let manager_clone = Arc::clone(&manager);
+        let manager_clone = Arc::clone(manager);
 
         emitter.emit(
             "recording-merge-waiting",
@@ -865,7 +865,6 @@ impl RecorderManager {
 fn recording_limit_reached(recorded_secs: f64, limit: u64) -> bool {
     limit > 0 && recorded_secs >= limit as f64
 }
-
 
 /// 检查 ffmpeg 是否在 PATH 中可用。
 /// Check if ffmpeg is available on PATH.
