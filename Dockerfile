@@ -1,7 +1,7 @@
 FROM debian:latest AS builder
 
 LABEL maintainer="chantrail@chantrail.com" \
-      version="0.3.2" \
+      version="0.3.3" \
       description="Stripchat Recorder Docker builder"
 
 RUN sed -i 's/deb.debian.org/mirrors.ustc.edu.cn/g' /etc/apt/sources.list.d/debian.sources
@@ -25,6 +25,18 @@ ENV RUSTUP_DIST_SERVER=https://mirrors.ustc.edu.cn/rust-static \
 RUN curl --proto '=https' --tlsv1.2 -sSf https://mirrors.ustc.edu.cn/misc/rustup-install.sh | sh -s -- -y && \
     . /root/.cargo/env && \
     rustup target add x86_64-unknown-linux-gnu
+
+RUN mkdir -vp ${CARGO_HOME:-$HOME/.cargo} && \
+    printf '%s\n' \
+    '[source.crates-io]' \
+    "replace-with = 'ustc'" \
+    '' \
+    '[source.ustc]' \
+    'registry = "sparse+https://mirrors.ustc.edu.cn/crates.io-index/"' \
+    '' \
+    '[registries.ustc]' \
+    'index = "sparse+https://mirrors.ustc.edu.cn/crates.io-index/"' \
+    | tee -a ${CARGO_HOME:-$HOME/.cargo}/config.toml
 
 WORKDIR /app
 COPY . /app

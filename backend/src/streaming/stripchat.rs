@@ -55,11 +55,17 @@ fn build_api_client(proxy_url: Option<&str>) -> Result<Client> {
     // Match the browser headers verified to work without session cookies.
     let mut headers = reqwest::header::HeaderMap::new();
     for (name, value) in [
-        ("accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"),
+        (
+            "accept",
+            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        ),
         ("accept-language", "en-US,en;q=0.6"),
         ("cache-control", "max-age=0"),
         ("priority", "u=0, i"),
-        ("sec-ch-ua", "\"Not=A?Brand\";v=\"99\", \"Brave\";v=\"151\", \"Chromium\";v=\"151\""),
+        (
+            "sec-ch-ua",
+            "\"Not=A?Brand\";v=\"99\", \"Brave\";v=\"151\", \"Chromium\";v=\"151\"",
+        ),
         ("sec-ch-ua-mobile", "?0"),
         ("sec-ch-ua-platform", "\"Linux\""),
         ("sec-fetch-dest", "document"),
