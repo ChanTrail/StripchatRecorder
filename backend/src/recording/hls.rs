@@ -7,7 +7,7 @@
 //! Supports the Mouflon encryption system: XOR-decrypts segment URLs using SHA-256 keys.
 
 use crate::core::error::{AppError, Result};
-use base64::{engine::general_purpose::STANDARD, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use regex::Regex;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -25,6 +25,8 @@ pub struct HlsSegment {
     pub url: String,
     /// 分片序号（用于去重）/ Segment sequence number (for deduplication)
     pub sequence: u32,
+    /// Media duration declared by EXTINF, in seconds.
+    pub duration_secs: f64,
 }
 
 /// 解析 HLS m3u8 播放列表，返回分片列表和 fMP4 初始化段 URL。
@@ -45,10 +47,21 @@ pub fn parse_playlist(
     let mut segments = Vec::new();
     let mut mp4_header_url = None;
     let mut current_pkey: Option<&str> = None;
+    let mut duration_secs = 0.0;
 
     let lines: Vec<&str> = playlist.lines().collect();
 
     for (i, line) in lines.iter().enumerate() {
+        if let Some(value) = line.strip_prefix("#EXTINF:") {
+            duration_secs = value
+                .split(',')
+                .next()
+                .unwrap_or("")
+                .parse::<f64>()
+                .ok()
+                .filter(|v| v.is_finite() && *v > 0.0)
+                .unwrap_or(0.0);
+        }
         // 解析 Mouflon 加密标签，获取当前 pkey 对应的解密密钥
         // Parse Mouflon encryption tag to get the decryption key for the current pkey
         if line.contains("#EXT-X-MOUFLON:PSCH") {
@@ -109,7 +122,12 @@ pub fn parse_playlist(
         };
 
         let sequence = extract_sequence(&url).unwrap_or(segments.len() as u32);
-        segments.push(HlsSegment { url, sequence });
+        segments.push(HlsSegment {
+            url,
+            sequence,
+            duration_secs,
+        });
+        duration_secs = 0.0;
     }
 
     Ok((segments, mp4_header_url))

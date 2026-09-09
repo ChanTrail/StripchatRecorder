@@ -197,6 +197,7 @@ impl RecorderManager {
         }
 
         let result_path = session_dir.to_string_lossy().to_string();
+        let mut session_dir = session_dir;
         let manager = Arc::clone(self);
         let username = username.to_string();
         let playlist_url = playlist_url.to_string();
@@ -208,7 +209,7 @@ impl RecorderManager {
                 .recording_loop(
                     &username,
                     &playlist_url,
-                    &session_dir,
+                    &mut session_dir,
                     stop_rx,
                     Arc::clone(&emitter),
                 )
@@ -231,175 +232,251 @@ impl RecorderManager {
                 manager.naturally_stopped.write().insert(username.clone());
             }
 
-            // 录制结束时读取最新的 merge_format，确保设置变更能在本次合并中生效
-            // Read the latest merge_format when recording ends so any in-flight setting change takes effect
-            let merge_format = manager.state.get_settings().merge_format.clone();
+            manager
+                .finish_file(username, session_dir, emitter, record_duration_secs)
+                .await;
+        });
 
-            let session_dir_clone = session_dir.clone();
-            let username_clone = username.clone();
-            let merge_format_clone = merge_format.clone();
-            let state_clone = Arc::clone(&manager.state);
-            let emitter_clone = Arc::clone(&emitter);
-            let manager_clone = Arc::clone(&manager);
+        Ok(result_path)
+    }
 
-            emitter.emit(
-                "recording-merge-waiting",
+    /// Merge a completed file without interrupting the ongoing download session.
+    async fn finish_file(
+        self: &Arc<Self>,
+        username: String,
+        session_dir: PathBuf,
+        emitter: Arc<dyn Emitter>,
+        record_duration_secs: Option<u64>,
+    ) {
+        let manager = self;
+        // 录制结束时读取最新的 merge_format，确保设置变更能在本次合并中生效
+        // Read the latest merge_format when recording ends so any in-flight setting change takes effect
+        let merge_format = manager.state.get_settings().merge_format.clone();
+
+        let session_dir_clone = session_dir.clone();
+        let username_clone = username.clone();
+        let merge_format_clone = merge_format.clone();
+        let state_clone = Arc::clone(&manager.state);
+        let emitter_clone = Arc::clone(&emitter);
+        let manager_clone = Arc::clone(manager);
+
+        emitter.emit(
+            "recording-merge-waiting",
+            &serde_json::json!({
+                "username": username,
+                "session_dir": session_dir.to_string_lossy(),
+                "merge_format": merge_format,
+            }),
+        );
+
+        manager
+            .waiting_merge_dirs
+            .write()
+            .insert(session_dir.clone());
+
+        // 确保合并目标视频的 meta 文件存在，并更新 status = "merging_waiting"
+        // Ensure meta file exists and update status = "merging_waiting"
+        {
+            let settings = manager.state.get_settings();
+            let parent = session_dir.parent().unwrap_or(&session_dir);
+            let stem = session_dir
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown");
+            let target_path = parent.join(format!("{}.{}", stem, settings.merge_format));
+            let started_at = crate::commands::recording_cmd::parse_timestamp_from_stem_pub(stem)
+                .unwrap_or_else(|| {
+                    let local: chrono::DateTime<chrono::Local> = chrono::Utc::now().into();
+                    local.to_rfc3339()
+                });
+            crate::recording::meta::ensure_meta(&target_path, &started_at);
+            crate::recording::meta::set_status(&target_path, "merging_waiting");
+        }
+
+        let video_duration_secs = tokio::task::spawn_blocking(move || {
+            let _startup_guard = state_clone
+                .startup_lock
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+
+            manager_clone
+                .waiting_merge_dirs
+                .write()
+                .remove(&session_dir_clone);
+            manager_clone
+                .merging_dirs
+                .write()
+                .insert(session_dir_clone.clone());
+
+            emitter_clone.emit(
+                "recording-merging",
                 &serde_json::json!({
-                    "username": username,
-                    "session_dir": session_dir.to_string_lossy(),
-                    "merge_format": merge_format,
+                    "username": username_clone,
+                    "session_dir": session_dir_clone.to_string_lossy(),
+                    "merge_format": merge_format_clone,
                 }),
             );
 
-            manager
-                .waiting_merge_dirs
-                .write()
-                .insert(session_dir.clone());
-
-            // 确保合并目标视频的 meta 文件存在，并更新 status = "merging_waiting"
-            // Ensure meta file exists and update status = "merging_waiting"
+            // 更新 meta status = "merging" / Update meta status = "merging"
             {
-                let settings = manager.state.get_settings();
-                let parent = session_dir.parent().unwrap_or(&session_dir);
-                let stem = session_dir
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("unknown");
-                let target_path = parent.join(format!("{}.{}", stem, settings.merge_format));
-                let started_at =
-                    crate::commands::recording_cmd::parse_timestamp_from_stem_pub(stem)
-                        .unwrap_or_else(|| {
-                            let local: chrono::DateTime<chrono::Local> = chrono::Utc::now().into();
-                            local.to_rfc3339()
-                        });
-                crate::recording::meta::ensure_meta(&target_path, &started_at);
-                crate::recording::meta::set_status(&target_path, "merging_waiting");
-            }
-
-            let video_duration_secs = tokio::task::spawn_blocking(move || {
-                let _startup_guard = state_clone
-                    .startup_lock
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-
-                manager_clone
-                    .waiting_merge_dirs
-                    .write()
-                    .remove(&session_dir_clone);
-                manager_clone
-                    .merging_dirs
-                    .write()
-                    .insert(session_dir_clone.clone());
-
-                emitter_clone.emit(
-                    "recording-merging",
-                    &serde_json::json!({
-                        "username": username_clone,
-                        "session_dir": session_dir_clone.to_string_lossy(),
-                        "merge_format": merge_format_clone,
-                    }),
-                );
-
-                // 更新 meta status = "merging" / Update meta status = "merging"
-                {
-                    let parent = session_dir_clone.parent().unwrap_or(&session_dir_clone);
-                    let stem = session_dir_clone
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("unknown");
-                    let target_path = parent.join(format!("{}.{}", stem, merge_format_clone));
-                    crate::recording::meta::set_status(&target_path, "merging");
-                }
-
-                let session_dir_str = session_dir_clone.to_string_lossy().to_string();
-                let duration = merge_segments(
-                    &session_dir_clone,
-                    &username_clone,
-                    &merge_format_clone,
-                    &emitter_clone,
-                    &session_dir_str,
-                );
-
-                manager_clone
-                    .merging_dirs
-                    .write()
-                    .remove(&session_dir_clone);
-
                 let parent = session_dir_clone.parent().unwrap_or(&session_dir_clone);
                 let stem = session_dir_clone
                     .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("unknown");
-                let merged_path = parent.join(format!("{}.{}", stem, merge_format_clone));
+                let target_path = parent.join(format!("{}.{}", stem, merge_format_clone));
+                crate::recording::meta::set_status(&target_path, "merging");
+            }
 
-                if duration.is_some() {
-                    if merged_path.exists() {
-                        let pipeline = state_clone.get_pipeline();
-                        if !pipeline.nodes.is_empty() {
-                            // 有后处理流水线：status → "pp_waiting"（由 run_postprocess_for_path 设置）
-                            // Has pipeline: status → "pp_waiting" (set by run_postprocess_for_path)
-                            crate::commands::postprocess_cmd::run_postprocess_for_path(
-                                &merged_path,
-                                &pipeline,
-                                &emitter_clone,
-                                &state_clone,
-                            );
-                        } else {
-                            // 无后处理流水线：直接标记为 finish
-                            // No pipeline: mark as finish directly
-                            crate::recording::meta::set_status(&merged_path, "finish");
-                        }
-                    }
-                } else {
-                    // 合并失败（无分片或 ffmpeg 出错）：删除孤立的 meta 文件和空会话目录，
-                    // 避免 meta 永久卡在 "merging" 状态。
-                    // Merge failed (no segments or ffmpeg error): delete orphaned meta file and
-                    // empty session dir to prevent meta from being stuck at "merging" forever.
-                    crate::recording::meta::delete_meta(&merged_path);
-                    tracing::info!(
-                        "Merge produced no output for {} → deleted meta, cleaning up session dir",
-                        username_clone
-                    );
-                    if session_dir_clone.exists()
-                        && let Err(e) = std::fs::remove_dir_all(&session_dir_clone)
-                    {
-                        tracing::warn!(
-                            "Failed to remove empty session dir {:?}: {}",
-                            session_dir_clone,
-                            e
+            let session_dir_str = session_dir_clone.to_string_lossy().to_string();
+            let duration = merge_segments(
+                &session_dir_clone,
+                &username_clone,
+                &merge_format_clone,
+                &emitter_clone,
+                &session_dir_str,
+            );
+
+            manager_clone
+                .merging_dirs
+                .write()
+                .remove(&session_dir_clone);
+
+            let parent = session_dir_clone.parent().unwrap_or(&session_dir_clone);
+            let stem = session_dir_clone
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown");
+            let merged_path = parent.join(format!("{}.{}", stem, merge_format_clone));
+
+            if duration.is_some() {
+                if merged_path.exists() {
+                    let pipeline = state_clone.get_pipeline();
+                    if !pipeline.nodes.is_empty() {
+                        // 有后处理流水线：status → "pp_waiting"（由 run_postprocess_for_path 设置）
+                        // Has pipeline: status → "pp_waiting" (set by run_postprocess_for_path)
+                        crate::commands::postprocess_cmd::run_postprocess_for_path(
+                            &merged_path,
+                            &pipeline,
+                            &emitter_clone,
+                            &state_clone,
                         );
+                    } else {
+                        // 无后处理流水线：直接标记为 finish
+                        // No pipeline: mark as finish directly
+                        crate::recording::meta::set_status(&merged_path, "finish");
                     }
                 }
+            } else {
+                // 合并失败（无分片或 ffmpeg 出错）：删除孤立的 meta 文件和空会话目录，
+                // 避免 meta 永久卡在 "merging" 状态。
+                // Merge failed (no segments or ffmpeg error): delete orphaned meta file and
+                // empty session dir to prevent meta from being stuck at "merging" forever.
+                crate::recording::meta::delete_meta(&merged_path);
+                tracing::info!(
+                    "Merge produced no output for {} → deleted meta, cleaning up session dir",
+                    username_clone
+                );
+                if session_dir_clone.exists()
+                    && let Err(e) = std::fs::remove_dir_all(&session_dir_clone)
+                {
+                    tracing::warn!(
+                        "Failed to remove empty session dir {:?}: {}",
+                        session_dir_clone,
+                        e
+                    );
+                }
+            }
 
-                duration
-            })
-            .await
-            .unwrap_or(None);
+            duration
+        })
+        .await
+        .unwrap_or(None);
 
-            let merged_video_path = {
-                let parent = session_dir.parent().unwrap_or(&session_dir);
-                let stem = session_dir
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("unknown");
-                parent
-                    .join(format!("{}.{}", stem, merge_format))
-                    .to_string_lossy()
-                    .to_string()
-            };
-            emitter.emit(
-                "recording-stopped",
-                &serde_json::json!({
-                    "username": username,
-                    "session_dir": session_dir.to_string_lossy(),
-                    "video_path": merged_video_path,
-                    "record_duration_secs": record_duration_secs,
-                    "video_duration_secs": video_duration_secs,
-                }),
-            );
+        let merged_video_path = {
+            let parent = session_dir.parent().unwrap_or(&session_dir);
+            let stem = session_dir
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown");
+            parent
+                .join(format!("{}.{}", stem, merge_format))
+                .to_string_lossy()
+                .to_string()
+        };
+        emitter.emit(
+            "recording-stopped",
+            &serde_json::json!({
+                "username": username,
+                "session_dir": session_dir.to_string_lossy(),
+                "video_path": merged_video_path,
+                "record_duration_secs": record_duration_secs,
+                "video_duration_secs": video_duration_secs,
+                "is_recording": manager.is_recording(&username),
+            }),
+        );
+    }
+
+    /// Rotate only between complete HLS segments, keeping the download history intact.
+    fn rotate_file(
+        self: &Arc<Self>,
+        username: &str,
+        session_dir: &mut PathBuf,
+        emitter: &Arc<dyn Emitter>,
+    ) -> Result<()> {
+        let now = chrono::Utc::now();
+        let parent = session_dir.parent().unwrap_or(session_dir);
+        let timestamp = Local::now().format("%Y%m%d_%H%M%S");
+        let mut part = 1u64;
+        let next_dir = loop {
+            let candidate = parent.join(format!("{}_part{}_{}", username, part, timestamp));
+            let stem = candidate.file_name().unwrap().to_string_lossy();
+            if !candidate.exists()
+                && !parent.join(format!("{}.mp4", stem)).exists()
+                && !parent.join(format!("{}.mkv", stem)).exists()
+                && !parent.join(format!(".{}.json", stem)).exists()
+            {
+                fs::create_dir(&candidate)?;
+                break candidate;
+            }
+            part += 1;
+        };
+        let format = self.state.get_settings().merge_format;
+        let target = parent.join(format!(
+            "{}.{}",
+            next_dir.file_name().unwrap().to_string_lossy(),
+            format
+        ));
+        crate::recording::meta::ensure_meta(&target, &now.to_rfc3339());
+        crate::recording::meta::set_status(&target, "recording");
+        let previous = std::mem::replace(session_dir, next_dir);
+        // Lock the completed directory before releasing its active-session protection.
+        self.waiting_merge_dirs.write().insert(previous.clone());
+        let duration = self.sessions.write().get_mut(username).map(|session| {
+            let elapsed = now
+                .signed_duration_since(session.started_at)
+                .num_seconds()
+                .max(0) as u64;
+            session.dir_path = session_dir.clone();
+            session.started_at = now;
+            elapsed
         });
-
-        Ok(result_path)
+        emitter.emit(
+            "recording-started",
+            &serde_json::json!({
+                "username": username,
+                "dir_path": session_dir.to_string_lossy(),
+            }),
+        );
+        let manager = Arc::clone(self);
+        let username = username.to_string();
+        let emitter = Arc::clone(emitter);
+        tokio::spawn(async move {
+            manager
+                .finish_file(username, previous, emitter, duration)
+                .await;
+        });
+        Ok(())
     }
 
     /// 手动停止录制（标记为手动停止，防止自动重录）。
@@ -436,10 +513,10 @@ impl RecorderManager {
     /// converts to TS format, and writes to the session directory.
     /// Proxy settings and Mouflon keys are read dynamically each iteration and take effect immediately.
     async fn recording_loop(
-        &self,
+        self: &Arc<Self>,
         username: &str,
         playlist_url: &str,
-        session_dir: &PathBuf,
+        session_dir: &mut PathBuf,
         mut stop_rx: mpsc::Receiver<()>,
         emitter: Arc<dyn Emitter>,
     ) -> Result<()> {
@@ -462,6 +539,7 @@ impl RecorderManager {
         let mut downloaded_sequences: HashSet<u32> = HashSet::new();
         let mut mp4_header: Option<Vec<u8>> = None;
         let mut cached_init_url: Option<String> = None;
+        let mut recorded_secs = 0.0;
         let mut retry_count = 0;
         let mut playlist_refresh_failures = 0;
         let mut consecutive_cdn_failures: usize = 0;
@@ -525,7 +603,7 @@ impl RecorderManager {
                     tracing::info!("Stop signal received → {}", username);
                     break;
                 }
-                result = Self::fetch_segments(
+                result = self.fetch_segments(
                     &api,
                     &current_playlist_url,
                     &url_prefix,
@@ -535,6 +613,8 @@ impl RecorderManager {
                     &mut downloaded_sequences,
                     &mut mp4_header,
                     &mut cached_init_url,
+                    &mut recorded_secs,
+                    &emitter,
                 ) => {
                     match result {
                         Ok((n, cdn_fail)) => {
@@ -546,7 +626,7 @@ impl RecorderManager {
                                 consecutive_cdn_failures = 0;
                                 retry_count = 0;
                                 total_downloaded += n as u64;
-                                let size_bytes = dir_size_bytes(session_dir).unwrap_or(0);
+                                let size_bytes = dir_size_bytes(&*session_dir).unwrap_or(0);
                                 let now = std::time::Instant::now();
                                 let speed_bps = last_size_snapshot.map(|(prev_size, prev_time)| {
                                     let dt = now.duration_since(prev_time).as_secs_f64();
@@ -676,15 +756,18 @@ impl RecorderManager {
     /// Returns `(number of segments written, number of CDN failures)`.
     #[allow(clippy::too_many_arguments)]
     async fn fetch_segments(
+        self: &Arc<Self>,
         api: &StripchatApi,
         playlist_url: &str,
         url_prefix: &str,
         mouflon_keys: &HashMap<String, String>,
-        session_dir: &std::path::Path,
+        session_dir: &mut PathBuf,
         username: &str,
         downloaded_sequences: &mut HashSet<u32>,
         mp4_header: &mut Option<Vec<u8>>,
         cached_init_url: &mut Option<String>,
+        recorded_secs: &mut f64,
+        emitter: &Arc<dyn Emitter>,
     ) -> Result<(usize, usize)> {
         let playlist = api.fetch_playlist(playlist_url).await?;
         let (segments, init_url) = parse_playlist(&playlist, url_prefix, mouflon_keys)?;
@@ -724,6 +807,11 @@ impl RecorderManager {
             match api.download_segment(&segment.url).await {
                 Ok(data) => {
                     if data.len() > 1000 {
+                        let limit = self.state.get_settings().max_recording_duration_secs;
+                        if recording_limit_reached(*recorded_secs, limit) {
+                            self.rotate_file(username, session_dir, emitter)?;
+                            *recorded_secs = 0.0;
+                        }
                         let ts_path = session_dir
                             .join(format!("{}_segment{:06}.ts", username, segment.sequence));
 
@@ -742,6 +830,7 @@ impl RecorderManager {
                                 append_to_m3u8(session_dir, &ts_path);
                                 downloaded_sequences.insert(segment.sequence);
                                 written += 1;
+                                *recorded_secs += segment.duration_secs;
                             }
                             Err(e) => {
                                 tracing::error!(
@@ -771,6 +860,10 @@ impl RecorderManager {
 
         Ok((written, cdn_failures))
     }
+}
+/// Zero disables rotation. Duration is measured from successfully recorded media.
+fn recording_limit_reached(recorded_secs: f64, limit: u64) -> bool {
+    limit > 0 && recorded_secs >= limit as f64
 }
 
 /// 检查 ffmpeg 是否在 PATH 中可用。

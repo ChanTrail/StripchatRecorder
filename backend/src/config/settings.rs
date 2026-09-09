@@ -76,6 +76,9 @@ pub struct Settings {
     pub sc_mirror_url: Option<String>,
     /// 最大并发录制数（0 = 不限制）/ Max concurrent recordings (0 = unlimited)
     pub max_concurrent: usize,
+    /// Per-file recording duration in seconds (0 = unlimited).
+    #[serde(default)]
+    pub max_recording_duration_secs: u64,
     /// 录制片段合并格式（默认 "mp4"）/ Recording segment merge format (default "mp4")
     #[serde(default = "default_merge_format")]
     pub merge_format: String,
@@ -162,6 +165,7 @@ impl Default for Settings {
             cdn_proxy_url: None,
             sc_mirror_url: None,
             max_concurrent: 0,
+            max_recording_duration_secs: 0,
             merge_format: default_merge_format(),
             preferred_resolution: 0,
             resolution_preference: default_resolution_preference(),
@@ -174,6 +178,7 @@ impl Default for Settings {
         }
     }
 }
+
 
 /// 持久化到 config/ 目录下各 JSON 文件的全部应用数据 / All application data persisted to JSON files under the config/ directory
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

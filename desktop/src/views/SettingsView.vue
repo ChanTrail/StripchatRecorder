@@ -85,6 +85,7 @@
 		cdn_proxy_url: null,
 		sc_mirror_url: null,
 		max_concurrent: 0,
+		max_recording_duration_secs: 0,
 		merge_format: "mp4",
 		preferred_resolution: 0,
 		resolution_preference: "lower",
@@ -143,6 +144,7 @@
 			poll_interval_secs: form.poll_interval_secs,
 			auto_record: form.auto_record,
 			max_concurrent: form.max_concurrent,
+			max_recording_duration_secs: form.max_recording_duration_secs,
 			merge_format: form.merge_format,
 			preferred_resolution: form.preferred_resolution,
 			resolution_preference: form.resolution_preference,
@@ -351,6 +353,25 @@
 					<p class="text-xs text-muted-foreground">
 						{{ t("settings.outputDir.hint") }}
 					</p>
+				</div>
+
+				<div class="flex flex-col gap-1.5">
+					<Label>{{ t("settings.recordingDuration.label") }}</Label>
+					<NumberField
+						:model-value="form.max_recording_duration_secs"
+						:min="0"
+						:max="Number.MAX_SAFE_INTEGER"
+						:step="1"
+						class="w-40"
+						@update:model-value="(v) => v !== undefined && Number.isSafeInteger(v) && (form.max_recording_duration_secs = Math.max(0, v))"
+					>
+						<NumberFieldContent>
+							<NumberFieldDecrement />
+							<NumberFieldInput />
+							<NumberFieldIncrement />
+						</NumberFieldContent>
+					</NumberField>
+					<p class="text-xs text-muted-foreground">{{ t("settings.recordingDuration.hint") }}</p>
 				</div>
 
 				<div class="flex flex-col gap-1.5">
