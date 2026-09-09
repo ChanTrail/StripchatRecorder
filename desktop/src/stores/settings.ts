@@ -30,6 +30,8 @@ export interface Settings {
 	sc_mirror_url: string | null;
 	/** 最大并发录制数（0 = 不限制）/ Max concurrent recordings (0 = unlimited) */
 	max_concurrent: number;
+	/** Per-file duration in seconds (0 = unlimited). */
+	max_recording_duration_secs: number;
 	/** 录制片段合并格式（"mp4" 或 "mkv"）/ Recording segment merge format ("mp4" or "mkv") */
 	merge_format: string;
 	/** 首选录制分辨率高度（0 = 原始/最高画质）/ Preferred recording resolution height (0 = original/highest quality) */
@@ -68,6 +70,7 @@ export const useSettingsStore = defineStore("settings", () => {
 		cdn_proxy_url: null,
 		sc_mirror_url: null,
 		max_concurrent: 0,
+		max_recording_duration_secs: 0,
 		merge_format: "mp4",
 		preferred_resolution: 0,
 		resolution_preference: "lower",

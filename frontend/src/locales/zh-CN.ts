@@ -259,6 +259,10 @@ export default {
 			changeConfirm: "确认",
 			changeDone: "输出目录已更新，将在下次录制时生效",
 		},
+		recordingDuration: {
+			label: "录制文件时长（秒）",
+			hint: "0 = 不限制；1800 = 30 分钟。自动保存并应用于正在录制的文件。达到时长后在下一个 HLS 分片边界开始新文件，实际时长可能多几秒。",
+		},
 		maxConcurrent: {
 			label: "最大并发录制数",
 			hint: "0 表示不限制",
