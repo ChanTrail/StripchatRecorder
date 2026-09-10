@@ -16,3 +16,4 @@ futures  = "0.3"
 tokio    = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
 dirs = "6"
 md5 = "0.8"
+hickory-proto = "0.26"
