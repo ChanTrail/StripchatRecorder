@@ -418,18 +418,17 @@ impl RecorderManager {
     }
 
     /// Rotate only between complete HLS segments, keeping the download history intact.
-    fn rotate_file(
+    async fn rotate_file(
         self: &Arc<Self>,
         username: &str,
         session_dir: &mut PathBuf,
         emitter: &Arc<dyn Emitter>,
     ) -> Result<()> {
-        let now = chrono::Utc::now();
         let parent = session_dir.parent().unwrap_or(session_dir);
-        let timestamp = Local::now().format("%Y%m%d_%H%M%S");
-        let mut part = 1u64;
-        let next_dir = loop {
-            let candidate = parent.join(format!("{}_part{}_{}", username, part, timestamp));
+        let (now, next_dir) = loop {
+            let now = chrono::Utc::now();
+            let timestamp = now.with_timezone(&Local).format("%Y%m%d_%H%M%S");
+            let candidate = parent.join(format!("{}_{}", username, timestamp));
             let stem = candidate.file_name().unwrap().to_string_lossy();
             if !candidate.exists()
                 && !parent.join(format!("{}.mp4", stem)).exists()
@@ -437,9 +436,10 @@ impl RecorderManager {
                 && !parent.join(format!(".{}.json", stem)).exists()
             {
                 fs::create_dir(&candidate)?;
-                break candidate;
+                break (now, candidate);
             }
-            part += 1;
+            // Wait for a unique timestamp.
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         };
         let format = self.state.get_settings().merge_format;
         let target = parent.join(format!(
@@ -809,7 +809,7 @@ impl RecorderManager {
                     if data.len() > 1000 {
                         let limit = self.state.get_settings().max_recording_duration_secs;
                         if recording_limit_reached(*recorded_secs, limit) {
-                            self.rotate_file(username, session_dir, emitter)?;
+                            self.rotate_file(username, session_dir, emitter).await?;
                             *recorded_secs = 0.0;
                         }
                         let ts_path = session_dir
