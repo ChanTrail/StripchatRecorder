@@ -1,6 +1,6 @@
 {
 	"productName": "StripchatRecorder",
-	"version": "0.3.2",
+	"version": "0.3.4",
 	"identifier": "com.chantrail.stripchat-recorder",
 	"build": {
 		"beforeDevCommand": "npm run dev",
