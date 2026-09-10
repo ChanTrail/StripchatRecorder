@@ -3,7 +3,8 @@ name: Release
 on:
   push:
     tags:
-      - 'v*.*.*'
+      - 'v*.*.*'       # 稳定版，例如 v0.4.0 / Stable releases, e.g. v0.4.0
+      - 'v*.*.*-*'     # 预发布版，例如 v0.4.0-beta / Pre-releases, e.g. v0.4.0-beta
 
 env:
   CARGO_TERM_COLOR: always
@@ -297,6 +298,8 @@ jobs:
   # 因此可与 release job 完全并行。
   # The Docker image is built from source in CI (reusing the Dockerfile) and does not
   # depend on build-server artifacts, so it runs fully in parallel with the release job.
+  # beta tag 时仅推送 "beta" 标签；稳定版同时推送 semver 版本号、major.minor 和 latest。
+  # For beta tags only the "beta" tag is pushed; stable releases also get semver, major.minor, and latest.
   docker:
     name: Build and push Docker image
     needs: [build-server]
@@ -325,8 +328,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract Docker metadata
-        id: meta
+      # 稳定版：semver 版本号 + major.minor + latest
+      # Stable: semver version + major.minor + latest
+      - name: Extract Docker metadata (stable)
+        id: meta-stable
+        if: ${{ !contains(github.ref_name, '-') }}
         uses: docker/metadata-action@v5
         with:
           images: |
@@ -337,13 +343,26 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest
 
+      # beta 版：仅推送固定的 "beta" 标签
+      # Beta: push only the fixed "beta" tag
+      - name: Extract Docker metadata (beta)
+        id: meta-beta
+        if: ${{ contains(github.ref_name, '-') }}
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/stripchat-recorder
+            ghcr.io/${{ github.repository_owner }}/stripchat-recorder
+          tags: |
+            type=raw,value=beta
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
           platforms: linux/amd64
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ contains(github.ref_name, '-') && steps.meta-beta.outputs.tags || steps.meta-stable.outputs.tags }}
+          labels: ${{ contains(github.ref_name, '-') && steps.meta-beta.outputs.labels || steps.meta-stable.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

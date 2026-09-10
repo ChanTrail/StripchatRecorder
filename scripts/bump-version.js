@@ -45,12 +45,14 @@ function fail(msg) { console.error(`  ${C.red}✗${C.reset}  ${msg}`); }
 
 // ── 版本校验 / Version validation ────────────────────────────────────────────
 
-const SEM_VER = /^\d+\.\d+\.\d+$/;
+// 允许 X.Y.Z 或 X.Y.Z-beta，例如 0.4.0、0.4.0-beta
+// Accepts X.Y.Z or X.Y.Z-beta, e.g. 0.4.0, 0.4.0-beta
+const SEM_VER = /^\d+\.\d+\.\d+(-beta)?$/;
 
 function validateVersion(v) {
   if (!SEM_VER.test(v)) {
-    fail(`"${v}" 不是合法的语义化版本号（需符合 X.Y.Z 格式）。`);
-    fail(`"${v}" is not a valid semver string (must match X.Y.Z).`);
+    fail(`"${v}" 不是合法的版本号（需符合 X.Y.Z 或 X.Y.Z-beta 格式）。`);
+    fail(`"${v}" is not a valid version string (must match X.Y.Z or X.Y.Z-beta).`);
     process.exit(1);
   }
 }
@@ -141,8 +143,9 @@ if (!newVersion || newVersion === "--help" || newVersion === "-h") {
   console.log(`\n${C.bold}用法 / Usage:${C.reset}`);
   console.log("  node scripts/bump-version.js <new-version>");
   console.log("  npm run bump-version -- <new-version>\n");
-  console.log(`${C.bold}示例 / Example:${C.reset}`);
-  console.log("  node scripts/bump-version.js 0.4.0\n");
+  console.log(`${C.bold}示例 / Examples:${C.reset}`);
+  console.log("  node scripts/bump-version.js 0.4.0");
+  console.log("  node scripts/bump-version.js 0.4.0-beta\n");
   process.exit(newVersion ? 0 : 1);
 }
 
