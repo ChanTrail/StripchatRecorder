@@ -41,7 +41,17 @@ export interface Group {
 export function usernameFromFile(f: RecordingFile): string {
 	const stem = f.name.replace(/\.[^.]+$/, "");
 	const parts = stem.split("_");
-	return parts.slice(0, -2).join("_");
+	const username = parts.slice(0, -2).join("_");
+	// Group legacy rotations by folder.
+	const pathParts = f.path.split(/[\\/]/);
+	const folder = pathParts[pathParts.length - 2];
+	if (
+		folder && username.startsWith(folder + "_part")
+		&& /^\d+$/.test(username.slice(folder.length + 5))
+	) {
+		return folder;
+	}
+	return username;
 }
 
 /**

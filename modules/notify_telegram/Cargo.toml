@@ -4,7 +4,7 @@ version = "0.3.1"
 edition = "2024"
 
 [[bin]]
-name = "notify_telegram_v030"
+name = "notify_telegram_v031"
 path = "src/main.rs"
 
 [dependencies]
@@ -16,4 +16,3 @@ futures  = "0.3"
 tokio    = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
 dirs = "6"
 md5 = "0.8"
-hickory-proto = "0.26"
