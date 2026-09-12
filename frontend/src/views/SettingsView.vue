@@ -110,6 +110,14 @@
 	const unlisteners: (() => void)[] = [];
 
 	onMounted(async () => {
+		// App.vue 可能尚未完成语言列表加载（或本页面独立刷新时被跳过），
+		// 确保语言下拉框不会因竞态条件而一直为空。
+		// App.vue may not have finished loading the locale list yet (or this page
+		// was reloaded independently); ensure the language dropdown isn't left
+		// empty due to a race condition.
+		if (!localesStore.loaded) {
+			await localesStore.refresh();
+		}
 		await store.initListeners();
 		await store.fetchSettings();
 		Object.assign(form, store.settings);
