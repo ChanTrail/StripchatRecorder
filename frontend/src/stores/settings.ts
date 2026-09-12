@@ -75,7 +75,7 @@ export const useSettingsStore = defineStore("settings", () => {
 		preferred_resolution: 0,
 		resolution_preference: "lower",
 		max_tmp_dir_gb: 50,
-		language: "zh-CN",
+		language: "en-US",
 		mouflon_sync_url: null,
 		mouflon_sync_token: null,
 		setup_done: false,

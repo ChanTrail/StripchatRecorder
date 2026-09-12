@@ -38,7 +38,7 @@ export default {
 	home: {
 		title: "Streamers",
 		subtitle: "{total} streamer(s), {recording} recording",
-		addStreamer: "+ Add Streamer",
+		addStreamer: "Add Streamer",
 		loadingStreamers: "Loading...",
 		noStreamers: "No streamers added yet",
 		addFirst: "Add your first streamer",

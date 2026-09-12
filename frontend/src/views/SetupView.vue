@@ -42,7 +42,7 @@ const error = ref("");
 const stepTransition = ref("step-forward");
 
 // ── 表单字段 / Form fields ───────────────────────────────────────────────────
-const language = ref("zh-CN");
+const language = ref("en-US");
 const outputDir = ref("");
 const apiProxy = ref("");
 const scMirror = ref("");
@@ -63,7 +63,7 @@ onMounted(async () => {
 	}
 	await store.fetchSettings();
 	const s = store.settings;
-	language.value = s.language || "zh-CN";
+	language.value = s.language || "en-US";
 	locale.value = language.value;
 	outputDir.value = s.output_dir || "";
 	apiProxy.value = s.api_proxy_url || "";

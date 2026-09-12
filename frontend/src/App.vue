@@ -7,6 +7,8 @@
     - 监听 ffmpeg-missing 事件并显示警告
     - 监听 SSE 断开/重连事件，重连后自动刷新页面
     - 监听 startup-warnings 事件，处理不存在的主播和孤立的后处理记录
+    - 窄屏（<768px）下用底部标签栏替代侧边栏；"主播查找" 折叠进"主播列表"标签，
+      通过一个仅在移动端显示的分段控件切换
 
     Provides the overall layout with sidebar navigation and main content area.
     Responsible for:
@@ -14,12 +16,15 @@
     - Listening for ffmpeg-missing events and showing warnings
     - Listening for SSE disconnect/reconnect events, auto-reloading on reconnect
     - Listening for startup-warnings to handle non-existent streamers and orphaned post-processing records
+    - Below 768px, a bottom tab bar replaces the sidebar; Finder folds into the Streamers tab
+      via a mobile-only segmented control
 -->
 <script setup lang="ts">
-	import { onMounted, onUnmounted, ref } from "vue";
+	import { computed, onMounted, onUnmounted, ref } from "vue";
 	import { RouterView, useRouter, useRoute } from "vue-router";
 	import NotifyLayer from "./components/NotifyLayer.vue";
 	import { Button } from "@/components/ui/button";
+	import { Users, Video, Wand2, Radio, Search, Settings } from "@lucide/vue";
 	import { call, on, onSseReconnect, onSseDisconnect } from "@/lib/api";
 	import { useNotify } from "@/composables/useNotify";
 	import { toast as sonnerToast } from "vue-sonner";
@@ -41,15 +46,48 @@
 	const mainScrollEl = ref<HTMLElement | null>(null);
 	useScrollbar(mainScrollEl);
 
+	async function setLocale(lang: string) {
+		const { modules: moduleLocales } = await loadLocaleFromServer(lang);
+		locale.value = lang;
+		moduleLocaleStore.setLocales(lang, moduleLocales);
+		try {
+			const settings = await call<Record<string, unknown>>("get_settings");
+			await call("save_settings_cmd", { newSettings: { ...settings, language: lang } });
+		} catch { /* non-critical */ }
+	}
+
 	/** 侧边栏导航项配置 / Sidebar navigation items configuration */
 	const navItems = [
-		{ to: "/", labelKey: "nav.streamers" },
-		{ to: "/recordings", labelKey: "nav.recordings" },
-		{ to: "/postprocess", labelKey: "nav.postprocess" },
-		{ to: "/relay", labelKey: "nav.relay" },
-		{ to: "/finder", labelKey: "nav.finder" },
-		{ to: "/settings", labelKey: "nav.settings" },
+		{ to: "/", labelKey: "nav.streamers", icon: Users },
+		{ to: "/recordings", labelKey: "nav.recordings", icon: Video },
+		{ to: "/postprocess", labelKey: "nav.postprocess", icon: Wand2 },
+		{ to: "/relay", labelKey: "nav.relay", icon: Radio },
+		{ to: "/finder", labelKey: "nav.finder", icon: Search },
+		{ to: "/settings", labelKey: "nav.settings", icon: Settings },
 	];
+
+	/**
+	 * 底部标签栏项目（移动端）：不含"主播查找"，它折叠进"主播列表"标签。
+	 * Bottom tab bar items (mobile): excludes Finder, which folds into the Streamers tab.
+	 */
+	const bottomNavItems = navItems.filter((item) => item.to !== "/finder");
+
+	/**
+	 * 判断底部标签是否处于激活状态。"主播列表"标签在 /finder 路由下也视为激活，
+	 * 因为主播查找是折叠进该标签的子视图。
+	 *
+	 * Whether a bottom tab is active. The Streamers tab is also considered active on the
+	 * /finder route, since Finder is a folded-in sub-view of that tab.
+	 */
+	function isTabActive(to: string): boolean {
+		if (to === "/") return route.path === "/" || route.path === "/finder";
+		return route.path === to;
+	}
+
+	/** 是否显示"主播列表 / 主播查找"分段控件（仅这两个路由下）/ Whether to show the Streamers/Finder segmented control */
+	const showStreamersSubnav = computed(
+		() => route.path === "/" || route.path === "/finder",
+	);
 
 	/**
 	 * 根据参数切换文档根元素的 dark 类，实现深色/浅色主题切换。
@@ -235,13 +273,17 @@
 		<!-- 正常布局：侧边栏 + 内容区 / Normal layout: sidebar + content -->
 		<div v-else key="main" class="flex h-screen overflow-hidden">
 			<aside
-				class="w-44 shrink-0 bg-sidebar border-r border-sidebar-border flex flex-col p-3 gap-1"
+				class="hidden md:flex w-52 shrink-0 bg-sidebar border-r border-sidebar-border flex-col p-3 gap-1"
 			>
 				<div
-					class="flex items-center gap-2 px-1 py-4 mb-1 border-b border-sidebar-border"
+					class="flex items-center gap-2.5 px-1.5 py-4 mb-2 border-b border-sidebar-border"
 				>
-					<span class="w-2.5 h-2.5 rounded-full bg-destructive shrink-0" />
-					<span class="text-sm font-bold text-sidebar-foreground"
+					<span
+						class="flex items-center justify-center size-7 rounded-md bg-primary text-primary-foreground shrink-0"
+					>
+						<Video class="size-4" />
+					</span>
+					<span class="text-sm font-bold text-sidebar-foreground leading-tight truncate"
 						>StripchatRecorder</span
 					>
 				</div>
@@ -250,20 +292,55 @@
 						v-for="item in navItems"
 						:key="item.to"
 						variant="ghost"
-						class="w-full justify-start text-sm font-normal"
+						class="w-full justify-start gap-2.5 text-sm font-normal rounded-l-none border-l-2 border-transparent pl-2.5"
 						:class="
 							route.path === item.to
-								? 'bg-sidebar-accent text-sidebar-accent-foreground font-semibold'
-								: 'text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/50'
+								? 'border-l-primary bg-sidebar-accent text-sidebar-accent-foreground font-semibold'
+								: 'text-sidebar-foreground/65 hover:text-sidebar-foreground hover:bg-sidebar-accent/40'
 						"
 						@click="router.push(item.to)"
 					>
-						{{ t(item.labelKey) }}
+						<component :is="item.icon" class="size-4 shrink-0" />
+						<span class="truncate">{{ t(item.labelKey) }}</span>
 					</Button>
 				</nav>
+				<div class="mt-auto pt-2 px-1.5 flex items-center justify-between">
+					<span class="text-[11px] text-sidebar-foreground/40">v0.3.5</span>
+					<select
+						:value="String(locale)"
+						class="text-[11px] bg-transparent text-sidebar-foreground/50 hover:text-sidebar-foreground cursor-pointer outline-none border-none appearance-none pr-1"
+						@change="setLocale(($event.target as HTMLSelectElement).value)"
+					>
+						<option
+							v-for="loc in localesStore.locales"
+							:key="loc.code"
+							:value="loc.code"
+						>{{ loc.name }}</option>
+					</select>
+				</div>
 			</aside>
-			<main class="flex-1 overflow-hidden">
-				<div ref="mainScrollEl" class="h-full overflow-y-scroll p-6 scrollbar-overlay">
+			<main class="flex-1 overflow-hidden flex flex-col">
+				<!-- 移动端分段控件：主播列表 / 主播查找（折叠导航）/ Mobile segmented control: Streamers / Finder (folded nav) -->
+				<div v-if="showStreamersSubnav" class="md:hidden flex gap-1.5 px-4 pt-3 pb-1 shrink-0">
+					<button
+						v-for="seg in [{ to: '/', labelKey: 'nav.streamers' }, { to: '/finder', labelKey: 'nav.finder' }]"
+						:key="seg.to"
+						type="button"
+						class="flex-1 rounded-md py-2 text-sm font-medium transition-colors"
+						:class="
+							route.path === seg.to
+								? 'bg-primary/12 text-primary font-semibold'
+								: 'text-muted-foreground hover:text-foreground'
+						"
+						@click="router.push(seg.to)"
+					>
+						{{ t(seg.labelKey) }}
+					</button>
+				</div>
+				<div
+					ref="mainScrollEl"
+					class="flex-1 overflow-y-scroll p-4 pb-[calc(4.5rem+env(safe-area-inset-bottom))] md:p-6 scrollbar-overlay"
+				>
 					<RouterView v-slot="{ Component }">
 						<Transition name="page" mode="out-in">
 							<component :is="Component" :key="route.path" />
@@ -271,6 +348,33 @@
 					</RouterView>
 				</div>
 			</main>
+
+			<!-- 底部标签栏（移动端）/ Bottom tab bar (mobile) -->
+			<nav
+				class="md:hidden fixed inset-x-0 bottom-0 z-30 flex bg-sidebar border-t border-sidebar-border"
+				style="padding-bottom: env(safe-area-inset-bottom)"
+			>
+				<button
+					v-for="item in bottomNavItems"
+					:key="item.to"
+					type="button"
+					class="flex-1 flex flex-col items-center justify-center gap-0.5 py-2 min-h-14 transition-colors"
+					:class="isTabActive(item.to) ? 'text-primary' : 'text-sidebar-foreground/55'"
+					@click="router.push(item.to)"
+				>
+					<component
+						:is="item.icon"
+						class="size-5 shrink-0"
+						:stroke-width="isTabActive(item.to) ? 2.25 : 1.75"
+					/>
+					<span
+						class="text-[11px] leading-none"
+						:class="isTabActive(item.to) ? 'font-semibold' : 'font-normal'"
+						>{{ t(item.labelKey) }}</span
+					>
+				</button>
+			</nav>
+
 			<NotifyLayer />
 		</div>
 

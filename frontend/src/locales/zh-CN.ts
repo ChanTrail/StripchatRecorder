@@ -38,7 +38,7 @@ export default {
 	home: {
 		title: "主播列表",
 		subtitle: "共 {total} 位主播，{recording} 个录制中",
-		addStreamer: "+ 添加主播",
+		addStreamer: "添加主播",
 		loadingStreamers: "加载中...",
 		noStreamers: "还没有添加主播",
 		addFirst: "添加第一个主播",

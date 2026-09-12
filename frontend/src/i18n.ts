@@ -21,7 +21,7 @@ import enUS from "./locales/en-US";
 
 export type MessageSchema = typeof zhCN;
 
-const savedLocale = "zh-CN"; // 初始值，启动后由 App.vue 从后端 settings 同步覆盖
+const savedLocale = "en-US"; // 初始值，启动后由 App.vue 从后端 settings 同步覆盖
 
 /** 可用语言条目（从 /api/locales 获取）/ Available locale entry (from /api/locales) */
 export interface LocaleEntry {
@@ -114,7 +114,7 @@ export async function loadLocaleFromServer(
 const i18n = createI18n<false>({
 	legacy: false,
 	locale: savedLocale,
-	fallbackLocale: "zh-CN",
+	fallbackLocale: "en-US",
 	messages: {
 		"zh-CN": zhCN,
 		"en-US": enUS,

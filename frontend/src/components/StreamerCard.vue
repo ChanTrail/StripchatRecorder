@@ -69,18 +69,18 @@
 	}
 
 	function statusClass(s: StreamerEntry): string {
-		if (!s.is_online) return "bg-zinc-800 text-zinc-400 border-transparent";
-		if (s.status === "公开秀") return "bg-green-900 text-green-300 border-transparent";
-		return "bg-amber-900 text-amber-300 border-transparent";
+		if (!s.is_online) return "bg-muted text-muted-foreground border-transparent";
+		if (s.status === "公开秀") return "bg-success/12 text-success border-success/25";
+		return "bg-warning/12 text-warning border-warning/25";
 	}
 </script>
 
 <template>
 	<Card
-		class="overflow-hidden transition-colors py-0"
+		class="overflow-hidden transition-all hover:shadow-md py-0"
 		:class="{
-			'border-green-900/50': streamer.is_online && !streamer.is_recording,
-			'border-red-900/50': streamer.is_recording,
+			'border-success/40': streamer.is_online && !streamer.is_recording,
+			'border-destructive/50': streamer.is_recording,
 		}"
 	>
 		<div class="relative aspect-video bg-muted overflow-hidden">
@@ -168,7 +168,7 @@
 			<!-- 转发流地址（始终显示）/ Stream URL (always shown) -->
 			<div class="flex items-center gap-2">
 				<div
-					class="flex-1 text-xs font-mono text-blue-400/60 bg-blue-950/10 rounded px-2 py-1 truncate select-all"
+					class="flex-1 text-xs font-mono text-info bg-info/8 rounded px-2 py-1 truncate select-all"
 					:title="t('streamerCard.streamUrlHint')"
 				>
 					{{ streamUrl }}
@@ -176,11 +176,11 @@
 				<Button
 					size="sm"
 					variant="ghost"
-					class="shrink-0 px-2 h-6 text-muted-foreground hover:text-blue-300"
+					class="shrink-0 px-2 h-6 text-muted-foreground hover:text-info"
 					:title="t('streamerCard.copyStreamUrl')"
 					@click="copyStreamUrl"
 				>
-					<Check v-if="copied" class="size-3 text-green-400" />
+					<Check v-if="copied" class="size-3 text-success" />
 					<Copy v-else class="size-3" />
 				</Button>
 			</div>

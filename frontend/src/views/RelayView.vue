@@ -23,16 +23,12 @@
 
 	const { t } = useI18n();
 
-	// 主播真实状态 Badge 内联样式（基于 session 里的实时数据）
-	// Streamer real status badge inline style (based on real-time data from session)
-	function streamerStatusStyle(isOnline: boolean, status: string): Record<string, string> {
-		if (!isOnline) {
-			return { backgroundColor: "rgb(39 39 42)", color: "rgb(161 161 170)", borderColor: "transparent" };
-		}
-		if (status === "公开秀") {
-			return { backgroundColor: "rgb(20 83 45)", color: "rgb(134 239 172)", borderColor: "transparent" };
-		}
-		return { backgroundColor: "rgb(120 53 15)", color: "rgb(252 211 77)", borderColor: "transparent" };
+	// 主播真实状态 Badge 样式（基于 session 里的实时数据）
+	// Streamer real status badge classes (based on real-time data from session)
+	function streamerStatusClass(isOnline: boolean, status: string): string {
+		if (!isOnline) return "bg-muted text-muted-foreground border-transparent";
+		if (status === "公开秀") return "bg-success/12 text-success border-success/25";
+		return "bg-warning/12 text-warning border-warning/25";
 	}
 
 	// 主播真实状态文字
@@ -147,12 +143,12 @@
 		}
 	}
 
-	function stateVariant(state: StreamState): Record<string, string> {
+	function stateClass(state: StreamState): string {
 		switch (state.type) {
-			case "live":       return { backgroundColor: "rgb(20 83 45)",   color: "rgb(134 239 172)", borderColor: "transparent" };
-			case "connecting": return { backgroundColor: "rgb(23 37 84)",   color: "rgb(147 197 253)", borderColor: "transparent" };
-			case "error":      return { backgroundColor: "rgb(127 29 29)",  color: "rgb(252 165 165)", borderColor: "transparent" };
-			default:           return { backgroundColor: "rgb(39 39 42)",   color: "rgb(161 161 170)", borderColor: "transparent" };
+			case "live":       return "bg-success/12 text-success border-success/25";
+			case "connecting": return "bg-info/12 text-info border-info/25";
+			case "error":      return "bg-destructive/12 text-destructive border-destructive/25";
+			default:           return "bg-muted text-muted-foreground border-transparent";
 		}
 	}
 
@@ -199,9 +195,9 @@
 		</header>
 
 		<!-- 转发流提示 / Relay hint -->
-		<div class="rounded-lg border border-blue-900/40 bg-blue-950/20 px-4 py-3 text-sm text-blue-300/80">
+		<div class="rounded-lg border border-info/25 bg-info/8 px-4 py-3 text-sm text-info">
 			<p>{{ t("relay.hint") }}</p>
-			<p class="mt-1 font-mono text-xs text-blue-400/60">
+			<p class="mt-1 font-mono text-xs text-info/80">
 				{{ exampleUrl }}
 			</p>
 		</div>
@@ -226,11 +222,11 @@
 			<Card
 				v-for="session in [...sessions].sort((a, b) => a.username.localeCompare(b.username))"
 				:key="session.username"
-				class="overflow-hidden py-0"
+				class="overflow-hidden transition-all hover:shadow-md py-0"
 				:class="{
-					'border-green-900/50': session.stream_state.type === 'live',
-					'border-blue-900/50': session.stream_state.type === 'connecting',
-					'border-red-900/50': session.stream_state.type === 'error',
+					'border-success/40': session.stream_state.type === 'live',
+					'border-info/40': session.stream_state.type === 'connecting',
+					'border-destructive/40': session.stream_state.type === 'error',
 				}"
 			>
 				<CardContent class="p-4 flex flex-col gap-3">
@@ -245,10 +241,10 @@
 									: WifiOff"
 								class="size-4 shrink-0"
 								:class="{
-									'text-green-400 animate-pulse': session.stream_state.type === 'live',
-									'text-blue-400 animate-spin': session.stream_state.type === 'connecting',
-									'text-red-400': session.stream_state.type === 'error',
-									'text-zinc-500': session.stream_state.type === 'offline',
+									'text-success animate-pulse': session.stream_state.type === 'live',
+									'text-info animate-spin': session.stream_state.type === 'connecting',
+									'text-destructive': session.stream_state.type === 'error',
+									'text-muted-foreground': session.stream_state.type === 'offline',
 								}"
 							/>
 							<span class="font-semibold text-sm truncate">{{ session.username }}</span>
@@ -257,13 +253,13 @@
 							<!-- 主播真实状态（后端实时查询）/ Streamer real status (real-time from backend) -->
 							<Badge
 								variant="outline"
-								:style="streamerStatusStyle(session.streamer_is_online, session.streamer_status)"
+								:class="streamerStatusClass(session.streamer_is_online, session.streamer_status)"
 								class="text-xs"
 							>
 								{{ streamerStatusLabel(session.streamer_is_online, session.streamer_status) }}
 							</Badge>
 							<!-- 转发流内部状态 / Relay stream internal state -->
-							<Badge variant="outline" :style="stateVariant(session.stream_state)" class="text-xs">
+							<Badge variant="outline" :class="stateClass(session.stream_state)" class="text-xs">
 								{{ stateLabel(session.stream_state) }}
 							</Badge>
 						</div>
@@ -281,7 +277,7 @@
 					<!-- 流地址 + 复制按钮 / Stream URL + copy button -->
 					<div class="flex items-center gap-2">
 						<div
-							class="flex-1 text-xs font-mono text-blue-400/70 bg-blue-950/20 rounded px-2 py-1.5 truncate select-all"
+							class="flex-1 text-xs font-mono text-info bg-info/8 rounded px-2 py-1.5 truncate select-all"
 							:title="getStreamUrl(session)"
 						>
 							{{ getStreamUrl(session) }}
@@ -289,17 +285,17 @@
 						<Button
 							size="sm"
 							variant="ghost"
-							class="shrink-0 px-2 h-7 text-muted-foreground hover:text-blue-300"
+							class="shrink-0 px-2 h-7 text-muted-foreground hover:text-info"
 							:title="t('relay.copyUrl')"
 							@click="copyUrl(session.username, getStreamUrl(session))"
 						>
-							<Check v-if="copiedMap[session.username]" class="size-3.5 text-green-400" />
+							<Check v-if="copiedMap[session.username]" class="size-3.5 text-success" />
 							<Copy v-else class="size-3.5" />
 						</Button>
 						<Button
 							size="sm"
 							variant="ghost"
-							class="shrink-0 px-2 h-7 text-muted-foreground hover:text-red-400"
+							class="shrink-0 px-2 h-7 text-muted-foreground hover:text-destructive"
 							:title="t('relay.stopRelay')"
 							:disabled="stoppingMap[session.username]"
 							@click="stopRelay(session.username)"

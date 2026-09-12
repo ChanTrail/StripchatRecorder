@@ -18,6 +18,7 @@
 	import StreamerCard from "../components/StreamerCard.vue";
 	import AddStreamerDialog from "../components/AddStreamerDialog.vue";
 	import { Button } from "@/components/ui/button";
+	import { Users, Plus } from "@lucide/vue";
 	import { useI18n } from "vue-i18n";
 
 	const store = useStreamersStore();
@@ -136,7 +137,7 @@
 					{{ t("home.subtitle", { total: store.streamers.length, recording: store.streamers.filter((s) => s.is_recording).length }) }}
 				</p>
 			</div>
-			<Button @click="showAdd = true">{{ t("home.addStreamer") }}</Button>
+			<Button @click="showAdd = true"><Plus class="size-4" />{{ t("home.addStreamer") }}</Button>
 		</header>
 
 		<div
@@ -148,10 +149,11 @@
 
 		<div
 			v-else-if="store.streamers.length === 0"
-			class="text-center text-muted-foreground py-16 flex flex-col items-center gap-3"
+			class="text-center text-muted-foreground py-20 flex flex-col items-center gap-3"
 		>
+			<Users class="size-9 opacity-25" />
 			<p>{{ t("home.noStreamers") }}</p>
-			<Button @click="showAdd = true">{{ t("home.addFirst") }}</Button>
+			<Button class="mt-1" @click="showAdd = true"><Plus class="size-4" />{{ t("home.addFirst") }}</Button>
 		</div>
 
 		<div

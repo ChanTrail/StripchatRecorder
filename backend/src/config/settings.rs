@@ -134,7 +134,7 @@ fn default_max_tmp_dir_gb() -> f64 {
 
 /// 语言的默认值 / Default value for language
 fn default_language() -> String {
-    "zh-CN".to_string()
+    "en-US".to_string()
 }
 
 /// Server 端口的默认值 / Default value for server port
