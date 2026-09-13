@@ -139,6 +139,18 @@ docker run -d \
 
 将自定义模块放入 `modules` 数据卷目录后会被自动发现，且不会在容器重启时被覆盖。详见[后处理模块开发文档](docs/module-development.md)。
 
+### Desktop 端模块安装路径
+
+Desktop 端安装包（NSIS/MSI、AppImage、deb/rpm、dmg）不把模块放在程序安装目录下（该目录在多数安装方式下只读或无写权限）。请将下载的 `modules-{platform}.zip` 解压到每用户数据目录的 `modules` 子目录：
+
+| 平台    | 路径                                                      |
+| ------- | ----------------------------------------------------------- |
+| Windows | `%APPDATA%\com.chantrail.stripchat-recorder\modules\`        |
+| macOS   | `~/Library/Application Support/com.chantrail.stripchat-recorder/modules/` |
+| Linux   | `~/.local/share/com.chantrail.stripchat-recorder/modules/`（或 `$XDG_DATA_HOME`） |
+
+目录不存在时可手动创建；应用启动后会自动监控该目录，新增/删除模块无需重启。
+
 ---
 
 ## 从源码构建

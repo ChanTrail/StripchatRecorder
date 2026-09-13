@@ -12,6 +12,7 @@ import { ref, onMounted, computed } from "vue";
 import { useRouter, useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { useAuthStore } from "@/stores/auth";
+import { useNotificationsStore } from "@/stores/notifications";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -20,6 +21,7 @@ const router = useRouter();
 const route = useRoute();
 const { t } = useI18n();
 const auth = useAuthStore();
+const notificationsStore = useNotificationsStore();
 
 /** null = 正在加载 / null = loading */
 const passwordSet = ref<boolean | null>(null);
@@ -58,6 +60,9 @@ async function submit() {
 			await auth.initPassword(pwd);
 		}
 		await auth.login(pwd);
+		// 登录成功后立即拉取通知，补回登录前因 401 拉取失败的启动期通知
+		// Re-fetch notifications after login to recover any missed during pre-login 401 phase
+		await notificationsStore.fetch();
 		const redirect = route.query.redirect;
 		const target = typeof redirect === "string" && redirect.startsWith("/") ? redirect : "/";
 		await router.replace(target);

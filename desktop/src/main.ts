@@ -10,7 +10,7 @@ import { createApp } from "vue";
 import { createPinia } from "pinia";
 import App from "./App.vue";
 import router from "./router";
-import i18n from "./i18n";
+import i18n, { initI18n } from "./i18n";
 import "./style.css";
 import "vue-sonner/style.css";
 
@@ -34,6 +34,10 @@ EventTarget.prototype.addEventListener = function (type, listener, options) {
 if (import.meta.env.PROD) {
 	document.addEventListener("contextmenu", (e) => e.preventDefault());
 }
+
+// 先从后端加载语言数据，再挂载 Vue，避免首屏显示键名
+// Load locale data from backend before mounting Vue to avoid showing raw keys on first render
+await initI18n();
 
 // 创建 Vue 应用实例，注册 Pinia 和路由，挂载到 #app 节点
 // Create Vue app instance, register Pinia and router, mount to #app element

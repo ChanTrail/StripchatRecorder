@@ -44,12 +44,25 @@ pub struct ChangePasswordBody {
 // ─── Handlers ──────────────────────────────────────────────────────────────
 
 /// GET /api/auth/status
+/// 返回密码是否已设置，以及当前请求携带的 token 是否仍然有效（对应当前访问者自身的登录状态）。
+/// Returns whether a password is set, and whether the token carried by this request is still valid
+/// (reflects the current visitor's own login state, not whether anyone is logged in).
 pub async fn auth_status(
     AxumState(s): AxumState<ServerState>,
+    req: Request<Body>,
 ) -> ApiResult<AuthStatusResponse> {
+    let ip = extract_ip(&req);
+    let logged_in = req
+        .headers()
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .is_some_and(|token| {
+            matches!(s.token_store.verify(token, ip), crate::server::auth::VerifyResult::Ok)
+        });
     Ok(Json(AuthStatusResponse {
         password_set: s.app_state.has_admin_password(),
-        logged_in: s.token_store.is_logged_in(),
+        logged_in,
     }))
 }
 
@@ -117,10 +130,22 @@ pub async fn login(
 }
 
 /// POST /api/auth/logout
+/// 登出当前 session（只清除本次登录的 token，不影响其他设备的登录状态）。
+/// Logout current session (only removes this token; other sessions remain active).
 pub async fn logout(
     AxumState(s): AxumState<ServerState>,
+    req: Request<Body>,
 ) -> ApiResult<serde_json::Value> {
-    s.token_store.clear();
+    // 提取当前请求携带的 token（若存在则精确删除该 session）
+    // Extract the token from this request and remove only that session if present
+    if let Some(token) = req
+        .headers()
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+    {
+        s.token_store.remove_session(token);
+    }
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 

@@ -133,8 +133,15 @@
 		{ to: "/about", labelKey: "nav.about", icon: Info },
 	];
 
-	/** 侧边栏是否折叠 / Whether the sidebar is collapsed */
-	const sidebarCollapsed = ref(false);
+	/** 侧边栏是否折叠（持久化到 localStorage，刷新/重登录后保持状态）
+	 *  Whether the sidebar is collapsed (persisted to localStorage, survives refresh/re-login) */
+	const SIDEBAR_KEY = "sidebar_collapsed";
+	const sidebarCollapsed = ref(localStorage.getItem(SIDEBAR_KEY) === "1");
+
+	function toggleSidebar() {
+		sidebarCollapsed.value = !sidebarCollapsed.value;
+		localStorage.setItem(SIDEBAR_KEY, sidebarCollapsed.value ? "1" : "0");
+	}
 
 	/** 移动端抽屉是否打开 / Whether the mobile drawer is open */
 	const mobileDrawerOpen = ref(false);
@@ -280,43 +287,10 @@
 			notify(p.message, "warning");
 		});
 
-		// SSE 重连后主动验证 token 有效性，若 session 已失效（如后端重启）则跳转登录页。
-		// 不再用硬刷新（window.location.reload），避免后端刚启动时路由守卫被 catch 放行。
-		//
-		// After SSE reconnect, verify token validity. If the backend session is gone
-		// (e.g. backend restarted), redirect to login. Using router.push instead of
-		// window.location.reload avoids the auth bypass when the backend just started.
-		unlistenReconnect = onSseReconnect(async () => {
-			isDisconnected.value = false;
-			try {
-				const token = localStorage.getItem("admin_token");
-				const statusRes = await fetch("/api/auth/status", {
-					headers: token ? { Authorization: `Bearer ${token}` } : {},
-				});
-				if (statusRes.ok) {
-					const status = await statusRes.json() as { password_set: boolean; logged_in: boolean };
-					if (status.password_set && token && !status.logged_in) {
-						// 后端重启后 session 消失：清除失效 token，跳转登录页
-						// Backend restarted, session gone: clear stale token and redirect to login
-						localStorage.removeItem("admin_token");
-						await router.push({ path: "/login", query: { redirect: router.currentRoute.value.fullPath } });
-						return;
-					}
-				}
-				// session 有效，重新同步语言和数据
-				// Session valid, re-sync locale and data
-				const settings = await call<{ language?: string }>("get_settings");
-				if (settings?.language) {
-					const { modules: moduleLocales } = await loadLocaleFromServer(settings.language);
-					locale.value = settings.language;
-					localStorage.setItem("locale", settings.language);
-					moduleLocaleStore.setLocales(settings.language, moduleLocales);
-				}
-				// 重新加载通知 / Reload notifications
-				await notificationsStore.fetch();
-			} catch {
-				// 静默，后端可能仍未完全就绪 / Silently ignore, backend may not be fully ready
-			}
+		// SSE 重连后直接刷新页面，清除前端缓存并让路由守卫重新验证 token。
+		// Reload the page on SSE reconnect to clear frontend cache and re-run auth guards.
+		unlistenReconnect = onSseReconnect(() => {
+			window.location.reload();
 		});
 
 		// 监听 SSE 断开连接 / Listen for SSE disconnect
@@ -348,6 +322,12 @@
 		// Listen for real-time new notifications (user online: panel + toast)
 		unlistenNotification = await on("notification-created", (payload) => {
 			notificationsStore.append(payload as Notification, true);
+		});
+
+		// 监听启动扫描完成信号，重新拉取通知列表（只加面板，不弹 toast）
+		// On startup scan done, re-fetch notification list (panel only, no toast)
+		await on("startup-scan-done", () => {
+			void notificationsStore.fetch();
 		});
 	});
 
@@ -452,7 +432,7 @@
 						class="w-full text-sm font-normal px-2 text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/50"
 						:class="sidebarCollapsed ? 'justify-center gap-0' : 'justify-start gap-2'"
 						:title="sidebarCollapsed ? t('nav.expand') : t('nav.collapse')"
-						@click="sidebarCollapsed = !sidebarCollapsed"
+						@click="toggleSidebar"
 					>
 						<ChevronsLeft v-if="!sidebarCollapsed" class="size-4 shrink-0" />
 						<ChevronsRight v-else class="size-4 shrink-0" />

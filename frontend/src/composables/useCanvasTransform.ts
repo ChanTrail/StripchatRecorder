@@ -11,11 +11,11 @@
  * dragging, or port wiring (see useNodeDragging / usePortWiring).
  */
 
-import { reactive, ref } from "vue";
+import { reactive, ref, onMounted, onUnmounted } from "vue";
 import type { Ref } from "vue";
 import { usePostprocessStore } from "@/stores/postprocess";
 
-export function useCanvasTransform(canvasRef: Ref<HTMLElement | null>) {
+export function useCanvasTransform(canvasRef: Ref<HTMLElement | null>, onBeforeWheel?: () => void) {
 	const store = usePostprocessStore();
 
 	/** 画布平移/缩放状态 / Canvas pan/zoom state */
@@ -70,9 +70,19 @@ export function useCanvasTransform(canvasRef: Ref<HTMLElement | null>) {
 		return { wasClick, canvasPos: screenToCanvas(e.clientX, e.clientY) };
 	}
 
-	/** 滚轮缩放，以光标位置为锚点 / Mouse wheel zoom, anchored at cursor position */
+	/**
+	 * 滚轮缩放，以光标位置为锚点 / Mouse wheel zoom, anchored at cursor position
+	 *
+	 * 注意：此函数通过 addEventListener 以 { passive: false } 注册，绕过 main.ts
+	 * 中强制 passive:true 的全局补丁，确保 preventDefault() 能正常阻止页面滚动。
+	 *
+	 * Note: This handler is registered via addEventListener with { passive: false },
+	 * bypassing the global patch in main.ts that forces passive:true, so that
+	 * preventDefault() can actually suppress page scrolling.
+	 */
 	function onCanvasWheel(e: WheelEvent) {
 		e.preventDefault();
+		onBeforeWheel?.();
 		const rawFactor = e.deltaY < 0 ? 1.1 : 0.9;
 		const rect = canvasRef.value!.getBoundingClientRect();
 		const cx = e.clientX - rect.left;
@@ -85,6 +95,17 @@ export function useCanvasTransform(canvasRef: Ref<HTMLElement | null>) {
 		transform.y = cy - (cy - transform.y) * effectiveFactor;
 		transform.scale = newScale;
 	}
+
+	// 以 { passive: false } 手动注册 wheel 事件，绕过全局 passive 补丁，
+	// 确保 onCanvasWheel 内的 e.preventDefault() 能生效。
+	// Register the wheel listener manually with { passive: false } to bypass the
+	// global passive patch, so that e.preventDefault() inside onCanvasWheel works.
+	onMounted(() => {
+		canvasRef.value?.addEventListener("wheel", onCanvasWheel, { passive: false });
+	});
+	onUnmounted(() => {
+		canvasRef.value?.removeEventListener("wheel", onCanvasWheel);
+	});
 
 	/** 首次加载时为无位置的节点分配初始网格布局 / Assign an initial grid layout to nodes without a position on first load */
 	function autoLayoutNodes() {
@@ -175,7 +196,6 @@ export function useCanvasTransform(canvasRef: Ref<HTMLElement | null>) {
 		startPan,
 		updatePan,
 		endPan,
-		onCanvasWheel,
 		autoLayoutNodes,
 		fitView,
 	};

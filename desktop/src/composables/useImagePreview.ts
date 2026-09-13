@@ -9,7 +9,23 @@
  * and automatically clamps translation to prevent the image from leaving the viewport.
  */
 
-import { ref } from "vue";
+import { ref, watch } from "vue";
+
+/** 当前持有的 blob URL（关闭时需 revoke）/ Current held blob URL (must be revoked on close) */
+let _currentBlobUrl: string | null = null;
+
+/**
+ * 加载图片并转换为 blob URL（Desktop 版：url 为 Tauri read_output_file 返回的
+ * base64 data URL，无需鉴权头）。
+ * Fetch image and convert to a blob URL (Desktop version: url is a base64 data URL
+ * returned by the Tauri read_output_file command; no auth header needed).
+ */
+async function fetchImage(url: string): Promise<string> {
+	const res = await fetch(url);
+	if (!res.ok) throw new Error(`Failed to load image: ${res.status}`);
+	const blob = await res.blob();
+	return URL.createObjectURL(blob);
+}
 
 /**
  * 图片预览状态与交互逻辑。
@@ -18,8 +34,23 @@ import { ref } from "vue";
 export function useImagePreview() {
 	/** 预览弹窗是否打开 / Whether the preview dialog is open */
 	const previewOpen = ref(false);
+
+	// 弹窗关闭时释放 blob URL，避免内存泄漏
+	// Revoke blob URL when dialog closes to prevent memory leaks
+	watch(previewOpen, (open) => {
+		if (!open && _currentBlobUrl) {
+			URL.revokeObjectURL(_currentBlobUrl);
+			_currentBlobUrl = null;
+			previewUrl.value = "";
+		}
+		if (!open) {
+			isLoadingPreview.value = false;
+		}
+	});
 	/** 当前预览图片的 URL / Current preview image URL */
 	const previewUrl = ref("");
+	/** 图片是否正在通过 fetch 加载中（blob URL 尚未就绪）/ Whether image is being fetched (blob URL not yet ready) */
+	const isLoadingPreview = ref(false);
 	/** 当前预览图片的标题 / Current preview image title */
 	const previewTitle = ref("");
 	/** 当前缩放比例（1 = 原始适配尺寸）/ Current zoom scale (1 = fit size) */
@@ -45,6 +76,14 @@ export function useImagePreview() {
 	// 拖拽起始状态：鼠标位置和平移偏移量快照
 	// Drag start state: mouse position and translation offset snapshot
 	let dragStart = { x: 0, y: 0, tx: 0, ty: 0 };
+
+	// 双指捏合状态 / Pinch-to-zoom state
+	let pinchStartDist = 0;
+	let pinchStartScale = 1;
+	let pinchStartMidX = 0;
+	let pinchStartMidY = 0;
+	let pinchStartTx = 0;
+	let pinchStartTy = 0;
 
 	/**
 	 * 将值限制在 [min, max] 范围内。
@@ -234,28 +273,133 @@ export function useImagePreview() {
 	}
 
 	/**
+	 * 双指触摸开始：记录初始捏合距离、中心点和变换快照。
+	 * Touch start with two fingers: record initial pinch distance, midpoint, and transform snapshot.
+	 */
+	function onViewportTouchstart(e: TouchEvent) {
+		if (e.touches.length === 2) {
+			e.preventDefault();
+			const t0 = e.touches[0];
+			const t1 = e.touches[1];
+			pinchStartDist = Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
+			pinchStartScale = previewScale.value;
+			pinchStartMidX = (t0.clientX + t1.clientX) / 2;
+			pinchStartMidY = (t0.clientY + t1.clientY) / 2;
+			pinchStartTx = previewTranslate.value.x;
+			pinchStartTy = previewTranslate.value.y;
+		} else if (e.touches.length === 1 && previewScale.value > 1) {
+			// 单指拖拽（缩放后）/ Single-finger pan (after zooming in)
+			dragStart = {
+				x: e.touches[0].clientX,
+				y: e.touches[0].clientY,
+				tx: previewTranslate.value.x,
+				ty: previewTranslate.value.y,
+			};
+			isDragging.value = true;
+		}
+	}
+
+	/**
+	 * 双指触摸移动：计算缩放比例和平移偏移，以双指中心点为锚点缩放。
+	 * Touch move with two fingers: compute scale and translation anchored at the pinch midpoint.
+	 */
+	function onViewportTouchmove(e: TouchEvent) {
+		if (e.touches.length === 2) {
+			e.preventDefault();
+			const t0 = e.touches[0];
+			const t1 = e.touches[1];
+			const dist = Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
+			if (pinchStartDist === 0) return;
+
+			const rawScale = (dist / pinchStartDist) * pinchStartScale;
+			const nextScale = Math.min(10, Math.max(1, Math.round(rawScale * 100) / 100));
+
+			// 以捏合起始中心点为锚点计算平移偏移
+			// Compute translation offset anchored at the initial pinch midpoint
+			const metrics = getPreviewMetrics();
+			if (!metrics) {
+				previewScale.value = nextScale;
+				return;
+			}
+
+			const curMidX = pinchStartMidX - metrics.viewportRect.left;
+			const curMidY = pinchStartMidY - metrics.viewportRect.top;
+			const curCenterX = metrics.viewportWidth / 2 + pinchStartTx;
+			const curCenterY = metrics.viewportHeight / 2 + pinchStartTy;
+			const localX = (curMidX - curCenterX) / pinchStartScale;
+			const localY = (curMidY - curCenterY) / pinchStartScale;
+			let nextX = curMidX - metrics.viewportWidth / 2 - localX * nextScale;
+			let nextY = curMidY - metrics.viewportHeight / 2 - localY * nextScale;
+			({ x: nextX, y: nextY } = clampPreviewTranslate(nextX, nextY, nextScale, metrics));
+
+			previewScale.value = nextScale;
+			previewTranslate.value = { x: nextX, y: nextY };
+		} else if (e.touches.length === 1 && isDragging.value) {
+			e.preventDefault();
+			previewTranslate.value = clampPreviewTranslate(
+				dragStart.tx + (e.touches[0].clientX - dragStart.x),
+				dragStart.ty + (e.touches[0].clientY - dragStart.y),
+				previewScale.value,
+			);
+		}
+	}
+
+	/**
+	 * 触摸结束：重置捏合状态和拖拽状态。
+	 * Touch end: reset pinch and drag state.
+	 */
+	function onViewportTouchend(e: TouchEvent) {
+		if (e.touches.length < 2) {
+			pinchStartDist = 0;
+		}
+		if (e.touches.length === 0) {
+			isDragging.value = false;
+		}
+	}
+
+	/**
 	 * 打开图片预览弹窗。
 	 * Open the image preview dialog.
 	 *
-	 * @param url - 图片 URL / Image URL
+	 * @param url - 图片 URL（base64 data URL 或普通 URL，均通过 fetch 加载）/ Image URL (base64 data URL or plain URL, loaded via fetch)
 	 * @param title - 图片标题 / Image title
 	 */
-	function openPreview(url: string, title: string) {
-		previewUrl.value = url;
+	async function openPreview(url: string, title: string) {
 		previewTitle.value = title;
 		resetPreviewTransform();
-		// 打开时先用最大尺寸占位，图片加载后再自适应
-		// Use max size as placeholder until image loads and adapts
+		// 打开时先用最大尺寸占位，fetch 完成后图片加载时再自适应
+		// Use max size as placeholder while fetching; viewport adapts once image loads
 		viewportSize.value = {
 			width: `${Math.round(window.innerWidth * 0.9)}px`,
 			height: `${Math.round(window.innerHeight * 0.9 - 52)}px`,
 		};
+		previewUrl.value = "";
+		isLoadingPreview.value = true;
 		previewOpen.value = true;
+
+		// 释放上一次的 blob URL / Revoke previous blob URL if any
+		if (_currentBlobUrl) {
+			URL.revokeObjectURL(_currentBlobUrl);
+			_currentBlobUrl = null;
+		}
+
+		try {
+			const blobUrl = await fetchImage(url);
+			_currentBlobUrl = blobUrl;
+			previewUrl.value = blobUrl;
+		} catch {
+			// 加载失败时清空 URL，<img> 会显示 broken 图标
+			// Clear URL on failure; <img> will show broken image icon
+			previewUrl.value = "";
+		} finally {
+			isLoadingPreview.value = false;
+		}
 	}
 
 	return {
 		previewOpen,
 		previewUrl,
+		isLoadingPreview,
 		previewTitle,
 		previewScale,
 		previewTranslate,
@@ -269,6 +413,9 @@ export function useImagePreview() {
 		onPreviewMousedown,
 		onDocMousemove,
 		onDocMouseup,
+		onViewportTouchstart,
+		onViewportTouchmove,
+		onViewportTouchend,
 		openPreview,
 	};
 }

@@ -30,6 +30,7 @@
 	import type { PipelineNode, ModuleInfo, PortType } from "@/stores/postprocess";
 	import { nodeEffectiveId, usePostprocessStore } from "@/stores/postprocess";
 	import { PORT_TYPE_COLORS } from "@/stores/postprocess";
+	import { useSystemStore } from "@/stores/system";
 	import { Switch } from "@/components/ui/switch";
 	import { Input } from "@/components/ui/input";
 	import { Label } from "@/components/ui/label";
@@ -73,6 +74,7 @@
 
 	const { t } = useI18n();
 	const store = usePostprocessStore();
+	const systemStore = useSystemStore();
 
 	function eid() {
 		return nodeEffectiveId(props.node);
@@ -235,6 +237,8 @@
 							<NumberField
 								v-else-if="param.type === 'number'"
 								:model-value="Number(node.params[param.key] ?? param.default)"
+								:min="param.min ?? 0"
+								:max="param.max === -1 ? (systemStore.maxPpConcurrentCap > 0 ? systemStore.maxPpConcurrentCap : undefined) : (param.max ?? undefined)"
 								@update:model-value="emit('update-param', param.key, $event ?? 0)"
 							>
 								<NumberFieldContent>

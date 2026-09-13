@@ -37,6 +37,8 @@ pub const TOKEN_RENEW: Duration = Duration::from_secs(3600);
 pub const MAX_FAIL: u32 = 5;
 /// 封禁时长（15 分钟）/ Lockout duration (15 minutes)
 pub const LOCKOUT_DURATION: Duration = Duration::from_secs(15 * 60);
+/// 最大并发登录 session 数 / Maximum number of concurrent login sessions
+pub const MAX_SESSIONS: usize = 5;
 
 // ─── 数据结构 / Data structures ─────────────────────────────────────────────
 
@@ -57,13 +59,15 @@ struct FailEntry {
 }
 
 struct TokenStoreInner {
-    session: Option<SessionEntry>,
+    /// 活跃 session 列表，按登录时间升序排列（最旧在前）
+    /// Active sessions, sorted by login time ascending (oldest first)
+    sessions: std::collections::VecDeque<SessionEntry>,
     password_configured: bool,
     /// IP → 登录失败记录 / IP → login failure record
     fail_map: HashMap<IpAddr, FailEntry>,
 }
 
-/// Token 存储（单用户）/ Token store (single-user)
+/// Token 存储（多 session，最多 MAX_SESSIONS 个）/ Token store (multi-session, up to MAX_SESSIONS)
 #[derive(Clone)]
 pub struct TokenStore(Arc<RwLock<TokenStoreInner>>);
 
@@ -76,21 +80,31 @@ impl Default for TokenStore {
 impl TokenStore {
     pub fn new(password_already_set: bool) -> Self {
         Self(Arc::new(RwLock::new(TokenStoreInner {
-            session: None,
+            sessions: std::collections::VecDeque::new(),
             password_configured: password_already_set,
             fail_map: HashMap::new(),
         })))
     }
 
     /// 登录成功：生成 Token，绑定 IP，重置该 IP 的失败计数。
+    /// 若 session 数已达 MAX_SESSIONS，踢出登录时间最早的那个（队首）。
+    ///
     /// Login success: generate token, bind IP, reset failure count for this IP.
+    /// If the session count reaches MAX_SESSIONS, evict the oldest session (queue front).
     pub fn create_session(&self, ip: IpAddr) -> String {
         let token = new_token();
+        let now = Instant::now();
         let mut inner = self.0.write();
-        inner.session = Some(SessionEntry {
+        // 先清除所有已过期 session / Prune expired sessions first
+        inner.sessions.retain(|s| now <= s.expires_at);
+        // 若仍满员，踢出最旧的（队首）/ Evict oldest (front) if still at capacity
+        while inner.sessions.len() >= MAX_SESSIONS {
+            inner.sessions.pop_front();
+        }
+        inner.sessions.push_back(SessionEntry {
             token: token.clone(),
             bound_ip: ip,
-            expires_at: Instant::now() + TOKEN_TTL,
+            expires_at: now + TOKEN_TTL,
         });
         inner.fail_map.remove(&ip);
         token
@@ -103,15 +117,17 @@ impl TokenStore {
     /// Auto-renews by TOKEN_RENEW on success.
     pub fn verify(&self, token: &str, ip: IpAddr) -> VerifyResult {
         let mut inner = self.0.write();
-        let session = match &mut inner.session {
+        let now = Instant::now();
+        // 找到对应 session / Find matching session
+        let entry = inner.sessions.iter_mut().find(|s| s.token == token);
+        let session = match entry {
             Some(s) => s,
             None => return VerifyResult::Invalid,
         };
-        if session.token != token {
-            return VerifyResult::Invalid;
-        }
-        if Instant::now() > session.expires_at {
-            inner.session = None;
+        if now > session.expires_at {
+            // 过期：从队列中移除 / Expired: remove from queue
+            let token_owned = token.to_string();
+            inner.sessions.retain(|s| s.token != token_owned);
             return VerifyResult::Expired;
         }
         // IP 不匹配时拒绝（可能是 token 泄漏）
@@ -120,34 +136,46 @@ impl TokenStore {
             return VerifyResult::IpMismatch;
         }
         // 自动续期 / Auto-renew
-        let new_exp = Instant::now() + TOKEN_RENEW;
+        let new_exp = now + TOKEN_RENEW;
         if new_exp > session.expires_at {
             session.expires_at = new_exp;
         }
         VerifyResult::Ok
     }
 
-    /// 强制续期：将过期时间延长至 now + TOKEN_TTL（前端主动调用 /api/auth/renew 时）。
-    /// Force-renew: extend expiry to now + TOKEN_TTL (called by frontend via /api/auth/renew).
+    /// 强制续期：将指定 Token 过期时间延长至 now + TOKEN_TTL（前端主动调用 /api/auth/renew 时）。
+    /// Force-renew: extend the given token's expiry to now + TOKEN_TTL (called by frontend via /api/auth/renew).
     pub fn renew(&self, token: &str, ip: IpAddr) -> bool {
         let mut inner = self.0.write();
-        if let Some(s) = &mut inner.session
-            && s.token == token && s.bound_ip == ip && Instant::now() <= s.expires_at
+        let now = Instant::now();
+        if let Some(s) = inner.sessions.iter_mut().find(|s| s.token == token)
+            && s.bound_ip == ip
+            && now <= s.expires_at
         {
-            s.expires_at = Instant::now() + TOKEN_TTL;
+            s.expires_at = now + TOKEN_TTL;
             return true;
         }
         false
     }
 
-    /// 登出：清除当前 session。
-    pub fn clear(&self) {
-        self.0.write().session = None;
+    /// 登出指定 Token（只清除该 session，不影响其他登录方）。
+    /// Logout the given token (only removes that session, leaving others intact).
+    pub fn remove_session(&self, token: &str) {
+        self.0.write().sessions.retain(|s| s.token != token);
     }
 
+    /// 清除所有 session（密码修改时使用）。
+    /// Clear all sessions (used when password is changed).
+    pub fn clear(&self) {
+        self.0.write().sessions.clear();
+    }
+
+    /// 检查是否有任意有效（未过期）session。
+    /// Check whether any valid (non-expired) session exists.
     pub fn is_logged_in(&self) -> bool {
         let inner = self.0.read();
-        inner.session.as_ref().is_some_and(|s| Instant::now() <= s.expires_at)
+        let now = Instant::now();
+        inner.sessions.iter().any(|s| now <= s.expires_at)
     }
 
     pub fn mark_password_configured(&self) {

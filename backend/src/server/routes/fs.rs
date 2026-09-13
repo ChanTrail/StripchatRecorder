@@ -11,10 +11,28 @@ pub async fn get_disk_space_handler(
 ) -> ApiResult<serde_json::Value> {
     let state = std::sync::Arc::clone(&s.app_state);
     let result = tokio::task::spawn_blocking(move || {
-        crate::system::disk::get_disk_space_inner(&state.get_settings().output_dir)
+        let settings = state.get_settings();
+        let ts_fragment_dir = settings.output_dir.clone();
+
+        // 查找流水线中已启用的 ts_merge 节点的 output_dir 参数
+        // Find the output_dir param of any enabled ts_merge node in the pipeline
+        let ts_merge_dir: Option<String> = state
+            .get_pipeline()
+            .nodes
+            .iter()
+            .find(|n| n.module_id == "ts_merge" && n.enabled)
+            .and_then(|n| n.params.get("output_dir"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| s.trim().to_string());
+
+        crate::system::disk::get_disk_space_entries(
+            &ts_fragment_dir,
+            ts_merge_dir.as_deref(),
+        )
     })
     .await
-    .map_err(|e| ApiError(e.to_string()))??;
+    .map_err(|e| ApiError(e.to_string()))?;
     Ok(Json(serde_json::to_value(result).unwrap()))
 }
 

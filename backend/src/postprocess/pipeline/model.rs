@@ -75,6 +75,18 @@ pub struct ParamDef {
     pub default: serde_json::Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<Vec<String>>,
+    /// number 类型参数的最小值（可选）/ Minimum value for number-type params (optional)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min: Option<i64>,
+    /// number 类型参数的最大值（可选）。
+    /// 特殊值 `-1` 表示"动态上限 = CPU 逻辑核心数"，前端负责从 `/api/system-info`
+    /// 获取实际值并替换。
+    ///
+    /// Maximum value for number-type params (optional).
+    /// Special value `-1` means "dynamic upper bound = logical CPU count";
+    /// the frontend fetches the actual value from `/api/system-info` and substitutes it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max: Option<i64>,
 }
 
 /// 后处理模块信息（从 `--describe` 输出中反序列化）/ Post-processing module info

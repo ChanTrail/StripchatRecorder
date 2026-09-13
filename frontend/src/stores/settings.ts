@@ -54,6 +54,8 @@ export interface Settings {
 	community_terms_accepted: boolean;
 	/** 首次启动向导是否已完成 / Whether the first-launch setup wizard has been completed */
 	setup_done: boolean;
+	/** 后处理最大并发数（0 = 自动 = CPU 核心数；≥1 = 固定）/ Max concurrent post-processing tasks (0 = auto; ≥1 = fixed) */
+	max_pp_concurrent: number;
 }
 
 /** Mouflon 密钥存储结构（含时间戳）/ Mouflon key store (with timestamps) */
@@ -88,6 +90,7 @@ export const useSettingsStore = defineStore("settings", () => {
 		community_mirror_url: null,
 		community_terms_accepted: false,
 		setup_done: false,
+		max_pp_concurrent: 0,
 	});
 	/** 是否正在加载 / Whether loading */
 	const loading = ref(false);

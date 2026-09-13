@@ -218,3 +218,17 @@
   opacity: 0;
   transform: translateX(24px);
 }
+
+/* Settings 页面 section 副标题滑入/滑出过渡 / Settings section label slide transition */
+.section-label-enter-active,
+.section-label-leave-active {
+  transition: opacity 0.15s, transform 0.15s;
+}
+.section-label-enter-from {
+  opacity: 0;
+  transform: translateY(4px);
+}
+.section-label-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}

@@ -291,7 +291,15 @@ impl StatusMonitor {
                 });
         }
 
-        let info = match api.get_stream_info(&username, !is_recording, streamer.model_id).await {
+        // 仅当确实可能触发自动录制时才拉取 playlist URL：
+        // 未在录制 + 该主播启用了自动录制 + 全局自动录制也开启。
+        // 手动录制按钮不依赖此处的缓存 URL，点击时会即时拉取。
+        //
+        // Only fetch the playlist URL when auto-recording could actually trigger:
+        // not currently recording + this streamer has auto-record on + global auto-record is on.
+        // The manual-record button does not rely on this cached URL; it fetches on demand.
+        let need_playlist = !is_recording && streamer.auto_record && auto_record_global;
+        let info = match api.get_stream_info(&username, need_playlist, streamer.model_id).await {
             Ok(i) => i,
             Err(crate::core::error::AppError::UserNotFound(_)) => {
                 // 用户名查不到，且 model_id 反查也失败（get_stream_info 已处理改名回退）
@@ -369,17 +377,22 @@ impl StatusMonitor {
             username: username.clone(),
             is_online: info.is_online,
             is_recording,
-            // 正在录制时不获取 playlist_url，保留上次缓存的 is_recordable 值，避免按钮被错误禁用
-            // When recording, playlist_url is not fetched; preserve the last cached is_recordable
-            // to avoid incorrectly disabling buttons
+            // 直接用 API 返回的 is_recordable（is_live && public），不依赖是否拉取了 playlist URL。
+            // 录制中时保留缓存值（正常情况下此时 API 仍返回 true；保留缓存仅作额外防护，
+            // 避免录制过程中状态短暂抖动导致按钮被错误禁用）。
+            //
+            // Use is_recordable directly from the API response (is_live && public),
+            // independent of whether a playlist URL was fetched.
+            // While recording, preserve the cached value as an extra guard against
+            // transient status flicker that could incorrectly disable the button.
             is_recordable: if is_recording {
                 self.statuses
                     .read()
                     .get(&username)
                     .map(|s| s.is_recordable)
-                    .unwrap_or(info.playlist_url.is_some())
+                    .unwrap_or(info.is_recordable)
             } else {
-                info.playlist_url.is_some()
+                info.is_recordable
             },
             status: info.status.clone(),
             thumbnail_url: info.thumbnail_url.clone(),

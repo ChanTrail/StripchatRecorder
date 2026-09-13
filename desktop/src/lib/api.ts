@@ -82,3 +82,9 @@ export async function on(
 	});
 	return unlisten;
 }
+
+// ─── startTokenRenew 存根（供 stores 兼容引用，Tauri 无需 token 续期）───────
+// startTokenRenew stub (for store compatibility; Tauri does not need token renewal)
+export function startTokenRenew(): void {
+	// no-op in Tauri mode
+}

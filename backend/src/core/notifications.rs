@@ -181,6 +181,34 @@ impl NotificationStore {
     /// 推入一条带 i18n 翻译键的通知，并广播 `notification-created`。
     /// `message` 作为 fallback，`message_key` + `message_args` 供前端查翻译。
     ///
+    /// 推入一条带 i18n 翻译键的通知，**不**通过 SSE 广播（只入库）。
+    /// 适用于需要静默写入、由前端主动 fetch 拉取的场景（如启动扫描完成通知）。
+    ///
+    /// Push a notification with an i18n key into the store WITHOUT broadcasting via SSE.
+    /// Use when the notification should be fetched by the frontend on demand (e.g. startup scan).
+    pub fn push_i18n(
+        &self,
+        level: NotificationLevel,
+        source: impl Into<String>,
+        message: impl Into<String>,
+        message_key: impl Into<String>,
+        message_args: Option<HashMap<String, serde_json::Value>>,
+    ) {
+        let mut inner = self.inner.write();
+        let id = inner.next_id;
+        inner.next_id += 1;
+        inner.notifications.push(Notification {
+            id,
+            level,
+            source: source.into(),
+            message: message.into(),
+            message_key: Some(message_key.into()),
+            message_args,
+            created_at: Utc::now().to_rfc3339(),
+            action: None,
+        });
+    }
+
     /// Push a notification with an i18n key, broadcast `notification-created`.
     /// `message` is the fallback; `message_key` + `message_args` are used by the frontend.
     pub fn emit_i18n(

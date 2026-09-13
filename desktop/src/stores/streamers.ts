@@ -12,7 +12,8 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
 import { call, on } from "@/lib/api";
-import { toast as sonnerToast } from "vue-sonner";
+import { toast, notify } from "@/composables/useNotify";
+import { useI18n } from "vue-i18n";
 
 /** 主播条目数据结构 / Streamer entry data structure */
 export interface StreamerEntry {
@@ -41,6 +42,7 @@ export interface StatusUpdatePayload {
 }
 
 export const useStreamersStore = defineStore("streamers", () => {
+	const { t } = useI18n();
 	/** 主播列表 / Streamer list */
 	const streamers = ref<StreamerEntry[]>([]);
 	/** 是否正在加载 / Whether loading */
@@ -83,12 +85,7 @@ export const useStreamersStore = defineStore("streamers", () => {
 
 	/**
 	 * 添加新主播到追踪列表，支持批量。
-	 * 向后端发送用户名列表，后端并发验证后逐个添加。
-	 * 通过订阅 streamer-batch-progress 事件实时调用进度回调。
-	 *
 	 * Add streamers to the tracking list, supporting batch input.
-	 * Sends a list of usernames to the backend for concurrent verification and sequential addition.
-	 * Invokes the optional progress callback in real time via streamer-batch-progress events.
 	 *
 	 * @param usernames - 主播用户名列表 / List of streamer usernames
 	 * @param onProgress - 可选进度回调 (done, currentUsername) / Optional progress callback (done, currentUsername)
@@ -99,8 +96,6 @@ export const useStreamersStore = defineStore("streamers", () => {
 	): Promise<{ total: number; success: number; skipped: number; failed: number }> {
 		for (const u of usernames) markLocal(`add:${u}`);
 
-		// 若提供进度回调，订阅进度事件并在完成后取消订阅
-		// If a progress callback is provided, subscribe to progress events and unsubscribe when done
 		let unlisten: (() => void) | null = null;
 		if (onProgress) {
 			unlisten = await on("streamer-batch-progress", (payload) => {
@@ -124,8 +119,6 @@ export const useStreamersStore = defineStore("streamers", () => {
 	/**
 	 * 从追踪列表中移除主播。
 	 * Remove a streamer from the tracking list.
-	 *
-	 * @param username - 主播用户名 / Streamer username
 	 */
 	async function removeStreamer(username: string) {
 		markLocal(`remove:${username}`);
@@ -136,9 +129,6 @@ export const useStreamersStore = defineStore("streamers", () => {
 	/**
 	 * 设置主播的自动录制开关。
 	 * Set the auto-record toggle for a streamer.
-	 *
-	 * @param username - 主播用户名 / Streamer username
-	 * @param enabled - 是否开启自动录制 / Whether to enable auto-record
 	 */
 	async function setAutoRecord(username: string, enabled: boolean) {
 		markLocal(`auto:${username}`);
@@ -150,9 +140,6 @@ export const useStreamersStore = defineStore("streamers", () => {
 	/**
 	 * 手动开始录制指定主播。
 	 * Manually start recording a specific streamer.
-	 *
-	 * @param username - 主播用户名 / Streamer username
-	 * @returns 录制文件路径 / Recording file path
 	 */
 	async function startRecording(username: string): Promise<string> {
 		return call<string>("start_recording", { username });
@@ -160,12 +147,7 @@ export const useStreamersStore = defineStore("streamers", () => {
 
 	/**
 	 * 手动停止录制指定主播。
-	 * 立即在本地将录制状态设为 false，防止 UI 闪烁。
-	 *
 	 * Manually stop recording a specific streamer.
-	 * Immediately sets recording state to false locally to prevent UI flicker.
-	 *
-	 * @param username - 主播用户名 / Streamer username
 	 */
 	async function stopRecording(username: string) {
 		stoppingSet.value.add(username);
@@ -177,8 +159,6 @@ export const useStreamersStore = defineStore("streamers", () => {
 	/**
 	 * 批量开始录制，并发发起，返回失败数量。
 	 * Batch start recording concurrently, returns failure count.
-	 *
-	 * @param usernames - 主播用户名列表 / List of streamer usernames
 	 */
 	async function batchStartRecording(
 		usernames: string[],
@@ -192,12 +172,7 @@ export const useStreamersStore = defineStore("streamers", () => {
 
 	/**
 	 * 批量停止录制，并发发起，返回失败数量。
-	 * 立即在本地将录制状态设为 false，防止 UI 闪烁。
-	 *
 	 * Batch stop recording concurrently, returns failure count.
-	 * Immediately sets local recording state to false to prevent UI flicker.
-	 *
-	 * @param usernames - 主播用户名列表 / List of streamer usernames
 	 */
 	async function batchStopRecording(
 		usernames: string[],
@@ -217,9 +192,6 @@ export const useStreamersStore = defineStore("streamers", () => {
 	/**
 	 * 批量设置自动录制开关，并发执行，返回失败数量。
 	 * Batch set auto-record toggle concurrently, returns failure count.
-	 *
-	 * @param usernames - 主播用户名列表 / List of streamer usernames
-	 * @param enabled   - 是否开启自动录制 / Whether to enable auto-record
 	 */
 	async function batchSetAutoRecord(
 		usernames: string[],
@@ -236,6 +208,10 @@ export const useStreamersStore = defineStore("streamers", () => {
 		const failed = results.filter((r) => r.status === "rejected").length;
 		return { failed };
 	}
+
+	/**
+	 * 批量移除主播，串行执行以保证顺序一致，返回失败数量。
+	 * Batch remove streamers serially to maintain consistency, returns failure count.
 	 *
 	 * @param usernames - 主播用户名列表 / List of streamer usernames
 	 */
@@ -257,10 +233,7 @@ export const useStreamersStore = defineStore("streamers", () => {
 
 	/**
 	 * 初始化后端事件监听器（只执行一次）。
-	 * 监听主播添加/移除、状态更新、录制开始/停止、自动录制变更等事件。
-	 *
 	 * Initialize backend event listeners (executed only once).
-	 * Listens for streamer add/remove, status updates, recording start/stop, auto-record changes, etc.
 	 */
 	async function initListeners() {
 		if (listenersReady) return;
@@ -268,16 +241,15 @@ export const useStreamersStore = defineStore("streamers", () => {
 		await Promise.all([
 			on("streamer-added", (payload) => {
 				const p = payload as { username: string };
-				// 非本地操作时显示提示 / Show notification for non-local actions
 				if (!localActions.has(`add:${p.username}`)) {
-					sonnerToast.info(`其他客户端添加了主播：${p.username}`);
+					toast(t("streamers.otherClientAdded", { username: p.username }));
 				}
 				void fetchStreamers();
 			}),
 			on("streamer-removed", (payload) => {
 				const p = payload as { username: string };
 				if (!localActions.has(`remove:${p.username}`)) {
-					sonnerToast.info(`其他客户端移除了主播：${p.username}`);
+					toast(t("streamers.otherClientRemoved", { username: p.username }));
 				}
 				streamers.value = streamers.value.filter(
 					(s) => s.username !== p.username,
@@ -287,16 +259,12 @@ export const useStreamersStore = defineStore("streamers", () => {
 				const p = payload as StatusUpdatePayload;
 				const s = streamers.value.find((s) => s.username === p.username);
 				if (s) {
-					// 若正在停止录制，忽略后端的录制状态更新，防止状态闪烁
-					// If stop is in progress, ignore backend recording state to prevent flicker
 					const isStopping = stoppingSet.value.has(p.username);
 					Object.assign(s, {
 						is_online: p.is_online,
 						is_recording: isStopping ? false : p.is_recording,
 						is_recordable: isStopping ? s.is_recordable : p.is_recordable,
 						status: p.status,
-						// 仅在有新缩略图时更新，避免清空已有缩略图
-						// Only update thumbnail if a new one is provided
 						...(p.thumbnail_url ? { thumbnail_url: p.thumbnail_url } : {}),
 					});
 				}
@@ -316,16 +284,26 @@ export const useStreamersStore = defineStore("streamers", () => {
 			on("auto-record-changed", (payload) => {
 				const p = payload as { username: string; enabled: boolean };
 				if (!localActions.has(`auto:${p.username}`)) {
-					sonnerToast.info(
-						`其他客户端${p.enabled ? "开启" : "关闭"}了 ${p.username} 的自动录制`,
+					const action = t(p.enabled
+						? "streamers.otherClientAutoRecordEnable"
+						: "streamers.otherClientAutoRecordDisable",
 					);
+					toast(t("streamers.otherClientAutoRecord", { action, username: p.username }));
 				}
 				const s = streamers.value.find((s) => s.username === p.username);
 				if (s) s.auto_record = p.enabled;
 			}),
+			// 主播改名：后端通过缓存的 model_id 反查确认改名后，直接原地更新用户名
+			// Streamer renamed: once the backend confirms a rename, update the username in place
+			on("streamer-renamed", (payload) => {
+				const p = payload as { old_username: string; new_username: string };
+				const s = streamers.value.find((s) => s.username === p.old_username);
+				if (s) s.username = p.new_username;
+				toast(t("streamers.renamed", { oldUsername: p.old_username, newUsername: p.new_username }));
+			}),
 			on("api-error", (payload) => {
 				const p = payload as { message: string };
-				sonnerToast.error(`Stripchat API连接错误: ${p.message}`);
+				notify(t("streamers.apiError", { message: p.message }), "error");
 			}),
 		]);
 	}

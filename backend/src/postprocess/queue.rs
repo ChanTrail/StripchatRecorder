@@ -1,20 +1,28 @@
 //! 后处理任务队列 / Post-processing Task Queue
 //!
-//! 集中管理后处理任务的运行时状态、取消标志和串行执行锁，
+//! 集中管理后处理任务的运行时状态、取消标志和并发执行控制，
 //! 从 `AppState` 中分离出来以保持关注点清晰。
 //!
 //! This module centralizes post-processing task runtime state, cancel flags,
-//! and the serial execution lock, separated from `AppState` to keep concerns clean.
+//! and concurrency execution control, separated from `AppState` to keep concerns clean.
 //!
 //! ## 设计 / Design
 //!
-//! - 同一时刻只允许一个后处理任务运行，通过 [`PpQueue::acquire_serial_lock`] 保证。
-//! - 其余排队中的任务在 `tasks` 表里标记为 `"waiting"`，直到轮到执行。
+//! - 并发度由用户设置中的 `max_pp_concurrent` 决定，通过 [`PpQueue::set_concurrency`] 动态更新。
+//! - 0 = 自动（CPU 逻辑核心数 × 2）；≥1 = 固定并发数。
+//! - 并发控制使用纯同步原语（`Mutex<usize>` + `Condvar`）实现计数信号量，
+//!   不依赖 tokio async，避免在 `spawn_blocking` 栈上调用 `block_on` 导致栈溢出。
 //! - `cancel_flags` 允许调用方（如取消按钮）异步请求中止某个正在运行或排队的任务。
 //! - [`PpQueue::get_all_tasks`] 合并内存中的运行时状态和 `meta/` 目录中的历史完成记录，
 //!   供前端一次性获取完整的任务列表。
+//!
+//! Concurrency is determined by the `max_pp_concurrent` user setting,
+//! updated dynamically via [`PpQueue::set_concurrency`].
+//! 0 = auto (logical CPU count × 2); ≥1 = fixed count.
+//! Concurrency control uses a pure sync counting semaphore (`Mutex<usize>` + `Condvar`)
+//! to avoid calling `block_on` on a `spawn_blocking` stack (which causes stack overflow).
 
-use parking_lot::RwLock;
+use parking_lot::{Condvar, Mutex, RwLock};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -43,16 +51,101 @@ pub struct PpTaskStatus {
     pub from_memory: bool,
 }
 
-/// 后处理任务队列：任务状态表 + 取消标志 + 串行执行锁。
-/// Post-processing task queue: task status table + cancel flags + serial execution lock.
+/// 纯同步计数信号量，基于 `parking_lot::Mutex` + `Condvar` 实现。
+///
+/// 不依赖 tokio async，可在 `spawn_blocking` 线程（栈较小）上安全调用，
+/// 避免 `block_on` 嵌套导致的栈溢出。
+///
+/// Pure sync counting semaphore backed by `parking_lot::Mutex` + `Condvar`.
+///
+/// Does not depend on tokio async; safe to call from `spawn_blocking` threads
+/// (which have smaller stacks), avoiding stack overflow from nested `block_on`.
+struct SyncSemaphore {
+    /// 当前可用许可数 / Available permit count
+    count: Mutex<usize>,
+    /// 许可释放通知 / Permit-release notification
+    condvar: Condvar,
+}
+
+impl SyncSemaphore {
+    fn new(permits: usize) -> Self {
+        Self {
+            count: Mutex::new(permits),
+            condvar: Condvar::new(),
+        }
+    }
+
+    /// 阻塞等待并获取一个许可（RAII guard 在 drop 时自动归还并递减运行计数）。
+    /// Block until a permit is available, then acquire one.
+    /// The returned guard returns the permit and decrements the running count on drop.
+    fn acquire(self: &Arc<Self>, running: &Arc<std::sync::atomic::AtomicUsize>) -> SyncPermit {
+        let mut count = self.count.lock();
+        while *count == 0 {
+            self.condvar.wait(&mut count);
+        }
+        *count -= 1;
+        running.fetch_add(1, Ordering::Relaxed);
+        SyncPermit { sem: Arc::clone(self), running: Arc::clone(running) }
+    }
+
+    /// 归还一个许可并唤醒一个等待者。
+    /// Return a permit and wake one waiter.
+    fn release(&self) {
+        let mut count = self.count.lock();
+        *count += 1;
+        self.condvar.notify_one();
+    }
+
+    /// 替换可用许可数（动态调整并发度时调用）。
+    /// Replace the available permit count (called when updating concurrency).
+    fn set_permits(&self, permits: usize) {
+        let mut count = self.count.lock();
+        *count = permits;
+        // 唤醒所有等待者重新竞争，避免新许可永远无人消费
+        // Wake all waiters to re-compete; avoids new permits going permanently unconsumed
+        self.condvar.notify_all();
+    }
+
+    /// 返回当前可用许可数快照（瞬时值，仅供监控/调试使用）。
+    /// Returns a snapshot of the current available permit count (instantaneous, for monitoring/debug only).
+    fn current_permits(&self) -> usize {
+        *self.count.lock()
+    }
+}
+
+/// `SyncSemaphore` 的 RAII 许可守卫，drop 时自动归还许可并递减运行中计数。
+/// RAII permit guard for `SyncSemaphore`; returns the permit and decrements the running count on drop.
+pub struct SyncPermit {
+    sem: Arc<SyncSemaphore>,
+    running: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl Drop for SyncPermit {
+    fn drop(&mut self) {
+        self.sem.release();
+        self.running.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+/// 后处理任务队列：任务状态表 + 取消标志 + 并发执行信号量。
+/// Post-processing task queue: task status map + cancel flags + concurrency semaphore.
 pub struct PpQueue {
     /// 任务状态表（文件路径 -> 状态）/ Task status map (file path -> status)
     tasks: RwLock<HashMap<String, PpTaskStatus>>,
     /// 取消标志表（文件路径 -> 原子布尔）/ Cancel flag map (file path -> atomic bool)
     cancel_flags: RwLock<HashMap<String, Arc<AtomicBool>>>,
-    /// 串行执行锁，确保同一时刻只有一个后处理任务运行
-    /// Serial execution lock ensuring only one post-processing task runs at a time
-    serial_lock: std::sync::Mutex<()>,
+    /// 同步计数信号量，控制最大并发后处理任务数。
+    /// Sync counting semaphore controlling max concurrent post-processing tasks.
+    semaphore: Arc<SyncSemaphore>,
+    /// 用户配置换算后的理论上限（CPU×公式），动态调整不超过此值。
+    /// Theoretical upper bound derived from user config (CPU × formula); dynamic adjustments never exceed this.
+    max_permits: std::sync::atomic::AtomicUsize,
+    /// 负载自适应后的当前许可上限（介于 1 和 max_permits 之间）。
+    /// Current permit ceiling after load-adaptive adjustment (between 1 and max_permits).
+    adjusted_permits: Arc<std::sync::atomic::AtomicUsize>,
+    /// 当前持有许可正在运行的任务数（acquire +1，permit drop -1）。
+    /// Number of tasks currently holding a permit and running (acquire +1, permit drop -1).
+    running_count: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl Default for PpQueue {
@@ -61,25 +154,142 @@ impl Default for PpQueue {
     }
 }
 
+/// 将用户配置的并发数（0=自动）解析为实际许可数。
+///
+/// 后处理任务以磁盘 I/O（ts_merge）为主，每个任务都会驱动一个 ffmpeg 进程，
+/// 过高并发会导致磁盘争抢和 CPU 过载反而降速。自动模式取 `cpu` 作为默认值；
+/// 用户手动设置时上限为 `cpu × 2`，防止过度并发。
+///
+/// Resolve the configured concurrency (0 = auto) to the actual permit count.
+///
+/// Post-processing tasks are primarily disk-I/O-bound (ts_merge drives one ffmpeg
+/// process per task); excessive concurrency causes disk contention and CPU saturation
+/// that hurts rather than helps throughput. Auto mode uses `cpu` as the default;
+/// the hard cap for manually-set values is `cpu × 2`.
+pub fn resolve_concurrency(n: usize) -> usize {
+    let cpu = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    // 上限为 cpu * 2 / Hard cap at cpu * 2
+    let cap = (cpu * 2).max(1);
+    if n == 0 {
+        // 自动：取 cpu（每核一个任务）/ Auto: one task per core
+        cpu.min(cap)
+    } else {
+        n.min(cap)
+    }
+}
+
 impl PpQueue {
-    /// 创建空队列。
-    /// Create an empty queue.
+    /// 创建空队列，初始并发度为 1（串行）。
+    /// 调用方应在流水线加载后立即调用 [`set_concurrency`] 更新为实际值。
+    ///
+    /// Create an empty queue with initial concurrency of 1 (serial).
+    /// Caller should call [`set_concurrency`] immediately after pipeline is loaded.
     pub fn new() -> Self {
         Self {
             tasks: RwLock::new(HashMap::new()),
             cancel_flags: RwLock::new(HashMap::new()),
-            serial_lock: std::sync::Mutex::new(()),
+            semaphore: Arc::new(SyncSemaphore::new(1)),
+            max_permits: std::sync::atomic::AtomicUsize::new(1),
+            adjusted_permits: Arc::new(std::sync::atomic::AtomicUsize::new(1)),
+            running_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
 
-    /// 获取串行执行锁（阻塞直至轮到当前任务）。
-    /// 锁中毒（上一个持有者 panic）时仍能正常获取，不会永久卡死队列。
+    /// 动态更新并发度（来自用户配置变更）。
     ///
-    /// Acquire the serial execution lock (blocks until it's this task's turn).
-    /// Recovers from a poisoned lock (previous holder panicked) so the queue never
-    /// gets permanently stuck.
-    pub fn acquire_serial_lock(&self) -> std::sync::MutexGuard<'_, ()> {
-        self.serial_lock.lock().unwrap_or_else(|e| e.into_inner())
+    /// 同时更新理论上限（`max_permits`），后续的 `adjust_for_load` 调用不会超过此值。
+    /// 调用后正在等待的任务会立即以新的许可数重新竞争。
+    /// 已持有许可正在运行的任务不受影响，继续运行直至完成。
+    ///
+    /// `n = 0` 表示自动（由 `resolve_concurrency` 映射为 CPU × 2）。
+    ///
+    /// Dynamically update concurrency (from user config change).
+    ///
+    /// Also updates the theoretical upper bound (`max_permits`); subsequent
+    /// `adjust_for_load` calls will never exceed this value.
+    ///
+    /// `n = 0` means auto (mapped to CPU × 2 by `resolve_concurrency`).
+    pub fn set_concurrency(&self, n: usize) {
+        let permits = resolve_concurrency(n);
+        self.max_permits.store(permits, Ordering::Relaxed);
+        self.adjusted_permits.store(permits, Ordering::Relaxed);
+        self.semaphore.set_permits(permits);
+        tracing::debug!("{}", crate::tl!("postprocess.concurrencySet", n = permits));
+    }
+
+    /// 根据实时系统负载动态调整当前信号量许可数。
+    ///
+    /// 调用 `recommend_permits` 根据实测每任务资源占用实时推算建议并发数，
+    /// 确保结果在 `[1, max_permits]` 范围内，再更新信号量。
+    /// 此方法由后台负载监控定时器调用，不影响 `max_permits`（理论上限）。
+    ///
+    /// Dynamically adjust the current semaphore permit count based on real-time system load.
+    ///
+    /// Uses `recommend_permits` to back-calculate a suggested value from measured
+    /// per-task resource usage, clamps it to `[1, max_permits]`, then updates the
+    /// semaphore. Called by the background load monitor timer; does not modify
+    /// `max_permits` (the theoretical ceiling).
+    pub fn adjust_for_load(&self, snapshot: &crate::system::load_monitor::LoadSnapshot) {
+        let max = self.max_permits.load(Ordering::Relaxed);
+        let running = self.running_count.load(Ordering::Relaxed);
+        let recommended = crate::system::load_monitor::recommend_permits(
+            snapshot,
+            max,
+            running,
+        );
+        let new_permits = recommended.clamp(1, max);
+        self.adjusted_permits.store(new_permits, Ordering::Relaxed);
+        self.semaphore.set_permits(new_permits);
+        tracing::debug!(
+            "{}",
+            crate::tl!(
+                "postprocess.ppQueueAdjusted",
+                permits = new_permits,
+                max = max,
+                running = running,
+                cpu = format!("{:.1}", snapshot.cpu_usage_pct),
+                mem = format!("{:.1}", snapshot.mem_usage_pct),
+                avail = snapshot.mem_available_bytes / 1024 / 1024
+            )
+        );
+    }
+
+    /// 获取当前并发执行许可（阻塞直至有空闲槽位），并递增运行中计数。
+    /// Acquire a concurrency permit (blocks until a slot is free) and increment the running count.
+    pub fn acquire_concurrency_permit(&self) -> SyncPermit {
+        self.semaphore.acquire(&self.running_count)
+    }
+
+    /// 当前实际正在运行（持有许可）的任务数。精确计数：acquire +1，permit drop -1。
+    /// Number of tasks currently running (holding a permit). Exact: acquire +1, drop -1.
+    pub fn running_count(&self) -> usize {
+        self.running_count.load(Ordering::Relaxed)
+    }
+
+    /// 返回 running_count 的 Arc 克隆，供需要跨线程实时读取任务数的场合使用。
+    /// Returns a cloned Arc of the running_count for cross-thread real-time reads.
+    pub fn running_count_arc(&self) -> Arc<std::sync::atomic::AtomicUsize> {
+        Arc::clone(&self.running_count)
+    }
+
+    /// 负载自适应后的当前许可上限（受 CPU/内存压力影响，≤ max_permits）。
+    /// Current permit ceiling after load-adaptive adjustment (≤ max_permits).
+    pub fn adjusted_permits(&self) -> usize {
+        self.adjusted_permits.load(Ordering::Relaxed)
+    }
+
+    /// 理论上限（用户配置换算后，不受实时负载影响）。
+    /// Theoretical upper bound (from user config, unaffected by real-time load).
+    pub fn max_permits(&self) -> usize {
+        self.max_permits.load(Ordering::Relaxed)
+    }
+
+    /// 当前可用许可数（瞬时值，= adjusted_permits - running_count）。
+    /// Current available permits (instantaneous, = adjusted_permits - running_count).
+    pub fn current_permits(&self) -> usize {
+        self.semaphore.current_permits()
     }
 
     /// 将任务加入等待队列（状态设为 `"waiting"`），并确保取消标志存在（不覆盖已有值）。

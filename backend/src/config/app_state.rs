@@ -101,6 +101,10 @@ pub struct Settings {
     /// Argon2 hash of the admin password (PHC string format). None = password not yet set (first run).
     #[serde(default)]
     pub admin_password_hash: Option<String>,
+    /// 后处理最大并发数（0 = 自动 = CPU 逻辑核心数；≥1 = 固定并发数）。
+    /// Max concurrent post-processing tasks (0 = auto = logical CPU count; ≥1 = fixed).
+    #[serde(default)]
+    pub max_pp_concurrent: usize,
 }
 
 /// Mouflon 同步地址的默认值 / Default value for Mouflon sync URL
@@ -133,9 +137,49 @@ fn default_server_port() -> u16 {
     3030
 }
 
-/// 返回可执行文件所在目录，用于定位配置文件和模块目录。
-/// Returns the directory containing the executable, used to locate config files and module directories.
+/// 运行时覆盖的数据根目录（仅 Desktop 端设置，见 [`set_exe_dir_override`]）。
+/// Runtime-overridden data root directory (only set by the Desktop build, see [`set_exe_dir_override`]).
+static EXE_DIR_OVERRIDE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// 设置数据根目录覆盖值，替代默认的"可执行文件同目录"约定。
+///
+/// 仅供 Desktop 端（`desktop-tauri`）在 `setup()` 阶段调用一次：Tauri 应用以系统安装包
+/// （NSIS/MSI、AppImage、deb/rpm、dmg）分发时，可执行文件所在目录既可能只读（如 AppImage
+/// 的 FUSE 挂载点，每次启动路径还会变化），也可能没有写权限（如 `/usr/bin`），或修改会
+/// 破坏代码签名（如 macOS `.app` bundle）。Desktop 端改用 Tauri 的 `app_data_dir()`
+/// （操作系统标准的每用户数据目录）作为覆盖值，Server 端不调用此函数，行为不变。
+///
+/// 必须在任何调用 [`exe_dir`]（或依赖它的 [`AppState::new`]、`log_dir`、`meta_dir` 等）的
+/// 代码之前调用，且只应调用一次；后续调用会静默忽略（[`OnceLock::set`] 的语义）。
+///
+/// Set the data root directory override, replacing the default "next to the executable"
+/// convention.
+///
+/// Only meant to be called once by the Desktop build (`desktop-tauri`) during `setup()`:
+/// when a Tauri app is distributed as a system installer package (NSIS/MSI, AppImage,
+/// deb/rpm, dmg), the executable's directory may be read-only (e.g. AppImage's FUSE mount
+/// point, which also changes path on every launch), lack write permission (e.g. `/usr/bin`),
+/// or modifying it may break code signing (e.g. macOS `.app` bundles). The Desktop build uses
+/// Tauri's `app_data_dir()` (the OS-standard per-user data directory) as the override value.
+/// The Server build never calls this, so its behavior is unchanged.
+///
+/// Must be called before any code that calls [`exe_dir`] (or things that depend on it, like
+/// [`AppState::new`], `log_dir`, `meta_dir`, etc.), and only once; subsequent calls are
+/// silently ignored (per [`OnceLock::set`] semantics).
+pub fn set_exe_dir_override(dir: PathBuf) {
+    let _ = EXE_DIR_OVERRIDE.set(dir);
+}
+
+/// 返回数据根目录：Desktop 端为 [`set_exe_dir_override`] 设置的每用户数据目录；
+/// Server 端（未设置覆盖值）为可执行文件所在目录，用于定位配置文件和模块目录。
+///
+/// Returns the data root directory: on Desktop, the per-user data directory set via
+/// [`set_exe_dir_override`]; on Server (no override set), the directory containing the
+/// executable — used to locate config files and module directories.
 pub fn exe_dir() -> PathBuf {
+    if let Some(dir) = EXE_DIR_OVERRIDE.get() {
+        return dir.clone();
+    }
     std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|p| p.to_path_buf()))
@@ -170,6 +214,7 @@ impl Default for Settings {
             community_terms_accepted: false,
             setup_done: false,
             admin_password_hash: None,
+            max_pp_concurrent: 0,
         }
     }
 }
@@ -249,8 +294,6 @@ pub struct AppState {
     /// Written on install start, removed on complete/fail;
     /// frontend can query on SSE reconnect to restore in-progress state.
     pub install_tasks: parking_lot::RwLock<std::collections::HashMap<String, u64>>,
-    /// 启动合并锁，防止启动时的合并与正常录制并发 / Startup merge lock preventing concurrent startup merge and normal recording
-    pub startup_lock: std::sync::Mutex<()>,
     /// 通知监控器 poll_interval_secs 已变更的发送端（可选，启动后注入）
     /// Sender to notify the monitor that poll_interval_secs has changed (optional, injected after startup)
     pub poll_interval_notify_tx: RwLock<Option<tokio::sync::mpsc::Sender<()>>>,
@@ -263,6 +306,16 @@ pub struct AppState {
     /// 更新下载/安装进度状态（通过 SSE 广播给前端）
     /// Update download/install progress state (broadcast to frontend via SSE)
     pub update_state: crate::update::UpdateStateStore,
+    /// 负载自适应后的有效最大并发录制数（由后台负载监控实时更新）。
+    /// 0 = 不限制（用户设置为不限制时保持不限制，不受负载约束）。
+    ///
+    /// Effective max concurrent recordings after load-adaptive adjustment
+    /// (updated in real time by the background load monitor).
+    /// 0 = unlimited (when the user configured 0, it stays unlimited regardless of load).
+    pub effective_max_concurrent: std::sync::atomic::AtomicUsize,
+    /// 当前活跃录制会话数（由 RecorderManager 维护，供负载监控读取）。
+    /// Current active recording session count (maintained by RecorderManager, read by load monitor).
+    pub active_recording_count: std::sync::atomic::AtomicUsize,
 }
 
 impl AppState {
@@ -339,17 +392,31 @@ impl AppState {
 
         fs::create_dir_all(&data.settings.output_dir)?;
 
-        Ok(Arc::new(Self {
+        // 记录初始最大并发录制数，用于初始化 effective_max_concurrent
+        // Capture initial max_concurrent for effective_max_concurrent initialization
+        let state_data_ref_max_concurrent = data.settings.max_concurrent;
+
+        let state = Arc::new(Self {
             data: RwLock::new(data),
             config_dir,
             pp_queue: crate::postprocess::queue::PpQueue::new(),
             install_tasks: parking_lot::RwLock::new(std::collections::HashMap::new()),
-            startup_lock: std::sync::Mutex::new(()),
             poll_interval_notify_tx: RwLock::new(None),
             mouflon_sync_notify_tx: RwLock::new(None),
             notification_store: crate::core::notifications::NotificationStore::new(),
             update_state: crate::update::new_update_state(),
-        }))
+            effective_max_concurrent: std::sync::atomic::AtomicUsize::new(
+                state_data_ref_max_concurrent
+            ),
+            active_recording_count: std::sync::atomic::AtomicUsize::new(0),
+        });
+
+        // 根据设置中的后处理并发数初始化信号量
+        // Initialize the semaphore from the max_pp_concurrent setting
+        let init_concurrency = state.data.read().settings.max_pp_concurrent;
+        state.pp_queue.set_concurrency(init_concurrency);
+
+        Ok(state)
     }
 
     /// 返回日志目录路径（可执行文件同目录下的 logs 文件夹）。
@@ -389,6 +456,8 @@ impl AppState {
         let poll_interval_changed = old.poll_interval_secs != settings.poll_interval_secs;
         let mouflon_sync_changed = old.mouflon_sync_url != settings.mouflon_sync_url
             || old.mouflon_sync_token != settings.mouflon_sync_token;
+        let pp_concurrent_changed = old.max_pp_concurrent != settings.max_pp_concurrent;
+        let new_pp_concurrent = settings.max_pp_concurrent;
         self.data.write().settings = settings;
         self.save()?;
         if poll_interval_changed
@@ -399,6 +468,16 @@ impl AppState {
             && let Some(tx) = self.mouflon_sync_notify_tx.read().as_ref() {
             let _ = tx.try_send(());
         }
+        if pp_concurrent_changed {
+            self.pp_queue.set_concurrency(new_pp_concurrent);
+        }
+        // 用户修改录制并发数时，重置 effective_max_concurrent 为新配置值，
+        // 下次负载采样时会再次动态调整。
+        // When user changes max_concurrent, reset effective_max_concurrent to the new config value;
+        // the next load sample will re-apply dynamic adjustment.
+        let new_max_concurrent = self.data.read().settings.max_concurrent;
+        self.effective_max_concurrent
+            .store(new_max_concurrent, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
 
@@ -717,3 +796,4 @@ impl AppState {
     }
 
 }
+

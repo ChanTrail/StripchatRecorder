@@ -69,11 +69,13 @@ jobs:
         with:
           workspaces: |
             backend -> ../build_tmp/backend/target
+            modules/cleanup -> ../../build_tmp/modules/cleanup/target
             modules/contact_sheet -> ../../build_tmp/modules/contact_sheet/target
             modules/filter_short -> ../../build_tmp/modules/filter_short/target
             modules/notify_discord -> ../../build_tmp/modules/notify_discord/target
             modules/notify_telegram -> ../../build_tmp/modules/notify_telegram/target
             modules/pp_utils -> ../../build_tmp/modules/pp_utils/target
+            modules/ts_merge -> ../../build_tmp/modules/ts_merge/target
           key: server-${{ matrix.platform }}
 
       # ── 系统依赖（仅 Linux）/ System libraries (Linux only) ──
@@ -182,11 +184,13 @@ jobs:
         with:
           workspaces: |
             desktop/src-tauri -> ../../../build_tmp/desktop/target
+            modules/cleanup -> ../../build_tmp/modules/cleanup/target
             modules/contact_sheet -> ../../build_tmp/modules/contact_sheet/target
             modules/filter_short -> ../../build_tmp/modules/filter_short/target
             modules/notify_discord -> ../../build_tmp/modules/notify_discord/target
             modules/notify_telegram -> ../../build_tmp/modules/notify_telegram/target
             modules/pp_utils -> ../../build_tmp/modules/pp_utils/target
+            modules/ts_merge -> ../../build_tmp/modules/ts_merge/target
           key: desktop-${{ matrix.platform }}
 
       # ── 平台系统依赖 / Platform-specific system dependencies ──
@@ -207,6 +211,8 @@ jobs:
         run: node scripts/release.desktop.js
         env:
           CARGO_TARGET_DIR: build_tmp/desktop/target
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       # ── 打包模块 / Pack modules ──
       - name: Pack modules (Linux/macOS)
@@ -229,6 +235,7 @@ jobs:
           name: ${{ matrix.artifact-name }}
           path: |
             build/desktop/appimage/*.AppImage
+            build/desktop/appimage/*.AppImage.sig
             build/desktop/deb/*.deb
             build/desktop/rpm/*.rpm
             build/desktop/modules-${{ matrix.platform }}.zip
@@ -242,6 +249,8 @@ jobs:
           name: ${{ matrix.artifact-name }}
           path: |
             build/desktop/dmg/*.dmg
+            build/desktop/macos/*.app.tar.gz
+            build/desktop/macos/*.app.tar.gz.sig
             build/desktop/modules-${{ matrix.platform }}.zip
           retention-days: 7
 
@@ -253,7 +262,10 @@ jobs:
           name: ${{ matrix.artifact-name }}
           path: |
             build/desktop/msi/*.msi
+            build/desktop/msi/*.msi.zip
+            build/desktop/msi/*.msi.zip.sig
             build/desktop/nsis/*.exe
+            build/desktop/nsis/*.exe.sig
             build/desktop/modules-${{ matrix.platform }}.zip
           retention-days: 7
 
@@ -283,6 +295,75 @@ jobs:
         id: tag
         run: echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
 
+      # ── 生成 latest.json（tauri-plugin-updater 检查更新的 manifest）──────────
+      # 遍历各平台的 .sig 签名文件，提取签名内容与对应安装包 URL，
+      # 组装成 tauri-plugin-updater 所要求的 latest.json 格式。
+      #
+      # Build latest.json (the update manifest consumed by tauri-plugin-updater).
+      # For each platform we locate the .sig file, read its signature, and pair it
+      # with the GitHub release download URL of the corresponding installer.
+      - name: Generate latest.json
+        run: |
+          TAG="${{ github.ref_name }}"
+          VER="${TAG#v}"
+          REPO="${{ github.repository }}"
+          BASE="https://github.com/${REPO}/releases/download/${TAG}"
+          NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+          # ── Windows x86_64: prefer NSIS .exe over MSI ──
+          WIN_SIG=""
+          WIN_URL=""
+          WIN_SIG_FILE=$(find artifacts -name "*_x64-setup.exe.sig" | head -1)
+          WIN_EXE_FILE=$(find artifacts -name "*_x64-setup.exe" ! -name "*.sig" | head -1)
+          if [ -n "$WIN_SIG_FILE" ] && [ -n "$WIN_EXE_FILE" ]; then
+            WIN_SIG=$(cat "$WIN_SIG_FILE")
+            WIN_URL="${BASE}/$(basename $WIN_EXE_FILE)"
+          fi
+
+          # ── Linux x86_64: AppImage ──
+          LINUX_SIG=""
+          LINUX_URL=""
+          LINUX_SIG_FILE=$(find artifacts -name "*.AppImage.sig" | head -1)
+          LINUX_APPIMAGE=$(find artifacts -name "*.AppImage" ! -name "*.sig" | head -1)
+          if [ -n "$LINUX_SIG_FILE" ] && [ -n "$LINUX_APPIMAGE" ]; then
+            LINUX_SIG=$(cat "$LINUX_SIG_FILE")
+            LINUX_URL="${BASE}/$(basename $LINUX_APPIMAGE)"
+          fi
+
+          # ── macOS aarch64: .app.tar.gz (Tauri updater bundle) ──
+          MAC_SIG=""
+          MAC_URL=""
+          MAC_SIG_FILE=$(find artifacts -name "*.app.tar.gz.sig" | head -1)
+          MAC_TGZ=$(find artifacts -name "*.app.tar.gz" ! -name "*.sig" | head -1)
+          if [ -n "$MAC_SIG_FILE" ] && [ -n "$MAC_TGZ" ]; then
+            MAC_SIG=$(cat "$MAC_SIG_FILE")
+            MAC_URL="${BASE}/$(basename $MAC_TGZ)"
+          fi
+
+          # ── 组装 JSON / Assemble JSON ──
+          python3 - <<PYEOF
+          import json, sys
+
+          platforms = {}
+          if "${WIN_SIG}" and "${WIN_URL}":
+              platforms["windows-x86_64"] = {"signature": """${WIN_SIG}""", "url": "${WIN_URL}"}
+          if "${LINUX_SIG}" and "${LINUX_URL}":
+              platforms["linux-x86_64"] = {"signature": """${LINUX_SIG}""", "url": "${LINUX_URL}"}
+          if "${MAC_SIG}" and "${MAC_URL}":
+              platforms["darwin-aarch64"] = {"signature": """${MAC_SIG}""", "url": "${MAC_URL}"}
+
+          manifest = {
+              "version": "${VER}",
+              "notes": "See https://github.com/${REPO}/releases/tag/${TAG} for release notes.",
+              "pub_date": "${NOW}",
+              "platforms": platforms
+          }
+          with open("artifacts/latest.json", "w") as f:
+              json.dump(manifest, f, indent=2)
+          print("Generated latest.json:")
+          print(json.dumps(manifest, indent=2))
+          PYEOF
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -291,7 +372,9 @@ jobs:
           draft: false
           prerelease: ${{ contains(steps.tag.outputs.tag, '-') }}
           generate_release_notes: true
-          files: artifacts/**/*
+          files: |
+            artifacts/**/*
+            artifacts/latest.json
 
   # ── Docker 镜像构建与推送 / Docker image build and push ──────────────────────
   # Docker 镜像在 CI 中从源码独立构建（复用 Dockerfile），不依赖 build-server 产物，

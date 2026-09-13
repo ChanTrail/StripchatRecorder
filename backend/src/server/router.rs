@@ -27,7 +27,7 @@ use crate::server::routes::{
         open_recording, serve_output_file,
     },
     settings::{
-        add_mouflon_key, get_settings,
+        add_mouflon_key, get_settings, get_system_info,
         list_mouflon_keys, remove_mouflon_key, save_settings, sync_mouflon_keys,
     },
     fs::{
@@ -119,6 +119,7 @@ pub fn build_router(state: ServerState) -> Router {
         .route("/api/streamers/{name}/stop", post(stop_recording))
         .route("/api/streamers/{name}/verify", get(verify_streamer))
         .route("/api/settings", get(get_settings).post(save_settings))
+        .route("/api/system-info", get(get_system_info))
         .route(
             "/api/mouflon-keys",
             get(list_mouflon_keys).post(add_mouflon_key),

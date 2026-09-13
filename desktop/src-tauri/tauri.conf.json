@@ -14,9 +14,9 @@
       {
         "title": "StripchatRecorder",
         "width": 1600,
-        "height": 600,
+        "height": 800,
         "minWidth": 1600,
-        "minHeight": 600,
+        "minHeight": 800,
         "resizable": true,
         "fullscreen": false,
         "visible": false
@@ -29,6 +29,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -36,5 +37,13 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDU4MDkxRDFBNDMwNDg1QkIKUldTN2hRUkRHaDBKV1AreGlyYUdPQzZWK0J0KzBHeU1aaTZoV3g4ZDhKeVY3bGtDZUxkNlFnSDEK",
+      "endpoints": [
+        "https://github.com/ChanTrail/StripchatRecorder/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

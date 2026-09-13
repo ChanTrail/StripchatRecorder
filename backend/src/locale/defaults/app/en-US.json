@@ -149,6 +149,11 @@
       "selected": "{count} selected",
       "totalSpeed": "Total recording speed"
     },
+    "diskLabel": {
+      "all": "Storage",
+      "ts_fragment": "Segments",
+      "ts_merge": "Merged"
+    },
     "batchPostprocess": "Batch Post-process ({count})",
     "deleteSelected": "Delete Selected ({count})",
     "openDir": "Open Folder",
@@ -337,6 +342,10 @@
       "label": "Maximum Concurrent Recordings",
       "hint": "0 means unlimited"
     },
+    "maxPpConcurrent": {
+      "label": "Maximum Concurrent Post-processing",
+      "hint": "Number of post-processing tasks to run simultaneously. 0 = auto (CPU count); capped at CPU core count."
+    },
     "pollInterval": {
       "label": "Polling Interval (seconds)"
     },
@@ -515,6 +524,10 @@
       "metaCleanup": "Cleaned {count} orphaned meta files (corresponding video no longer exists)",
       "ppRemainingOne": "Found 1 unfinished post-process task (likely left from previous abnormal exit), re-triggered: {name}",
       "ppRemainingMany": "Found {count} unfinished post-process tasks (likely left from previous abnormal exit), re-triggered: {names}",
+      "ppRetryOne": "1 post-process task failed last time, auto-retrying on startup: {name}",
+      "ppRetryMany": "{count} post-process tasks failed last time, auto-retrying on startup: {names}",
+      "ppFailed": "Post-processing failed for {name}: {detail}",
+      "startupScanDone": "Startup scan completed",
       "streamerDeadOne": "Streamer {username} can no longer be found by username or internal ID; may have changed name, been deactivated or banned. Subsequent polling requests will be skipped.",
       "streamerDeadMany": "The following {count} streamers can no longer be found, may have changed name, been deactivated or banned. Subsequent polling requests will be skipped: {usernames}",
       "updateAvailableDocker": "New version v{version} available. Please update the Docker image to upgrade.",

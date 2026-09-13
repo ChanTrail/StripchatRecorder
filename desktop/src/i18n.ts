@@ -1,27 +1,38 @@
 /**
  * i18n 初始化模块（桌面版）/ i18n Initialization Module (Desktop)
  *
- * 与服务器版的区别：通过 Tauri invoke 而非 fetch 加载 locale 数据。
- * Difference from server version: loads locale data via Tauri invoke instead of fetch.
+ * 与服务器版架构完全一致：翻译数据完全来自后端（这里是 Tauri invoke，而非 fetch），
+ * 前端不内置任何 fallback 消息，启动时同步阻塞加载后才挂载 Vue。
+ * 后端 get_locale/list_locales 命令包装的是与 Server 完全相同的
+ * stripchat_recorder_lib::locale::manager，因此无需在桌面端维护第二份静态翻译文件。
+ *
+ * Architecture is identical to the server version: all translation data comes from
+ * the backend (here via Tauri invoke instead of fetch). No built-in fallback messages
+ * in the frontend; Vue is mounted only after the locale data is loaded synchronously
+ * at startup. The backend's get_locale/list_locales commands wrap the exact same
+ * stripchat_recorder_lib::locale::manager used by the server build, so there is no
+ * need to maintain a second static translation file on desktop.
  */
 
 import { createI18n } from "vue-i18n";
 import { invoke } from "@tauri-apps/api/core";
-import zhCN from "./locales/zh-CN";
-import enUS from "./locales/en-US";
 
-export type MessageSchema = typeof zhCN;
+// MessageSchema 从后端 JSON 的结构推导，运行时类型安全
+// MessageSchema derived from backend JSON structure for runtime type safety
+export type MessageSchema = Record<string, unknown>;
 
-const savedLocale = "zh-CN";
+const savedLocale = localStorage.getItem("locale") || "zh-CN";
 
-/** 可用语言条目 / Available locale entry */
+/** 可用语言条目（从 list_locales 获取）/ Available locale entry (from list_locales) */
 export interface LocaleEntry {
+	/** BCP 47 语言代码 / BCP 47 locale code */
 	code: string;
+	/** 该语言的自身显示名称 / Native display name */
 	name: string;
 }
 
 /**
- * 获取服务器支持的语言列表（通过 Tauri invoke）。
+ * 获取后端支持的语言列表（通过 Tauri invoke）。
  * Fetch available locales via Tauri invoke.
  */
 export async function fetchAvailableLocales(): Promise<LocaleEntry[]> {
@@ -34,6 +45,7 @@ export async function fetchAvailableLocales(): Promise<LocaleEntry[]> {
 	}
 }
 
+/** 内置语言列表（invoke 失败时的备用）/ Fallback locale list when invoke is unavailable */
 function builtinLocales(): LocaleEntry[] {
 	return [
 		{ code: "zh-CN", name: "简体中文" },
@@ -41,14 +53,25 @@ function builtinLocales(): LocaleEntry[] {
 	];
 }
 
+/** 加载 locale 的返回结果 / Result of loading a locale */
 export interface LoadLocaleResult {
+	/** 模块翻译数据映射（moduleId -> {name, description, params}）/ Module translation map */
 	modules: Record<string, unknown>;
+	/**
+	 * 若语言文件存在但校验失败，此字段为错误描述；否则为 undefined。
+	 * Set when the locale file exists but fails validation; otherwise undefined.
+	 */
 	warning?: string;
 }
 
 /**
- * 从后端加载指定语言的完整 locale 数据（通过 Tauri invoke）。
- * Load the full locale data for the given locale code via Tauri invoke.
+ * 从后端 Tauri 命令获取指定语言的完整 locale 数据并注册到 vue-i18n。
+ *
+ * Fetch the full locale data from the backend via Tauri invoke for the given
+ * locale code and register it in vue-i18n.
+ *
+ * @param localeCode - BCP 47 语言标签 / BCP 47 language tag
+ * @returns LoadLocaleResult，失败时 modules 为空对象 / modules is {} on failure
  */
 export async function loadLocaleFromServer(
 	localeCode: string,
@@ -75,14 +98,54 @@ export async function loadLocaleFromServer(
 	}
 }
 
+// vue-i18n 实例（空消息，由 initI18n 填充）
+// vue-i18n instance with empty messages, populated by initI18n()
 const i18n = createI18n<false>({
 	legacy: false,
 	locale: savedLocale,
-	fallbackLocale: "zh-CN",
-	messages: {
-		"zh-CN": zhCN,
-		"en-US": enUS,
-	},
+	fallbackLocale: false,
+	messages: {},
+	missing: (_locale, key) => key, // 键缺失时直接返回键名，避免控制台警告
 });
+
+/**
+ * 在 Vue 挂载前调用：从后端加载当前语言数据。
+ *
+ * 语言优先级：
+ * 1. 后端 get_settings 的 language 字段（无需登录即可获取，与本地缓存脱节时仍能纠正）
+ * 2. localStorage 缓存值（后端请求失败时使用）
+ * 3. 硬编码 fallback "zh-CN"
+ *
+ * 取到后端语言后同步写入 localStorage，保持一致。
+ *
+ * Call before Vue mounts: load locale data from the backend.
+ *
+ * Language priority:
+ * 1. backend get_settings language field (works without login; corrects stale local cache)
+ * 2. localStorage cached value (fallback when backend request fails)
+ * 3. hardcoded fallback "zh-CN"
+ *
+ * The resolved locale is written back to localStorage to keep it in sync.
+ */
+export async function initI18n(): Promise<void> {
+	let resolvedLocale = savedLocale; // localStorage 或 "zh-CN" / localStorage or "zh-CN"
+
+	// 尝试从后端读取语言设置 / Try reading language from backend
+	try {
+		const settings = await invoke<{ language?: string }>("get_settings");
+		if (settings.language && typeof settings.language === "string") {
+			resolvedLocale = settings.language;
+			// 同步写回 localStorage，后续切换语言时仍能读到正确值
+			// Write back to localStorage so subsequent locale switches read the right value
+			localStorage.setItem("locale", resolvedLocale);
+		}
+	} catch {
+		// 后端未就绪（冷启动）时静默使用 localStorage/fallback
+		// Backend not ready (cold start): silently use localStorage/fallback
+	}
+
+	await loadLocaleFromServer(resolvedLocale);
+	i18n.global.locale.value = resolvedLocale as never;
+}
 
 export default i18n;

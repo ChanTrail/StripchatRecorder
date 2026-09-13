@@ -49,6 +49,9 @@
     "streamerRenamed": "主播已改名：{oldUsername} → {newUsername}",
     "streamerRenameSkipped": "主播改名跳过 {username}：{error}"
   },
+  "maintenance": {
+    "tmpCleanup": "tmp 清理：已删除 {count} 个过期文件，释放 {mb} MB"
+  },
   "meta": {
     "migrationCreateDirFailed": "Meta 迁移：创建目录 {dir} 失败：{error}",
     "migrationTargetExists": "Meta 迁移：目标已存在，跳过 {path}",
@@ -63,11 +66,13 @@
     "scanCreatedVideo": "Meta 扫描：已为视频 {path} 创建 pp_waiting meta",
     "scanCorruptVideo": "Meta 扫描：视频 {path} 的 meta 损坏，重新创建为 pp_waiting",
     "scanStaleVideo": "Meta 扫描：视频 {path} 的 {status} 状态已陈旧（本进程未追踪），重新触发后处理",
+    "scanRetryVideo": "Meta 扫描：视频 {path} 上次后处理失败（pp_error），重启后自动重试",
     "scanRepairedVideo": "Meta 扫描：已修复视频 {path} 的字段",
     "scanUnrepairableVideo": "Meta 扫描：视频 {path} 的 meta 无法修复，重建为 pp_waiting",
     "scanCreatedSessionDir": "Meta 扫描：已为 session_dir {path} 创建 pp_waiting meta",
     "scanCorruptSessionDir": "Meta 扫描：session_dir {path} 的 meta 损坏，重新创建为 pp_waiting",
     "scanStaleSessionDir": "Meta 扫描：session_dir {path} 的 {status} 状态已陈旧（本进程未追踪），重新触发后处理",
+    "scanRetrySessionDir": "Meta 扫描：session_dir {path} 上次后处理失败（pp_error），重启后自动重试",
     "scanRepairedSessionDir": "Meta 扫描：已修复 session_dir {path} 的字段",
     "scanUnrepairableSessionDir": "Meta 扫描：session_dir {path} 的 meta 无法修复，重建为 pp_waiting",
     "writeMetaFailed": "写入 meta 文件 {path} 失败：{error}",
@@ -81,7 +86,8 @@
     "mouflonSettingsChanged": "Mouflon 同步：设置已变更，立即触发同步",
     "updateAvailable": "发现新版本：{latest}（当前：{current}）",
     "updateUpToDate": "版本检查：已是最新版本 {current}",
-    "updateCheckFailed": "版本检查失败（将在 24 小时后重试）：{error}"
+    "updateCheckFailed": "版本检查失败（将在 24 小时后重试）：{error}",
+    "recordingConcurrencyAdjusted": "录制并发度调整：有效值={effective}（用户配置={user}，录制中={running}，cpu={cpu}%，内存={mem}%，可用={avail}MB）"
   },
   "watcher": {
     "recordingsCreateDirFailed": "创建监控目录 {dir} 失败：{error}",
@@ -141,7 +147,9 @@
     "discoveryDupKeepHigher": "模块 ID {id} 被多个可执行文件声明（{a} 和 {b}）；保留版本较高者（{va} >= {vb}）",
     "discoveryDupReplace": "模块 ID {id} 被多个可执行文件声明（{a} 和 {b}）；保留版本较高者（{va} > {vb}）",
     "discoveryDescribeFailed": "描述模块 {path} 失败：{error}",
-    "builtinUnpackImageNotFound": "unpack：图片路径未找到（跳过端口 1）：{path}"
+    "builtinUnpackImageNotFound": "unpack：图片路径未找到（跳过端口 1）：{path}",
+    "ppQueueAdjusted": "pp_queue：许可数={permits}（上限={max}，运行中={running}，cpu={cpu}%，内存={mem}%，可用={avail}MB）",
+    "concurrencySet": "后处理并发度已设置为 {n}"
   },
   "ffmpegUtil": {
     "openPlaylistFailed": "打开 playlist.m3u8 失败：{error}",

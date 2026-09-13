@@ -54,10 +54,12 @@ const {
 	startPan,
 	updatePan,
 	endPan,
-	onCanvasWheel,
 	autoLayoutNodes,
 	fitView,
-} = useCanvasTransform(canvasRef);
+} = useCanvasTransform(canvasRef, () => {
+	closeContextMenu();
+	closeWireMenu();
+});
 
 // ─── 节点选择与拖拽 / Node Selection and Dragging ────────────────────────────
 const {
@@ -136,13 +138,6 @@ const canvasCursor = computed(() => {
 	if (isMarquee.value) return "crosshair";
 	return "default";
 })
-
-/** 滚轮缩放画布前先关闭两个菜单，与右键平移的行为保持一致 / Close both menus before wheel-zooming the canvas, matching right-click pan behavior */
-function onWheel(e: WheelEvent) {
-	closeContextMenu();
-	closeWireMenu();
-	onCanvasWheel(e);
-}
 
 function onCanvasMousedown(e: MouseEvent) {
 	if ((e.target as HTMLElement).closest(".pipeline-node")) return;
@@ -368,7 +363,6 @@ const inputPortConnected = computed(() =>
 				backgroundSize: '24px 24px',
 			}"
 			@mousedown="onCanvasMousedown"
-			@wheel.prevent="onWheel"
 			@contextmenu.prevent="openContextMenu"
 		>
 			<!-- 框选矩形覆盖层（z-50 确保在节点之上）/ Marquee selection overlay (z-50 on top of nodes) -->

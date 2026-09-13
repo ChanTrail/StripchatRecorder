@@ -1,8 +1,13 @@
 /**
  * 路由配置（桌面版）/ Router Configuration (Desktop)
  *
- * 与服务器版相比，移除了 /relay 路由（桌面版不支持流转发）。
- * Compared to the server version, the /relay route is removed (desktop does not support stream relay).
+ * 与服务器版相比：
+ * - 无 /login、/relay（桌面版不支持流转发、无独立认证）
+ * - 新增 /community、/about（与服务器版同步）
+ *
+ * Compared to the server version:
+ * - No /login or /relay (desktop has no relay and no separate auth)
+ * - Added /community and /about (synced with server version)
  */
 
 import { createRouter, createWebHistory } from "vue-router";
@@ -12,12 +17,14 @@ import type { Settings } from "@/stores/settings";
 const router = createRouter({
 	history: createWebHistory(),
 	routes: [
-		{ path: "/setup", component: () => import("../views/SetupView.vue") },
-		{ path: "/", component: () => import("../views/HomeView.vue") },
-		{ path: "/recordings", component: () => import("../views/RecordingsView.vue") },
+		{ path: "/setup",       component: () => import("../views/SetupView.vue") },
+		{ path: "/",            component: () => import("../views/HomeView.vue") },
+		{ path: "/recordings",  component: () => import("../views/RecordingsView.vue") },
 		{ path: "/postprocess", component: () => import("../views/PostprocessView.vue") },
-		{ path: "/settings", component: () => import("../views/SettingsView.vue") },
-		{ path: "/finder", component: () => import("../views/FinderView.vue") },
+		{ path: "/community",   component: () => import("../views/CommunityView.vue") },
+		{ path: "/settings",    component: () => import("../views/SettingsView.vue") },
+		{ path: "/finder",      component: () => import("../views/FinderView.vue") },
+		{ path: "/about",       component: () => import("../views/AboutView.vue") },
 	],
 });
 

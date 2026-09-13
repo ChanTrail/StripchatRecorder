@@ -14,6 +14,7 @@ import { ref, watch } from "vue";
 import { call, on } from "@/lib/api";
 import { useI18n } from "vue-i18n";
 import { useModuleLocaleStore } from "@/stores/moduleLocale";
+import { useSystemStore } from "@/stores/system";
 
 /**
  * 生成一个随机 ID，优先使用 crypto.randomUUID()，
@@ -70,6 +71,17 @@ export interface ParamDef {
 	default: unknown;
 	/** select 类型的可选项 / Options for select type */
 	options?: string[];
+	/** number 类型参数的最小值 / Minimum value for number-type params */
+	min?: number;
+	/**
+	 * number 类型参数的最大值。
+	 * 特殊值 -1 表示"动态上限 = CPU 逻辑核心数"，由前端从 /api/system-info 获取后替换。
+	 *
+	 * Maximum value for number-type params.
+	 * Special value -1 means "dynamic upper bound = logical CPU count",
+	 * fetched from /api/system-info and substituted by the frontend.
+	 */
+	max?: number;
 }
 
 /**
@@ -238,6 +250,7 @@ export const usePostprocessStore = defineStore("postprocess", () => {
 
 	const { locale } = useI18n();
 	const moduleLocaleStore = useModuleLocaleStore();
+	const systemStore = useSystemStore();
 
 	/**
 	 * 根据当前语言对模块的 name/description/params[].label 应用 i18n 翻译。
@@ -279,11 +292,14 @@ export const usePostprocessStore = defineStore("postprocess", () => {
 	const _rawModules = ref<ModuleInfo[]>([]);
 
 	/**
-	 * 从后端获取可用模块列表。
-	 * Fetch the available module list from the backend.
+	 * 从后端获取可用模块列表，并同步拉取系统信息（CPU 核心数）。
+	 * Fetch the available module list from the backend, and concurrently fetch system info (CPU count).
 	 */
 	async function fetchModules() {
-		const raw = await call<ModuleInfo[]>("list_modules");
+		const [raw] = await Promise.all([
+			call<ModuleInfo[]>("list_modules"),
+			systemStore.fetchSystemInfo(),
+		]);
 		_rawModules.value = raw;
 		modules.value = applyModuleI18n(raw);
 	}

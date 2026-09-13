@@ -1,10 +1,18 @@
-//! 更新检查模块 / Update Check Module
+﻿//! 更新检查模块 / Update Check Module
 //!
-//! 提供版本检查、Docker 环境检测、平台识别功能。
-//! 前端通过 GET /api/update/info 获取更新信息，后端负责向 GitHub API 查询最新 Release。
+//! 提供版本检查、Docker 环境检测、平台识别功能，以及后台下载并安装更新的逻辑。
 //!
-//! Provides version checking, Docker environment detection, and platform identification.
-//! The frontend calls GET /api/update/info; the backend queries the GitHub API for the latest release.
+//! 下载安装流程（download_and_install）：
+//! 1. 用 reqwest 流式下载 zip，每 1%（或 200ms、512KB）广播 SSE `update-progress` 进度
+//! 2. 用 self_update::Extract 解压到临时目录
+//! 3. 用 self_update::MoveAll 事务性多文件替换（任一步失败全部回滚）
+//! 4. 用 duct::cmd! 在独立进程中启动新版本，立即退出当前进程
+//!
+//! Download/install flow (download_and_install):
+//! 1. Stream-download the zip via reqwest, broadcasting SSE `update-progress` every 1% / 200ms / 512KB
+//! 2. Extract with self_update::Extract to a temp dir
+//! 3. Atomically replace files with self_update::MoveAll (all-or-nothing, rolls back on failure)
+//! 4. Spawn the new version in a detached process via duct::cmd!, then exit immediately
 
 use serde::Serialize;
 use std::sync::Arc;
@@ -40,82 +48,46 @@ pub fn current_platform() -> &'static str {
 // ─── Docker 检测 / Docker detection ──────────────────────────────────────────
 
 /// 检测当前运行环境是否为 Docker 容器。
-///
-/// 按优先级依次检查：
-/// 1. 环境变量 `IS_DOCKER=1`（可由 Dockerfile 手动设置，最可靠）
-/// 2. `/.dockerenv` 文件存在
-/// 3. `/proc/1/cgroup` 中包含 "docker" 或 "kubepods"（Linux 下 cgroup v1）
-///
-/// Detects whether the current runtime environment is a Docker container.
-///
-/// Checked in priority order:
-/// 1. Env var `IS_DOCKER=1` (manually set in Dockerfile — most reliable)
-/// 2. Presence of `/.dockerenv`
-/// 3. `/proc/1/cgroup` contains "docker" or "kubepods" (Linux cgroup v1)
 pub fn is_docker() -> bool {
-    // 1. 显式环境变量 / explicit env var
     if std::env::var("IS_DOCKER").as_deref() == Ok("1") {
         return true;
     }
-
-    // 2. /.dockerenv 文件（Docker 在容器内自动创建）
-    //    /.dockerenv file (automatically created by Docker inside containers)
     if std::path::Path::new("/.dockerenv").exists() {
         return true;
     }
-
-    // 3. /proc/1/cgroup（仅 Linux，cgroup v1）
-    //    /proc/1/cgroup (Linux only, cgroup v1)
     #[cfg(target_os = "linux")]
     if let Ok(content) = std::fs::read_to_string("/proc/1/cgroup")
-        && (content.contains("docker") || content.contains("kubepods")) {
+        && (content.contains("docker") || content.contains("kubepods"))
+    {
         return true;
     }
-
     false
 }
 
 // ─── GitHub Release 检查 / GitHub release check ───────────────────────────
 
 /// GitHub Release 信息（仅包含前端需要的字段）
-/// GitHub Release information (only fields needed by the frontend)
 #[derive(Debug, Serialize)]
 pub struct ReleaseInfo {
-    /// 最新版本号（去掉 "v" 前缀）/ Latest version (without "v" prefix)
     pub latest_version: String,
-    /// Release 页面 URL / Release page URL
     pub release_url: String,
-    /// Release body（更新日志，Markdown）/ Release body (changelog, Markdown)
     pub release_notes: String,
-    /// 发布时间（ISO 8601）/ Published time (ISO 8601)
     pub published_at: String,
-    /// 当前平台对应的 asset 直链（无对应 asset 时为 None）
-    /// Direct download URL for the current platform's asset (None if no matching asset)
     pub download_url: Option<String>,
-    /// 当前平台对应的 asset 文件大小（字节，无 asset 时为 None）
-    /// Asset file size in bytes for the current platform (None if no matching asset)
     pub download_size: Option<u64>,
 }
 
 /// GET /api/update/info 的完整响应结构
-/// Full response structure for GET /api/update/info
 #[derive(Debug, Serialize)]
 pub struct UpdateInfo {
-    /// 当前运行版本 / Current running version
     pub current_version: String,
-    /// 运行平台标识 / Runtime platform identifier
     pub platform: String,
-    /// 是否在 Docker 容器中运行 / Whether running inside a Docker container
     pub is_docker: bool,
-    /// 最新 Release 信息；None 表示检查失败 / Latest release info; None means check failed
     pub release: Option<ReleaseInfo>,
-    /// 所有 release asset 名称列表（用于调试匹配问题）
-    /// All release asset names (for debugging matching issues)
     pub asset_names: Vec<String>,
 }
 
 /// 向 GitHub API 查询最新 Release，使用可选的代理地址。
-/// Queries the GitHub API for the latest release, using an optional proxy address.
 pub async fn fetch_latest_release(
     proxy_url: Option<&str>,
 ) -> crate::core::error::Result<ReleaseInfo> {
@@ -124,7 +96,6 @@ pub async fn fetch_latest_release(
 }
 
 /// 向 GitHub API 查询最新 Release，同时返回所有 asset 名称列表（用于调试）。
-/// Queries the latest release and also returns all asset names (for debugging).
 pub async fn fetch_latest_release_with_assets(
     proxy_url: Option<&str>,
 ) -> crate::core::error::Result<(ReleaseInfo, Vec<String>)> {
@@ -133,8 +104,6 @@ pub async fn fetch_latest_release_with_assets(
         OWNER, REPO
     );
 
-    // 构造 reqwest Client（可带代理）
-    // Build reqwest Client (optionally with proxy)
     let mut builder = reqwest::Client::builder()
         .user_agent(format!("StripchatRecorder/{}", APP_VERSION))
         .timeout(std::time::Duration::from_secs(15));
@@ -173,30 +142,14 @@ pub async fn fetch_latest_release_with_assets(
         .unwrap_or("")
         .trim_start_matches('v')
         .to_string();
-    let release_url = json["html_url"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
-    let release_notes = json["body"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
-    let published_at = json["published_at"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
+    let release_url = json["html_url"].as_str().unwrap_or("").to_string();
+    let release_notes = json["body"].as_str().unwrap_or("").to_string();
+    let published_at = json["published_at"].as_str().unwrap_or("").to_string();
 
-    // asset 命名规则：StripchatRecorder-server-{platform}.zip（不含版本号）
-    // 同时区分 server/desktop 两种产物，避免误命中 desktop 安装包。
-    //
-    // Asset naming: StripchatRecorder-server-{platform}.zip (no version number).
-    // The "server" infix distinguishes server from desktop installers.
-    // asset 命名规则：StripchatRecorder-server-{platform}.zip（不含版本号）
-    // Asset naming: StripchatRecorder-server-{platform}.zip (no version number)
+    // asset 命名规则：StripchatRecorder-server-{platform}.zip
     let platform = current_platform();
     let asset_name = format!("StripchatRecorder-server-{}.zip", platform);
 
-    // 收集所有 asset 名称（用于调试）/ Collect all asset names (for debugging)
     let asset_names: Vec<String> = json["assets"]
         .as_array()
         .map(|assets| {
@@ -209,9 +162,7 @@ pub async fn fetch_latest_release_with_assets(
     let (download_url, download_size) = json["assets"]
         .as_array()
         .and_then(|assets| {
-            assets.iter().find(|a| {
-                a["name"].as_str() == Some(&asset_name)
-            })
+            assets.iter().find(|a| a["name"].as_str() == Some(&asset_name))
         })
         .map(|a| {
             let url = a["browser_download_url"].as_str().unwrap_or("").to_string();
@@ -233,10 +184,6 @@ pub async fn fetch_latest_release_with_assets(
 // ─── 语义化版本比较 / Semantic version comparison ────────────────────────────
 
 /// 语义化版本比较：`latest` > `current` 时返回 true。
-/// 逐段比较 major.minor.patch；任一段解析失败时退回字符串不等值判断。
-///
-/// Semantic version comparison: returns true when `latest` > `current`.
-/// Compares major.minor.patch segments; falls back to string inequality on parse failure.
 pub fn semver_gt(latest: &str, current: &str) -> bool {
     fn parse(v: &str) -> Option<(u64, u64, u64)> {
         let mut it = v.splitn(3, '.');
@@ -246,60 +193,43 @@ pub fn semver_gt(latest: &str, current: &str) -> bool {
         Some((a, b, c))
     }
     match (parse(latest), parse(current)) {
-        (Some((la, lb, lc)), Some((ca, cb, cc))) => {
-            (la, lb, lc) > (ca, cb, cc)
-        }
-        _ => latest != current, // 解析失败时退回字符串比较
+        (Some((la, lb, lc)), Some((ca, cb, cc))) => (la, lb, lc) > (ca, cb, cc),
+        _ => latest != current,
     }
 }
 
 // ─── 更新安装状态 / Update install state ─────────────────────────────────────
 
 /// 更新下载/安装的进度状态，通过 SSE `update-progress` 事件广播给前端。
-/// Update download/install progress state, broadcast to frontend via SSE `update-progress`.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum UpdateProgress {
-    /// 空闲（无进行中的更新）/ Idle (no update in progress)
     Idle,
-    /// 下载中 / Downloading
     Downloading {
-        /// 已下载字节数 / Bytes downloaded so far
         downloaded: u64,
-        /// 总字节数（0 表示未知）/ Total bytes (0 if unknown)
         total: u64,
-        /// 百分比 0-100（total 为 0 时为 None）/ Percentage 0-100 (None when total is unknown)
         pct: Option<u8>,
     },
-    /// 安装中（解压+替换文件）/ Installing (extracting + replacing files)
     Installing,
-    /// 完成，即将重启 / Done, restarting soon
     Done,
-    /// 出错 / Error
     Error { message: String },
 }
 
-/// 进程内更新状态存储（`Arc<RwLock<UpdateProgress>>`），注入到 `AppState`。
-/// In-process update state store, injected into `AppState`.
 pub type UpdateStateStore = Arc<RwLock<UpdateProgress>>;
 
-/// 创建初始更新状态存储。
 pub fn new_update_state() -> UpdateStateStore {
     Arc::new(RwLock::new(UpdateProgress::Idle))
 }
 
 // ─── 下载 + 安装 / Download + Install ────────────────────────────────────────
 
-/// 后台下载 zip 包、解压并替换当前可执行文件，然后重启进程。
+/// 后台下载 zip 包、用 self_update 解压并多文件事务性替换，然后用 duct 启动新进程后退出。
 ///
-/// 进度通过 `emitter` 广播 `update-progress` SSE 事件。
-/// 所有错误都更新 state 并广播，不 panic。
+/// 保留与旧版完全一致的 SSE `update-progress` 事件接口，前端无需任何改动。
 ///
-/// Downloads the zip in the background, extracts and replaces the current executable,
-/// then restarts the process.
-///
-/// Progress is broadcast via `emitter` as `update-progress` SSE events.
-/// All errors update state and broadcast without panicking.
+/// Downloads the zip, extracts and atomically replaces files using self_update::MoveAll,
+/// then spawns the new process via duct and exits immediately.
+/// SSE `update-progress` interface is identical to the old version — no frontend changes needed.
 pub async fn download_and_install(
     download_url: String,
     proxy_url: Option<String>,
@@ -324,7 +254,7 @@ pub async fn download_and_install(
         }};
     }
 
-    // ── 1. 流式下载 zip / Stream-download zip ────────────────────────────────
+    // ── 1. 流式下载 zip，实时广播进度 / Stream-download with live progress ──
     let mut builder = reqwest::Client::builder()
         .user_agent(format!("StripchatRecorder/{}", APP_VERSION))
         .connect_timeout(std::time::Duration::from_secs(30))
@@ -351,7 +281,11 @@ pub async fn download_and_install(
 
     let total = resp.content_length().unwrap_or(0);
     let mut downloaded: u64 = 0;
-    let mut zip_bytes: Vec<u8> = if total > 0 { Vec::with_capacity(total as usize) } else { Vec::new() };
+    let mut zip_bytes: Vec<u8> = if total > 0 {
+        Vec::with_capacity(total as usize)
+    } else {
+        Vec::new()
+    };
 
     emit_state!(UpdateProgress::Downloading {
         downloaded: 0,
@@ -359,13 +293,10 @@ pub async fn download_and_install(
         pct: if total > 0 { Some(0) } else { None },
     });
 
-    // 节流策略 / Throttle strategy:
-    // - total 已知：每 1% 或每 200ms 广播一次
-    // - total 未知：每 512 KB 或每 200ms 广播一次
-    // Known total: broadcast every 1% or 200ms
-    // Unknown total: broadcast every 512 KB or 200ms
+    // 节流：total 已知时每 1% 或 200ms 广播；未知时每 512KB 或 200ms 广播
+    // Throttle: broadcast every 1% or 200ms (known total), or every 512KB or 200ms (unknown)
     const THROTTLE_MS: u128 = 200;
-    const BYTES_THRESHOLD: u64 = 512 * 1024; // 512 KB
+    const BYTES_THRESHOLD: u64 = 512 * 1024;
 
     let mut last_emit = std::time::Instant::now();
     let mut last_pct: Option<u8> = if total > 0 { Some(0) } else { None };
@@ -377,15 +308,13 @@ pub async fn download_and_install(
             Ok(bytes) => {
                 zip_bytes.extend_from_slice(&bytes);
                 downloaded += bytes.len() as u64;
-
                 let pct = (downloaded * 100)
                     .checked_div(total)
                     .map(|r| r.min(100) as u8);
-
                 let elapsed = last_emit.elapsed().as_millis() >= THROTTLE_MS;
                 let pct_changed = pct != last_pct;
-                let bytes_threshold = total == 0 && (downloaded - last_emit_bytes) >= BYTES_THRESHOLD;
-
+                let bytes_threshold =
+                    total == 0 && (downloaded - last_emit_bytes) >= BYTES_THRESHOLD;
                 if elapsed || pct_changed || bytes_threshold {
                     emit_state!(UpdateProgress::Downloading { downloaded, total, pct });
                     last_emit = std::time::Instant::now();
@@ -397,16 +326,13 @@ pub async fn download_and_install(
         }
     }
 
-    // 确保最终状态一定广播
-    // Always broadcast the final download state
     let final_pct = if total > 0 { Some(100u8) } else { None };
     emit_state!(UpdateProgress::Downloading { downloaded, total, pct: final_pct });
 
-    // 给 SSE 推送一点时间让前端收到最终下载状态，再进入安装阶段
-    // Give SSE a moment to deliver the final download state before moving to install
+    // SSE 推送完成前稍作等待 / Brief pause to let SSE deliver the final download state
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
-    // ── 2. 解压 + 替换 / Extract + replace ───────────────────────────────────
+    // ── 2. 解压 + 事务性替换 / Extract + atomic replace via self_update ──
     emit_state!(UpdateProgress::Installing);
 
     let exe_path = match std::env::current_exe() {
@@ -418,10 +344,10 @@ pub async fn download_and_install(
         None => bail!("无法获取可执行文件所在目录"),
     };
 
-    // 在临时目录解压 zip，找到新的可执行文件
-    // Extract the zip to a temp dir and locate the new executable
+    // 解压和替换在阻塞线程中执行，避免阻塞 tokio executor
+    // Run on a blocking thread so we don't stall the tokio executor
     let result = tokio::task::spawn_blocking(move || {
-        extract_and_replace(&zip_bytes, &exe_path, &exe_dir)
+        extract_and_replace_with_self_update(&zip_bytes, &exe_dir)
     }).await;
 
     match result {
@@ -430,11 +356,11 @@ pub async fn download_and_install(
         Err(e) => bail!(format!("安装任务崩溃: {}", e)),
     }
 
-    // ── 3. 完成，spawn 新进程后立即退出 / Done, spawn new process then exit immediately ──
+    // ── 3. 完成，用 duct 启动新进程后立即退出 / Done: detached spawn via duct, then exit ──
     emit_state!(UpdateProgress::Done);
     tracing::info!("{}", crate::tl!("update.installDone"));
 
-    // 等待 SSE 推送完成
+    // 给 SSE 一点时间送达完成状态 / Give SSE a moment to deliver the done state
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
     let exe = match std::env::current_exe() {
@@ -446,137 +372,157 @@ pub async fn download_and_install(
     };
     let args: Vec<String> = std::env::args().skip(1).collect();
 
-    tracing::info!("{}", crate::tl!("update.launching", exe = exe.display(), args = format!("{:?}", args)));
+    tracing::info!("{}", crate::tl!("update.launching",
+        exe = exe.display(), args = format!("{:?}", args)));
 
-    #[cfg(target_os = "windows")]
-    let spawn_result = {
-        use std::os::windows::process::CommandExt;
-        // CREATE_NEW_CONSOLE(0x00000010) + CREATE_NEW_PROCESS_GROUP(0x00000200)
-        // 新进程获得独立的新控制台窗口，不继承也不依附于父进程的窗口
-        // New process gets its own new console window, independent of the parent's
-        std::process::Command::new(&exe)
-            .args(&args)
-            .creation_flags(0x00000010 | 0x00000200)
-            .env("STRIPCHAT_RESTART_DELAY_MS", "2000")
-            .spawn()
-    };
+    // duct::cmd 构建命令，.unchecked() 不因子进程退出码非零而报错
+    // .unchecked() so duct doesn't error if the child exits with a nonzero code
+    let cmd = duct::cmd(exe.as_os_str(), &args)
+        .env("STRIPCHAT_RESTART_DELAY_MS", "2000")
+        .unchecked();
 
-    #[cfg(not(target_os = "windows"))]
-    let spawn_result = {
-        use std::os::unix::process::CommandExt;
-        // setsid：创建新会话，脱离父进程的进程组和控制终端
-        // 保证父进程退出后新进程不会收到 SIGHUP
-        // setsid: create a new session, detach from parent's process group and controlling terminal
-        // Ensures the new process doesn't receive SIGHUP when the parent exits
-        unsafe {
-            std::process::Command::new(&exe)
-                .args(&args)
-                .env("STRIPCHAT_RESTART_DELAY_MS", "2000")
-                .pre_exec(|| {
-                    libc::setsid();
-                    Ok(())
-                })
-                .spawn()
+    match cmd.start() {
+        Ok(handle) => {
+            tracing::info!("{}", crate::tl!("update.launchSuccess", pid = handle.pids()[0]));
+            // 分离子进程：遗忘 handle，父进程直接退出，无需等待子进程
+            // Detach: forget the handle, parent exits immediately to free the port
+            std::mem::forget(handle);
         }
-    };
-
-    match &spawn_result {
-        Ok(child) => tracing::info!("{}", crate::tl!("update.launchSuccess", pid = child.id())),
-        Err(e) => tracing::error!("{}", crate::tl!("update.launchFailed", error = e)),
+        Err(e) => {
+            tracing::error!("{}", crate::tl!("update.launchFailed", error = e));
+        }
     }
 
-    // 立即退出，释放端口，让新进程能绑定
-    // Exit immediately to free the port so the new process can bind it
     std::process::exit(0);
 }
 
-/// 解压 zip 包并替换 exe 目录下的所有文件（保留 config/ 目录）。
+// ─── 私有辅助函数 / Private helpers ──────────────────────────────────────────
+
+/// 用 self_update::Extract 解压 zip 到临时目录，再用 self_update::MoveAll 事务性多文件替换。
 ///
 /// zip 内层目录结构：`{package-name}/{files...}`，跳过顶层目录直接提取内容。
-/// Windows 上运行中的 exe 无法直接覆盖，先 rename 为 `.old` 再写入新文件。
+/// MoveAll 要求源文件与目标在同一文件系统（使用 rename），因此
+/// staging/stash 临时目录均在 exe_dir 内创建。
 ///
-/// Extracts the zip and replaces all files under the exe directory (preserves config/).
-///
-/// Zip structure: `{package-name}/{files...}` — skips the top-level dir and extracts contents.
-/// On Windows, the running exe cannot be overwritten directly; rename it to `.old` first.
-fn extract_and_replace(
+/// Extract zip to a staging temp dir via self_update::Extract, then atomically replace
+/// all files via self_update::MoveAll (all-or-nothing; rolls back on failure).
+/// Staging and stash are created inside exe_dir to stay on the same filesystem as the install target.
+fn extract_and_replace_with_self_update(
     zip_bytes: &[u8],
-    exe_path: &std::path::Path,
     exe_dir: &std::path::Path,
 ) -> Result<(), String> {
-    use std::io::Read;
+    // 将 zip 字节写入临时文件，self_update::Extract 需要文件路径而非内存切片
+    // self_update::Extract needs a file path, not a byte slice — write to a temp file first
+    let tmp = tempfile::Builder::new()
+        .prefix("stripchat_update_")
+        .suffix(".zip")
+        .tempfile_in(exe_dir)
+        .map_err(|e| format!("创建临时 zip 文件失败: {}", e))?;
 
-    let cursor = std::io::Cursor::new(zip_bytes);
-    let mut archive = zip::ZipArchive::new(cursor)
-        .map_err(|e| format!("无法读取 zip: {}", e))?;
+    std::fs::write(tmp.path(), zip_bytes)
+        .map_err(|e| format!("写入临时 zip 失败: {}", e))?;
 
-    for i in 0..archive.len() {
-        let mut file = archive.by_index(i)
-            .map_err(|e| format!("读取 zip 条目失败: {}", e))?;
+    // 解压到 staging 临时目录（在 exe_dir 内保证同一文件系统）
+    // Extract to a staging temp dir inside exe_dir to guarantee same filesystem
+    let staging = tempfile::Builder::new()
+        .prefix("stripchat_staging_")
+        .tempdir_in(exe_dir)
+        .map_err(|e| format!("创建解压目录失败: {}", e))?;
 
-        let raw_path = match file.enclosed_name() {
-            Some(p) => p,
-            None => continue, // 跳过路径遍历风险条目 / skip unsafe paths
-        };
+    self_update::Extract::from_source(tmp.path())
+        .archive(self_update::ArchiveKind::Zip)
+        .extract_into(staging.path())
+        .map_err(|e| format!("解压失败: {}", e))?;
 
-        // 跳过顶层目录（zip 内第一层是包名目录）
-        // Strip the top-level directory (first component is the package name dir)
-        let mut components = raw_path.components();
-        components.next(); // 丢弃顶层目录名 / discard top-level dir name
-        let relative: std::path::PathBuf = components.collect();
-        if relative.as_os_str().is_empty() {
-            continue; // 顶层目录本身，跳过 / the top-level dir entry itself, skip
-        }
+    // zip 内第一层是包名目录，跳过它找到实际内容
+    // Skip the top-level package-name directory inside the zip
+    let content_dir = find_single_subdir(staging.path())
+        .unwrap_or_else(|| staging.path().to_path_buf());
 
-        let dest = exe_dir.join(&relative);
+    // stash 目录同样在 exe_dir 内，MoveAll 需要它与目标在同一文件系统
+    // Stash dir also inside exe_dir — MoveAll requires same filesystem as destinations
+    let stash = tempfile::Builder::new()
+        .prefix("stripchat_stash_")
+        .tempdir_in(exe_dir)
+        .map_err(|e| format!("创建 stash 目录失败: {}", e))?;
 
-        if file.is_dir() {
-            std::fs::create_dir_all(&dest)
-                .map_err(|e| format!("创建目录失败 {}: {}", dest.display(), e))?;
-            continue;
-        }
+    // 收集所有 (src → dest) 文件对
+    // Collect all (src → dest) file pairs
+    let mut pairs: Vec<(std::path::PathBuf, std::path::PathBuf)> = Vec::new();
+    collect_file_pairs(&content_dir, exe_dir, &mut pairs);
 
-        // 确保父目录存在 / ensure parent dir exists
+    // 确保所有目标父目录存在（MoveAll 本身不创建目录）
+    // Ensure all destination parent directories exist (MoveAll doesn't create them)
+    for (_, dest) in &pairs {
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("创建目录失败 {}: {}", parent.display(), e))?;
         }
+    }
 
-        // Windows：运行中的 exe 不能直接覆盖，先重命名为 .old
-        // Windows: rename the running exe to .old before writing the new one
-        if dest == exe_path && dest.exists() {
-            let old_path = dest.with_extension("old");
-            let _ = std::fs::remove_file(&old_path); // 清理上次遗留的 .old / clean up previous .old
-            std::fs::rename(&dest, &old_path)
-                .map_err(|e| format!("重命名旧 exe 失败: {}", e))?;
-        }
+    // 构建 MoveAll 并提交
+    // Build MoveAll and commit
+    let mut mover = self_update::MoveAll::from_temp(stash.path());
+    for (src, dest) in pairs {
+        mover.add(src, dest);
+    }
+    mover.commit()
+        .map_err(|e| format!("文件替换失败（MoveAll）: {}", e))?;
 
-        let mut buf = Vec::with_capacity(file.size() as usize);
-        file.read_to_end(&mut buf)
-            .map_err(|e| format!("读取 zip 文件内容失败: {}", e))?;
+    tracing::info!("{}", crate::tl!("update.unzipDone"));
 
-        std::fs::write(&dest, &buf)
-            .map_err(|e| format!("写入文件失败 {}: {}", dest.display(), e))?;
-
-        // Linux/macOS：为可执行文件设置执行权限
-        // Linux/macOS: set executable permission for binary files
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            if let Ok(meta) = std::fs::metadata(&dest) {
-                // 有执行位需求：只对 exe 目录根级文件（而不是 config 下的 json）设置
-                // Only set +x on root-level files (not config/*.json etc.)
-                if relative.components().count() == 1 {
-                    let mut perms = meta.permissions();
-                    perms.set_mode(perms.mode() | 0o111);
-                    let _ = std::fs::set_permissions(&dest, perms);
+    // Linux/macOS：为 exe_dir 根级文件设置执行权限
+    // Linux/macOS: set executable bit on root-level files in exe_dir
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(entries) = std::fs::read_dir(exe_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    if let Ok(meta) = std::fs::metadata(&path) {
+                        let mut perms = meta.permissions();
+                        perms.set_mode(perms.mode() | 0o111);
+                        let _ = std::fs::set_permissions(&path, perms);
+                    }
                 }
             }
         }
-
-        tracing::debug!("{}", crate::tl!("update.unzipped", path = dest.display()));
     }
 
-    tracing::info!("{}", crate::tl!("update.unzipDone"));
     Ok(())
+}
+
+/// 如果 `dir` 下恰好只有一个子目录（且没有文件），返回该子目录；否则返回 None。
+/// Returns the single subdirectory of `dir` if there is exactly one dir entry and it's a dir.
+fn find_single_subdir(dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    let entries: Vec<_> = std::fs::read_dir(dir).ok()?.flatten().collect();
+    if entries.len() == 1 {
+        let entry = &entries[0];
+        if entry.file_type().ok()?.is_dir() {
+            return Some(entry.path());
+        }
+    }
+    None
+}
+
+/// 递归收集 `src_base` 下所有文件的 `(src, dest)` 对，dest 路径相对于 `dest_base`。
+/// Recursively collect (src, dest) pairs for all files under `src_base`,
+/// with dest paths rooted at `dest_base`.
+fn collect_file_pairs(
+    src_base: &std::path::Path,
+    dest_base: &std::path::Path,
+    pairs: &mut Vec<(std::path::PathBuf, std::path::PathBuf)>,
+) {
+    let Ok(entries) = std::fs::read_dir(src_base) else { return };
+    for entry in entries.flatten() {
+        let src = entry.path();
+        let rel = src.strip_prefix(src_base).unwrap_or(&src);
+        let dest = dest_base.join(rel);
+        if src.is_dir() {
+            collect_file_pairs(&src, &dest_base.join(rel), pairs);
+        } else if src.is_file() {
+            pairs.push((src, dest));
+        }
+    }
 }

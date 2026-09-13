@@ -111,8 +111,6 @@ pub fn startup_merge_leftover_segments(
         return Vec::new();
     }
 
-    let _startup_guard = state.startup_lock.lock().unwrap_or_else(|e| e.into_inner());
-
     let mut merged_paths = Vec::new();
     let mut pp_handles: Vec<std::thread::JoinHandle<()>> = Vec::new();
 

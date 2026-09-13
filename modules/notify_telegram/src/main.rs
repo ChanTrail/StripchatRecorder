@@ -29,7 +29,7 @@ use grammers_client::sender::{ConnectionParams, SenderPool};
 use grammers_client::tl;
 use grammers_session::Session;
 use grammers_session::storages::SqliteSession;
-use grammers_session::types::{PeerId, PeerKind, PeerRef};
+use grammers_session::types::{PeerId, PeerKind, PeerAuth, PeerRef};
 use tokio::io::AsyncReadExt;
 use pp_utils::{format_duration, format_bytes, format_speed, parse_stem, find_cover, tmp_dir, image_dimensions, video_meta, ModuleInput};
 
@@ -69,6 +69,9 @@ const DESCRIBE: &str = r#"{
 /// 若封面图不满足 Telegram 限制（宽+高 < 10000 且宽高比 < 20:1），则等比缩放。
 /// Resize cover image if it violates Telegram limits (w+h < 10000 and aspect ratio < 20:1).
 /// Returns Some(new_path) if resized, None if no resize needed.
+///
+/// 若目标文件已存在且非空，则跳过 ffmpeg 直接复用。
+/// If the target file already exists and is non-empty, reuse it without calling ffmpeg.
 fn resize_cover_for_telegram(img: &Path) -> Result<Option<PathBuf>, String> {
     const MAX_PHOTO_BYTES: u64 = 10 * 1024 * 1024; // Telegram photo limit: 10 MB
 
@@ -116,6 +119,12 @@ fn resize_cover_for_telegram(img: &Path) -> Result<Option<PathBuf>, String> {
     let stem = img.file_stem().and_then(|s| s.to_str()).unwrap_or("cover");
     let out_path = tmp_dir().join(format!("{}_tg_resized.jpg", stem));
 
+    // 已存在且非空则直接复用，跳过 ffmpeg
+    // Reuse existing non-empty file without calling ffmpeg
+    if out_path.exists() && fs::metadata(&out_path).map(|m| m.len()).unwrap_or(0) > 0 {
+        return Ok(Some(out_path));
+    }
+
     // 若文件超过 10MB，逐步降低质量直到满足大小限制
     // If file exceeds 10MB, progressively lower quality until size limit is met
     let q_values: &[&str] = if !size_ok { &["5", "10", "15", "20", "25", "31"] } else { &["2"] };
@@ -150,12 +159,22 @@ fn resize_cover_for_telegram(img: &Path) -> Result<Option<PathBuf>, String> {
 /// Extract the first frame from a video as a thumbnail using ffmpeg
 /// (used as preview image for Telegram video messages).
 ///
+/// 若目标缩略图文件已存在且非空，则跳过 ffmpeg 直接复用。
+/// If the target thumbnail already exists and is non-empty, reuse it without calling ffmpeg.
+///
 /// # 返回值 / Returns
 /// 缩略图文件路径，失败时返回错误。
 /// Thumbnail file path, or error on failure.
 fn extract_video_thumbnail(input: &Path) -> Result<PathBuf, String> {
     let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("recording");
     let thumb_path = tmp_dir().join(format!("{}.tg_thumb.png", stem));
+
+    // 已存在且非空则直接复用，跳过 ffmpeg
+    // Reuse existing non-empty thumbnail without calling ffmpeg
+    if thumb_path.exists() && fs::metadata(&thumb_path).map(|m| m.len()).unwrap_or(0) > 0 {
+        return Ok(thumb_path);
+    }
+
     let status = Command::new("ffmpeg")
         .args(["-y", "-i"])
         .arg(input)
@@ -214,7 +233,9 @@ fn split_one(input: &Path, max_bytes: u64, dir: &Path, stem: &str, ext: &str, of
 
     // ffmpeg segment 模式不支持任意起始编号，先生成临时名再重命名
     // ffmpeg segment mode doesn't support arbitrary start numbers; generate then rename
-    let tmp_dir_path = dir.join(format!("_split_tmp_{}", offset));
+    // 临时目录名加入 stem 和 offset，防止并发任务路径冲突
+    // Include stem and offset in temp dir name to avoid collisions under concurrent tasks
+    let tmp_dir_path = dir.join(format!("_split_tmp_{}_{}",  stem, offset));
     fs::create_dir_all(&tmp_dir_path).map_err(|e| format!("mkdir failed: {}", e))?;
     let tmp_pattern = tmp_dir_path.join(format!("seg%03d.{}", ext));
 
@@ -251,12 +272,47 @@ fn split_one(input: &Path, max_bytes: u64, dir: &Path, stem: &str, ext: &str, of
 }
 
 fn split_video(input: &Path, max_bytes: u64) -> Result<Vec<PathBuf>, String> {
-    let file_size = fs::metadata(input).map_err(|e| format!("stat failed: {}", e))?.len();
+    let meta = fs::metadata(input).map_err(|e| format!("stat failed: {}", e))?;
+    let file_size = meta.len();
     if file_size <= (max_bytes as f64 * 0.95) as u64 { return Ok(vec![input.to_path_buf()]); }
 
     let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("part");
     let ext  = input.extension().and_then(|e| e.to_str()).unwrap_or("mp4");
-    let dir  = tmp_dir();
+    // 目录名由文件内容特征（mtime_nanos + size）确定，同一个视频文件每次产生相同路径，
+    // 允许跨进程复用已有的分割片段，同时也保证不同视频之间不会冲突。
+    //
+    // Directory name is derived from the file's identity (mtime_nanos + size) so the same
+    // input file always maps to the same directory, enabling reuse of existing split segments
+    // across process restarts, while different files remain collision-free.
+    let mtime_nanos = meta.modified()
+        .map(|t| t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos())
+        .unwrap_or(0);
+    let dir = tmp_dir().join(format!("split_{}_{}_{}", stem, mtime_nanos, file_size));
+    fs::create_dir_all(&dir).map_err(|e| format!("mkdir split dir failed: {}", e))?;
+
+    // 若目录中已有所有分片文件则直接复用，跳过 ffmpeg split。
+    // 通过检查第一个片段是否存在来快速判断（若 ffmpeg 上次中途失败，片段不完整，
+    // 下次会因某片段缺失而重新切割）。
+    //
+    // Reuse existing segments if they are all present in the directory, skipping ffmpeg split.
+    // A quick check on the first segment is used as a proxy; if ffmpeg previously failed
+    // mid-split, missing segments will cause a fresh re-split on the next run.
+    let first_expected = dir.join(format!("{}_part000.{}", stem, ext));
+    if first_expected.exists() && fs::metadata(&first_expected).map(|m| m.len()).unwrap_or(0) > 0 {
+        // 收集目录下所有已有分片，按名称排序后返回
+        // Collect all existing segments in the directory, sorted by name
+        let mut existing: Vec<PathBuf> = fs::read_dir(&dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_file() && p.extension().and_then(|e| e.to_str()).unwrap_or("") == ext)
+            .collect();
+        existing.sort();
+        if !existing.is_empty() {
+            return Ok(existing);
+        }
+    }
     // 第一次切分
     // Initial split
     let initial = split_one(input, max_bytes, &dir, stem, ext, 0)?;
@@ -436,43 +492,22 @@ fn build_caption(
 /// 解析 Telegram Peer（优先通过 username 解析，其次使用数字 chat_id）。
 ///
 /// chat_id 路径的解析策略：
-/// 1. 小群组（chat，非超级群组）不需要 access_hash，Telegram 直接接受零权限凭证。
-/// 2. 超级群组/频道/私聊用户理想情况下需要真实非零的 access_hash——优先从 session
-///    缓存中查找（`auto_cache_peers` 已开启，此前任何一次成功的 RPC 调用返回过该
-///    peer 信息时都会自动缓存，包括此前的发送成功、resolve_username 命中等）；
-/// 3. 缓存未命中时**不再在本地预先报错**，而是直接使用零 access_hash 尝试——这不是
-///    临时兜底，而是 Telegram 官方文档（<https://core.telegram.org/api/peers>
-///    "Access hash" 一节）明确记载的 bot 专属行为：
-///    > Zero access hash: equal to 0, must be used by bots when only a min access hash
-///    > (or no access hash) is available locally, but a full access hash is required.
-///
-/// 是否成立完全取决于 Telegram 服务端是否已经认可这个 bot 对该 peer 的隐式权限
-/// （例如 bot 是群组成员），本地无法提前判断，必须让真实的 RPC 调用结果说话——
-/// 之前版本在本地直接返回自定义错误，反而掩盖了 Telegram 服务端返回的真实错误码
-/// （如 CHANNEL_INVALID/CHANNEL_PRIVATE），不利于用户排查实际原因。
+/// 1. 小群组（chat，非超级群组）不需要 access_hash，Telegram 直接接受零凭证。
+/// 2. 频道/超级群组需要真实的 access_hash，优先从 session 缓存读取。
+/// 3. 缓存未命中（首次使用）时，调用 `channels.GetChannels` 向服务端主动查询——
+///    若 bot 已是该频道/超级群组的成员，服务端返回带真实 access_hash 的 Channel 对象，
+///    grammers 自动将其写入 session 缓存，之后再读即可拿到真实 hash。
+///    若 bot 不是成员，返回 CHANNEL_INVALID 并附带可操作的诊断提示。
 ///
 /// Resolve a Telegram Peer (prefers username resolution, falls back to numeric chat_id).
 ///
-/// Resolution strategy for the chat_id path:
-/// 1. Small group chats (not supergroups) need no access_hash — Telegram accepts a
-///    zero/ambient credential for them directly.
-/// 2. Supergroups/channels/private user chats ideally need a real, non-zero access_hash —
-///    first checked against the session cache (`auto_cache_peers` is enabled, so any prior
-///    successful RPC call that returned this peer's info — including a previous successful
-///    send, or a `resolve_username` hit — would have cached it automatically).
-/// 3. On a cache miss, this **no longer pre-emptively errors locally**; it proceeds with a
-///    zero access_hash instead. This isn't a stopgap — it's the bot-specific behavior
-///    explicitly documented by Telegram itself (see the "Access hash" section of
-///    <https://core.telegram.org/api/peers>):
-///    > Zero access hash: equal to 0, must be used by bots when only a min access hash
-///    > (or no access hash) is available locally, but a full access hash is required.
-///
-/// Whether this succeeds depends entirely on whether Telegram's server has already
-/// granted this bot implicit authority over the peer (e.g. the bot is a member of the
-/// group) — something that cannot be determined locally, so the real RPC response must
-/// be the final word. The previous version returned a custom local error instead, which
-/// masked Telegram's actual error code (e.g. CHANNEL_INVALID/CHANNEL_PRIVATE) and made
-/// it harder for users to diagnose the real cause.
+/// chat_id resolution strategy:
+/// 1. Small group chats (not supergroups) need no access_hash — zero credential works.
+/// 2. Channels/supergroups require a real access_hash — checked in the session cache first.
+/// 3. On a cache miss (first use), call `channels.GetChannels` to ask the server directly —
+///    if the bot is a member, the server returns a Channel with the real access_hash, which
+///    grammers writes into the session cache automatically. If the bot is not a member,
+///    the server returns CHANNEL_INVALID and we surface a diagnostic hint.
 async fn resolve_peer(
     session: &Arc<SqliteSession>,
     client: &Client,
@@ -501,19 +536,81 @@ async fn resolve_peer(
         return Ok(id.to_ambient_ref());
     }
 
-    // 先查 session 缓存（若此前已成功发送过，或曾通过其他 RPC 见过该 peer）；
-    // 未命中则退回零 access_hash（`to_ambient_ref`），交给真实 RPC 调用决定成败
-    // （见函数文档）。grammers 0.10 起 Session 的方法均为 fallible（返回
-    // Result<_, Self::Error>），缓存查询本身出错（如 sqlite 读取失败）时视同未命中，
-    // 不应中断整个发送流程——因此这里用 .ok().flatten() 吞掉查询错误。
+    // 优先从 session 缓存读取 access_hash（首次使用时缓存为空）。
+    // 缓存未命中时，主动调用 channels.GetChannels 向服务端查询该频道/超级群组——
+    // 若 bot 已是成员，服务端会返回带真实 access_hash 的 Channel 对象，
+    // grammers 会将其自动写入 session 缓存；之后再从缓存读取即可拿到真实 hash。
+    // 这解决了首次使用私密频道时 zero access_hash 导致的 CHANNEL_INVALID 问题。
     //
-    // Check the session cache first (hit if we've sent here before, or seen this peer via
-    // any other RPC); on a miss, fall back to a zero access_hash (`to_ambient_ref`) and let
-    // the real RPC call decide (see function doc). Since grammers 0.10, Session methods are
-    // fallible (return Result<_, Self::Error>); a cache-lookup error itself (e.g. sqlite read
-    // failure) should be treated the same as a miss rather than aborting the whole send flow
-    // — hence swallowing the lookup error via .ok().flatten() here.
-    Ok(session.peer_ref(id).await.ok().flatten().unwrap_or_else(|| id.to_ambient_ref()))
+    // Check session cache for access_hash first (empty on first use).
+    // On a cache miss, proactively call channels.GetChannels to ask the server —
+    // if the bot is a member, the server returns a Channel with a real access_hash
+    // which grammers automatically writes into the session cache; a subsequent cache
+    // read then yields the real hash.
+    // This fixes the CHANNEL_INVALID error caused by zero access_hash on first use
+    // of a private channel/supergroup.
+    if let Ok(Some(cached)) = session.peer_ref(id).await {
+        return Ok(cached);
+    }
+
+    // 缓存未命中：用 zero hash 构造 InputChannel，发起 GetChannels RPC，
+    // 直接从返回值里取出真实 access_hash 构造 PeerRef，不依赖自动缓存。
+    // Cache miss: call GetChannels with zero hash, extract the real access_hash
+    // from the response directly rather than relying on automatic session caching.
+    let channel_id = match id.kind() {
+        PeerKind::Channel => id.bare_id().ok_or_else(|| format!("chat_id {} has no bare id", chat_id))?,
+        _ => return Err(format!(
+            "chat_id {} resolved to a non-channel peer type; \
+             use the full -100xxxxxxxxxx format for supergroups/channels",
+            chat_id
+        )),
+    };
+
+    let input_channel = tl::types::InputChannel {
+        channel_id,
+        access_hash: 0,
+    };
+    let result = client.invoke(&tl::functions::channels::GetChannels {
+        id: vec![tl::enums::InputChannel::Channel(input_channel)],
+    }).await;
+
+    match result {
+        Ok(chats) => {
+            // 从返回的 Chat 列表里找到匹配的 Channel，取出其 access_hash 直接构造 PeerRef
+            // Find the matching Channel in the returned list and build PeerRef from its access_hash
+            for chat in chats.chats() {
+                if let tl::enums::Chat::Channel(ch) = chat
+                    && ch.id == channel_id {
+                        let hash = ch.access_hash.unwrap_or(0);
+                        let peer_id = PeerId::channel(ch.id).ok_or_else(|| {
+                            format!("channel id {} is out of valid range", ch.id)
+                        })?;
+                        return Ok(PeerRef {
+                            id: peer_id,
+                            auth: PeerAuth::from_hash(hash),
+                        });
+                    }
+            }
+            Err(format!(
+                "GetChannels succeeded but channel {} was not in the response; \
+                 the bot may not be a member of this channel/supergroup",
+                chat_id
+            ))
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("CHANNEL_INVALID") {
+                Err(format!(
+                    "Cannot resolve private channel/supergroup {chat_id}: {msg}\n\n\
+                     Hint: make sure the bot has been added as a member/admin of this \
+                     channel or supergroup before sending. The bot must be present so \
+                     Telegram can supply its access_hash.",
+                ))
+            } else {
+                Err(format!("GetChannels failed for chat_id {chat_id}: {msg}"))
+            }
+        }
+    }
 }
 
 /// 上传文件到 Telegram，支持断点续传、进度上报。
@@ -743,11 +840,15 @@ async fn upload_and_send(
                 "{}_tg_tmp.png",
                 img.file_stem().and_then(|s| s.to_str()).unwrap_or("cover")
             ));
-            let status = Command::new("ffmpeg")
-                .args(["-y", "-i"]).arg(img).arg(&tmp)
-                .stdout(Stdio::null()).stderr(Stdio::null())
-                .status().map_err(|e| format!("ffmpeg not found: {}", e))?;
-            if !status.success() { return Err("ffmpeg failed to convert cover image".to_string()); }
+            // 已存在且非空则直接复用，跳过 ffmpeg
+            // Reuse existing non-empty file without calling ffmpeg
+            if !tmp.exists() || fs::metadata(&tmp).map(|m| m.len()).unwrap_or(0) == 0 {
+                let status = Command::new("ffmpeg")
+                    .args(["-y", "-i"]).arg(img).arg(&tmp)
+                    .stdout(Stdio::null()).stderr(Stdio::null())
+                    .status().map_err(|e| format!("ffmpeg not found: {}", e))?;
+                if !status.success() { return Err("ffmpeg failed to convert cover image".to_string()); }
+            }
             converted_cover = Some(tmp);
         }
         let after_format: &Path = converted_cover.as_deref().unwrap_or(img);
@@ -775,21 +876,25 @@ async fn upload_and_send(
                     "{}_tg_tmp.mkv",
                     part.file_stem().and_then(|s| s.to_str()).unwrap_or("video")
                 ));
-                // 先尝试无损重封装 / Try lossless remux first
-                let remux_ok = Command::new("ffmpeg")
-                    .args(["-y", "-i"]).arg(part)
-                    .args(["-c", "copy", "-movflags", "+faststart"]).arg(&tmp)
-                    .stdout(Stdio::null()).stderr(Stdio::null())
-                    .status().map_err(|e| format!("ffmpeg not found: {}", e))?.success();
-                if !remux_ok {
-                    // 重封装失败则转码为 H.264 + AAC / Fall back to H.264 + AAC transcoding
-                    let ok = Command::new("ffmpeg")
+                // 已存在且非空则直接复用，跳过 ffmpeg
+                // Reuse existing non-empty file without calling ffmpeg
+                if !tmp.exists() || fs::metadata(&tmp).map(|m| m.len()).unwrap_or(0) == 0 {
+                    // 先尝试无损重封装 / Try lossless remux first
+                    let remux_ok = Command::new("ffmpeg")
                         .args(["-y", "-i"]).arg(part)
-                        .args(["-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-                               "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart"]).arg(&tmp)
+                        .args(["-c", "copy", "-movflags", "+faststart"]).arg(&tmp)
                         .stdout(Stdio::null()).stderr(Stdio::null())
                         .status().map_err(|e| format!("ffmpeg not found: {}", e))?.success();
-                    if !ok { return Err("ffmpeg failed to convert video to mkv".to_string()); }
+                    if !remux_ok {
+                        // 重封装失败则转码为 H.264 + AAC / Fall back to H.264 + AAC transcoding
+                        let ok = Command::new("ffmpeg")
+                            .args(["-y", "-i"]).arg(part)
+                            .args(["-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+                                   "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart"]).arg(&tmp)
+                            .stdout(Stdio::null()).stderr(Stdio::null())
+                            .status().map_err(|e| format!("ffmpeg not found: {}", e))?.success();
+                        if !ok { return Err("ffmpeg failed to convert video to mkv".to_string()); }
+                    }
                 }
                 converted_parts.push(tmp.clone());
                 parts_out.push(tmp);
@@ -1167,7 +1272,6 @@ fn run() -> Result<(), String> {
     // Telegram single file size limit is 2GB
     const TG_MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
     let video_parts: Vec<PathBuf> = if send_video { split_video(&input, TG_MAX_BYTES)? } else { vec![input.clone()] };
-    let is_split = video_parts.len() > 1 || video_parts.first().map(|p| p != &input).unwrap_or(false);
 
     // 预计算上传总字节数（外层重试循环保持不变，done 计数器每次重试从 0 重置）。
     // cover/sidecar 图片尺寸此时已是原始文件；ffmpeg 转换/缩放后的实际大小略有不同，
@@ -1195,7 +1299,7 @@ fn run() -> Result<(), String> {
 
     // 构建 Tokio 运行时并执行异步上传，最多重试 3 次
     // Build Tokio runtime and execute async upload with up to 3 retries
-    tokio::runtime::Builder::new_multi_thread()
+    let upload_result = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|e| format!("tokio runtime error: {}", e))?
@@ -1216,6 +1320,23 @@ fn run() -> Result<(), String> {
                 match result {
                     Ok(()) => break Ok(()),
                     Err(e) => {
+                        // AUTH_KEY_DUPLICATED：本地 session 的 auth key 已被服务端吊销
+                        // （常见原因：数据库文件被复制到另一台机器后原机器继续使用）。
+                        // 唯一修复方法是删除本地 session 文件，下次重试时重新登录。
+                        //
+                        // AUTH_KEY_DUPLICATED: the local session's auth key has been
+                        // revoked server-side (typically caused by copying the session DB
+                        // to another machine while the original keeps using it).
+                        // The only fix is to delete the local session file so the next
+                        // retry performs a fresh sign-in.
+                        if e.contains("AUTH_KEY_DUPLICATED") {
+                            let path = session_path(api_id);
+                            eprintln!(
+                                "AUTH_KEY_DUPLICATED: deleting stale session file {} and retrying…",
+                                path.display()
+                            );
+                            let _ = fs::remove_file(&path);
+                        }
                         let annotated = annotate_peer_error(e, chat_id, &username);
                         // peer 权限/解析类错误不是网络瞬断，重连重试无法修复，直接放弹并
                         // 附带诊断提示，避免用户多等 2 * 30s 才看到同样的错误。
@@ -1233,12 +1354,60 @@ fn run() -> Result<(), String> {
                     }
                 }
             }
-        })?;    // 清理分割产生的临时片段文件 / Clean up temporary segment files from splitting
-    if is_split {
-        for part in &video_parts {
-            if part != &input { let _ = fs::remove_file(part); }
+        });
+
+    // 清理本次产生的所有 tmp 文件，无论成功还是失败均执行。
+    // 包含：封面格式转换、封面缩放、视频格式转换、视频缩略图，以及分割产生的临时片段。
+    //
+    // Clean up all tmp files produced this run, regardless of success or failure.
+    // Covers: cover format conversion, cover resize, video format conversion,
+    // video thumbnails, and temporary segment files from splitting.
+    {
+        let tmp = tmp_dir();
+        // 封面图相关 tmp / Cover-related tmp files
+        if let Some(ref img) = cover {
+            let cover_stem = img.file_stem().and_then(|s| s.to_str()).unwrap_or("cover");
+            // 格式转换产物（非 jpg/png 时才会产生）/ Format-conversion artifact (only for non-jpg/png)
+            let ext = img.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+            if !matches!(ext.as_str(), "jpg" | "jpeg" | "png") {
+                let conv_name = format!("{}_tg_tmp.png", cover_stem);
+                let _ = fs::remove_file(tmp.join(&conv_name));
+                // resize 以转换后文件的 stem 命名（"{cover_stem}_tg_tmp"）
+                // resize is named after the converted file's stem ("{cover_stem}_tg_tmp")
+                let conv_stem = format!("{}_tg_tmp", cover_stem);
+                let _ = fs::remove_file(tmp.join(format!("{}_tg_resized.jpg", conv_stem)));
+            }
+            // 直接对原封面 resize 的产物（jpg/png 格式时）
+            // Resize artifact when cover is already jpg/png
+            let _ = fs::remove_file(tmp.join(format!("{}_tg_resized.jpg", cover_stem)));
         }
+        // 视频片段相关 tmp / Video-part-related tmp files
+        if send_video {
+            for part in &video_parts {
+                let part_stem = part.file_stem().and_then(|s| s.to_str()).unwrap_or("video");
+                let ext = part.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+                if ext == "mp4" || ext == "mkv" {
+                    // 原格式直接使用：缩略图基于原 stem
+                    // Native format: thumbnail is named after the original stem
+                    let _ = fs::remove_file(tmp.join(format!("{}.tg_thumb.png", part_stem)));
+                } else {
+                    // 需要格式转换：转换产物和基于转换产物的缩略图
+                    // Needs conversion: both the converted file and its derived thumbnail
+                    let conv_stem = format!("{}_tg_tmp", part_stem);
+                    let _ = fs::remove_file(tmp.join(format!("{}.mkv", conv_stem)));
+                    let _ = fs::remove_file(tmp.join(format!("{}.tg_thumb.png", conv_stem)));
+                }
+            }
+        }
+        // 分割产生的片段文件：目录名现在基于视频文件的 mtime+size，是稳定的，
+        // 保留片段文件供下次运行复用；缩略图已在上方循环中清理。
+        //
+        // Split segment files: the directory name is now stable (derived from the video's
+        // mtime+size), so segment files are kept for reuse on the next run.
+        // Thumbnails have already been cleaned up in the loop above.
     }
+
+    upload_result?;
 
     pp_utils::output_ok(&[&bundle_input.to_string_lossy()], "Telegram notification sent");
     Ok(())

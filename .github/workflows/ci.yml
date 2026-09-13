@@ -18,11 +18,11 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # ── 前端类型检查与构建 / Frontend type-check & build ────────────────────────
-  # 前端产物与平台无关，单平台检查足够。
-  # Frontend output is platform-independent; single-platform check is sufficient.
-  frontend:
-    name: Frontend (type-check + build)
+  # ── 前端类型检查 / Frontend type-check ──────────────────────────────────────
+  # 前端产物与平台无关，单平台检查足够；仅 vue-tsc 通过即可。
+  # Frontend is platform-independent; only type-check (vue-tsc) is required.
+  check-frontend:
+    name: Check frontend (vue-tsc)
     runs-on: ubuntu-22.04
 
     steps:
@@ -40,13 +40,13 @@ jobs:
         run: npm i
         working-directory: frontend
 
-      - name: Type-check & build
-        run: npm run build
+      - name: Type-check
+        run: npx vue-tsc --noEmit
         working-directory: frontend
 
   # ── 桌面端前端类型检查 / Desktop frontend type-check ────────────────────────
-  # 同上，前端与平台无关，单平台即可。
-  # Same reasoning — frontend is platform-independent.
+  # 同上，仅 vue-tsc 通过即可，不涉及 Rust。
+  # Same reasoning — frontend only, no Rust needed.
   check-desktop-frontend:
     name: Check desktop frontend (vue-tsc)
     runs-on: ubuntu-22.04
@@ -66,6 +66,21 @@ jobs:
         run: npm i
         working-directory: desktop
 
+      - name: Type-check
+        run: npx vue-tsc --noEmit
+        working-directory: desktop
+
+  # ── 桌面端后端检查 / Desktop backend check ──────────────────────────────────
+  # 拆分自原 check-desktop-frontend，单独跑 Tauri (Rust) 部分。
+  # Split from check-desktop-frontend; runs the Tauri (Rust) side only.
+  check-desktop-backend:
+    name: Check desktop backend (cargo)
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -83,10 +98,14 @@ jobs:
           workspaces: desktop/src-tauri -> ../../../build_tmp/desktop/target
           key: desktop-ci-linux
 
-      - name: Run desktop check
-        run: node scripts/check.desktop.js
+      - name: Check
+        run: cargo check --manifest-path desktop/src-tauri/Cargo.toml
         env:
-          CHECK_NESTED: "1"
+          CARGO_TARGET_DIR: build_tmp/desktop/target
+
+      - name: Clippy
+        run: cargo clippy --manifest-path desktop/src-tauri/Cargo.toml -- -D warnings
+        env:
           CARGO_TARGET_DIR: build_tmp/desktop/target
 
   # ── 服务器端三平台检查 / Server cross-platform check ──────────────────────
@@ -170,17 +189,19 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
+            modules/cleanup -> ../../build_tmp/modules/cleanup/target
             modules/contact_sheet -> ../../build_tmp/modules/contact_sheet/target
             modules/filter_short -> ../../build_tmp/modules/filter_short/target
             modules/notify_discord -> ../../build_tmp/modules/notify_discord/target
             modules/notify_telegram -> ../../build_tmp/modules/notify_telegram/target
             modules/pp_utils -> ../../build_tmp/modules/pp_utils/target
+            modules/ts_merge -> ../../build_tmp/modules/ts_merge/target
           key: modules-ci-${{ matrix.os }}
 
       - name: Check all modules
         shell: bash
         run: |
-          for module_dir in modules/contact_sheet modules/filter_short modules/notify_discord modules/notify_telegram modules/pp_utils; do
+          for module_dir in modules/cleanup modules/contact_sheet modules/filter_short modules/notify_discord modules/notify_telegram modules/pp_utils modules/ts_merge; do
             if [ -f "$module_dir/Cargo.toml" ]; then
               echo "=== Checking $module_dir ==="
               cargo check --manifest-path "$module_dir/Cargo.toml"
@@ -199,7 +220,7 @@ jobs:
   auto-tag:
     name: Auto-tag release
     runs-on: ubuntu-22.04
-    needs: [frontend, check-desktop-frontend, check-server, check-modules]
+    needs: [check-frontend, check-desktop-frontend, check-desktop-backend, check-server, check-modules]
     if: github.ref == 'refs/heads/master' && github.event_name == 'push'
 
     steps:

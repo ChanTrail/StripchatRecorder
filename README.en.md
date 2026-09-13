@@ -139,6 +139,18 @@ Modules are standalone executables implementing a simple protocol. They receive 
 
 Custom modules placed in the `modules` volume directory are discovered automatically and will not be overwritten when the container restarts. See the [Module Development Guide](docs/module-development.en.md) for details.
 
+### Desktop Module Install Path
+
+The Desktop installer packages (NSIS/MSI, AppImage, deb/rpm, dmg) do not place modules inside the app's install directory (which is read-only or unwritable for most installer types). Extract the downloaded `modules-{platform}.zip` into the `modules` subdirectory of the per-user data directory instead:
+
+| Platform | Path                                                          |
+| -------- | -------------------------------------------------------------- |
+| Windows  | `%APPDATA%\com.chantrail.stripchat-recorder\modules\`           |
+| macOS    | `~/Library/Application Support/com.chantrail.stripchat-recorder/modules/` |
+| Linux    | `~/.local/share/com.chantrail.stripchat-recorder/modules/` (or `$XDG_DATA_HOME`) |
+
+You can create the directory manually if it doesn't exist yet. The app watches this directory at runtime, so adding or removing modules doesn't require a restart.
+
 ---
 
 ## Building from Source

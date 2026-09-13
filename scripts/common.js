@@ -34,6 +34,48 @@ function moduleTarget(name) {
   return path.join(BUILD_TMP, "modules", name, "target");
 }
 
+/**
+ * 读取 desktop/src-tauri/tauri.conf.json 中的 `identifier` 字段。
+ * Read the `identifier` field from desktop/src-tauri/tauri.conf.json.
+ */
+function readDesktopIdentifier() {
+  const confPath = path.join(DESKTOP, "src-tauri", "tauri.conf.json");
+  const conf = JSON.parse(fs.readFileSync(confPath, "utf8"));
+  if (!conf.identifier) {
+    throw new Error(`Missing "identifier" field in ${confPath}`);
+  }
+  return conf.identifier;
+}
+
+/**
+ * 计算 Tauri `app_data_dir()` 在当前宿主机上解析到的路径，与
+ * desktop-tauri/src/lib.rs 中 `app_handle.path().app_data_dir()` 的结果一致
+ * （dev 模式下 desktop-tauri 从这里的 modules/ 子目录加载模块二进制，见
+ * dev.desktop.js）。
+ *
+ * 对应规则 / Matches Tauri's rules:
+ * - Windows: %APPDATA%\{identifier}\        (FOLDERID_RoamingAppData)
+ * - macOS:   ~/Library/Application Support/{identifier}/
+ * - Linux:   $XDG_DATA_HOME/{identifier}/ or ~/.local/share/{identifier}/
+ *
+ * Computes the path Tauri's `app_data_dir()` resolves to on the current host,
+ * matching `app_handle.path().app_data_dir()` in desktop-tauri/src/lib.rs (in dev
+ * mode, desktop-tauri loads module binaries from the modules/ subdirectory here,
+ * see dev.desktop.js).
+ */
+function desktopAppDataDir() {
+  const identifier = readDesktopIdentifier();
+  if (process.platform === "win32") {
+    const appData = process.env.APPDATA || path.join(require("os").homedir(), "AppData", "Roaming");
+    return path.join(appData, identifier);
+  }
+  if (process.platform === "darwin") {
+    return path.join(require("os").homedir(), "Library", "Application Support", identifier);
+  }
+  const xdgDataHome = process.env.XDG_DATA_HOME || path.join(require("os").homedir(), ".local", "share");
+  return path.join(xdgDataHome, identifier);
+}
+
 /** 枚举所有可构建的模块名（跳过纯库 crate）/ List all buildable module names (skip pure library crates) */
 function listModules() {
   const skip = new Set(["pp_utils"]);
@@ -386,6 +428,8 @@ module.exports = {
   DESKTOP_TARGET,
   NESTED,
   moduleTarget,
+  readDesktopIdentifier,
+  desktopAppDataDir,
   listModules,
   readPackageVersion,
   isStaleModuleBinary,

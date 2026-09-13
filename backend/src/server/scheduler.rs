@@ -292,6 +292,93 @@ pub fn start_update_check(app_state: Arc<AppState>, emitter: Arc<dyn Emitter>) {
     });
 }
 
+/// 启动后处理并发度负载自适应调节器。
+///
+/// 每 5 秒采样一次 CPU 和内存使用率，调用 `PpQueue::adjust_for_load` 在
+/// 用户配置的理论上限内动态收缩/扩展并发许可数。
+///
+/// 采样逻辑（`LoadSampler`）包含 sysinfo 状态，不跨线程共享，因此使用一个
+/// 专用的阻塞线程（`std::thread::spawn`）持续运行，通过 channel 把
+/// `LoadSnapshot` 发回 async 侧处理。
+///
+/// Start the post-processing concurrency load-adaptive regulator.
+///
+/// Samples CPU and memory usage every 5 seconds and calls
+/// `PpQueue::adjust_for_load` to dynamically shrink/expand the concurrency
+/// permit count within the user-configured theoretical upper bound.
+///
+/// Sampling logic (`LoadSampler`) holds sysinfo state that is not `Sync`,
+/// so it runs on a dedicated blocking thread (`std::thread::spawn`) and sends
+/// `LoadSnapshot` values back to the async side via a channel.
+pub fn start_pp_load_monitor(app_state: Arc<AppState>) {
+    // 采样间隔：5 秒 / Sampling interval: 5 seconds
+    const INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<crate::system::load_monitor::LoadSnapshot>(4);
+
+    // 将 pp_queue 的 running_count Arc 共享给阻塞线程，用于采样时读取实时任务数
+    // Share the pp_queue running_count Arc with the blocking thread for real-time task count
+    let pp_running_arc = app_state.pp_queue.running_count_arc();
+
+    // 阻塞线程：持续采样并将快照发送到 channel
+    // Blocking thread: continuously sample and send snapshots to the channel
+    std::thread::spawn(move || {
+        let mut sampler = crate::system::load_monitor::LoadSampler::new();
+        // 首次采样后稍等，让 sysinfo 建立 CPU 基准（至少 200ms）
+        // After first sample, wait briefly so sysinfo can establish a CPU baseline (≥ 200ms)
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        loop {
+            let running = pp_running_arc.load(std::sync::atomic::Ordering::Relaxed);
+            let snapshot = sampler.sample(running);
+            if tx.blocking_send(snapshot).is_err() {
+                // 接收端已关闭（程序退出），退出采样线程
+                // Receiver dropped (program exiting), exit sampling thread
+                break;
+            }
+            std::thread::sleep(INTERVAL);
+        }
+    });
+
+    // async 侧：接收快照并调整信号量
+    // Async side: receive snapshots and adjust semaphore
+    tokio::spawn(async move {
+        while let Some(snapshot) = rx.recv().await {
+            // 调整后处理并发度 / Adjust post-processing concurrency
+            app_state.pp_queue.adjust_for_load(&snapshot);
+
+            // 调整录制并发度：仅当用户配置了上限时才动态缩减
+            // （0 = 不限制，保持不变）
+            // Adjust recording concurrency: only shrink dynamically when user set a limit
+            // (0 = unlimited, leave unchanged)
+            let user_max = app_state.get_settings().max_concurrent;
+            if user_max > 0 {
+                let rec_running = app_state.active_recording_count
+                    .load(std::sync::atomic::Ordering::Relaxed);
+                let recommended = crate::system::load_monitor::recommend_permits(
+                    &snapshot,
+                    user_max,
+                    rec_running,
+                );
+                let effective = recommended.clamp(1, user_max);
+                app_state.effective_max_concurrent
+                    .store(effective, std::sync::atomic::Ordering::Relaxed);
+                tracing::debug!(
+                    "{}",
+                    crate::tl!(
+                        "scheduler.recordingConcurrencyAdjusted",
+                        effective = effective,
+                        user = user_max,
+                        running = rec_running,
+                        cpu = format!("{:.1}", snapshot.cpu_usage_pct),
+                        mem = format!("{:.1}", snapshot.mem_usage_pct),
+                        avail = snapshot.mem_available_bytes / 1024 / 1024
+                    )
+                );
+            }
+        }
+    });
+}
+
 /// 在 `run_server()` 中统一启动所有后台定时任务。
 ///
 /// Launch all background scheduled tasks from `run_server()`.
@@ -309,5 +396,6 @@ pub fn start_all(
     start_mouflon_sync(Arc::clone(&app_state), Arc::clone(&emitter));
     start_meta_cleanup(Arc::clone(&app_state), Arc::clone(&emitter));
     start_output_dir_maintenance(Arc::clone(&app_state), Arc::clone(&emitter), recorder);
-    start_update_check(app_state, emitter);
+    start_update_check(Arc::clone(&app_state), Arc::clone(&emitter));
+    start_pp_load_monitor(app_state);
 }

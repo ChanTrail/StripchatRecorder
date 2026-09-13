@@ -20,6 +20,7 @@ import { usePpStatusStore } from "@/stores/ppStatus";
 import { storeToRefs } from "pinia";
 import { useNotify } from "./useNotify";
 import { useI18n } from "vue-i18n";
+import type { PpExecutionEntry, PpNodeProgress } from "@/types/recordings";
 
 /** 后处理任务状态 / Post-processing task status */
 export type PpStatus = "idle" | "waiting" | "running" | "done" | "error";
@@ -110,15 +111,6 @@ export function makePpProgress(
 	prevModulePct = 0,
 	labels: PpProgressLabels = DEFAULT_LABELS,
 ): PpProgress {
-	const overallPctByNode =
-		overallTotal > 0 ? clampPct2((overallDone * 100) / overallTotal) : 0;
-	// 取节点计算值和后端上报值中的较大值，避免进度倒退
-	// Take the larger of node-calculated and backend-reported values to prevent progress regression
-	const overallPct =
-		overallTotal > 0
-			? Math.max(overallPctByNode, clampPct2(overallPctFallback))
-			: clampPct2(overallPctFallback);
-
 	const hasModuleProgress = moduleTotal > 0;
 	const rawModulePct = hasModuleProgress
 		? clampPct2((moduleDone * 100) / moduleTotal)
@@ -130,6 +122,19 @@ export function makePpProgress(
 	const modulePct = isSameModule
 		? Math.max(rawModulePct, prevModulePct)
 		: rawModulePct;
+
+	// 计算总进度：已完成节点 + 当前模块的进度（作为分数）
+	// Calculate overall progress: completed nodes + current module progress (as a fraction)
+	const overallPctByNode =
+		overallTotal > 0
+			? clampPct2(((overallDone + modulePct / 100) * 100) / overallTotal)
+			: 0;
+	// 取节点计算值和后端上报值中的较大值，避免进度倒退
+	// Take the larger of node-calculated and backend-reported values to prevent progress regression
+	const overallPct =
+		overallTotal > 0
+			? Math.max(overallPctByNode, clampPct2(overallPctFallback))
+			: clampPct2(overallPctFallback);
 
 	// 计算当前执行的模块序号（1-based）
 	// Calculate the current executing module index (1-based)
@@ -161,13 +166,144 @@ export function makePpProgress(
 }
 
 /**
+ * 从 meta 的 pp_execution 和 pp_progress 字段直接计算 PpProgress。
+ *
+ * 规则：
+ * - result != null 的条目 → 已完成（用于 overallDone / moduleResults）
+ * - result == null 的条目 → 正在执行（当前节点）
+ * - pp_progress → 当前节点的模块内进度
+ * - overallTotal 来自 pipelineTotal 参数（当前流水线配置中启用且非内置的节点数），
+ *   而非 pp_execution 的条目数——后者在流水线刚开始执行、或部分重新触发时不完整，
+ *   不能作为总量的权威来源。
+ *
+ * Build PpProgress directly from meta's pp_execution and pp_progress fields.
+ *
+ * Rules:
+ * - Entry with result != null → completed (contributes to overallDone / moduleResults)
+ * - Entry with result == null → currently executing (current node)
+ * - pp_progress → intra-module progress of the current node
+ * - overallTotal comes from the pipelineTotal parameter (enabled, non-builtin node count
+ *   in the current pipeline config), not the number of pp_execution entries — the latter
+ *   is incomplete when the pipeline has just started or is partially re-triggered, so it
+ *   cannot serve as the authoritative total.
+ *
+ * @param pipelineTotal - 当前流水线的总节点数（见 countPipelineTotal）/ Current pipeline's total node count (see countPipelineTotal)
+ */
+export function ppProgressFromMeta(
+	ppExecution: PpExecutionEntry[] | null | undefined,
+	ppProgress: PpNodeProgress | null | undefined,
+	pipelineTotal: number,
+	labels: PpProgressLabels = DEFAULT_LABELS,
+	/**
+	 * 可选：当前流水线中存在的节点有效 ID 集合（`node_id ?? module_id`）。
+	 * 传入时会过滤掉不在集合里的历史记录——用于后处理运行中的实时快照（
+	 * `postprocess-meta-update`），避免流水线删除某节点后、`set_pp_done`
+	 * 还没写入最终 meta 之前，那个节点的旧记录仍然出现在进度列表里。
+	 * 不传时不过滤（用于从已落盘的最终 meta 还原，那里的记录已经是干净的）。
+	 *
+	 * Optional: set of effective IDs (node_id ?? module_id) of nodes that currently
+	 * exist in the pipeline. When provided, entries for nodes absent from this set are
+	 * filtered out — used for real-time snapshots during execution
+	 * (postprocess-meta-update) to prevent stale records of deleted nodes from
+	 * appearing in the progress list before set_pp_done writes the final clean meta.
+	 * Omit when restoring from the final persisted meta (already clean).
+	 */
+	knownNodeIds?: Set<string>,
+): PpProgress {
+	const entries = ppExecution ?? [];
+
+	// 过滤掉内置节点（module_id 包含 __builtin__），并按有效 ID（node_id ?? module_id）
+	// 去重，只保留每个节点最新的一条记录——重新触发后处理时，pp_execution 中可能同时
+	// 存在同一节点的旧记录（被跳过，来自上次成功）和新记录（本次重新执行），需要以
+	// 后者覆盖前者，避免同一节点被计数两次。
+	//
+	// Filter out builtin nodes (module_id contains __builtin__), and dedupe by effective ID
+	// (node_id ?? module_id), keeping only the latest record per node — when post-processing
+	// is re-triggered, pp_execution may contain both a stale record (skipped, from the
+	// previous successful run) and a fresh one (re-executed this time) for the same node;
+	// the latter must take precedence so the node isn't counted twice.
+	const dedup = new Map<string, PpExecutionEntry>();
+	for (const e of entries) {
+		if (e.module_id.includes("__builtin__")) continue;
+		dedup.set(e.node_id ?? e.module_id, e);
+	}
+	// 若传入了当前流水线的节点 ID 集合，过滤掉已不在流水线中的历史记录
+	// If the current pipeline's node ID set is provided, filter out stale records
+	// for nodes that no longer exist in the pipeline
+	let userNodes = Array.from(dedup.values());
+	if (knownNodeIds) {
+		userNodes = userNodes.filter((e) => knownNodeIds.has(e.node_id ?? e.module_id));
+	}
+
+	// 统计已完成的节点数；总数使用当前流水线配置的节点数（权威来源）
+	// Count completed nodes; total uses the current pipeline config's node count (authoritative)
+	const overallDone = userNodes.filter((e) => e.result != null).length;
+	const overallTotal = pipelineTotal;
+
+	// 查找第一个正在执行的节点
+	// Find the first running node
+	const runningNode = userNodes.find((e) => e.result == null);
+
+	const moduleResults = userNodes
+		.filter((e) => e.result != null)
+		.map((e) => ({
+			moduleId: e.module_id,
+			success:
+				e.result?.code === "ok" ||
+				e.result?.code === "done" ||
+				e.result?.code === "skipped",
+			message: e.result?.message ?? "",
+		}));
+
+	const moduleName = runningNode?.module_id ?? ppProgress?.module_id ?? "";
+	const modDone = ppProgress?.mod_done ?? 0;
+	// mod_total 固定为 10000（PROGRESS_SCALE）——但仅当确实存在正在执行的节点时才
+	// 传给 makePpProgress，否则传 0。
+	//
+	// 若没有正在执行的节点（runningNode 为 undefined，即所有条目都已有 result），
+	// 却仍无条件传一个非零的 modTotal，会导致 makePpProgress 内部
+	// `hasModuleProgress = moduleTotal > 0` 恒为 true，进而虚构出一条
+	// "当前模块 0% / 处理中" 的进度行——即使流水线已经全部跑完。这正是"总进度
+	// 5/5 100%，但模块行卡在'处理中 0.00%'"现象的直接原因：整体进度和模块进度
+	// 是两个独立字段，整体进度不为 100% 不代表模块进度就该显示"运行中"。
+	//
+	// mod_total is fixed at 10000 (PROGRESS_SCALE) — but only passed to
+	// makePpProgress when a node is actually running; otherwise 0 is passed.
+	//
+	// If no node is currently running (runningNode is undefined, i.e. every entry
+	// already has a result) but a non-zero modTotal is still passed unconditionally,
+	// makePpProgress's internal `hasModuleProgress = moduleTotal > 0` is always true,
+	// fabricating a "current module 0% / processing" row even though the pipeline has
+	// fully finished. This is the direct cause of "overall progress 5/5 100%, but the
+	// module row stuck at 'processing 0.00%'" — overall progress and module progress
+	// are independent fields; overall not being 100% doesn't mean module progress
+	// should show "running".
+	const modTotal = runningNode ? 10000 : 0;
+
+	return {
+		...makePpProgress(
+			overallDone,
+			overallTotal,
+			modDone,
+			modTotal,
+			moduleName,
+			overallTotal > 0 ? clampPct2((overallDone * 100) / overallTotal) : 0,
+			"",
+			0,
+			labels,
+		),
+		moduleResults,
+	};
+}
+
+/**
  * 后处理任务状态与操作。
  * Post-processing task state and operations.
  */
 export function usePostprocess() {
 	const ppStore = usePostprocessStore();
 	const ppStatusStore = usePpStatusStore();
-	const { toast } = useNotify();
+	const { toast, notify } = useNotify();
 	const { t } = useI18n();
 
 	/** i18n 标签，传入 makePpProgress / i18n labels passed to makePpProgress */
@@ -180,69 +316,17 @@ export function usePostprocess() {
 	const { ppStatus, ppProgress, moduleOutputs } = storeToRefs(ppStatusStore);
 
 	/**
-	 * 根据当前流水线配置推断模块输出路径（无需请求后端）。
-	 * Infer module output paths from the current pipeline config (without requesting backend).
-	 *
-	 * @param videoPath - 视频文件路径 / Video file path
-	 * @returns 模块 ID -> 输出路径 的映射 / Map of module ID -> output path
-	 */
-	function inferModuleOutputs(videoPath: string): Record<string, string> {
-		const outputs: Record<string, string> = {};
-		const pipeline = ppStore.pipeline;
-		if (!pipeline?.nodes) return outputs;
-		// 兼容 Windows 和 Unix 路径分隔符 / Handle both Windows and Unix path separators
-		const sep = videoPath.includes("\\") ? "\\" : "/";
-		const parts = videoPath.split(sep);
-		const filename = parts[parts.length - 1];
-		const dir = parts.slice(0, -1).join(sep);
-		const stem = filename.includes(".")
-			? filename.slice(0, filename.lastIndexOf("."))
-			: filename;
-		for (const node of pipeline.nodes) {
-			if (!node.enabled) continue;
-			// contact_sheet 模块：输出与视频同名的图片文件
-			// contact_sheet module: outputs an image file with the same name as the video
-			if (node.moduleId === "contact_sheet") {
-				const format = (node.params?.format as string) ?? "webp";
-				outputs["contact_sheet"] = `${dir}${sep}${stem}.${format}`;
-			}
-		}
-		return outputs;
-	}
-
-	/**
-	 * 从后端获取指定文件的模块输出路径。
-	 * Fetch module output paths for a specific file from the backend.
-	 *
-	 * @param path - 视频文件路径 / Video file path
-	 */
-	async function fetchModuleOutputs(path: string) {
-		try {
-			const result = await call<Record<string, string>>("get_module_outputs", {
-				path,
-			});
-			if (result && Object.keys(result).length > 0) {
-				moduleOutputs.value = { ...moduleOutputs.value, [path]: result };
-			}
-		} catch {
-			toast(t("usePostprocess.fetchOutputFailed"), "error");
-		}
-	}
-
-	/**
 	 * 触发对指定文件执行后处理流水线。
 	 * Trigger post-processing pipeline execution for a specific file.
 	 *
 	 * @param path - 视频文件路径 / Video file path
 	 */
 	async function runPostprocess(path: string) {
-		ppStatus.value[path] = "running";
-		ppProgress.value[path] = makePpProgress(0, 0, 0, 0, "", 0, "", 0, ppLabels());
 		try {
 			await call("run_postprocess_cmd", { path });
+			// 状态由 SSE 事件驱动：postprocess-waiting → postprocess-started → …
+			// Status is driven by SSE events: postprocess-waiting → postprocess-started → …
 		} catch (e) {
-			ppStatus.value[path] = "error";
-			delete ppProgress.value[path];
 			toast(String(e), "error");
 		}
 	}
@@ -301,19 +385,24 @@ export function usePostprocess() {
 
 	/**
 	 * 处理后处理完成事件，更新状态并触发文件列表刷新。
+	 *
+	 * toast 提示只展示具体的视频文件名，不逐一列出每个模块的执行情况——用户
+	 * 关心的是"哪个视频处理完了"，模块级别的成功/失败明细已经能在后处理列的
+	 * 进度/状态展示中查看，重复堆在 toast 里反而降低可读性（尤其流水线模块
+	 * 较多时，一条 toast 文字会很长）。失败时的详细模块信息保留在 message 里，
+	 * 但同样以文件名作为提示的主体。
+	 *
 	 * Handle post-processing done event, update state and trigger file list reload.
 	 *
-	 * @param payload - 后端推送的完成事件数据 / Done event data from backend
-	 * @param onLoad - 文件列表刷新回调 / File list reload callback
-	 * @param isFileDeleted - 文件是否已被用户删除（为 true 时跳过 toast 提示）/ Whether the file was deleted by the user (skip toast if true)
+	 * The toast only shows the specific video's filename, not a per-module rundown —
+	 * users care about "which video finished", and per-module success/failure detail
+	 * is already visible in the post-processing column's progress/status display;
+	 * repeating it in the toast only hurts readability (especially with pipelines that
+	 * have many modules, where the toast text would get very long). Failure detail is
+	 * still included in the message, but the filename remains the toast's main subject.
 	 */
-	function handlePostprocessDone(
-		payload: {
-			path: string;
-			success: boolean;
-			message?: string;
-			pp_execution?: { module_id: string; result?: { code: string; message?: string } | null }[];
-		},
+	async function handlePostprocessDone(
+		payload: { path: string; success: boolean; message?: string },
 		onLoad: () => Promise<void>,
 		isFileDeleted?: () => boolean,
 	) {
@@ -321,55 +410,41 @@ export function usePostprocess() {
 		ppStatus.value[payload.path] = allOk ? "done" : "error";
 
 		const deleted = isFileDeleted?.() ?? false;
+		const fileName = payload.path.split(/[\\/]/).pop() ?? payload.path;
 
-		// 若 payload 携带完整的 pp_execution，立即更新 moduleResults（含被跳过的节点）
-		// If payload carries full pp_execution, update moduleResults immediately (including skipped nodes)
-		if (payload.pp_execution && payload.pp_execution.length > 0) {
-			const results = payload.pp_execution
-				.filter((e) => e.result != null)
-				.map((e) => ({
-					moduleId: e.module_id,
-					success: e.result?.code === "ok" || e.result?.code === "done" || e.result?.code === "skipped",
-					message: e.result?.message ?? "",
-				}));
-			if (results.length > 0) {
-				ppProgress.value[payload.path] = {
-					...makePpProgress(
-						allOk ? results.length : 0,
-						results.length,
-						0, 0, "", allOk ? 100 : 0, "", 0,
-						ppLabels(),
-					),
-					moduleResults: results,
-				};
-			}
-		} else if (allOk) {
-			ppProgress.value[payload.path] = {
-				...makePpProgress(0, 0, 0, 0, "", 100, "", 0, ppLabels()),
-			};
-		} else {
-			ppProgress.value[payload.path] = {
-				...makePpProgress(0, 0, 0, 0, "", 0, "", 0, ppLabels()),
-			};
-		}
-
-		if (!deleted) {
-			if (allOk) {
-				toast(t("usePostprocess.done", { modules: "" }).replace(" →", "").trim(), "success");
-			} else if (payload.message) {
-				toast(t("usePostprocess.failed", { moduleId: "", message: payload.message }), "error");
-			}
-		}
+		// 执行 onLoad() 刷新文件列表（meta 已是最新，进度由 postprocess-meta-update 维护）
+		// Execute onLoad() to refresh file list (meta is up-to-date; progress maintained by postprocess-meta-update)
+		await onLoad();
 
 		if (allOk) {
-			const inferred = inferModuleOutputs(payload.path);
-			if (Object.keys(inferred).length > 0) {
-				moduleOutputs.value = { ...moduleOutputs.value, [payload.path]: inferred };
-			} else {
-				fetchModuleOutputs(payload.path);
+			if (!deleted) {
+				notify(t("usePostprocess.doneForFile", { name: fileName }), "success");
+			}
+			// moduleOutputs 已通过上面的 onLoad()（内部调用 syncModuleOutputsFromFiles）
+			// 从刷新后的 meta.pp_execution 中提取真实、经校验的输出路径，无需在此
+			// 额外推断或请求——避免展示未经确认成功（result.code !== "ok"）或凭
+			// 命名规则猜测（可能与实际参数不符）的路径。
+			//
+			// moduleOutputs was already populated by the onLoad() call above (which
+			// internally calls syncModuleOutputsFromFiles) from the refreshed
+			// meta.pp_execution — real, validated output paths. No need to infer or
+			// fetch separately here, avoiding paths that weren't confirmed successful
+			// (result.code !== "ok") or guessed from naming conventions (which may not
+			// match the actual params).
+		} else {
+			if (!deleted) {
+				const failedModules = ppProgress.value[payload.path]?.moduleResults?.filter((r) => !r.success);
+				const detail = failedModules?.length
+					? failedModules.map((r) => `${r.moduleId}: ${r.message}`).join("; ")
+					: payload.message;
+				notify(
+					detail
+						? t("usePostprocess.failedWithDetail", { name: fileName, detail })
+						: t("usePostprocess.failedGeneric", { name: fileName }),
+					"error",
+				);
 			}
 		}
-		return onLoad();
 	}
 
 	/**
@@ -386,8 +461,6 @@ export function usePostprocess() {
 		ppStatus,
 		ppProgress,
 		moduleOutputs,
-		inferModuleOutputs,
-		fetchModuleOutputs,
 		runPostprocess,
 		restoreFromBackend,
 		handlePostprocessDone,

@@ -148,7 +148,11 @@ impl RecorderManager {
         }
 
         let settings = self.state.get_settings();
-        if settings.max_concurrent > 0 && self.active_count() >= settings.max_concurrent {
+        let effective_max = self.state.effective_max_concurrent
+            .load(std::sync::atomic::Ordering::Relaxed);
+        // 0 = 不限制；否则检查当前活跃数是否已达上限（负载自适应后的有效值）
+        // 0 = unlimited; otherwise check if active count has reached the effective cap
+        if effective_max > 0 && self.active_count() >= effective_max {
             return Err(AppError::Other(
                 "Max concurrent recordings reached".to_string(),
             ));
@@ -171,6 +175,7 @@ impl RecorderManager {
         };
 
         self.sessions.write().insert(username.to_string(), session);
+        self.state.active_recording_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         // 录制开始时立即创建 meta，写入 recording 状态
         // Create meta immediately when recording starts, with "recording" status
@@ -228,6 +233,7 @@ impl RecorderManager {
             });
 
             manager.sessions.write().remove(&username);
+            manager.state.active_recording_count.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
 
             // 录制结束后清理 segment_stats 缓存（以 session_dir 路径为 key）
             // Clean up segment_stats cache after recording ends (keyed by session_dir path)
@@ -259,11 +265,6 @@ impl RecorderManager {
             // After recording ends, trigger the post-processing pipeline as-is per user config.
             // If no enabled nodes exist in the user pipeline, skip post-processing entirely.
             tokio::task::spawn_blocking(move || {
-                let _startup_guard = state_clone
-                    .startup_lock
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-
                 let user_pipeline = state_clone.get_pipeline();
 
                 // 若流水线中没有任何启用节点，直接跳过后处理
@@ -406,12 +407,6 @@ impl RecorderManager {
         let emitter_owned = Arc::clone(emitter);
 
         tokio::task::spawn_blocking(move || {
-            let _startup_guard = manager
-                .state
-                .startup_lock
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-
             let user_pipeline = manager.state.get_pipeline();
             if !user_pipeline.nodes.iter().any(|n| n.enabled) {
                 return;
@@ -845,6 +840,7 @@ impl RecorderManager {
                             Err(e) => {
                                 tracing::error!("{}", crate::tl!("recorder.ffmpegConvertFailed", seq = segment.sequence, error = e)
                                 );
+                                cdn_failures += 1;
                             }
                         }
                     }
@@ -859,10 +855,7 @@ impl RecorderManager {
         }
 
         if new_segments > 0 && cdn_failures == new_segments {
-            return Err(AppError::Other(format!(
-                "All {} new segments failed (CDN 404 / token expired), refreshing playlist",
-                new_segments
-            )));
+            return Ok((0, cdn_failures));
         }
 
         Ok((written, cdn_failures))

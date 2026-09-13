@@ -67,13 +67,15 @@
 	 */
 	const ppCancelledByDelete = new Set<string>();
 
-	/** 磁盘空间信息 / Disk space information */
-	interface DiskSpace {
+	/** 磁盘空间条目 / Disk space entry */
+	interface DiskSpaceEntry {
+		label: string; // "ts_fragment" | "ts_merge"
+		path: string;
 		total_bytes: number;
 		available_bytes: number;
 		used_bytes: number;
 	}
-	const diskSpace = ref<DiskSpace | null>(null);
+	const diskSpaces = ref<DiskSpaceEntry[]>([]);
 
 	/**
 	 * 从后端刷新磁盘空间信息。
@@ -81,7 +83,7 @@
 	 */
 	async function refreshDiskSpace() {
 		try {
-			diskSpace.value = await call<DiskSpace>("get_disk_space");
+			diskSpaces.value = await call<DiskSpaceEntry[]>("get_disk_space");
 		} catch {}
 	}
 
@@ -368,14 +370,26 @@
 		() => files.value.filter((f) => f.is_recording).length,
 	);
 
-	/** 磁盘使用率百分比 / Disk usage percentage */
-	const diskUsedPct = computed(() => {
-		if (!diskSpace.value || diskSpace.value.total_bytes === 0) return 0;
-		return Math.min(
-			100,
-			(diskSpace.value.used_bytes / diskSpace.value.total_bytes) * 100,
-		);
-	});
+	/** 各磁盘使用率百分比 / Disk usage percentage per entry */
+	function diskUsedPct(entry: DiskSpaceEntry) {
+		if (entry.total_bytes === 0) return 0;
+		return Math.min(100, (entry.used_bytes / entry.total_bytes) * 100);
+	}
+
+	/**
+	 * 根据磁盘使用率返回三级颜色等级。
+	 * Return a three-level color tier based on disk usage ratio.
+	 * - "warn"  : 50% ≤ used < 80%
+	 * - "danger": used ≥ 80%
+	 * - ""      : normal (< 50%)
+	 */
+	function diskColorTier(entry: DiskSpaceEntry): "warn" | "danger" | "" {
+		if (entry.total_bytes === 0) return "";
+		const pct = (entry.used_bytes / entry.total_bytes) * 100;
+		if (pct >= 80) return "danger";
+		if (pct >= 50) return "warn";
+		return "";
+	}
 	onMounted(async () => {
 		await load();
 		startTick();
@@ -660,27 +674,40 @@
 						>
 					</span>
 				</div>
-				<div v-if="diskSpace" class="mt-2 flex items-center gap-2 max-w-xs">
-					<Progress
-						:model-value="diskUsedPct"
-						class="h-1.5 flex-1"
-						:class="
-							diskSpace.available_bytes < 5 * 1024 ** 3
-								? '[&>div]:bg-destructive'
-								: ''
-						"
-					/>
-					<span
-						class="text-xs text-muted-foreground whitespace-nowrap tabular-nums"
-						:class="
-							diskSpace.available_bytes < 5 * 1024 ** 3
-								? 'text-destructive'
-								: ''
-						"
+				<div
+					class="mt-2 flex gap-3"
+					:class="isMobile ? 'flex-col' : 'flex-row'"
+				>
+					<div
+						v-for="entry in diskSpaces"
+						:key="entry.label"
+						class="flex flex-col gap-1"
+						:class="isMobile ? '' : 'min-w-40 max-w-56 flex-1'"
 					>
-						{{ formatSize(diskSpace.used_bytes) }} /
-						{{ formatSize(diskSpace.total_bytes) }}
-					</span>
+						<div class="flex items-center justify-between gap-2">
+							<span class="text-xs text-muted-foreground whitespace-nowrap">
+								{{ t(`recordings.diskLabel.${entry.label}`) }}
+							</span>
+							<span
+								class="text-xs text-muted-foreground whitespace-nowrap tabular-nums"
+								:class="{
+									'text-destructive': diskColorTier(entry) === 'danger',
+									'text-yellow-500':  diskColorTier(entry) === 'warn',
+								}"
+							>
+								{{ formatSize(entry.used_bytes) }} /
+								{{ formatSize(entry.total_bytes) }}
+							</span>
+						</div>
+						<Progress
+							:model-value="diskUsedPct(entry)"
+							class="h-1.5"
+							:class="{
+								'[&>div]:bg-destructive': diskColorTier(entry) === 'danger',
+								'[&>div]:bg-yellow-500':  diskColorTier(entry) === 'warn',
+							}"
+						/>
+					</div>
 				</div>
 			</div>
 			<div class="flex gap-2 shrink-0" :class="isMobile ? 'flex-col items-end' : ''">

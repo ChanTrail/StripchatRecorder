@@ -25,6 +25,8 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { loadLocaleFromServer } from "@/i18n";
 import { useModuleLocaleStore } from "@/stores/moduleLocale";
 import { useLocalesStore } from "@/stores/locales";
+import { useDirectoryBrowser } from "@/composables/useDirectoryBrowser";
+import { FolderOpen } from "@lucide/vue";
 
 const router = useRouter();
 const { t, locale } = useI18n();
@@ -47,6 +49,8 @@ const outputDir = ref("");
 const apiProxy = ref("");
 const scMirror = ref("");
 const cdnProxy = ref("");
+const communityProxy = ref("");
+const communityMirror = ref("");
 
 /** 可用语言列表（从共享 store 读取，由 App.vue 统一维护）
  * Available locales (from shared store, maintained by App.vue) */
@@ -69,7 +73,17 @@ onMounted(async () => {
 	apiProxy.value = s.api_proxy_url || "";
 	scMirror.value = s.sc_mirror_url || "";
 	cdnProxy.value = s.cdn_proxy_url || "";
+	communityProxy.value = s.community_proxy_url || "";
+	communityMirror.value = s.community_mirror_url || "";
 });
+
+// ── 目录浏览器 / Directory browser ───────────────────────────────────────────
+const { open: openDirectoryBrowser } = useDirectoryBrowser();
+function browseOutputDir() {
+	openDirectoryBrowser(outputDir.value, (picked) => {
+		outputDir.value = picked;
+	});
+}
 
 // ── 语言切换 / Language switch ───────────────────────────────────────────────
 async function setLanguage(lang: string) {
@@ -78,6 +92,7 @@ async function setLanguage(lang: string) {
 	// Load messages first, then switch locale to avoid vue-i18n rendering with fallback
 	const { modules: moduleLocales, warning } = await loadLocaleFromServer(lang);
 	locale.value = lang;
+	localStorage.setItem("locale", lang);
 	moduleLocaleStore.setLocales(lang, moduleLocales);
 	if (warning) {
 		// SetupView 没有 toast，用 error ref 展示
@@ -125,6 +140,8 @@ async function finish() {
 			api_proxy_url: apiProxy.value.trim() || null,
 			sc_mirror_url: scMirror.value.trim() || null,
 			cdn_proxy_url: cdnProxy.value.trim() || null,
+			community_proxy_url: communityProxy.value.trim() || null,
+			community_mirror_url: communityMirror.value.trim() || null,
 			setup_done: true,
 		});
 		await router.replace("/");
@@ -143,7 +160,7 @@ async function finish() {
 			<!-- 标题 / Title -->
 			<div class="flex flex-col gap-1.5">
 				<div class="flex items-center gap-2.5">
-					<span class="w-3 h-3 rounded-full bg-destructive shrink-0" />
+					<img src="/icon.png" alt="icon" class="w-6 h-6 shrink-0" />
 					<span class="text-lg font-bold">StripchatRecorder</span>
 				</div>
 				<h1 class="text-2xl font-bold mt-1">{{ t("setup.title") }}</h1>
@@ -212,12 +229,24 @@ async function finish() {
 							</div>
 							<div class="flex flex-col gap-2">
 								<Label>{{ t("settings.outputDir.label") }}</Label>
-								<Input
-									v-model="outputDir"
-									:placeholder="t('setup.step2.placeholder')"
-									autocomplete="off"
-									autofocus
-								/>
+								<div class="flex items-center gap-1.5">
+									<Input
+										v-model="outputDir"
+										:placeholder="t('setup.step2.placeholder')"
+										autocomplete="off"
+										autofocus
+										class="flex-1"
+									/>
+									<Button
+										type="button"
+										variant="outline"
+										size="icon"
+										:title="t('settings.outputDir.pick')"
+										@click="browseOutputDir"
+									>
+										<FolderOpen class="size-4" />
+									</Button>
+								</div>
 								<p class="text-xs text-muted-foreground">{{ t("setup.step2.hint") }}</p>
 							</div>
 						</template>
@@ -241,6 +270,15 @@ async function finish() {
 									<Label>{{ t("settings.cdnProxy.label") }}</Label>
 									<Input v-model="cdnProxy" :placeholder="t('settings.cdnProxy.placeholder')" autocomplete="off" />
 								</div>
+								<div class="flex flex-col gap-1.5">
+									<Label>{{ t("settings.communityProxy.label") }}</Label>
+									<Input v-model="communityProxy" :placeholder="t('settings.communityProxy.placeholder')" autocomplete="off" />
+								</div>
+								<div class="flex flex-col gap-1.5">
+									<Label>{{ t("settings.communityMirror.label") }}</Label>
+									<Input v-model="communityMirror" :placeholder="t('settings.communityMirror.placeholder')" autocomplete="off" />
+									<p class="text-xs text-muted-foreground">{{ t("settings.communityMirror.hint") }}</p>
+								</div>
 							</div>
 						</template>
 
@@ -258,9 +296,6 @@ async function finish() {
 				</Button>
 
 				<div class="flex items-center gap-3">
-					<Button v-if="step === 3" variant="ghost" :disabled="saving" @click="finish">
-						{{ t("setup.skip") }}
-					</Button>
 					<Button v-if="step < TOTAL_STEPS" :disabled="!canNext" @click="next">
 						{{ t("setup.next") }}
 					</Button>

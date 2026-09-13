@@ -25,6 +25,7 @@
 	import { onMounted, onUnmounted, reactive, ref, watch, nextTick } from "vue";
 	import { call, on } from "@/lib/api";
 	import { useSettingsStore, type Settings, type MouflonKeysStore } from "../stores/settings";
+	import { useSystemStore } from "../stores/system";
 	import { useAuthStore } from "../stores/auth";
 	import { useNotify } from "../composables/useNotify";
 	import { useRouter } from "vue-router";
@@ -54,6 +55,7 @@
 	import { FolderOpen, Eye, EyeOff } from "@lucide/vue";
 
 	const store = useSettingsStore();
+	const systemStore = useSystemStore();
 	const { toast, confirm } = useNotify();
 	const { t, locale } = useI18n();
 	const moduleLocaleStore = useModuleLocaleStore();
@@ -105,6 +107,7 @@
 		community_mirror_url: null,
 		community_terms_accepted: false,
 		setup_done: true,
+		max_pp_concurrent: 0,
 	});
 
 	// 保存各代理字段的原始值，用于检测是否有实际变更
@@ -124,7 +127,7 @@
 
 	onMounted(async () => {
 		await store.initListeners();
-		await store.fetchSettings();
+		await Promise.all([store.fetchSettings(), systemStore.fetchSystemInfo()]);
 		Object.assign(form, store.settings);
 		originalOutputDir.value = form.output_dir;
 		originalApiProxy.value = form.api_proxy_url;
@@ -164,6 +167,7 @@
 			resolution_preference: form.resolution_preference,
 			max_tmp_dir_gb: form.max_tmp_dir_gb,
 			sc_mirror_scheme: form.sc_mirror_scheme,
+			max_pp_concurrent: form.max_pp_concurrent,
 		}),
 		async () => {
 			if (!initialized) return;
@@ -578,7 +582,7 @@
 					<NumberField
 						:model-value="form.max_concurrent"
 						:min="0"
-						:max="50"
+						:max="systemStore.maxConcurrentCap > 0 ? systemStore.maxConcurrentCap : undefined"
 						class="w-32"
 						@update:model-value="
 							(v) => v !== undefined && (form.max_concurrent = v)
@@ -591,6 +595,26 @@
 						</NumberFieldContent>
 					</NumberField>
 					<p class="text-xs text-muted-foreground">{{ t("settings.maxConcurrent.hint") }}</p>
+				</div>
+
+				<div class="flex flex-col gap-1.5">
+					<Label>{{ t("settings.maxPpConcurrent.label") }}</Label>
+					<NumberField
+						:model-value="form.max_pp_concurrent"
+						:min="0"
+						:max="systemStore.maxPpConcurrentCap > 0 ? systemStore.maxPpConcurrentCap : undefined"
+						class="w-32"
+						@update:model-value="
+							(v) => v !== undefined && (form.max_pp_concurrent = v)
+						"
+					>
+						<NumberFieldContent>
+							<NumberFieldDecrement />
+							<NumberFieldInput />
+							<NumberFieldIncrement />
+						</NumberFieldContent>
+					</NumberField>
+					<p class="text-xs text-muted-foreground">{{ t("settings.maxPpConcurrent.hint") }}</p>
 				</div>
 
 				<div class="flex flex-col gap-1.5">

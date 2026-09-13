@@ -255,6 +255,9 @@
 			toast(String(e), "error");
 		}
 	}
+
+	/**
+	 * 批量移除当前选中的可见主播，带确认对话框。
 	 * 移除前取消所有相关后处理任务并清理合并队列状态。
 	 *
 	 * Batch remove currently selected visible streamers, with confirmation dialog.

@@ -8,10 +8,10 @@
 
 use std::sync::Arc;
 use stripchat_recorder_lib::{
-    config::settings::AppState,
+    config::app_state::AppState,
     core::emitter::Emitter,
     recording::recorder::RecorderManager,
-    streaming::monitor::StatusMonitor,
+    platform::monitor::StatusMonitor,
 };
 
 /// Tauri 托管的全局应用状态。

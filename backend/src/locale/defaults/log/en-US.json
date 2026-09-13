@@ -49,6 +49,9 @@
     "streamerRenamed": "Streamer renamed: {oldUsername} -> {newUsername}",
     "streamerRenameSkipped": "Streamer rename skipped for {username}: {error}"
   },
+  "maintenance": {
+    "tmpCleanup": "tmp cleanup: removed {count} stale file(s), freed {mb} MB"
+  },
   "meta": {
     "migrationCreateDirFailed": "Meta migration: failed to create dir {dir}: {error}",
     "migrationTargetExists": "Meta migration: target already exists, skipping {path}",
@@ -63,11 +66,13 @@
     "scanCreatedVideo": "Meta scan: created pp_waiting meta for video {path}",
     "scanCorruptVideo": "Meta scan: corrupt meta for video {path} — recreating as pp_waiting",
     "scanStaleVideo": "Meta scan: stale {status} status for video {path} (not tracked by this process) — re-triggering post-processing",
+    "scanRetryVideo": "Meta scan: video {path} previously failed (pp_error) — auto-retrying on restart",
     "scanRepairedVideo": "Meta scan: repaired fields for video {path}",
     "scanUnrepairableVideo": "Meta scan: unrepairable meta for video {path} — rebuilding as pp_waiting",
     "scanCreatedSessionDir": "Meta scan: created pp_waiting meta for session_dir {path}",
     "scanCorruptSessionDir": "Meta scan: corrupt meta for session_dir {path} — recreating as pp_waiting",
     "scanStaleSessionDir": "Meta scan: stale {status} status for session_dir {path} (not tracked by this process) — re-triggering post-processing",
+    "scanRetrySessionDir": "Meta scan: session_dir {path} previously failed (pp_error) — auto-retrying on restart",
     "scanRepairedSessionDir": "Meta scan: repaired fields for session_dir {path}",
     "scanUnrepairableSessionDir": "Meta scan: unrepairable meta for session_dir {path} — rebuilding as pp_waiting",
     "writeMetaFailed": "Failed to write meta file {path}: {error}",
@@ -81,7 +86,8 @@
     "mouflonSettingsChanged": "Mouflon sync: settings changed, triggering immediate sync",
     "updateAvailable": "New version available: {latest} (current: {current})",
     "updateUpToDate": "Update check: already on latest version {current}",
-    "updateCheckFailed": "Update check failed (will retry in 24 h): {error}"
+    "updateCheckFailed": "Update check failed (will retry in 24 h): {error}",
+    "recordingConcurrencyAdjusted": "recording: effective={effective} (user={user}, running={running}, cpu={cpu}%, mem={mem}%, mem_avail={avail}MB)"
   },
   "watcher": {
     "recordingsCreateDirFailed": "Failed to create watch dir {dir}: {error}",
@@ -141,7 +147,9 @@
     "discoveryDupKeepHigher": "Module id {id} declared by multiple executables ({a} and {b}); keeping higher version ({va} >= {vb})",
     "discoveryDupReplace": "Module id {id} declared by multiple executables ({a} and {b}); keeping higher version ({va} > {vb})",
     "discoveryDescribeFailed": "Failed to describe module {path}: {error}",
-    "builtinUnpackImageNotFound": "unpack: image path not found (skipping port 1): {path}"
+    "builtinUnpackImageNotFound": "unpack: image path not found (skipping port 1): {path}",
+    "ppQueueAdjusted": "pp_queue: permits={permits} (max={max}, running={running}, cpu={cpu}%, mem={mem}%, mem_avail={avail}MB)",
+    "concurrencySet": "post-processing concurrency set to {n}"
   },
   "ffmpegUtil": {
     "openPlaylistFailed": "Failed to open playlist.m3u8: {error}",

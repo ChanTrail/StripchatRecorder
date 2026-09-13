@@ -149,6 +149,11 @@
       "selected": "已选 {count} 个",
       "totalSpeed": "总录制速度"
     },
+    "diskLabel": {
+      "all": "存储空间",
+      "ts_fragment": "分片",
+      "ts_merge": "合并"
+    },
     "batchPostprocess": "批量后处理 ({count})",
     "deleteSelected": "删除选中 ({count})",
     "openDir": "打开目录",
@@ -337,6 +342,10 @@
       "label": "最大并发录制数",
       "hint": "0 表示不限制"
     },
+    "maxPpConcurrent": {
+      "label": "最大并发后处理数",
+      "hint": "同时处理的后处理任务数。0 = 自动（CPU 核心数）；上限为 CPU 核心数。"
+    },
     "pollInterval": {
       "label": "轮询间隔（秒）"
     },
@@ -515,6 +524,10 @@
       "metaCleanup": "已清理 {count} 个孤立的 meta 文件（对应视频已不存在）",
       "ppRemainingOne": "发现 1 个未完成的后处理任务（可能由上次异常退出遗留），已重新触发：{name}",
       "ppRemainingMany": "发现 {count} 个未完成的后处理任务（可能由上次异常退出遗留），已重新触发：{names}",
+      "ppRetryOne": "上次后处理失败，启动后自动重试 1 个任务：{name}",
+      "ppRetryMany": "上次后处理失败，启动后自动重试 {count} 个任务：{names}",
+      "ppFailed": "{name} 后处理失败：{detail}",
+      "startupScanDone": "启动扫描完成",
       "streamerDeadOne": "主播 {username} 已无法通过用户名或内部 ID 找到，可能已改名、注销或被封禁，后续将跳过其轮询请求。",
       "streamerDeadMany": "以下 {count} 个主播已无法找到，可能已改名、注销或被封禁，后续将跳过其轮询请求：{usernames}",
       "updateAvailableDocker": "发现新版本 v{version}，请更新 Docker 镜像以升级",

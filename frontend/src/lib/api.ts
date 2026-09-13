@@ -190,6 +190,7 @@ const COMMAND_MAP: Record<
 		url: (a) => `/api/streamers/${a.username}/verify`,
 	},
 	get_settings: { method: "GET", url: () => "/api/settings" },
+	get_system_info: { method: "GET", url: () => "/api/system-info" },
 	save_settings_cmd: {
 		method: "POST",
 		url: () => "/api/settings",

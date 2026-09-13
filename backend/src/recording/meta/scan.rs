@@ -139,15 +139,16 @@ pub fn ensure_meta_files(
     extra_dirs: &[&Path],
     state: &crate::config::app_state::AppState,
     recorder: &crate::recording::recorder::RecorderManager,
+    retry_pp_error: bool,
 ) -> Vec<std::path::PathBuf> {
     let mut pp_pending: Vec<std::path::PathBuf> = Vec::new();
 
     if output_dir.exists() {
-        scan_and_ensure_meta(output_dir, &mut pp_pending, state, recorder);
+        scan_and_ensure_meta(output_dir, &mut pp_pending, state, recorder, retry_pp_error);
     }
     for dir in extra_dirs {
         if dir.exists() && *dir != output_dir {
-            scan_and_ensure_meta(dir, &mut pp_pending, state, recorder);
+            scan_and_ensure_meta(dir, &mut pp_pending, state, recorder, retry_pp_error);
         }
     }
 
@@ -164,6 +165,7 @@ fn scan_and_ensure_meta(
     pp_pending: &mut Vec<std::path::PathBuf>,
     state: &crate::config::app_state::AppState,
     recorder: &crate::recording::recorder::RecorderManager,
+    retry_pp_error: bool,
 ) {
     // 判断某路径当前状态是否"真实活跃"（不应被本次扫描触碰或重新触发）。
     //
@@ -305,6 +307,13 @@ fn scan_and_ensure_meta(
                 if matches!(meta.status.as_str(), "recording" | "pp_waiting" | "pp_running") {
                     tracing::warn!("{}", crate::tl!("meta.scanStaleVideo", path = path.display(), status = meta.status)
                     );
+                    pp_pending.push(path.clone());
+                    continue;
+                }
+                // pp_error：上次后处理失败，仅启动时自动重试（定时扫描跳过）
+                // pp_error: failed last time; auto-retry only on startup, skip on periodic scan
+                if meta.status == "pp_error" && retry_pp_error {
+                    tracing::info!("{}", crate::tl!("meta.scanRetryVideo", path = path.display()));
                     pp_pending.push(path.clone());
                     continue;
                 }
@@ -464,6 +473,13 @@ fn scan_and_ensure_meta(
                     pp_pending.push(path.clone());
                     continue;
                 }
+                // pp_error：上次后处理失败，仅启动时自动重试（定时扫描跳过）
+                // pp_error: failed last time; auto-retry only on startup, skip on periodic scan
+                if meta.status == "pp_error" && retry_pp_error {
+                    tracing::info!("{}", crate::tl!("meta.scanRetrySessionDir", path = path.display()));
+                    pp_pending.push(path.clone());
+                    continue;
+                }
                 match repair_meta(&meta, &path) {
                     Some(repaired) if repaired.meta_version == META_VERSION
                         && repaired.started_at == meta.started_at
@@ -505,7 +521,7 @@ fn scan_and_ensure_meta(
         }
 
         // ── 普通子目录，递归扫描 / Regular subdirectory, recurse ──────────────
-        scan_and_ensure_meta(&path, pp_pending, state, recorder);
+        scan_and_ensure_meta(&path, pp_pending, state, recorder, retry_pp_error);
     }
 }
 

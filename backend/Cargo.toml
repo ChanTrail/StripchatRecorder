@@ -35,3 +35,8 @@ argon2 = { version = "0.5", features = ["std"] }
 notify = "8"
 libc = "0.2"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+sysinfo = { version = "0.39", default-features = false, features = ["system"] }
+self_update = { version = "1.3.0", default-features = false, features = ["archive-zip", "compression-zip-deflate", "rustls", "async"] }
+duct = "1.1.2"
+wait-timeout = "0.2.1"
+tempfile = "3.27.0"

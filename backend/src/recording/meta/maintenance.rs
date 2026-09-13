@@ -221,6 +221,7 @@ pub async fn maintain_output_dir(
     app_state: Arc<crate::config::app_state::AppState>,
     emitter: Arc<dyn crate::core::emitter::Emitter>,
     recorder: Arc<crate::recording::recorder::RecorderManager>,
+    is_startup: bool,
 ) {
     let settings = app_state.get_settings();
     let output_dir = std::path::PathBuf::from(&settings.output_dir);
@@ -234,7 +235,7 @@ pub async fn maintain_output_dir(
         move || {
             let ts_merge_extra = ts_merge_output_dir(&app_state);
             let extra_refs: Vec<&Path> = ts_merge_extra.iter().map(|p| p.as_path()).collect();
-            let pp_pending = ensure_meta_files(&output_dir, &extra_refs, &app_state, &recorder);
+            let pp_pending = ensure_meta_files(&output_dir, &extra_refs, &app_state, &recorder, is_startup);
             let pipeline = app_state.get_pipeline();
             (pp_pending, pipeline)
         }
@@ -260,88 +261,127 @@ pub async fn maintain_output_dir(
     });
 
     if pp_pending.is_empty() {
-        // 步骤 3：仍需清理可能遗留的空目录 / Step 3: still clean up any leftover empty dirs
-        let _ = tokio::task::spawn_blocking(move || {
-            crate::recording::segment_merge::startup_remove_empty_dirs(&output_dir);
-        })
-        .await;
-        return;
-    }
+        // 步骤 3/4 和 startup-scan-done 走统一收尾路径
+        // Fall through to unified cleanup and startup-scan-done
+    } else {
     // pp_pending 不为空说明有上次进程退出时遗留的未完成任务，通知用户
     // Non-empty pp_pending means there are leftover unfinished tasks from a previous run; notify the user
-    {
-        let count = pp_pending.len();
-        let names: Vec<String> = pp_pending
-            .iter()
-            .map(|p| {
-                p.file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| p.to_string_lossy().into_owned())
-            })
-            .collect();
+    if is_startup {
+        // 按 meta 状态分类：pp_error（失败重试）与其他（崩溃遗留）
+        // Classify by meta status: pp_error (retry after failure) vs others (crash leftover)
+        let mut stale_names: Vec<String> = Vec::new();
+        let mut retry_names: Vec<String> = Vec::new();
+        for path in &pp_pending {
+            let name = path.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.to_string_lossy().into_owned());
+            let status = read_meta(path).map(|m| m.status).unwrap_or_default();
+            if status == "pp_error" {
+                retry_names.push(name);
+            } else {
+                stale_names.push(name);
+            }
+        }
         use std::collections::HashMap;
-        let (message, key, args) = if count == 1 {
-            let mut a = HashMap::new();
-            a.insert("name".to_string(), serde_json::json!(&names[0]));
-            (
-                format!("Found 1 unfinished post-processing task (possibly left over from a previous crash), re-triggered: {}", names[0]),
-                "notifications.backend.ppRemainingOne",
-                a,
-            )
-        } else {
-            let joined = names.join(", ");
-            let mut a = HashMap::new();
-            a.insert("count".to_string(), serde_json::json!(count));
-            a.insert("names".to_string(), serde_json::json!(joined));
-            (
-                format!("Found {} unfinished post-processing tasks (possibly left over from a previous crash), re-triggered: {}", count, joined),
-                "notifications.backend.ppRemainingMany",
-                a,
-            )
-        };
-        app_state.notification_store.emit_i18n(
-            emitter.as_ref(),
-            crate::core::notifications::NotificationLevel::Warning,
-            "output_dir_maintenance",
-            message,
-            key,
-            Some(args),
-        );
+        if !stale_names.is_empty() {
+            let count = stale_names.len();
+            let joined = stale_names.join(", ");
+            let (message, key, args) = if count == 1 {
+                let mut a = HashMap::new();
+                a.insert("name".to_string(), serde_json::json!(&stale_names[0]));
+                (
+                    format!("Found 1 unfinished post-processing task from a previous crash, re-triggering: {}", stale_names[0]),
+                    "notifications.backend.ppRemainingOne",
+                    a,
+                )
+            } else {
+                let mut a = HashMap::new();
+                a.insert("count".to_string(), serde_json::json!(count));
+                a.insert("names".to_string(), serde_json::json!(joined));
+                (
+                    format!("Found {} unfinished post-processing tasks from a previous crash, re-triggering: {}", count, joined),
+                    "notifications.backend.ppRemainingMany",
+                    a,
+                )
+            };
+            app_state.notification_store.emit_i18n(
+                emitter.as_ref(),
+                crate::core::notifications::NotificationLevel::Warning,
+                "output_dir_maintenance",
+                message,
+                key,
+                Some(args),
+            );
+        }
+        if !retry_names.is_empty() {
+            let count = retry_names.len();
+            let joined = retry_names.join(", ");
+            let (message, key, args) = if count == 1 {
+                let mut a = HashMap::new();
+                a.insert("name".to_string(), serde_json::json!(&retry_names[0]));
+                (
+                    format!("1 post-processing task failed last time, auto-retrying on startup: {}", retry_names[0]),
+                    "notifications.backend.ppRetryOne",
+                    a,
+                )
+            } else {
+                let mut a = HashMap::new();
+                a.insert("count".to_string(), serde_json::json!(count));
+                a.insert("names".to_string(), serde_json::json!(joined));
+                (
+                    format!("{} post-processing tasks failed last time, auto-retrying on startup: {}", count, joined),
+                    "notifications.backend.ppRetryMany",
+                    a,
+                )
+            };
+            app_state.notification_store.emit_i18n(
+                emitter.as_ref(),
+                crate::core::notifications::NotificationLevel::Info,
+                "output_dir_maintenance",
+                message,
+                key,
+                Some(args),
+            );
+        }
     }
 
     if !pipeline.nodes.iter().any(|n| n.enabled) {
-        tracing::info!("{}", crate::tl!("meta.scanSkipEmpty", count = pp_pending.len())
-        );
+        tracing::info!("{}", crate::tl!("meta.scanSkipEmpty", count = pp_pending.len()));
+        let pp_pending_clone = pp_pending.clone();
         let _ = tokio::task::spawn_blocking(move || {
-            for path in &pp_pending {
+            for path in &pp_pending_clone {
                 if let Some(mut meta) = read_meta(path) {
                     meta.status = "finish".to_string();
                     write_meta(path, &meta);
                 }
             }
-            // 步骤 3 / Step 3
-            crate::recording::segment_merge::startup_remove_empty_dirs(&output_dir);
         })
         .await;
-        return;
+    } else {
+        // 同时启动所有任务，由信号量控制实际并发度；统一等待全部完成后再清理空目录
+        // Launch all tasks concurrently; the semaphore controls actual parallelism.
+        let handles: Vec<_> = pp_pending
+            .into_iter()
+            .map(|video_path| {
+                let pp_state = Arc::clone(&app_state);
+                let pp_emitter = Arc::clone(&emitter);
+                let pp_pipeline = pipeline.clone();
+                tokio::task::spawn_blocking(move || {
+                    crate::postprocess::service::run_postprocess_for_path(
+                        &video_path,
+                        &video_path,
+                        &pp_pipeline,
+                        &pp_emitter,
+                        &pp_state,
+                    );
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.await.ok();
+        }
     }
-
-    for video_path in pp_pending {
-        let pp_state = Arc::clone(&app_state);
-        let pp_emitter = Arc::clone(&emitter);
-        let pp_pipeline = pipeline.clone();
-        tokio::task::spawn_blocking(move || {
-            crate::postprocess::service::run_postprocess_for_path(
-                &video_path,
-                &video_path,
-                &pp_pipeline,
-                &pp_emitter,
-                &pp_state,
-            );
-        })
-        .await
-        .ok();
-    }
+    } // end else pp_pending non-empty
 
     // 步骤 3：后处理（含 ts_merge 合并）可能遗留空目录，统一清理一次
     // Step 3: post-processing (including ts_merge merges) may leave empty directories; clean up once
@@ -349,6 +389,34 @@ pub async fn maintain_output_dir(
         crate::recording::segment_merge::startup_remove_empty_dirs(&output_dir);
     })
     .await;
+
+    // 步骤 4：清理 tmp 目录中超过 24 小时未访问的残留文件和空子目录
+    // Step 4: clean up stale files (older than 24 h) and empty subdirectories in the tmp dir
+    let max_tmp_gb = app_state.get_settings().max_tmp_dir_gb;
+    let tmp_dir = crate::config::app_state::exe_dir().join("tmp");
+    let _ = tokio::task::spawn_blocking(move || {
+        cleanup_stale_tmp(&tmp_dir, max_tmp_gb);
+    })
+    .await;
+
+    // 启动扫描全部完成后，通知写入 store（不推 SSE，前端通过 startup-scan-done 触发 fetch 后拉取）
+    // After startup scan completes, write notification to store (no SSE push here;
+    // the frontend fetches it after receiving startup-scan-done)
+    if is_startup {
+        use crate::core::emitter::EmitterExt;
+        // 静默写入 Info 通知（不推 notification-created SSE，避免弹 toast）
+        // Silently write Info notification (no notification-created SSE, no toast)
+        app_state.notification_store.push_i18n(
+            crate::core::notifications::NotificationLevel::Info,
+            "startup_scan",
+            "Startup scan completed",
+            "notifications.backend.startupScanDone",
+            None,
+        );
+        // 推 startup-scan-done 信号，前端收到后 fetch 通知列表（只加面板，不弹 toast）
+        // Signal the frontend to fetch the notification list (panel only, no toast)
+        emitter.emit("startup-scan-done", &serde_json::json!({}));
+    }
 }
 
 /// 启动 meta 版本检查轮询调度器：立即执行一次，之后每隔指定秒数执行一次。
@@ -368,6 +436,7 @@ pub async fn schedule_meta_version_check(
         Arc::clone(&app_state),
         Arc::clone(&emitter),
         Arc::clone(&recorder),
+        true,  // 启动时首次扫描，发通知 / First run on startup, emit notifications
     )
     .await;
     loop {
@@ -376,7 +445,131 @@ pub async fn schedule_meta_version_check(
             Arc::clone(&app_state),
             Arc::clone(&emitter),
             Arc::clone(&recorder),
+            false, // 定时扫描，静默 / Periodic scan, silent
         )
         .await;
+    }
+}
+
+/// 清理 tmp 目录中的过期内容：
+///
+/// 1. **过期文件**：修改时间超过 24 小时的文件直接删除（不受大小限制影响）。
+///    这类文件是后处理任务失败/中断时遗留的中间产物，不再被任何运行中任务使用。
+/// 2. **空子目录**：删除文件后遗留的空子目录一并清理。
+/// 3. **大小上限兜底**：若清理过期文件后目录仍超出 `max_tmp_gb` 限制，
+///    再按修改时间从旧到新继续删文件，直到大小低于上限。
+///
+/// `max_tmp_gb` 为 0 时跳过大小兜底逻辑（不限制大小，但仍清理 24 小时过期文件）。
+///
+/// Clean up stale content in the tmp directory:
+///
+/// 1. **Stale files**: files not modified within the last 24 hours are deleted unconditionally
+///    (regardless of size limit). These are leftover intermediates from failed/interrupted
+///    post-processing tasks that no running task is using anymore.
+/// 2. **Empty subdirectories**: empty subdirectories left after file deletion are also removed.
+/// 3. **Size cap fallback**: if the directory still exceeds `max_tmp_gb` after removing
+///    stale files, continue deleting from oldest to newest until under the limit.
+///
+/// When `max_tmp_gb` is 0, the size cap fallback is skipped (size is unlimited, but
+/// 24-hour stale file cleanup still runs).
+fn cleanup_stale_tmp(tmp: &std::path::Path, max_tmp_gb: f64) {
+    if !tmp.exists() {
+        return;
+    }
+
+    let max_age = std::time::Duration::from_secs(24 * 3600);
+    let now = std::time::SystemTime::now();
+
+    // 递归收集所有文件（含子目录内文件）
+    // Recursively collect all files (including inside subdirectories)
+    let mut all_files: Vec<(std::path::PathBuf, u64, std::time::SystemTime)> = Vec::new();
+    collect_files_recursive(tmp, &mut all_files);
+
+    let mut removed_bytes: u64 = 0;
+    let mut removed_count: usize = 0;
+
+    // 第一轮：删除超过 24 小时未修改的文件
+    // Round 1: delete files not modified within the last 24 hours
+    let mut remaining_files: Vec<(std::path::PathBuf, u64, std::time::SystemTime)> = Vec::new();
+    for (path, size, modified) in all_files {
+        let age = now.duration_since(modified).unwrap_or(max_age);
+        if age >= max_age {
+            if std::fs::remove_file(&path).is_ok() {
+                removed_bytes += size;
+                removed_count += 1;
+            }
+        } else {
+            remaining_files.push((path, size, modified));
+        }
+    }
+
+    // 第二轮：大小兜底——若仍超出上限，从旧到新继续删
+    // Round 2: size fallback — if still over cap, delete from oldest to newest
+    if max_tmp_gb > 0.0 {
+        let max_bytes = (max_tmp_gb * 1024.0 * 1024.0 * 1024.0) as u64;
+        let current: u64 = remaining_files.iter().map(|(_, s, _)| s).sum();
+        if current > max_bytes {
+            remaining_files.sort_by_key(|(_, _, t)| *t);
+            let mut total = current;
+            for (path, size, _) in &remaining_files {
+                if total <= max_bytes {
+                    break;
+                }
+                if std::fs::remove_file(path).is_ok() {
+                    removed_bytes += size;
+                    removed_count += 1;
+                    total = total.saturating_sub(*size);
+                }
+            }
+        }
+    }
+
+    // 清理空子目录（递归，从深到浅）
+    // Remove empty subdirectories (recursive, deepest first)
+    remove_empty_subdirs_recursive(tmp);
+
+    if removed_count > 0 {
+        tracing::info!(
+            "{}",
+            crate::tl!("maintenance.tmpCleanup", count = removed_count, mb = format!("{:.1}", removed_bytes as f64 / 1024.0 / 1024.0))
+        );
+    }
+}
+
+/// 递归收集目录下所有文件及其元数据。
+fn collect_files_recursive(
+    dir: &std::path::Path,
+    out: &mut Vec<(std::path::PathBuf, u64, std::time::SystemTime)>,
+) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_files_recursive(&path, out);
+        } else if let Ok(meta) = std::fs::metadata(&path) {
+            let size = meta.len();
+            let modified = meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            out.push((path, size, modified));
+        }
+    }
+}
+
+/// 递归删除空子目录（不删除 tmp 根目录本身）。
+fn remove_empty_subdirs_recursive(dir: &std::path::Path) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            remove_empty_subdirs_recursive(&path);
+            // 尝试删除（只有空目录才会成功）
+            // Only succeeds if the directory is now empty
+            let _ = std::fs::remove_dir(&path);
+        }
     }
 }

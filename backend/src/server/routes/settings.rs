@@ -8,12 +8,43 @@ use axum::{
     Json,
     extract::{Path, State as AxumState},
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 pub async fn get_settings(
     AxumState(s): AxumState<ServerState>,
 ) -> ApiResult<crate::config::app_state::Settings> {
     Ok(Json(s.app_state.get_settings()))
+}
+
+/// 只读系统信息（不持久化，每次从操作系统实时读取）。
+/// Read-only system information (not persisted; read from the OS on each request).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SystemInfo {
+    /// 逻辑 CPU 核心数 / Logical CPU core count
+    pub cpu_count: usize,
+    /// 后处理并发数的输入上限（= cpu * 4）
+    /// Input cap for post-processing concurrency (= cpu * 4)
+    pub max_pp_concurrent_cap: usize,
+    /// 录制并发数的输入上限（= cpu * 4，0 = 不限制时不受限）
+    /// Input cap for recording concurrency (= cpu * 4)
+    pub max_concurrent_cap: usize,
+}
+
+/// 返回只读系统信息（CPU 核心数及各并发数的输入上限）。
+/// Returns read-only system information (CPU count and input caps for concurrency fields).
+pub async fn get_system_info() -> ApiResult<SystemInfo> {
+    let cpu_count = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    // 上限与后端 resolve_concurrency 的 cap 保持一致：cpu * 2
+    // Matches the cap in backend resolve_concurrency: cpu * 2
+    let cap = (cpu_count * 2).max(1);
+    Ok(Json(SystemInfo {
+        cpu_count,
+        max_pp_concurrent_cap: cap,
+        max_concurrent_cap: cap,
+    }))
 }
 
 pub async fn save_settings(

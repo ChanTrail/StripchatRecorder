@@ -78,8 +78,8 @@ pub fn run_postprocess_inner(
 ) {
     let path_str = video_path.to_string_lossy().to_string();
 
-    // 获取串行锁 / Acquire serial lock
-    let _pp_guard = state.pp_queue.acquire_serial_lock();
+    // 获取并发许可（阻塞直至有空闲槽位）/ Acquire concurrency permit (blocks until a slot is free)
+    let _pp_permit = state.pp_queue.acquire_concurrency_permit();
 
     // 检查是否在等待锁期间已被取消 / Check if cancelled while waiting for the lock
     if state.pp_queue.is_cancelled(&path_str) {
@@ -561,6 +561,36 @@ pub fn run_postprocess_inner(
     // ensures the "task done" signal always lands on the same key as
     // `postprocess-meta-update`.
     let final_path_str = path_str_ref.lock().unwrap().clone();
+
+    // 后处理失败时写入通知，让用户在通知面板看到报错
+    // Push a notification on failure so the user sees it in the notification panel
+    if !all_ok {
+        let file_name = std::path::Path::new(&final_path_str)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| final_path_str.clone());
+        // 从 merged_results 里收集所有失败节点的错误信息
+        // Collect error messages from all failed nodes in merged_results
+        let errors: Vec<String> = merged_results
+            .iter()
+            .filter(|r| !r.is_success())
+            .map(|r| format!("{}: {}", r.module_id, r.message))
+            .collect();
+        let error_detail = errors.join("; ");
+        let message = format!("{} 后处理失败：{}", file_name, error_detail);
+        let mut args = std::collections::HashMap::new();
+        args.insert("name".to_string(), serde_json::json!(file_name));
+        args.insert("detail".to_string(), serde_json::json!(error_detail));
+        state.notification_store.emit_i18n(
+            emitter.as_ref(),
+            crate::core::notifications::NotificationLevel::Error,
+            "postprocess",
+            message,
+            "notifications.backend.ppFailed",
+            Some(args),
+        );
+    }
+
     emitter.emit(
         "postprocess-done",
         &serde_json::json!({

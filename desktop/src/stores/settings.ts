@@ -28,8 +28,16 @@ export interface Settings {
 	cdn_proxy_url: string | null;
 	/** Stripchat 镜像站地址 / Stripchat mirror site URL */
 	sc_mirror_url: string | null;
+	/** Stripchat 镜像站协议（"https" 或 "http"）/ Mirror site scheme ("https" or "http") */
+	sc_mirror_scheme: string;
 	/** 最大并发录制数（0 = 不限制）/ Max concurrent recordings (0 = unlimited) */
 	max_concurrent: number;
+	/** 每文件录制时长上限（秒，0 = 不限制）/ Per-file recording duration in seconds (0 = unlimited) */
+	max_recording_duration_secs: number;
+	/** 首选录制分辨率高度（0 = 原始/最高画质）/ Preferred recording resolution height (0 = original/highest quality) */
+	preferred_resolution: number;
+	/** 首选分辨率缺失时的回退方向 / Fallback direction when preferred resolution is unavailable */
+	resolution_preference: "lower" | "higher";
 	/** 后处理 tmp 目录最大占用（GB，0 = 不限制）/ Max tmp dir size in GB (0 = unlimited) */
 	max_tmp_dir_gb: number;
 	/** 界面语言 / UI language */
@@ -38,8 +46,16 @@ export interface Settings {
 	mouflon_sync_url: string | null;
 	/** Mouflon Keys 同步鉴权 Token / Mouflon Keys sync auth token */
 	mouflon_sync_token: string | null;
+	/** 社区模块代理地址 / Community module proxy URL */
+	community_proxy_url: string | null;
+	/** 社区模块镜像站地址 / Community module mirror URL */
+	community_mirror_url: string | null;
+	/** 用户是否已接受社区模块使用条款 / Whether the user has accepted the community module terms */
+	community_terms_accepted: boolean;
 	/** 首次启动向导是否已完成 / Whether the first-launch setup wizard has been completed */
 	setup_done: boolean;
+	/** 后处理最大并发数（0 = 自动 = CPU 核心数；≥1 = 固定）/ Max concurrent post-processing tasks (0 = auto; ≥1 = fixed) */
+	max_pp_concurrent: number;
 }
 
 /** Mouflon 密钥存储结构（含时间戳）/ Mouflon key store (with timestamps) */
@@ -61,12 +77,20 @@ export const useSettingsStore = defineStore("settings", () => {
 		api_proxy_url: null,
 		cdn_proxy_url: null,
 		sc_mirror_url: null,
+		sc_mirror_scheme: "https",
 		max_concurrent: 0,
+		max_recording_duration_secs: 0,
+		preferred_resolution: 0,
+		resolution_preference: "lower",
 		max_tmp_dir_gb: 50,
 		language: "zh-CN",
 		mouflon_sync_url: null,
 		mouflon_sync_token: null,
+		community_proxy_url: null,
+		community_mirror_url: null,
+		community_terms_accepted: false,
 		setup_done: false,
+		max_pp_concurrent: 0,
 	});
 	/** 是否正在加载 / Whether loading */
 	const loading = ref(false);
