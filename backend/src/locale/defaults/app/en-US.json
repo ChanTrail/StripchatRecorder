@@ -112,7 +112,8 @@
       "public": "Public",
       "recording": "Recording",
       "ticket": "Ticket",
-      "virtualPrivate": "Virtual Private"
+      "virtualPrivate": "Virtual Private",
+      "waiting": "Waiting"
     }
   },
   "streamerCard": {

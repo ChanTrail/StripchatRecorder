@@ -1,7 +1,7 @@
 {
 	"name": "stripchat-recorder-workspace",
 	"private": true,
-	"version": "0.4.0",
+	"version": "0.4.0-beta",
 	"scripts": {
 		"dev": "node scripts/dev.js",
 		"build": "node scripts/release.js",

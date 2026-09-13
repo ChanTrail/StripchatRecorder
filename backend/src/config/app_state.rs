@@ -763,11 +763,10 @@ impl AppState {
     pub fn set_admin_password(&self, password: &str) -> Result<()> {
         use argon2::{
             Argon2,
-            password_hash::{PasswordHasher, SaltString, rand_core::OsRng},
+            password_hash::PasswordHasher,
         };
-        let salt = SaltString::generate(&mut OsRng);
         let hash = Argon2::default()
-            .hash_password(password.as_bytes(), &salt)
+            .hash_password(password.as_bytes())
             .map_err(|e| AppError::Other(format!("密码哈希失败: {e}")))?
             .to_string();
         self.data.write().settings.admin_password_hash = Some(hash);
@@ -782,7 +781,7 @@ impl AppState {
     pub fn verify_admin_password(&self, password: &str) -> bool {
         use argon2::{
             Argon2,
-            password_hash::{PasswordHash, PasswordVerifier},
+            password_hash::{phc::PasswordHash, PasswordVerifier},
         };
         let hash_str = match self.data.read().settings.admin_password_hash.clone() {
             Some(h) => h,

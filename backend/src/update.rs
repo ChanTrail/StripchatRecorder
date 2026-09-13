@@ -479,13 +479,12 @@ fn extract_and_replace_with_self_update(
         if let Ok(entries) = std::fs::read_dir(exe_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.is_file() {
-                    if let Ok(meta) = std::fs::metadata(&path) {
+                if path.is_file() 
+                    && let Ok(meta) = std::fs::metadata(&path) {
                         let mut perms = meta.permissions();
                         perms.set_mode(perms.mode() | 0o111);
                         let _ = std::fs::set_permissions(&path, perms);
                     }
-                }
             }
         }
     }

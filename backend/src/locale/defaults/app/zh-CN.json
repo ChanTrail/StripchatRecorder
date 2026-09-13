@@ -112,7 +112,8 @@
       "public": "公开秀",
       "recording": "录制中",
       "ticket": "票务秀",
-      "virtualPrivate": "虚拟私密"
+      "virtualPrivate": "虚拟私密",
+      "waiting": "等待中"
     }
   },
   "streamerCard": {

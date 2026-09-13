@@ -64,9 +64,27 @@
 		emit("toggle-auto", val);
 	}
 
+	// 将后端返回的中文 status 值映射为 i18n key（home.filter.*）
+	// Map backend Chinese status value to i18n key (home.filter.*)
+	const STATUS_KEY_MAP: Record<string, string> = {
+		"公开秀": "home.filter.public",
+		"私密秀": "home.filter.private",
+		"群组秀": "home.filter.group",
+		"票务秀": "home.filter.ticket",
+		"计时秀": "home.filter.perMinute",
+		"P2P":   "home.filter.p2p",
+		"虚拟私密": "home.filter.virtualPrivate",
+		"等待":   "home.filter.waiting",
+	};
+
+	function statusLabel(s: StreamerEntry): string {
+		if (!s.is_online) return t("streamerCard.offline");
+		return t(STATUS_KEY_MAP[s.status] ?? "home.filter.online");
+	}
+
 	function statusClass(s: StreamerEntry): string {
 		if (!s.is_online) return "bg-zinc-800 text-zinc-400 border-transparent";
-		if (s.status === "公开秀") return "bg-green-900 text-green-300 border-transparent";
+		if (STATUS_KEY_MAP[s.status] === "home.filter.public") return "bg-green-900 text-green-300 border-transparent";
 		return "bg-amber-900 text-amber-300 border-transparent";
 	}
 
@@ -142,7 +160,7 @@
 
 			<div class="flex items-center gap-1.5 flex-wrap">
 				<Badge :class="statusClass(streamer)">
-					{{ streamer.is_online ? streamer.status : t("streamerCard.offline") }}
+					{{ statusLabel(streamer) }}
 				</Badge>
 				<Badge v-if="streamer.is_recording" variant="destructive">{{ t("streamerCard.recording") }}</Badge>
 			</div>
