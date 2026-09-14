@@ -17,6 +17,7 @@
 const path = require("path");
 const {
   ROOT, DESKTOP, DESKTOP_TARGET, NESTED,
+  nativeCargoEnv,
   step, header, run, checkModules, clippyModules, installDesktop,
 } = require("./common");
 
@@ -36,13 +37,13 @@ run("npx vue-tsc --noEmit", { cwd: DESKTOP });
 // ── Step 3: Tauri 后端编译检查 / Tauri backend compile check ─────────────────
 step(3, TOTAL, "Checking desktop backend (cargo check)");
 run(`cargo check --manifest-path "${DESKTOP_MANIFEST}"`, {
-  env: { ...process.env, CARGO_TARGET_DIR: DESKTOP_TARGET },
+  env: nativeCargoEnv({ CARGO_TARGET_DIR: DESKTOP_TARGET }),
 });
 
 // ── Step 4: Tauri 后端 Clippy / Tauri backend clippy ─────────────────────────
 step(4, TOTAL, "Checking desktop backend (cargo clippy)");
 run(`cargo clippy --manifest-path "${DESKTOP_MANIFEST}" -- -D warnings`, {
-  env: { ...process.env, CARGO_TARGET_DIR: DESKTOP_TARGET },
+  env: nativeCargoEnv({ CARGO_TARGET_DIR: DESKTOP_TARGET }),
 });
 
 // ── Step 5: 模块编译检查 / Modules compile check ────────────────────────────

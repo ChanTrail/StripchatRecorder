@@ -17,6 +17,7 @@
 const {
   FRONTEND, NESTED,
   BACKEND_MANIFEST, BACKEND_TARGET,
+  nativeCargoEnv,
   step, header, run, checkModules, clippyModules, installFrontend,
 } = require("./common");
 
@@ -34,13 +35,13 @@ run("npx vue-tsc --noEmit", { cwd: FRONTEND });
 // ── Step 3: 后端编译检查 / Backend compile check ─────────────────────────────
 step(3, TOTAL, "Checking backend (cargo check)");
 run(`cargo check --manifest-path "${BACKEND_MANIFEST}"`, {
-  env: { ...process.env, CARGO_TARGET_DIR: BACKEND_TARGET },
+  env: nativeCargoEnv({ CARGO_TARGET_DIR: BACKEND_TARGET }),
 });
 
 // ── Step 4: 后端 Clippy / Backend clippy ─────────────────────────────────────
 step(4, TOTAL, "Checking backend (cargo clippy)");
 run(`cargo clippy --manifest-path "${BACKEND_MANIFEST}" -- -D warnings`, {
-  env: { ...process.env, CARGO_TARGET_DIR: BACKEND_TARGET },
+  env: nativeCargoEnv({ CARGO_TARGET_DIR: BACKEND_TARGET }),
 });
 
 // ── Step 5: 模块编译检查 / Modules compile check ────────────────────────────

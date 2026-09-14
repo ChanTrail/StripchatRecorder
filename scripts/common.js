@@ -268,6 +268,25 @@ function listDir(dir, prefix = "") {
 // ── 模块构建与检查 / Module build & check ───────────────────────────────────
 
 /**
+ * 构造用于本机原生 check/clippy 的环境变量对象。
+ * 删除 CARGO_BUILD_TARGET，防止交叉编译场景下空字符串被 Cargo 当成 --target 使用
+ * 而触发 "error: target was empty"。
+ *
+ * Build an env object suitable for native check/clippy invocations.
+ * CARGO_BUILD_TARGET is removed so that an empty string set by CI (when no
+ * cross-compile target is defined in the matrix) is not forwarded to Cargo
+ * as an empty --target, which would produce "error: target was empty".
+ *
+ * @param {Record<string,string>} extra  额外要叠加的环境变量 / Extra variables to merge in
+ * @returns {Record<string,string>}
+ */
+function nativeCargoEnv(extra = {}) {
+  const env = { ...process.env, ...extra };
+  delete env.CARGO_BUILD_TARGET;
+  return env;
+}
+
+/**
  * 对所有模块执行 cargo check。
  * Run `cargo check` for all modules.
  */
@@ -275,7 +294,7 @@ function checkModules() {
   for (const name of listModules()) {
     run(
       `cargo check --manifest-path "${path.join(MODULES_DIR, name, "Cargo.toml")}"`,
-      { env: { ...process.env, CARGO_TARGET_DIR: moduleTarget(name) } }
+      { env: nativeCargoEnv({ CARGO_TARGET_DIR: moduleTarget(name) }) }
     );
   }
 }
@@ -288,7 +307,7 @@ function clippyModules() {
   for (const name of listModules()) {
     run(
       `cargo clippy --manifest-path "${path.join(MODULES_DIR, name, "Cargo.toml")}" -- -D warnings`,
-      { env: { ...process.env, CARGO_TARGET_DIR: moduleTarget(name) } }
+      { env: nativeCargoEnv({ CARGO_TARGET_DIR: moduleTarget(name) }) }
     );
   }
 }
@@ -434,6 +453,7 @@ module.exports = {
   readPackageVersion,
   isStaleModuleBinary,
   removeStaleModuleBinaries,
+  nativeCargoEnv,
   step,
   header,
   run,
