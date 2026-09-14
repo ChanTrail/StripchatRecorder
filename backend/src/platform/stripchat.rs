@@ -23,7 +23,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 /// 模拟浏览器的 User-Agent / Browser-mimicking User-Agent
-const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36";
+const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36";
 /// 请求 Referer 头 / Request Referer header
 const REFERER: &str = "https://stripchat.com/";
 
@@ -116,6 +116,7 @@ pub struct StreamInfo {
 
 /// Stripchat API 客户端，封装 API 请求和 CDN 分片下载。
 /// Stripchat API client wrapping API requests and CDN segment downloads.
+#[derive(Clone)]
 pub struct StripchatApi {
     /// API 请求客户端 / API request client
     api_client: Client,
@@ -230,9 +231,9 @@ impl StripchatApi {
         }
     }
 
-    /// 返回适配镜像站的 Referer 头值。
-    /// Return the Referer header value adapted for the mirror site.
-    fn referer(&self) -> String {
+    /// 返回适配镜像站的站点根 Referer（scheme://host/）。
+    /// Return the site-root Referer adapted for the mirror site (scheme://host/).
+    fn referer_base(&self) -> String {
         match &self.sc_mirror {
             Some(mirror) => {
                 let replaced = REFERER.replace("stripchat.com", mirror);
@@ -244,6 +245,21 @@ impl StripchatApi {
             }
             None => REFERER.to_string(),
         }
+    }
+
+    /// 构造请求特定路径时使用的 Referer 头值（scheme://host + path）。
+    /// 例如请求 /api/front/v1/broadcasts/qi33wei 时，Referer 为
+    /// https://stripchat.com/api/front/v1/broadcasts/qi33wei。
+    ///
+    /// Build the Referer header for a specific request path (scheme://host + path).
+    /// e.g. when requesting /api/front/v1/broadcasts/qi33wei, Referer is
+    /// https://stripchat.com/api/front/v1/broadcasts/qi33wei.
+    fn referer_for_path(&self, path: &str) -> String {
+        let base = self.referer_base();
+        // REFERER 以 "/" 结尾，path 以 "/" 开头时去掉一个 "/"，避免双斜杠
+        // REFERER ends with "/"; strip the leading "/" from path to avoid double slashes
+        let path = path.trim_start_matches('/');
+        format!("{}{}", base, path)
     }
 
     /// 解析 v1/broadcasts/{username} 响应，统一处理"用户不存在"判定。
@@ -286,7 +302,7 @@ impl StripchatApi {
             Ok(v) => v,
             Err(_) => {
                 return Err(AppError::Other(format!(
-                    "API 返回 {} ({})",
+                    "API return {} ({})",
                     status.as_u16(),
                     username
                 )));
@@ -308,12 +324,12 @@ impl StripchatApi {
                 lower.contains("not found") || lower.contains("entity") && lower.contains("model")
             });
         if is_not_found {
-            return Err(AppError::UserNotFound(format!("用户 {} 不存在", username)));
+            return Err(AppError::UserNotFound(format!("Model {} not found", username)));
         }
 
         if !status.is_success() {
             return Err(AppError::Other(format!(
-                "API 返回 {} ({})",
+                "API return {} ({})",
                 status.as_u16(),
                 username
             )));
@@ -342,7 +358,7 @@ impl StripchatApi {
                 return Ok(self
                     .cdn_client
                     .get(url)
-                    .header("Referer", REFERER)
+                    .header("Referer", self.referer_base())
                     .send()
                     .await?);
             }
@@ -357,10 +373,11 @@ impl StripchatApi {
             let candidate = url.replace(src_tld, tld);
             let client = client.clone();
             let tld = tld.to_string();
+            let referer = self.referer_base();
             tasks.spawn(async move {
                 let resp = client
                     .get(&candidate)
-                    .header("Referer", REFERER)
+                    .header("Referer", referer)
                     .send()
                     .await;
                 (tld, resp)
@@ -446,15 +463,13 @@ impl StripchatApi {
     /// (v2/models/username/{username}/cam) to internal-ID-based lookup
     /// (v2/models/{model_id}/cam) — the `username` parameter is only used for logging
     /// and the Referer header, no longer appearing in the request path.
-    async fn fetch_cam_json(&self, username: &str, model_id: i64) -> Option<serde_json::Value> {
-        let url = self.api_url(&format!(
-            "https://stripchat.com/api/front/v2/models/{}/cam",
-            model_id
-        ));
+    async fn fetch_cam_json(&self, _username: &str, model_id: i64) -> Option<serde_json::Value> {
+        let path = format!("/api/front/v2/models/{}/cam", model_id);
+        let url = self.api_url(&format!("https://stripchat.com{}", path));
         let resp = self
             .api_client
             .get(&url)
-            .header("Referer", format!("{}{}", self.referer(), username))
+            .header("Referer", self.referer_for_path(&path))
             .send()
             .await
             .ok()?;
@@ -506,15 +521,13 @@ impl StripchatApi {
     /// streamer's model_id (from the response's `modelId` field) for the add flow to
     /// persist alongside, for later rename lookups.
     pub async fn verify_user_exists(&self, username: &str) -> Result<Option<i64>> {
-        let url = self.api_url(&format!(
-            "https://stripchat.com/api/front/v1/broadcasts/{}",
-            username
-        ));
+        let path = format!("/api/front/v1/broadcasts/{}", username);
+        let url = self.api_url(&format!("https://stripchat.com{}", path));
 
         let resp = self
             .api_client
             .get(&url)
-            .header("Referer", format!("{}{}", self.referer(), username))
+            .header("Referer", self.referer_for_path(&path))
             .send()
             .await?;
 
@@ -568,7 +581,7 @@ impl StripchatApi {
                     // the account being banned/deleted or another reason v1/broadcasts
                     // can't find it). Return the original UserNotFound as-is, without
                     // masking the real cause.
-                    _ => Err(AppError::UserNotFound(format!("用户 {} 不存在", username))),
+                    _ => Err(AppError::UserNotFound(format!("Model {} not found", username))),
                 }
             }
             Err(e) => Err(e),
@@ -586,15 +599,13 @@ impl StripchatApi {
         username: &str,
         fetch_playlist: bool,
     ) -> Result<StreamInfo> {
-        let url = self.api_url(&format!(
-            "https://stripchat.com/api/front/v1/broadcasts/{}",
-            username
-        ));
+        let path = format!("/api/front/v1/broadcasts/{}", username);
+        let url = self.api_url(&format!("https://stripchat.com{}", path));
 
         let resp = self
             .api_client
             .get(&url)
-            .header("Referer", format!("{}{}", self.referer(), username))
+            .header("Referer", self.referer_for_path(&path))
             .send()
             .await?;
 
@@ -673,8 +684,7 @@ impl StripchatApi {
         // Build a minimal model_json for get_playlist_url (only needs user.user.id)
         let playlist_url = if is_recordable && fetch_playlist {
             if let Some(mid) = model_id {
-                let model_json = serde_json::json!({ "user": { "user": { "id": mid } } });
-                self.get_playlist_url(username, &model_json).await.ok()
+                self.get_playlist_url(username, mid).await.ok()
             } else {
                 None
             }
@@ -706,8 +716,9 @@ impl StripchatApi {
                 tld, model_id, model_id
             );
             let client = client.clone();
+            let referer = self.referer_base();
             tasks.spawn(async move {
-                let resp = client.get(&url).header("Referer", REFERER).send().await;
+                let resp = client.get(&url).header("Referer", referer).send().await;
                 (tld, url, resp)
             });
         }
@@ -752,15 +763,7 @@ impl StripchatApi {
     /// Races all CDN TLDs for `{model_id}_auto.m3u8` and selects a stream using the configured resolution preference.
     /// If the playlist contains Mouflon encryption parameters, iterates through the user-configured
     /// Mouflon Keys in order and uses the first matching pkey's psch in the URL.
-    async fn get_playlist_url(
-        &self,
-        username: &str,
-        model_json: &serde_json::Value,
-    ) -> Result<String> {
-        let model_id = model_json["user"]["user"]["id"]
-            .as_i64()
-            .ok_or_else(|| AppError::Other("Cannot get model ID".to_string()))?;
-
+    pub async fn get_playlist_url(&self, username: &str, model_id: i64) -> Result<String> {
         let playlist_text = self.fetch_auto_playlist(model_id).await?;
 
         let parsed = crate::recording::hls::parse_master_playlist(

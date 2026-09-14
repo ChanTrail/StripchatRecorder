@@ -1,14 +1,14 @@
 //! 转发路由处理器 / Relay Route Handlers
 //!
 //! 端点：
-//! - GET  /stream/{modelname}       → 持续输出 MPEG-TS 流（按需启动 worker）
-//! - GET  /api/relay/sessions       → 查询所有活跃转发会话状态
+//! - GET  /stream/{modelname}         → 持续输出 HTTP-FLV 流（按需启动 worker）
+//! - GET  /api/relay/sessions         → 查询所有活跃转发会话状态
 //! - POST /api/relay/{modelname}/stop → 强制停止指定主播的转发 worker
 //!
 //! 转发流永远可访问，无需手动启动：
 //! - 有请求时自动启动 worker
-//! - 上游在线时转发直播流
-//! - 上游离线时输出黑屏+状态文字画面
+//! - 上游在线时转发直播流（HTTP-FLV 格式，兼容 flv.js / mpegts.js 等播放器）
+//! - 上游离线时 worker 退出，HTTP 连接自然关闭
 
 use super::state::RelayManager;
 use super::worker::start_streamer;
@@ -33,11 +33,13 @@ pub struct RelayState {
 
 /// GET /stream/{modelname}
 ///
-/// 按需启动转发 worker，持续输出 MPEG-TS 字节流。
-/// 播放器直接打开此 URL 即可播放，无需任何预先配置。
+/// 按需启动转发 worker，持续输出 HTTP-FLV 字节流。
+/// 兼容所有支持 HTTP-FLV 的播放器（flv.js、mpegts.js、VLC、PotPlayer 等）。
+/// 上游离线时 worker 自动退出，HTTP 响应正常结束，客户端连接关闭。
 ///
-/// Starts relay worker on demand, continuously outputs MPEG-TS byte stream.
-/// Players open this URL directly without any prior configuration.
+/// Starts relay worker on demand, continuously outputs HTTP-FLV byte stream.
+/// Compatible with any player that supports HTTP-FLV (flv.js, mpegts.js, VLC, PotPlayer, etc.).
+/// When upstream goes offline the worker exits, the HTTP response ends, and the client disconnects.
 pub async fn stream_handler(
     AxumState(s): AxumState<RelayState>,
     Path(modelname): Path<String>,
@@ -52,8 +54,8 @@ pub async fn stream_handler(
         s.relay_manager.create_session(&modelname, stop_tx, ts_tx);
     }
 
-    let rx = match s.relay_manager.subscribe(&modelname) {
-        Some(rx) => rx,
+    let (rx, prebuf) = match s.relay_manager.subscribe_with_prebuffer(&modelname) {
+        Some(pair) => pair,
         None => {
             return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to subscribe to stream")
                 .into_response();
@@ -85,6 +87,16 @@ pub async fn stream_handler(
         // Move guard into stream closure so unsubscribe fires when stream is dropped
         let _guard = _guard;
         let mut rx = rx;
+
+        // 先将预缓冲数据推给播放器，使其立即有数据可解码，无需等待 worker 下一批产出。
+        // Push prebuffered data first so the player can start decoding immediately
+        // without waiting for the worker's next output cycle.
+        for chunk in prebuf {
+            yield Ok::<axum::body::Bytes, std::convert::Infallible>(
+                axum::body::Bytes::from(chunk.as_ref().clone())
+            );
+        }
+
         loop {
             match rx.recv().await {
                 Ok(chunk) => {
@@ -100,7 +112,7 @@ pub async fn stream_handler(
 
     (
         [
-            (header::CONTENT_TYPE, "video/mp2t"),
+            (header::CONTENT_TYPE, "video/x-flv"),
             (header::CACHE_CONTROL, "no-cache, no-store"),
             (header::ACCESS_CONTROL_ALLOW_ORIGIN, "*"),
             (header::TRANSFER_ENCODING, "chunked"),

@@ -4,15 +4,15 @@ on:
   push:
     branches: [master, beta]
     paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - '.gitignore'
-      - 'docker-compose.yml'
+      - "**.md"
+      - "docs/**"
+      - ".gitignore"
+      - "docker-compose.yml"
   pull_request:
     branches: [master]
     paths-ignore:
-      - '**.md'
-      - 'docs/**'
+      - "**.md"
+      - "docs/**"
 
 env:
   CARGO_TERM_COLOR: always
@@ -220,7 +220,14 @@ jobs:
   auto-tag:
     name: Auto-tag release
     runs-on: ubuntu-22.04
-    needs: [check-frontend, check-desktop-frontend, check-desktop-backend, check-server, check-modules]
+    needs:
+      [
+        check-frontend,
+        check-desktop-frontend,
+        check-desktop-backend,
+        check-server,
+        check-modules,
+      ]
     if: github.ref == 'refs/heads/master' && github.event_name == 'push'
 
     steps:
@@ -249,6 +256,69 @@ jobs:
 
       - name: Create and push tag
         if: steps.tag_check.outputs.exists == 'false'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "${{ steps.version.outputs.tag }}"
+          git push origin "${{ steps.version.outputs.tag }}"
+
+  # ── 自动打 Tag / Auto-tag (beta only) ────────────────────────────────────────
+  #
+  # 逻辑与 auto-tag 相同，但仅在 beta 分支触发。
+  # 版本号必须包含预发布后缀（如 -beta），否则跳过，避免意外覆盖稳定版 tag。
+  #
+  # Same logic as auto-tag, but triggered on the beta branch only.
+  # Skips if the version has no pre-release suffix to avoid overwriting stable tags.
+  auto-tag-beta:
+    name: Auto-tag pre-release (beta)
+    runs-on: ubuntu-22.04
+    needs:
+      [
+        check-frontend,
+        check-desktop-frontend,
+        check-desktop-backend,
+        check-server,
+        check-modules,
+      ]
+    if: github.ref == 'refs/heads/beta' && github.event_name == 'push'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PAT }}
+
+      - name: Read version
+        id: version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=v$VERSION"    >> $GITHUB_OUTPUT
+
+      - name: Verify pre-release suffix
+        id: pre_check
+        run: |
+          if echo "${{ steps.version.outputs.version }}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+-.+$'; then
+            echo "is_prerelease=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_prerelease=false" >> $GITHUB_OUTPUT
+            echo "Version '${{ steps.version.outputs.version }}' has no pre-release suffix, skipping tag."
+          fi
+
+      - name: Check if tag exists
+        id: tag_check
+        if: steps.pre_check.outputs.is_prerelease == 'true'
+        run: |
+          if git ls-remote --tags origin "${{ steps.version.outputs.tag }}" | grep -q .; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Tag ${{ steps.version.outputs.tag }} already exists, skipping."
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create and push tag
+        if: steps.pre_check.outputs.is_prerelease == 'true' && steps.tag_check.outputs.exists == 'false'
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"

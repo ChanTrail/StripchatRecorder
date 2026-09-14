@@ -1,10 +1,18 @@
 //! 转发会话状态 / Relay Session State
 
 use parking_lot::RwLock;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{broadcast, mpsc};
+
+/// TS 数据预缓冲 ring buffer，保留最近约 N 字节，供新连接立即推送。
+/// Pre-buffer ring buffer for TS data; retains the last ~N bytes for immediate push to new connections.
+const PREBUFFER_MAX_BYTES: usize = 512 * 1024; // 512 KB ≈ 2–3 秒黑屏或 1–2 秒直播
+
+/// `subscribe_with_prebuffer` 的返回类型别名。
+/// Return type alias for `subscribe_with_prebuffer`.
+type SubscribeWithPrebuf = (broadcast::Receiver<Arc<Vec<u8>>>, Vec<Arc<Vec<u8>>>);
 
 /// 转发流的当前状态 / Current state of a relay stream
 #[derive(Debug, Clone, serde::Serialize)]
@@ -42,6 +50,11 @@ pub struct RelaySession {
     pub stop_tx: mpsc::Sender<()>,
     /// TS 数据广播发送端 / TS data broadcast sender
     pub ts_tx: broadcast::Sender<Arc<Vec<u8>>>,
+    /// 最近 TS 数据 ring buffer，供新连接立即推送，减少首帧等待。
+    /// Recent TS data ring buffer for immediate push to new connections, reducing first-frame wait.
+    pub prebuffer: VecDeque<Arc<Vec<u8>>>,
+    /// ring buffer 当前总字节数 / Total bytes currently in prebuffer
+    pub prebuffer_bytes: usize,
 }
 
 /// 全局转发会话管理器 / Global relay session manager
@@ -81,6 +94,8 @@ impl RelayManager {
                 last_active: now_instant,
                 stop_tx,
                 ts_tx,
+                prebuffer: VecDeque::new(),
+                prebuffer_bytes: 0,
             },
         );
     }
@@ -94,6 +109,53 @@ impl RelayManager {
             return Some(s.ts_tx.subscribe());
         }
         None
+    }
+
+    /// 订阅 TS 数据流并同时返回当前预缓冲数据快照，供新连接立即推送。
+    /// Subscribe to TS data stream and return a prebuffer snapshot for immediate push to the new connection.
+    pub fn subscribe_with_prebuffer(
+        &self,
+        username: &str,
+    ) -> Option<SubscribeWithPrebuf> {
+        let mut sessions = self.sessions.write();
+        if let Some(s) = sessions.get_mut(username) {
+            s.active_connections += 1;
+            s.last_active = Instant::now();
+            let rx = s.ts_tx.subscribe();
+            let snapshot: Vec<Arc<Vec<u8>>> = s.prebuffer.iter().cloned().collect();
+            return Some((rx, snapshot));
+        }
+        None
+    }
+
+    /// 将一块 TS 数据推入预缓冲 ring buffer，超出上限时淘汰最旧的块。
+    /// Push a TS chunk into the prebuffer, evicting the oldest chunk(s) when the limit is exceeded.
+    pub fn push_prebuffer(&self, username: &str, chunk: Arc<Vec<u8>>) {
+        let mut sessions = self.sessions.write();
+        if let Some(s) = sessions.get_mut(username) {
+            let len = chunk.len();
+            s.prebuffer.push_back(chunk);
+            s.prebuffer_bytes += len;
+            // 淘汰最旧的块直到总字节数不超过上限
+            // Evict oldest chunks until total bytes are within limit
+            while s.prebuffer_bytes > PREBUFFER_MAX_BYTES {
+                if let Some(oldest) = s.prebuffer.pop_front() {
+                    s.prebuffer_bytes = s.prebuffer_bytes.saturating_sub(oldest.len());
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+
+    /// 清空预缓冲（状态切换时调用，避免将旧内容推给新连接）。
+    /// Clear the prebuffer (called on state transition to avoid pushing stale content to new connections).
+    pub fn clear_prebuffer(&self, username: &str) {
+        let mut sessions = self.sessions.write();
+        if let Some(s) = sessions.get_mut(username) {
+            s.prebuffer.clear();
+            s.prebuffer_bytes = 0;
+        }
     }
 
     /// 减少连接计数，并在连接数归零时更新最后活跃时间。

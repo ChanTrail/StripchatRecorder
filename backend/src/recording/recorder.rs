@@ -752,6 +752,22 @@ impl RecorderManager {
     ///
     /// Fetch the playlist once and download all new segments.
     /// Returns `(number of segments written, number of CDN failures)`.
+    ///
+    /// ## Init segment 缓存策略 / Init segment caching strategy
+    ///
+    /// 每个 `HlsSegment` 在 `init_url` 字段中携带自身所需的 init URL（仅在 EXT-X-MAP
+    /// 发生变更的分片处才为 `Some`）。遍历分片时，一旦发现某个分片需要新的 init，
+    /// 立即 spawn 异步任务开始下载（预取），同时继续处理当前分片；等到真正要用
+    /// 新 init 时再 await 结果。这样把 init 下载时间与前一个分片的处理并行化，
+    /// 尽可能实现零等待的 Cached init segment。
+    ///
+    /// Each `HlsSegment` carries the init URL it requires in the `init_url` field
+    /// (only `Some` at segments where EXT-X-MAP changes). When iterating segments,
+    /// as soon as a segment requiring a new init is found, an async task is spawned
+    /// to prefetch it immediately while the current segment is still being processed;
+    /// the result is only awaited when the new init is actually needed. This
+    /// parallelises init download time with the preceding segment's processing,
+    /// achieving zero-wait Cached init segments whenever possible.
     #[allow(clippy::too_many_arguments)]
     async fn fetch_segments(
         self: &Arc<Self>,
@@ -768,36 +784,125 @@ impl RecorderManager {
         emitter: &Arc<dyn Emitter>,
     ) -> Result<(usize, usize)> {
         let playlist = api.fetch_playlist(playlist_url).await?;
-        let (segments, init_url) = parse_playlist(&playlist, url_prefix, mouflon_keys)?;
-        let init_url_path = |u: &str| u.split('?').next().unwrap_or(u).to_string();
-        let new_init_path = init_url.as_deref().map(init_url_path);
-        let cached_init_path = cached_init_url.as_deref().map(init_url_path);
-        if new_init_path.is_some() && new_init_path != cached_init_path
-            && let Some(ref url) = init_url
-        {
-            match api.download_segment(url).await {
-                Ok(data) => {
-                    tracing::info!("{}", crate::tl!("recorder.initSegmentCached", username = username, bytes = data.len()));
-                    *mp4_header = Some(data);
-                    *cached_init_url = Some(url.clone());
-                }
-                Err(e) => {
-                    tracing::error!("{}", crate::tl!("recorder.initSegmentFailed", error = e)
-                    );
-                    return Ok((0, 0));
-                }
-            }
-        }
+        let segments = parse_playlist(&playlist, url_prefix, mouflon_keys)?;
 
         let mut written = 0;
         let mut new_segments = 0;
         let mut cdn_failures = 0;
 
-        for segment in segments {
+        // 飞行中的 init 预取任务：(预取的 init URL, JoinHandle<下载结果>)
+        // In-flight init prefetch task: (prefetched init URL, JoinHandle<download result>)
+        let mut prefetch: Option<(String, tokio::task::JoinHandle<Result<Vec<u8>>>)> = None;
+
+        // 预取辅助闭包：判断并启动一个还没有在飞行中的 init 预取任务。
+        // 使用宏形式以避免借用冲突（需要同时借用 api 和 prefetch）。
+        // Helper macro to spawn a prefetch task when a new init URL is encountered.
+        macro_rules! maybe_prefetch {
+            ($init_url:expr) => {
+                // 只在没有飞行中任务、或飞行中任务的 URL 与新 URL 不同时才重新 spawn
+                // Only spawn if there is no in-flight task, or the in-flight task is for a different URL
+                let already_fetching = prefetch
+                    .as_ref()
+                    .map(|(url, _)| url == $init_url)
+                    .unwrap_or(false);
+                if !already_fetching {
+                    // 取消旧的飞行中任务（URL 不同，旧结果已无用）
+                    // Abort the old in-flight task if its URL differs (result would be useless)
+                    if let Some((_, handle)) = prefetch.take() {
+                        handle.abort();
+                    }
+                    let api_clone = api.clone();
+                    let url_owned = $init_url.to_string();
+                    let handle = tokio::spawn(async move {
+                        api_clone.download_segment(&url_owned).await
+                    });
+                    prefetch = Some(($init_url.to_string(), handle));
+                }
+            };
+        }
+
+        // 第一遍扫描：对还未下载的分片，找到其中第一个携带 init_url 的分片并立即开始预取，
+        // 这样在进入下载循环之前 init 已经在飞行中了。
+        //
+        // Pre-scan: find the first segment that carries an init_url among not-yet-downloaded
+        // segments and kick off prefetch before entering the download loop, so the init
+        // download is already in-flight when the loop starts.
+        for seg in &segments {
+            if downloaded_sequences.contains(&seg.sequence) {
+                continue;
+            }
+            if let Some(ref init_url) = seg.init_url {
+                maybe_prefetch!(init_url.as_str());
+                break; // 只预取第一个变更点，后续循环中按需继续预取
+            }
+        }
+
+        for segment in &segments {
             if downloaded_sequences.contains(&segment.sequence) {
                 continue;
             }
             new_segments += 1;
+
+            // 若该分片携带新的 init URL，先确保 init 已下载完成，再下载分片本体。
+            // 同时对下一个携带 init_url 的分片提前发起预取（与本分片下载并行）。
+            //
+            // If this segment carries a new init URL, ensure the init is downloaded
+            // before downloading the segment body.
+            // Also kick off a prefetch for the next init-bearing segment in parallel
+            // with this segment's download.
+            if let Some(ref new_init_url) = segment.init_url {
+                // 确保预取任务的目标 URL 正确（pre-scan 可能已启动，或 URL 可能更新了）
+                // Ensure the prefetch target is correct (pre-scan may have already started it)
+                maybe_prefetch!(new_init_url.as_str());
+
+                // Await 飞行中的预取结果
+                // Await the in-flight prefetch result
+                let init_data = match prefetch.take() {
+                    Some((_, handle)) => match handle.await {
+                        Ok(Ok(data)) => data,
+                        Ok(Err(e)) => {
+                            tracing::error!("{}", crate::tl!("recorder.initSegmentFailed", error = e));
+                            return Ok((0, 0));
+                        }
+                        Err(_) => {
+                            tracing::error!("{}", crate::tl!("recorder.initSegmentFailed", error = "prefetch task panicked"));
+                            return Ok((0, 0));
+                        }
+                    },
+                    // 理论上不应走到这里（maybe_prefetch! 已保证任务存在）
+                    // Should not happen — maybe_prefetch! guarantees a task exists
+                    None => {
+                        match api.download_segment(new_init_url).await {
+                            Ok(data) => data,
+                            Err(e) => {
+                                tracing::error!("{}", crate::tl!("recorder.initSegmentFailed", error = e));
+                                return Ok((0, 0));
+                            }
+                        }
+                    }
+                };
+
+                tracing::info!("{}", crate::tl!("recorder.initSegmentCached", username = username, bytes = init_data.len()));
+                *mp4_header = Some(init_data);
+                *cached_init_url = Some(new_init_url.clone());
+
+                // 扫描后续分片，对下一个携带 init_url 的分片预先发起下载（并行化）
+                // Scan ahead for the next init-bearing segment and start its prefetch now
+                let mut found_self = false;
+                for ahead in &segments {
+                    if !found_self {
+                        found_self = ahead.sequence == segment.sequence;
+                        continue;
+                    }
+                    if downloaded_sequences.contains(&ahead.sequence) {
+                        continue;
+                    }
+                    if let Some(ref next_init_url) = ahead.init_url {
+                        maybe_prefetch!(next_init_url.as_str());
+                        break;
+                    }
+                }
+            }
 
             match api.download_segment(&segment.url).await {
                 Ok(data) => {
@@ -852,6 +957,13 @@ impl RecorderManager {
             }
 
             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        }
+
+        // 本轮结束，取消任何剩余的飞行中预取任务（下轮循环会重新决定是否需要它）
+        // Cancel any remaining in-flight prefetch task at end of round; the next round
+        // will re-evaluate whether it is still needed.
+        if let Some((_, handle)) = prefetch.take() {
+            handle.abort();
         }
 
         if new_segments > 0 && cdn_failures == new_segments {

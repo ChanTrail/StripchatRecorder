@@ -38,25 +38,42 @@ pub struct HlsSegment {
     pub sequence: u32,
     /// 分片时长（秒，来自 #EXTINF 标签，未知时为 0）/ Segment duration in seconds (from #EXTINF tag, 0 if unknown)
     pub duration_secs: f64,
+    /// 该分片对应的 fMP4 初始化段 URL（来自 EXT-X-MAP 标签，None 表示与上一分片相同）。
+    /// 每个 segment 精确携带自身对应的 init URL，使录制器能在分片粒度上精确切换 init，
+    /// 避免 mid-stream init 变更被遗漏。
+    ///
+    /// The fMP4 init segment URL for this segment (from the EXT-X-MAP tag; None means
+    /// same as the previous segment). Each segment carries its own init URL so the
+    /// recorder can switch init at exact segment boundaries, preventing mid-stream
+    /// init changes from being missed.
+    pub init_url: Option<String>,
 }
 
-/// 解析 HLS m3u8 播放列表，返回分片列表和 fMP4 初始化段 URL。
-/// Parse an HLS m3u8 playlist, returning the segment list and fMP4 init segment URL.
+/// 解析 HLS m3u8 播放列表，返回分片列表。每个分片在 `init_url` 字段中携带
+/// 自己对应的 fMP4 初始化段 URL（仅在该分片处发生 EXT-X-MAP 变更时才为 Some；
+/// None 表示沿用前一分片的 init segment）。
+///
+/// Parse an HLS m3u8 playlist and return the segment list. Each segment carries the
+/// fMP4 init segment URL in its `init_url` field — only set to Some when an EXT-X-MAP
+/// change occurs at that segment boundary; None means the previous init segment
+/// continues to apply.
 ///
 /// # 参数 / Parameters
 /// - `playlist`: m3u8 文本内容 / m3u8 text content
 /// - `url_prefix`: 用于将相对路径转为绝对 URL 的前缀 / Prefix for converting relative paths to absolute URLs
 /// - `mouflon_keys`: Mouflon 解密密钥表（pkey -> pdkey）/ Mouflon decryption key map (pkey -> pdkey)
-///
-/// # 返回值 / Returns
-/// `(segments, init_url)` 元组 / Tuple of `(segments, init_url)`
 pub fn parse_playlist(
     playlist: &str,
     url_prefix: &str,
     mouflon_keys: &HashMap<String, String>,
-) -> Result<(Vec<HlsSegment>, Option<String>)> {
+) -> Result<Vec<HlsSegment>> {
     let mut segments = Vec::new();
-    let mut mp4_header_url = None;
+    // 解析过程中追踪的"当前" EXT-X-MAP URL（按行推进，在 segment 入列时快照）
+    // Current EXT-X-MAP URL tracked during parsing (advanced per line, snapshotted at segment push)
+    let mut current_init_url: Option<String> = None;
+    // 上一个推入 segments 的分片所用的 init URL（用于判断是否发生了变更）
+    // The init URL used by the last pushed segment (for change detection)
+    let mut last_pushed_init_url: Option<String> = None;
     let mut current_pkey: Option<&str> = None;
     let mut pending_duration: f64 = 0.0;
 
@@ -83,14 +100,15 @@ pub fn parse_playlist(
                 .unwrap_or(0.0);
         }
 
-        // 解析 fMP4 初始化段 URL（EXT-X-MAP）
-        // Parse fMP4 init segment URL (EXT-X-MAP)
+        // 解析 fMP4 初始化段 URL（EXT-X-MAP）——按行推进，后续 segment 沿用直到下次变更
+        // Parse fMP4 init segment URL (EXT-X-MAP) — advanced per-line; segments inherit
+        // the current value until the next EXT-X-MAP tag overrides it.
         if line.contains("EXT-X-MAP:URI")
             && let Some(start) = line.find('"')
             && let Some(end) = line[start + 1..].find('"')
         {
             let header_path = &line[start + 1..start + 1 + end];
-            mp4_header_url = Some(if header_path.starts_with("http") {
+            current_init_url = Some(if header_path.starts_with("http") {
                 header_path.to_string()
             } else {
                 format!("{}/{}", url_prefix, header_path)
@@ -133,11 +151,27 @@ pub fn parse_playlist(
         };
 
         let sequence = extract_sequence(&url).unwrap_or(segments.len() as u32);
-        segments.push(HlsSegment { url, sequence, duration_secs: pending_duration });
+
+        // 仅在 init URL 发生变更时才填充 Some，否则为 None（沿用缓存，不重复下载）
+        // Only set Some when the init URL has changed; None means reuse the cached init.
+        let init_url_changed = current_init_url != last_pushed_init_url;
+        let seg_init_url = if init_url_changed {
+            last_pushed_init_url.clone_from(&current_init_url);
+            current_init_url.clone()
+        } else {
+            None
+        };
+
+        segments.push(HlsSegment {
+            url,
+            sequence,
+            duration_secs: pending_duration,
+            init_url: seg_init_url,
+        });
         pending_duration = 0.0;
     }
 
-    Ok((segments, mp4_header_url))
+    Ok(segments)
 }
 
 /// 从主播放列表（master playlist）文本中按配置选择变体流 URL，

@@ -184,12 +184,25 @@ pub async fn fetch_latest_release_with_assets(
 // ─── 语义化版本比较 / Semantic version comparison ────────────────────────────
 
 /// 语义化版本比较：`latest` > `current` 时返回 true。
+///
+/// 支持预发布后缀（如 `0.4.0-beta`）：比较时只取 `major.minor.patch` 数字部分，
+/// 预发布版本的 patch 数字与正式版相同时视为相等（不认为正式版更新）。
+/// 这样 `0.4.0-beta` 不会被 `0.3.5` 触发更新提示。
+///
+/// Supports pre-release suffixes (e.g. `0.4.0-beta`): only the numeric
+/// `major.minor.patch` portion is compared. A pre-release version with the
+/// same patch number is treated as equal to the stable release, so
+/// `0.4.0-beta` will not trigger an update notification for `0.3.5`.
 pub fn semver_gt(latest: &str, current: &str) -> bool {
     fn parse(v: &str) -> Option<(u64, u64, u64)> {
         let mut it = v.splitn(3, '.');
         let a = it.next()?.parse::<u64>().ok()?;
         let b = it.next()?.parse::<u64>().ok()?;
-        let c = it.next().unwrap_or("0").parse::<u64>().ok()?;
+        // 截断预发布后缀（如 "0-beta" → "0"）再解析
+        // Strip any pre-release suffix before parsing (e.g. "0-beta" → "0")
+        let patch_str = it.next().unwrap_or("0");
+        let patch_num = patch_str.split('-').next().unwrap_or("0");
+        let c = patch_num.parse::<u64>().ok()?;
         Some((a, b, c))
     }
     match (parse(latest), parse(current)) {
