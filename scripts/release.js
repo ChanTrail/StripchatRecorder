@@ -27,6 +27,7 @@ const fs   = require("fs");
 const {
   ROOT, BUILD_TMP, BUILD_OUT,
   BACKEND_MANIFEST, BACKEND_TARGET,
+  nativeCargoEnv,
   step, header, run, collectBinaries, listDir, buildModules, installFrontend,
 } = require("./common");
 
@@ -70,7 +71,7 @@ const backendReleaseDir = cargoTarget
   : path.join(BACKEND_TARGET, "release");
 
 run(`cargo build --manifest-path "${BACKEND_MANIFEST}" --release${targetFlag}`, {
-  env: { ...process.env, CARGO_TARGET_DIR: BACKEND_TARGET },
+  env: nativeCargoEnv({ CARGO_TARGET_DIR: BACKEND_TARGET }),
 });
 
 // ── Step 4: 模块 / Modules ───────────────────────────────────────────────────

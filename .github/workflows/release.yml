@@ -34,11 +34,6 @@ jobs:
             artifact-name: StripchatRecorder-server-windows-x86_64
             archive-name: StripchatRecorder-server-windows-x86_64.zip
 
-          - platform: darwin-x86_64
-            os: macos-13
-            artifact-name: StripchatRecorder-server-darwin-x86_64
-            archive-name: StripchatRecorder-server-darwin-x86_64.zip
-
           - platform: darwin-aarch64
             os: macos-latest
             artifact-name: StripchatRecorder-server-darwin-aarch64

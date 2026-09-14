@@ -358,7 +358,7 @@ function buildModules(profile, outDir, cargoTarget = null, platform = null) {
     const manifestPath = path.join(MODULES_DIR, name, "Cargo.toml");
     run(
       `cargo build --manifest-path "${manifestPath}" --bins${releaseFlag}${targetFlag}`,
-      { env: { ...process.env, CARGO_TARGET_DIR: moduleTarget(name) } }
+      { env: nativeCargoEnv({ CARGO_TARGET_DIR: moduleTarget(name) }) }
     );
     const version = readPackageVersion(manifestPath);
     // 交叉编译时产物在 <target_dir>/<triple>/release/，原生时在 <target_dir>/release/
