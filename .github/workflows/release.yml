@@ -260,9 +260,6 @@ jobs:
         with:
           name: ${{ matrix.artifact-name }}
           path: |
-            build/desktop/msi/*.msi
-            build/desktop/msi/*.msi.zip
-            build/desktop/msi/*.msi.zip.sig
             build/desktop/nsis/*.exe
             build/desktop/nsis/*.exe.sig
             build/desktop/modules-${{ matrix.platform }}.zip
