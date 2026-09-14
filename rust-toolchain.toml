@@ -1,0 +1,4 @@
+[toolchain]
+# edition = "2024" requires Rust >= 1.85 (stabilized in Rust 1.85, February 2025)
+channel = "1.98"
+components = ["clippy", "rustfmt"]

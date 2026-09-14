@@ -63,6 +63,8 @@ jobs:
       # ── Rust 工具链 / Rust toolchain ──
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.98"
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -178,6 +180,8 @@ jobs:
       # ── Rust 工具链 / Rust toolchain ──
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.98"
 
       - name: Cache Rust dependencies (desktop)
         uses: Swatinem/rust-cache@v2
