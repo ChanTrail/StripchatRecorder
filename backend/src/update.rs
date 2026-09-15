@@ -83,26 +83,50 @@ pub struct UpdateInfo {
     pub current_version: String,
     pub platform: String,
     pub is_docker: bool,
+    /// 当前运行的是预发布版本（版本号含 `-beta`，如 `0.4.0-beta`）。
+    /// Whether the currently running build is a pre-release (version string contains `-beta`).
+    pub is_beta: bool,
     pub release: Option<ReleaseInfo>,
     pub asset_names: Vec<String>,
+}
+
+/// 判断当前版本是否为预发布版（版本号以 `-beta` 结尾，如 `0.4.0-beta`）。
+/// Returns true if the current version string ends with `-beta` (e.g. `0.4.0-beta`).
+pub fn is_beta_version() -> bool {
+    APP_VERSION.ends_with("-beta")
 }
 
 /// 向 GitHub API 查询最新 Release，使用可选的代理地址。
 pub async fn fetch_latest_release(
     proxy_url: Option<&str>,
+    check_prerelease: bool,
 ) -> crate::core::error::Result<ReleaseInfo> {
-    let (info, _) = fetch_latest_release_with_assets(proxy_url).await?;
+    let (info, _) = fetch_latest_release_with_assets(proxy_url, check_prerelease).await?;
     Ok(info)
 }
 
 /// 向 GitHub API 查询最新 Release，同时返回所有 asset 名称列表（用于调试）。
+///
+/// `check_prerelease = true` 时改用 `/releases?per_page=10` 取最新的一条（含 prerelease）；
+/// `check_prerelease = false` 时使用 `/releases/latest`（仅正式版）。
+///
+/// When `check_prerelease = true`, uses `/releases?per_page=10` to get the most recent
+/// release including pre-releases; when `false`, uses `/releases/latest` (stable only).
 pub async fn fetch_latest_release_with_assets(
     proxy_url: Option<&str>,
+    check_prerelease: bool,
 ) -> crate::core::error::Result<(ReleaseInfo, Vec<String>)> {
-    let api_url = format!(
-        "https://api.github.com/repos/{}/{}/releases/latest",
-        OWNER, REPO
-    );
+    let api_url = if check_prerelease {
+        format!(
+            "https://api.github.com/repos/{}/{}/releases?per_page=10",
+            OWNER, REPO
+        )
+    } else {
+        format!(
+            "https://api.github.com/repos/{}/{}/releases/latest",
+            OWNER, REPO
+        )
+    };
 
     let mut builder = reqwest::Client::builder()
         .user_agent(format!("StripchatRecorder/{}", APP_VERSION))
@@ -137,20 +161,41 @@ pub async fn fetch_latest_release_with_assets(
         .await
         .map_err(|e| crate::core::error::AppError::Other(format!("解析响应失败: {}", e)))?;
 
-    let latest_version = json["tag_name"]
+    // check_prerelease 模式下返回数组，取第一个（GitHub 按发布时间倒序，第一个即最新）；
+    // 否则直接使用对象（/releases/latest 返回单个对象）。
+    //
+    // In check_prerelease mode the response is an array; take the first element
+    // (GitHub returns releases in reverse chronological order).
+    let release_obj = if check_prerelease {
+        match json.as_array().and_then(|arr| arr.first()) {
+            Some(obj) => obj.clone(),
+            None => {
+                return Err(crate::core::error::AppError::Other(
+                    "GitHub API 未返回任何 Release".to_string(),
+                ))
+            }
+        }
+    } else {
+        json
+    };
+
+    let latest_version = release_obj["tag_name"]
         .as_str()
         .unwrap_or("")
         .trim_start_matches('v')
         .to_string();
-    let release_url = json["html_url"].as_str().unwrap_or("").to_string();
-    let release_notes = json["body"].as_str().unwrap_or("").to_string();
-    let published_at = json["published_at"].as_str().unwrap_or("").to_string();
+    let release_url = release_obj["html_url"].as_str().unwrap_or("").to_string();
+    let release_notes = release_obj["body"].as_str().unwrap_or("").to_string();
+    let published_at = release_obj["published_at"].as_str().unwrap_or("").to_string();
 
-    // asset 命名规则：StripchatRecorder-server-{platform}.zip
+    // asset 命名规则：StripchatRecorder-server-{platform}[-{version}].zip
+    // 用前缀+后缀匹配，兼容带版本号和不带版本号两种命名。
+    // Asset naming: StripchatRecorder-server-{platform}[-{version}].zip
+    // Match by prefix + suffix to handle both versioned and non-versioned names.
     let platform = current_platform();
-    let asset_name = format!("StripchatRecorder-server-{}.zip", platform);
+    let asset_prefix = format!("StripchatRecorder-server-{}", platform);
 
-    let asset_names: Vec<String> = json["assets"]
+    let asset_names: Vec<String> = release_obj["assets"]
         .as_array()
         .map(|assets| {
             assets.iter()
@@ -159,10 +204,14 @@ pub async fn fetch_latest_release_with_assets(
         })
         .unwrap_or_default();
 
-    let (download_url, download_size) = json["assets"]
+    let (download_url, download_size) = release_obj["assets"]
         .as_array()
         .and_then(|assets| {
-            assets.iter().find(|a| a["name"].as_str() == Some(&asset_name))
+            assets.iter().find(|a| {
+                a["name"].as_str().map(|n| {
+                    n.starts_with(&asset_prefix) && n.ends_with(".zip")
+                }).unwrap_or(false)
+            })
         })
         .map(|a| {
             let url = a["browser_download_url"].as_str().unwrap_or("").to_string();
@@ -185,24 +234,19 @@ pub async fn fetch_latest_release_with_assets(
 
 /// 语义化版本比较：`latest` > `current` 时返回 true。
 ///
-/// 支持预发布后缀（如 `0.4.0-beta`）：比较时只取 `major.minor.patch` 数字部分，
-/// 预发布版本的 patch 数字与正式版相同时视为相等（不认为正式版更新）。
-/// 这样 `0.4.0-beta` 不会被 `0.3.5` 触发更新提示。
+/// 剥除 `-beta` 等预发布后缀后只比较 major.minor.patch 数字部分，
+/// 从左到右逐段比较，遇到差异立即返回结果。
 ///
-/// Supports pre-release suffixes (e.g. `0.4.0-beta`): only the numeric
-/// `major.minor.patch` portion is compared. A pre-release version with the
-/// same patch number is treated as equal to the stable release, so
-/// `0.4.0-beta` will not trigger an update notification for `0.3.5`.
+/// Compares only the numeric major.minor.patch part after stripping any
+/// pre-release suffix. Segments are compared left-to-right; returns as soon
+/// as a difference is found.
 pub fn semver_gt(latest: &str, current: &str) -> bool {
     fn parse(v: &str) -> Option<(u64, u64, u64)> {
         let mut it = v.splitn(3, '.');
         let a = it.next()?.parse::<u64>().ok()?;
         let b = it.next()?.parse::<u64>().ok()?;
-        // 截断预发布后缀（如 "0-beta" → "0"）再解析
-        // Strip any pre-release suffix before parsing (e.g. "0-beta" → "0")
         let patch_str = it.next().unwrap_or("0");
-        let patch_num = patch_str.split('-').next().unwrap_or("0");
-        let c = patch_num.parse::<u64>().ok()?;
+        let c = patch_str.split('-').next().unwrap_or("0").parse::<u64>().ok()?;
         Some((a, b, c))
     }
     match (parse(latest), parse(current)) {

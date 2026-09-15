@@ -7,6 +7,7 @@
 //! as Tauri-managed state, along with an `AppHandle` for access in Tauri commands.
 
 use std::sync::Arc;
+use parking_lot::RwLock;
 use stripchat_recorder_lib::{
     config::app_state::AppState,
     core::emitter::Emitter,
@@ -26,4 +27,7 @@ pub struct DesktopState {
     /// 事件发射器（Arc<dyn Emitter>，具体实现为 TauriEmitter）
     /// Event emitter (Arc<dyn Emitter>, backed by TauriEmitter)
     pub emitter: Arc<dyn Emitter>,
+    /// 最近一次 check_for_updates_cmd 检查到的可用更新（用于后续安装）。
+    /// The latest available update found by check_for_updates_cmd (used for installation).
+    pub pending_update: RwLock<Option<tauri_plugin_updater::Update>>,
 }

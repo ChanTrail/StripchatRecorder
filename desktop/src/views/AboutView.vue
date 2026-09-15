@@ -14,11 +14,12 @@
 	Contributors are fetched directly from the GitHub API.
 -->
 <script setup lang="ts">
-	import { ref, computed, onMounted } from "vue";
+	import { ref, computed, onMounted, onUnmounted } from "vue";
 	import { useI18n } from "vue-i18n";
 	import { getVersion } from "@tauri-apps/api/app";
-	import { check, type Update } from "@tauri-apps/plugin-updater";
 	import { relaunch } from "@tauri-apps/plugin-process";
+	import { invoke } from "@tauri-apps/api/core";
+	import { on } from "@/lib/api";
 	import {
 		Bug, ExternalLink, Scale, Users, Link, RefreshCw,
 		ChevronDown, ChevronUp, Download, CheckCircle2, AlertCircle, Loader2,
@@ -47,7 +48,7 @@
 	type UpdateState =
 		| { phase: "idle" }
 		| { phase: "checking" }
-		| { phase: "available"; update: Update }
+		| { phase: "available"; version: string; date: number | null; body: string | null }
 		| { phase: "none" }
 		| { phase: "error"; message: string }
 		| { phase: "downloading"; pct: number | null; downloaded: number; total: number }
@@ -122,21 +123,27 @@
 	// ── 更新操作 / Update actions ─────────────────────────────────────────────
 
 	/**
-	 * 检查更新：调用 tauri-plugin-updater 的 check()，
-	 * 返回 Update 对象（有更新）或 null（已是最新）。
-	 * 强制模式下传 allowDowngrades: true，使当前版本也会被视为"有更新"，便于测试 UI。
+	 * 检查更新：调用后端 check_for_updates_cmd，
+	 * 根据设置中的 check_prerelease（beta 版强制开启）决定检查正式版还是 beta 版。
+	 * 强制模式（点版本号 5 次激活）下允许降级检查，便于测试 UI。
 	 *
-	 * Check for updates via tauri-plugin-updater check().
-	 * In force mode, passes allowDowngrades: true so the current version is also seen
-	 * as "updatable", which lets you test the entire update UI without releasing a new version.
+	 * Check for updates via backend check_for_updates_cmd.
+	 * Respects check_prerelease setting (forced on for beta builds).
 	 */
 	async function checkForUpdate() {
 		updateState.value = { phase: "checking" };
 		changelogExpanded.value = false;
 		try {
-			const update = await check(forceShowUpdate.value ? { allowDowngrades: true } : undefined);
-			if (update?.available) {
-				updateState.value = { phase: "available", update };
+			const result = await invoke<{ available: boolean; version?: string; date?: number | null; body?: string | null; current_version?: string }>(
+				"check_for_updates_cmd",
+			);
+			if (result.available && result.version) {
+				updateState.value = {
+					phase: "available",
+					version: result.version,
+					date: result.date ?? null,
+					body: result.body ?? null,
+				};
 			} else {
 				updateState.value = { phase: "none" };
 			}
@@ -146,37 +153,15 @@
 	}
 
 	/**
-	 * 下载并安装更新。进度通过 onChunk 回调更新下载百分比，
-	 * 完成后调用 relaunch() 重启应用。
-	 *
-	 * Download and install the update. Progress is tracked via onChunk callbacks.
-	 * After installation, calls relaunch() to restart the app.
+	 * 下载并安装更新：调用后端 apply_update_cmd，进度通过 SSE desktop-update-progress 推送。
+	 * Download and install: calls apply_update_cmd; progress is pushed via desktop-update-progress SSE.
 	 */
 	async function startUpdate() {
 		if (updateState.value.phase !== "available") return;
-		const update = updateState.value.update;
-
 		updateState.value = { phase: "downloading", pct: 0, downloaded: 0, total: 0 };
-
 		try {
-			let downloaded = 0;
-			let total = 0;
-
-			await update.downloadAndInstall((event) => {
-				if (event.event === "Started") {
-					total = event.data.contentLength ?? 0;
-					updateState.value = { phase: "downloading", pct: 0, downloaded: 0, total };
-				} else if (event.event === "Progress") {
-					downloaded += event.data.chunkLength;
-					const pct = total > 0 ? Math.min(100, Math.round((downloaded / total) * 100)) : null;
-					updateState.value = { phase: "downloading", pct, downloaded, total };
-				} else if (event.event === "Finished") {
-					updateState.value = { phase: "installing" };
-				}
-			});
-
-			// downloadAndInstall 返回后安装已完成，重启进入新版本
-			// After downloadAndInstall returns, installation is complete — relaunch
+			await invoke("apply_update_cmd");
+			// apply_update_cmd 安装完成后 SSE 会推送 done；此处也保底设置
 			updateState.value = { phase: "done" };
 			await relaunch();
 		} catch (e) {
@@ -184,10 +169,32 @@
 		}
 	}
 
+	// ── SSE 订阅：desktop-update-progress ────────────────────────────────────
+	let unlistenUpdateProgress: (() => void) | null = null;
+
 	onMounted(() => {
 		fetchContributors();
 		fetchLicense();
 		getVersion().then((v) => { appVersion.value = v; }).catch(() => {});
+		on("desktop-update-progress", (payload) => {
+			const p = payload as { phase: string; pct?: number | null; downloaded?: number; total?: number };
+			if (p.phase === "downloading") {
+				updateState.value = {
+					phase: "downloading",
+					pct: p.pct ?? null,
+					downloaded: p.downloaded ?? 0,
+					total: p.total ?? 0,
+				};
+			} else if (p.phase === "installing") {
+				updateState.value = { phase: "installing" };
+			} else if (p.phase === "done") {
+				updateState.value = { phase: "done" };
+			}
+		}).then((fn) => { unlistenUpdateProgress = fn; });
+	});
+
+	onUnmounted(() => {
+		unlistenUpdateProgress?.();
 	});
 </script>
 
@@ -324,15 +331,15 @@
 						<div class="flex items-center justify-between gap-3 px-4 py-3">
 							<div class="flex flex-col gap-0.5">
 								<span class="text-sm font-medium text-foreground">
-									{{ t("about.updateAvailable", { version: updateState.update.version }) }}
+									{{ t("about.updateAvailable", { version: updateState.version }) }}
 								</span>
-								<span v-if="updateState.update.date" class="text-xs text-muted-foreground">
-									{{ new Date(updateState.update.date).toLocaleDateString() }}
+								<span v-if="updateState.date" class="text-xs text-muted-foreground">
+									{{ new Date((updateState.date as number) * 1000).toLocaleDateString() }}
 								</span>
 							</div>
 							<div class="flex items-center gap-2 shrink-0">
 								<!-- 展开更新日志 / Expand changelog -->
-								<Button v-if="updateState.update.body"
+								<Button v-if="updateState.body"
 									variant="ghost" size="sm" class="text-muted-foreground"
 									@click="changelogExpanded = !changelogExpanded">
 									<component :is="changelogExpanded ? ChevronUp : ChevronDown" class="size-3.5 mr-1" />
@@ -349,10 +356,10 @@
 							</div>
 						</div>
 						<!-- 更新日志 / Changelog -->
-						<div v-if="changelogExpanded && updateState.update.body"
+						<div v-if="changelogExpanded && updateState.body"
 							class="border-t px-4 py-3">
 							<p class="text-xs text-muted-foreground whitespace-pre-line leading-relaxed">
-								{{ updateState.update.body }}
+								{{ updateState.body }}
 							</p>
 							<a :href="`${repoUrl}/releases`"
 								target="_blank" rel="noopener noreferrer"

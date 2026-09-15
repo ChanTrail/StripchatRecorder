@@ -22,7 +22,7 @@
     Supports real-time multi-client sync: form updates when another client changes settings.
 -->
 <script setup lang="ts">
-	import { onMounted, onUnmounted, reactive, ref, watch, nextTick } from "vue";
+	import { onMounted, onUnmounted, reactive, ref, watch, nextTick, computed } from "vue";
 	import { call, on } from "@/lib/api";
 	import { useSettingsStore, type Settings, type MouflonKeysStore } from "../stores/settings";
 	import { useSystemStore } from "../stores/system";
@@ -32,6 +32,7 @@
 	import { Button } from "@/components/ui/button";
 	import { Input } from "@/components/ui/input";
 	import { Label } from "@/components/ui/label";
+	import { Switch } from "@/components/ui/switch";
 	import {
 		NumberField,
 		NumberFieldContent,
@@ -108,6 +109,7 @@
 		community_terms_accepted: false,
 		setup_done: true,
 		max_pp_concurrent: 0,
+		check_prerelease: false,
 	});
 
 	// 保存各代理字段的原始值，用于检测是否有实际变更
@@ -168,6 +170,7 @@
 			max_tmp_dir_gb: form.max_tmp_dir_gb,
 			sc_mirror_scheme: form.sc_mirror_scheme,
 			max_pp_concurrent: form.max_pp_concurrent,
+			check_prerelease: form.check_prerelease,
 		}),
 		async () => {
 			if (!initialized) return;
@@ -343,6 +346,10 @@
 	// ── 当前可见 section 追踪 / Active section tracking ────────────────────────
 	/** section key → 显示名称的映射（顺序即为 DOM 顺序）/ Section key to display name map (in DOM order) */
 	const SECTION_KEYS = ["language", "recording", "network", "mouflonKeys", "security"] as const;
+
+	/** 当前运行的是预发布版本（版本号以 `-beta` 结尾，如 `0.4.0-beta`）时为 true，此时强制开启检查预发布更新。
+	 * True when running a pre-release build (version string ends with `-beta`); forces check_prerelease on. */
+	const isBeta = computed(() => __APP_VERSION__.endsWith("-beta"));
 	type SectionKey = (typeof SECTION_KEYS)[number];
 	/** 当前滚动到的 section key / Currently visible section key */
 	const activeSection = ref<SectionKey | null>(null);
@@ -654,6 +661,27 @@
 						</NumberFieldContent>
 					</NumberField>
 					<p class="text-xs text-muted-foreground">{{ t("settings.maxTmpDirGb.hint") }}</p>
+				</div>
+
+				<div class="flex flex-col gap-1.5">
+					<div class="flex items-center gap-3">
+						<Switch
+							id="check-prerelease"
+							:model-value="isBeta ? true : form.check_prerelease"
+							:disabled="isBeta"
+							@update:model-value="(v) => !isBeta && (form.check_prerelease = !!v)"
+						/>
+						<Label
+							for="check-prerelease"
+							:class="isBeta ? 'cursor-default opacity-60' : 'cursor-pointer'"
+						>
+							{{ t("settings.checkPrerelease.label") }}
+						</Label>
+					</div>
+					<p class="text-xs text-muted-foreground">
+						<template v-if="isBeta">{{ t("settings.checkPrerelease.hintBeta") }}</template>
+						<template v-else>{{ t("settings.checkPrerelease.hint") }}</template>
+					</p>
 				</div>
 			</section>
 

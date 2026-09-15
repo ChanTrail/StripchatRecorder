@@ -48,6 +48,7 @@
 		current_version: string;
 		platform: string;
 		is_docker: boolean;
+		is_beta: boolean;
 		release: ReleaseInfo | null;
 		asset_names: string[];
 	}
@@ -92,13 +93,10 @@
 
 	/**
 	 * 语义化版本比较：latest > current 时返回 true。
-	 * 格式 major.minor.patch，逐段比较；解析失败时退回字符串不等值比较。
-	 *
-	 * Semantic version comparison: returns true when latest > current.
-	 * Compares major.minor.patch segments; falls back to string inequality on parse failure.
+	 * 剥除 -beta 等预发布后缀后只比较 major.minor.patch 数字部分，从左到右逐段比较。
 	 */
 	function semverGt(latest: string, current: string): boolean {
-		const parse = (v: string) => v.split(".").map((n) => parseInt(n, 10));
+		const parse = (v: string) => v.split("-")[0].split(".").map((n) => parseInt(n, 10));
 		const [la, lb, lc] = parse(latest);
 		const [ca, cb, cc] = parse(current);
 		if ([la, lb, lc, ca, cb, cc].some(isNaN)) return latest !== current;

@@ -369,6 +369,11 @@
       "label": "后处理临时目录最大占用（GB）",
       "hint": "后处理模块运行时产生的临时文件上限，超出后自动删除最旧的文件。0 表示不限制，默认 50 GB"
     },
+    "checkPrerelease": {
+      "label": "检查 beta 版本更新",
+      "hint": "开启后将同时检查 beta 预发布版本。beta 版本可能不稳定，仅建议尝鲜用户开启。",
+      "hintBeta": "当前运行的是 beta 版本，已自动启用 beta 更新检查。"
+    },
     "apiProxy": {
       "label": "API 代理（访问 stripchat.com，留空不使用）",
       "placeholder": "socks5://127.0.0.1:10808",

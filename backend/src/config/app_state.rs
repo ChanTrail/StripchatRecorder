@@ -105,6 +105,10 @@ pub struct Settings {
     /// Max concurrent post-processing tasks (0 = auto = logical CPU count; ≥1 = fixed).
     #[serde(default)]
     pub max_pp_concurrent: usize,
+    /// 是否检查预发布（beta/rc）版本更新（true = 同时检查 prerelease；beta 版本强制为 true）。
+    /// Whether to check for pre-release (beta/rc) updates (true = include prereleases; forced true on beta builds).
+    #[serde(default)]
+    pub check_prerelease: bool,
 }
 
 /// Mouflon 同步地址的默认值 / Default value for Mouflon sync URL
@@ -215,6 +219,7 @@ impl Default for Settings {
             setup_done: false,
             admin_password_hash: None,
             max_pp_concurrent: 0,
+            check_prerelease: false,
         }
     }
 }

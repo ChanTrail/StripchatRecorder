@@ -1,7 +1,7 @@
 FROM debian:latest AS builder
 
 LABEL maintainer="chantrail@chantrail.com" \
-      version="0.4.0-beta" \
+      version="0.4.1-beta" \
       description="Stripchat Recorder Docker builder"
 
 RUN apt-get update && apt-get install -y \
@@ -28,7 +28,7 @@ RUN . /root/.cargo/env && npm run build
 FROM debian:latest
 
 LABEL maintainer="chantrail@chantrail.com" \
-      version="0.4.0-beta" \
+      version="0.4.1-beta" \
       description="Stripchat Recorder"
 
 RUN apt-get update && apt-get install -y \

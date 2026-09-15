@@ -13,10 +13,14 @@ use serde::Deserialize;
 pub async fn get_update_info(
     AxumState(s): AxumState<ServerState>,
 ) -> ApiResult<crate::update::UpdateInfo> {
-    let proxy_url = s.app_state.get_settings().api_proxy_url;
+    let settings = s.app_state.get_settings();
+    let proxy_url = settings.api_proxy_url;
+    // beta 版本强制检查预发布，否则读取用户配置
+    // Force check_prerelease on beta builds; otherwise respect user setting
+    let check_prerelease = crate::update::is_beta_version() || settings.check_prerelease;
 
     let (release, asset_names) =
-        match crate::update::fetch_latest_release_with_assets(proxy_url.as_deref()).await {
+        match crate::update::fetch_latest_release_with_assets(proxy_url.as_deref(), check_prerelease).await {
             Ok((r, names)) => (Some(r), names),
             Err(_) => (None, vec![]),
         };
@@ -25,6 +29,7 @@ pub async fn get_update_info(
         current_version: crate::update::APP_VERSION.to_string(),
         platform: crate::update::current_platform().to_string(),
         is_docker: crate::update::is_docker(),
+        is_beta: crate::update::is_beta_version(),
         release,
         asset_names,
     }))

@@ -839,3 +839,150 @@ pub async fn create_dir(parent: String, name: String) -> CmdResult<serde_json::V
     .map_err(|e| e.to_string())?;
     Ok(serde_json::json!({ "path": result }))
 }
+
+// ─── Update Check ─────────────────────────────────────────────────────────────
+
+/// 检查桌面端更新。
+///
+/// 根据设置中的 `check_prerelease`（beta 版强制开启）决定检查正式版还是 beta 版：
+/// - `check_prerelease = false`：使用 `/releases/latest/download/latest.json`（仅正式版）
+/// - `check_prerelease = true` ：先通过 GitHub API 找到最新 Release（含 prerelease），
+///   再构造对应的 `latest.json` 下载 URL 用于 tauri-plugin-updater 检查。
+///
+/// Check for desktop updates.
+///
+/// Selects the update endpoint based on `check_prerelease` in settings (forced on for beta builds):
+/// - `check_prerelease = false`: uses `/releases/latest/download/latest.json` (stable only)
+/// - `check_prerelease = true` : queries GitHub API for the latest release (including prerelease),
+///   then constructs the corresponding `latest.json` URL for tauri-plugin-updater.
+#[tauri::command]
+pub async fn check_for_updates_cmd(
+    app: tauri::AppHandle,
+    state: State<'_, DesktopState>,
+) -> CmdResult<serde_json::Value> {
+    use tauri_plugin_updater::UpdaterExt;
+
+    let settings = state.app_state.get_settings();
+    let proxy_url = settings.api_proxy_url.clone();
+    let check_prerelease = stripchat_recorder_lib::update::is_beta_version()
+        || settings.check_prerelease;
+
+    const OWNER: &str = "ChanTrail";
+    const REPO: &str = "StripchatRecorder";
+
+    // 根据 check_prerelease 决定 latest.json 的 URL
+    // Choose latest.json URL based on check_prerelease
+    let endpoint_url: String = if check_prerelease {
+        // 通过 GitHub API 获取最新 Release（含 prerelease），找到其 latest.json
+        // Use GitHub API to get the newest release (including prereleases)
+        match stripchat_recorder_lib::update::fetch_latest_release_with_assets(
+            proxy_url.as_deref(),
+            true,
+        )
+        .await
+        {
+            Ok((release, _)) => {
+                let tag = format!("v{}", release.latest_version);
+                format!(
+                    "https://github.com/{}/{}/releases/download/{}/latest.json",
+                    OWNER, REPO, tag
+                )
+            }
+            Err(e) => return Err(format!("获取最新 Release 信息失败: {}", e)),
+        }
+    } else {
+        format!(
+            "https://github.com/{}/{}/releases/latest/download/latest.json",
+            OWNER, REPO
+        )
+    };
+
+    let url = endpoint_url.parse::<url::Url>().map_err(|e| e.to_string())?;
+
+    let mut builder = app
+        .updater_builder()
+        .endpoints(vec![url])
+        .map_err(|e| e.to_string())?;
+
+    if let Some(proxy) = proxy_url.as_deref().filter(|s| !s.is_empty())
+        && let Ok(proxy_url_parsed) = proxy.parse::<url::Url>() {
+            builder = builder.proxy(proxy_url_parsed);
+        }
+
+    let updater = builder.build().map_err(|e| e.to_string())?;
+    match updater.check().await.map_err(|e| e.to_string())? {
+        Some(update) => {
+            let info = serde_json::json!({
+                "available": true,
+                "version": update.version,
+                "date": update.date.map(|d| d.unix_timestamp()),
+                "body": update.body,
+                "current_version": update.current_version,
+            });
+            // 缓存 Update 对象供后续安装使用 / Cache Update object for later installation
+            *state.pending_update.write() = Some(update);
+            Ok(info)
+        }
+        None => {
+            *state.pending_update.write() = None;
+            Ok(serde_json::json!({ "available": false }))
+        }
+    }
+}
+
+/// 下载并安装已检查到的更新，通过 SSE 事件推送进度。
+/// 必须先调用 `check_for_updates_cmd` 才能调用本命令。
+///
+/// Download and install the pending update, pushing progress via SSE events.
+/// `check_for_updates_cmd` must be called first.
+#[tauri::command]
+pub async fn apply_update_cmd(
+    state: State<'_, DesktopState>,
+) -> CmdResult<serde_json::Value> {
+    use stripchat_recorder_lib::core::emitter::EmitterExt;
+
+    let update = state
+        .pending_update
+        .write()
+        .take()
+        .ok_or("没有可用的更新，请先执行检查更新 / No pending update, run check first")?;
+
+    let emitter = Arc::clone(&state.emitter);
+
+    emitter.emit(
+        "desktop-update-progress",
+        &serde_json::json!({ "phase": "downloading", "pct": 0, "downloaded": 0, "total": 0 }),
+    );
+
+    let emitter2 = Arc::clone(&emitter);
+    let emitter3 = Arc::clone(&emitter);
+    let mut downloaded: u64 = 0;
+    update
+        .download_and_install(
+            move |chunk, total| {
+                downloaded += chunk as u64;
+                let pct = total.and_then(|t| (downloaded).checked_mul(100)?.checked_div(t))
+                    .map(|p| p.min(100));
+                emitter2.emit(
+                    "desktop-update-progress",
+                    &serde_json::json!({
+                        "phase": "downloading",
+                        "pct": pct,
+                        "downloaded": downloaded,
+                        "total": total.unwrap_or(0),
+                    }),
+                );
+            },
+            move || {
+                emitter3.emit(
+                    "desktop-update-progress",
+                    &serde_json::json!({ "phase": "installing" }),
+                );
+            },
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+    emitter.emit("desktop-update-progress", &serde_json::json!({ "phase": "done" }));
+    Ok(serde_json::json!({ "ok": true }))
+}

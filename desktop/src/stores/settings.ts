@@ -56,6 +56,8 @@ export interface Settings {
 	setup_done: boolean;
 	/** 后处理最大并发数（0 = 自动 = CPU 核心数；≥1 = 固定）/ Max concurrent post-processing tasks (0 = auto; ≥1 = fixed) */
 	max_pp_concurrent: number;
+	/** 是否检查 beta 版本更新 / Whether to check for beta updates */
+	check_prerelease: boolean;
 }
 
 /** Mouflon 密钥存储结构（含时间戳）/ Mouflon key store (with timestamps) */
@@ -91,6 +93,7 @@ export const useSettingsStore = defineStore("settings", () => {
 		community_terms_accepted: false,
 		setup_done: false,
 		max_pp_concurrent: 0,
+		check_prerelease: false,
 	});
 	/** 是否正在加载 / Whether loading */
 	const loading = ref(false);

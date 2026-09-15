@@ -230,9 +230,11 @@ pub fn start_update_check(app_state: Arc<AppState>, emitter: Arc<dyn Emitter>) {
         let mut last_notified_version: Option<String> = None;
 
         loop {
-            let proxy_url = app_state.get_settings().api_proxy_url;
+            let settings = app_state.get_settings();
+            let proxy_url = settings.api_proxy_url;
+            let check_prerelease = crate::update::is_beta_version() || settings.check_prerelease;
 
-            match crate::update::fetch_latest_release(proxy_url.as_deref()).await {
+            match crate::update::fetch_latest_release(proxy_url.as_deref(), check_prerelease).await {
                 Ok(release) => {
                     let current = crate::update::APP_VERSION;
                     let latest = &release.latest_version;

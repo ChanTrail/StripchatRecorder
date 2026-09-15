@@ -13,7 +13,7 @@
     - sticky header + section observer
 -->
 <script setup lang="ts">
-	import { onMounted, onUnmounted, reactive, ref, watch, nextTick } from "vue";
+	import { onMounted, onUnmounted, reactive, ref, watch, nextTick, computed } from "vue";
 	import { call, on } from "@/lib/api";
 	import { useSettingsStore, type Settings, type MouflonKeysStore } from "../stores/settings";
 	import { useSystemStore } from "../stores/system";
@@ -22,6 +22,7 @@
 	import { Button } from "@/components/ui/button";
 	import { Input } from "@/components/ui/input";
 	import { Label } from "@/components/ui/label";
+	import { Switch } from "@/components/ui/switch";
 	import {
 		NumberField,
 		NumberFieldContent,
@@ -51,6 +52,10 @@
 	const localesStore = useLocalesStore();
 
 	const resolutionDirections = ["lower", "higher"] as const;
+
+	/** 当前运行的是 beta 版本（版本号以 `-beta` 结尾）时为 true，此时强制开启 beta 更新检查。
+	 * True when running a beta build; forces check_prerelease on. */
+	const isBeta = computed(() => __APP_VERSION__.endsWith("-beta"));
 
 	async function setLocale(lang: string) {
 		const { modules: moduleLocales, warning } = await loadLocaleFromServer(lang);
@@ -86,6 +91,7 @@
 		community_terms_accepted: false,
 		setup_done: true,
 		max_pp_concurrent: 0,
+		check_prerelease: false,
 	});
 
 	const originalOutputDir = ref("");
@@ -141,6 +147,7 @@
 			max_tmp_dir_gb: form.max_tmp_dir_gb,
 			sc_mirror_scheme: form.sc_mirror_scheme,
 			max_pp_concurrent: form.max_pp_concurrent,
+			check_prerelease: form.check_prerelease,
 		}),
 		async () => {
 			if (!initialized) return;
@@ -469,6 +476,27 @@
 						</NumberFieldContent>
 					</NumberField>
 					<p class="text-xs text-muted-foreground">{{ t("settings.maxTmpDirGb.hint") }}</p>
+				</div>
+
+				<div class="flex flex-col gap-1.5">
+					<div class="flex items-center gap-3">
+						<Switch
+							id="check-prerelease"
+							:model-value="isBeta ? true : form.check_prerelease"
+							:disabled="isBeta"
+							@update:model-value="(v) => !isBeta && (form.check_prerelease = !!v)"
+						/>
+						<Label
+							for="check-prerelease"
+							:class="isBeta ? 'cursor-default opacity-60' : 'cursor-pointer'"
+						>
+							{{ t("settings.checkPrerelease.label") }}
+						</Label>
+					</div>
+					<p class="text-xs text-muted-foreground">
+						<template v-if="isBeta">{{ t("settings.checkPrerelease.hintBeta") }}</template>
+						<template v-else>{{ t("settings.checkPrerelease.hint") }}</template>
+					</p>
 				</div>
 			</section>
 

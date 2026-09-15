@@ -124,6 +124,9 @@ pub fn run() {
             commands::list_dir,
             commands::list_drives,
             commands::create_dir,
+            // Update
+            commands::check_for_updates_cmd,
+            commands::apply_update_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -233,6 +236,7 @@ async fn setup_app(app_handle: tauri::AppHandle) {
         recorder: Arc::clone(&recorder),
         monitor: Arc::clone(&monitor),
         emitter: Arc::clone(&emitter),
+        pending_update: parking_lot::RwLock::new(None),
     });
 
     // ── 启动后台异步任务 / Start background async tasks ──────────────────────
