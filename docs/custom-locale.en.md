@@ -4,7 +4,7 @@
 
 This document explains how to customize UI translations or add new languages in StripchatRecorder.
 
-Translations are now loaded from **JSON files on disk** rather than being compiled into the binary. The program creates default locale files on first run, which you can edit freely — your changes are never overwritten by updates.
+Translations are loaded from **JSON files on disk** rather than being compiled into the binary. The program creates default locale files on first run, which you can edit freely — your changes are never overwritten by updates.
 
 ---
 
@@ -16,6 +16,9 @@ Translations are now loaded from **JSON files on disk** rather than being compil
     ├── app/                        # Main application translations
     │   ├── zh-CN.json              # Simplified Chinese (default)
     │   └── en-US.json              # English
+    ├── log/                        # Backend log translations (affects log output language)
+    │   ├── zh-CN.json
+    │   └── en-US.json
     └── modules/                    # Module translations
         ├── filter_short/
         │   ├── zh-CN.json
@@ -26,12 +29,20 @@ Translations are now loaded from **JSON files on disk** rather than being compil
         ├── notify_discord/
         │   ├── zh-CN.json
         │   └── en-US.json
-        └── notify_telegram/
+        ├── notify_telegram/
+        │   ├── zh-CN.json
+        │   └── en-US.json
+        ├── cleanup/
+        │   ├── zh-CN.json
+        │   └── en-US.json
+        └── __builtin__/            # Built-in DAG node translations (recording_input, unpack)
             ├── zh-CN.json
             └── en-US.json
 ```
 
 > **Note:** Files are created automatically on first run. If a file already exists it is **never overwritten**, so your customizations are preserved across restarts and updates.
+>
+> Exception: if a built-in locale file (`app/`, `log/`, `modules/<builtin_id>/`) exists but fails JSON validation, the program automatically rebuilds it with default content. Custom locale files (third-party modules or custom locale codes) only log a warning on validation failure and are not rebuilt.
 
 ---
 
@@ -86,25 +97,48 @@ All fields are optional — any omitted field falls back to the module's own `--
 
 For third-party modules (not in the built-in list), simply create a folder with the module's `id` under `locale/modules/` and add the JSON files — the system discovers them automatically.
 
+### Built-in DAG node translations (`__builtin__`)
+
+The `__builtin__` module locale file uses a **per-node nested structure**, unlike the flat structure of regular modules:
+
+```json
+{
+  "recording_input": {
+    "name": "Recording Input",
+    "description": "Virtual recording input node — always the pipeline start point"
+  },
+  "unpack": {
+    "name": "Unpack Media Bundle",
+    "description": "Split a media bundle into a video file (port 0) and an image file (port 1)"
+  }
+}
+```
+
 ---
 
 ## Translation Key Reference
 
-| Top-level key    | Description                           |
-| ---------------- | ------------------------------------- |
-| `nav`            | Sidebar navigation labels             |
-| `common`         | Shared button text (confirm, cancel…) |
-| `notify`         | System notifications and dialogs      |
-| `home`           | Streamers list page                   |
-| `streamerCard`   | Streamer card component               |
-| `addStreamer`    | Add streamer dialog                   |
-| `recordings`     | Recordings page                       |
-| `postprocess`    | Post-processing pipeline page         |
-| `relay`          | Relay streams page                    |
-| `finder`         | Streamer finder page                  |
-| `settings`       | Settings page                         |
-| `usePostprocess` | Post-processing task status messages  |
-| `setup`          | First-launch setup wizard             |
+| Top-level key    | Description                                                   |
+| ---------------- | ------------------------------------------------------------- |
+| `nav`            | Sidebar navigation labels                                     |
+| `common`         | Shared button text (confirm, cancel…)                        |
+| `notify`         | System notifications and dialogs (disconnect, missing files…) |
+| `home`           | Streamers list page                                           |
+| `streamerCard`   | Streamer card component                                       |
+| `addStreamer`    | Add streamer dialog                                           |
+| `recordings`     | Recordings page                                               |
+| `postprocess`    | Post-processing pipeline page                                 |
+| `relay`          | Relay streams page                                            |
+| `finder`         | Streamer finder page                                          |
+| `settings`       | Settings page                                                 |
+| `usePostprocess` | Post-processing task status messages                          |
+| `setup`          | First-launch setup wizard                                     |
+| `login`          | Login page (password input, initial password setup)           |
+| `notifications`  | In-app notification panel                                     |
+| `community`      | Community module marketplace page                             |
+| `about`          | About page (version info, update check)                       |
+| `streamers`      | Streamer event messages (rename notifications, API errors…)  |
+| `dirBrowser`     | Directory picker dialog                                       |
 
 Interpolation variables use the `{variableName}` format. Always keep placeholders as-is when translating:
 

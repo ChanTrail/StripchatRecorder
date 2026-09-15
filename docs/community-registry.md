@@ -36,7 +36,7 @@ registry.json                      registry.json（由 CI 自动维护）
    - `registry.json`：填写 `id`、`name`、`description`、`author`、`tags`（其余字段由 CI 自动填写）
    - 两个 workflow 文件顶部的 `MODULE_NAME`
 
-参考[模块开发文档](module-development.md)了解完整的 stdin/stdout 协议。
+参考[模块开发文档](module-development.md)了解完整的 JSON stdin/stdout 协议、端口类型系统和 DAG 流水线机制。
 
 ---
 

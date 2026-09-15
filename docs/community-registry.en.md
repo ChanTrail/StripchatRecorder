@@ -36,7 +36,7 @@ registry.json                      registry.json (auto-maintained by CI)
    - `registry.json`: fill in `id`, `name`, `description`, `author`, `tags` (other fields are auto-managed by CI)
    - Both workflow files: update `MODULE_NAME` at the top
 
-See the [module development guide](module-development.en.md) for the full stdin/stdout protocol.
+See the [module development guide](module-development.en.md) for the full JSON stdin/stdout protocol, port type system, and DAG pipeline mechanics.
 
 ---
 
