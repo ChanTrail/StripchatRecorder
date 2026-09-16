@@ -19,7 +19,12 @@
     "rotateFailed": "Recording {username}: failed to rotate session: {error}",
     "ffmpegConvertFailed": "ffmpeg convert failed → segment {seq}: {error}",
     "segmentDownloadFailed": "Failed to download segment {seq}: {error}",
-    "recordingError": "Recording error → {username}: {error}"
+    "recordingError": "Recording error → {username}: {error}",
+    "segmentRetrySuccess": "Segment {seq} retry succeeded → {username} (attempt {attempt})",
+    "segmentRetryFfmpegFailed": "Segment {seq} retry ffmpeg failed → {username} (attempt {attempt}): {error}",
+    "segmentRetryTooSmall": "Segment {seq} retry got too-small response → {username} (attempt {attempt})",
+    "segmentRetryAttemptFailed": "Segment {seq} retry failed → {username} (attempt {attempt}/{max}): {error}",
+    "segmentPermanentFailed": "Segment {seq} permanently failed → {username} after {max} retries"
   },
   "relay": {
     "workerStarted": "Relay worker started for {username}",
@@ -47,7 +52,13 @@
     "streamerDead": "Streamer {username} confirmed dead (not found by username or model_id), skipping future polls",
     "pollFailed": "Poll failed → {username}: {error}",
     "streamerRenamed": "Streamer renamed: {oldUsername} -> {newUsername}",
-    "streamerRenameSkipped": "Streamer rename skipped for {username}: {error}"
+    "streamerRenameSkipped": "Streamer rename skipped for {username}: {error}",
+    "cgfProxyInvalid": "CGF proxy URL invalid, skipping proxy: {error}",
+    "cgfClientFailed": "CGF HTTP client build failed for {username}: {error}",
+    "cgfRequestFailed": "CGF request failed for {username}: {error}",
+    "cgfHttpError": "CGF returned HTTP {status} for {username}",
+    "cgfParseFailed": "CGF response parse failed for {username}: {error}",
+    "cgfScheduleNull": "CGF schedule is null for {username} (insufficient history data)"
   },
   "maintenance": {
     "tmpCleanup": "tmp cleanup: removed {count} stale file(s), freed {mb} MB"
@@ -87,7 +98,11 @@
     "updateAvailable": "New version available: {latest} (current: {current})",
     "updateUpToDate": "Update check: already on latest version {current}",
     "updateCheckFailed": "Update check failed (will retry in 24 h): {error}",
-    "recordingConcurrencyAdjusted": "recording: effective={effective} (user={user}, running={running}, cpu={cpu}%, mem={mem}%, mem_avail={avail}MB)"
+    "recordingConcurrencyAdjusted": "recording: effective={effective} (user={user}, running={running}, cpu={cpu}%, mem={mem}%, mem_avail={avail}MB)",
+    "cgfRefreshStart": "CGF schedule refresh: {count} streamer(s)",
+    "cgfRefreshUpdated": "CGF schedule updated for {username}",
+    "cgfRefreshUnavailable": "CGF schedule not available for {username} (absent in CGF or network error)",
+    "cgfRefreshDone": "CGF schedule refresh pass complete"
   },
   "watcher": {
     "recordingsCreateDirFailed": "Failed to create watch dir {dir}: {error}",

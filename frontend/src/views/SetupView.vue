@@ -55,6 +55,7 @@ const scMirror = ref("");
 const cdnProxy = ref("");
 const communityProxy = ref("");
 const communityMirror = ref("");
+const cgfProxy = ref("");
 const adminPassword = ref("");
 
 /** 可用语言列表（从共享 store 读取，由 App.vue 统一维护）
@@ -80,6 +81,7 @@ onMounted(async () => {
 	cdnProxy.value = s.cdn_proxy_url || "";
 	communityProxy.value = s.community_proxy_url || "";
 	communityMirror.value = s.community_mirror_url || "";
+	cgfProxy.value = s.cgf_proxy_url || "";
 });
 
 // ── 目录浏览器 / Directory browser ───────────────────────────────────────────
@@ -155,6 +157,7 @@ async function finish() {
 			cdn_proxy_url: cdnProxy.value.trim() || null,
 			community_proxy_url: communityProxy.value.trim() || null,
 			community_mirror_url: communityMirror.value.trim() || null,
+			cgf_proxy_url: cgfProxy.value.trim() || null,
 			setup_done: true,
 		});
 		// 2. 设置管理员密码
@@ -297,6 +300,11 @@ async function finish() {
 									<Label>{{ t("settings.communityMirror.label") }}</Label>
 									<Input v-model="communityMirror" :placeholder="t('settings.communityMirror.placeholder')" autocomplete="off" />
 									<p class="text-xs text-muted-foreground">{{ t("settings.communityMirror.hint") }}</p>
+								</div>
+								<div class="flex flex-col gap-1.5">
+									<Label>{{ t("settings.cgfProxy.label") }}</Label>
+									<Input v-model="cgfProxy" :placeholder="t('settings.cgfProxy.placeholder')" autocomplete="off" />
+									<p class="text-xs text-muted-foreground">{{ t("settings.cgfProxy.hint") }}</p>
 								</div>
 							</div>
 						</template>

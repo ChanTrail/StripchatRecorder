@@ -4512,7 +4512,7 @@ dependencies = [
 
 [[package]]
 name = "stripchat-recorder"
-version = "0.3.9"
+version = "0.4.1-beta"
 dependencies = [
  "argon2",
  "async-stream",
@@ -4548,7 +4548,7 @@ dependencies = [
 
 [[package]]
 name = "stripchat-recorder-desktop"
-version = "0.3.9"
+version = "0.4.1-beta"
 dependencies = [
  "base64 0.23.1",
  "parking_lot",

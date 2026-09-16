@@ -6,7 +6,7 @@
     2. 名字查找：输入主播名，通过 camgirlfinder.net 的名字搜索 API 查找主播
 -->
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, reactive, onMounted } from "vue";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ImageIcon, Loader2, Search, X } from "@lucide/vue";
@@ -30,56 +30,6 @@ onMounted(() => {
   streamersStore.initListeners();
   void streamersStore.fetchStreamers();
 });
-
-// 正在添加中的主播集合，防止重复点击
-const addingSet = ref(new Set<string>());
-
-// 验证状态缓存：username -> "checking" | "exists" | "not_found" | "timeout"
-const verifyCache = ref(new Map<string, "checking" | "exists" | "not_found" | "timeout">());
-
-async function verifyStreamer(username: string) {
-  if (verifyCache.value.has(username)) return;
-  const next = new Map(verifyCache.value);
-  next.set(username, "checking");
-  verifyCache.value = next;
-
-  try {
-    const res = await call<{ exists: boolean }>("verify_streamer", { username });
-    const m = new Map(verifyCache.value);
-    m.set(username, res.exists ? "exists" : "not_found");
-    verifyCache.value = m;
-  } catch {
-    // 网络错误时乐观处理，不阻塞添加
-    const m = new Map(verifyCache.value);
-    m.set(username, "exists");
-    verifyCache.value = m;
-  }
-}
-
-function verifyAll(usernames: string[]) {
-  for (const u of usernames) verifyStreamer(u);
-}
-
-async function addToRecord(username: string) {
-  if (addingSet.value.has(username)) return;
-  addingSet.value = new Set(addingSet.value).add(username);
-  try {
-    await streamersStore.addStreamers([username]);
-    toast(t("finder.card.addedToast", { username }), "success");
-  } catch (e) {
-    toast(e instanceof Error ? e.message : String(e), "error");
-  } finally {
-    const next = new Set(addingSet.value);
-    next.delete(username);
-    addingSet.value = next;
-  }
-}
-
-function isAdded(username: string) {
-  return streamersStore.streamers.some(
-    (s) => s.username.toLowerCase() === username.toLowerCase()
-  );
-}
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -198,44 +148,108 @@ const nameLoading = ref(false);
 const nameError = ref<string | null>(null);
 const nameSearched = ref(false);
 
+// 正在添加中的主播集合，防止重复点击
+// 使用 reactive Set：Vue 能追踪 .add() / .delete() 的变更
+const addingSet = reactive(new Set<string>());
+
+// 验证状态缓存：username -> "checking" | "exists" | "not_found"
+// 使用 reactive 对象：Vue 能追踪属性赋值的变更，无需每次 new Map()
+const verifyCache = reactive<Record<string, "checking" | "exists" | "not_found">>({});
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 const CGF_API = "https://api.camgirlfinder.net";
 
-async function cgfFetch(url: string, init?: RequestInit) {
+async function cgfFetch(url: string, init?: RequestInit): Promise<Response> {
   const headers = new Headers(init?.headers);
   headers.set("User-Agent", "StripchatRecorder/1.0");
   const res = await fetch(url, { ...init, headers });
   if (!res.ok) {
     const text = await res.text().catch(() => res.statusText);
     let msg = text;
-    try { const j = JSON.parse(text); msg = j?.error ?? text; } catch {}
+    try { msg = (JSON.parse(text) as { error?: string })?.error ?? text; } catch { /* 不是 JSON，直接用原文 */ }
     throw new Error(msg || `HTTP ${res.status}`);
   }
   return res;
 }
 
-function platformLabel(code: string) {
+function platformLabel(code: string): string {
   return PLATFORM_LABELS[code] ?? code.toUpperCase();
 }
 
-function genderLabel(code: string) {
+function genderLabel(code: string): string {
   return t(`finder.gender.${code}`) || code;
 }
 
-function probabilityLabel(code: string) {
-  const labels: Record<string, string> = {
-    high: t("finder.card.probHigh"),
-    medium: t("finder.card.probMedium"),
-    low: t("finder.card.probLow"),
-  };
-  return labels[code] ?? code;
+function probabilityLabel(code: string): string {
+  if (code === "high") return t("finder.card.probHigh");
+  if (code === "medium") return t("finder.card.probMedium");
+  if (code === "low") return t("finder.card.probLow");
+  return code;
 }
 
-function formatDate(iso: string) {
+function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString("zh-CN", {
     year: "numeric", month: "2-digit", day: "2-digit",
   });
+}
+
+// ─── Verify / Add ─────────────────────────────────────────────────────────────
+
+async function verifyStreamer(username: string) {
+  if (username in verifyCache) return;
+  verifyCache[username] = "checking";
+  try {
+    const res = await call<{ exists: boolean }>("verify_streamer", { username });
+    verifyCache[username] = res.exists ? "exists" : "not_found";
+  } catch {
+    // 网络错误时乐观处理，不阻塞添加
+    verifyCache[username] = "exists";
+  }
+}
+
+function verifyAll(usernames: string[]) {
+  for (const u of usernames) verifyStreamer(u);
+}
+
+async function addToRecord(username: string) {
+  if (addingSet.has(username)) return;
+  addingSet.add(username);
+  try {
+    await streamersStore.addStreamers([username]);
+    toast(t("finder.card.addedToast", { username }), "success");
+  } catch (e) {
+    toast(e instanceof Error ? e.message : String(e), "error");
+  } finally {
+    addingSet.delete(username);
+  }
+}
+
+function isAdded(username: string): boolean {
+  return streamersStore.streamers.some(
+    (s) => s.username.toLowerCase() === username.toLowerCase()
+  );
+}
+
+// ─── Job polling ──────────────────────────────────────────────────────────────
+
+async function pollJob(jobId: string): Promise<Job> {
+  for (let i = 0; i < 60; i++) {
+    await new Promise((r) => setTimeout(r, 2000));
+    const res = await cgfFetch(`${CGF_API}/jobs/${jobId}`);
+    const job = await res.json() as Job;
+    if (job.status !== "active") return job;
+  }
+  throw new Error(t("finder.face.timeout"));
+}
+
+/**
+ * 发起一次搜索任务并等待完成。
+ * @param submit 提交任务的函数，返回初始 Job
+ */
+async function runJobSearch(submit: () => Promise<Job>): Promise<Job> {
+  const job = await submit();
+  return job.status === "active" ? pollJob(job.id) : job;
 }
 
 // ─── Face search ─────────────────────────────────────────────────────────────
@@ -266,22 +280,10 @@ function onDrop(e: DragEvent) {
 }
 
 function onPaste(e: ClipboardEvent) {
-  const f = Array.from(e.clipboardData?.files ?? []).find((f) =>
-    f.type.startsWith("image/")
+  const f = Array.from(e.clipboardData?.files ?? []).find((file) =>
+    file.type.startsWith("image/")
   );
   if (f) setFile(f);
-}
-
-async function pollJob(jobId: string): Promise<Job> {
-  for (let i = 0; i < 60; i++) {
-    await new Promise((r) => setTimeout(r, 2000));
-    const res = await cgfFetch(`${CGF_API}/jobs/${jobId}`);
-    const job: Job = await res.json();
-    if (job.status === "finished" || job.status === "failed" || job.status === "noface") {
-      return job;
-    }
-  }
-  throw new Error(t("finder.face.timeout"));
 }
 
 async function doFaceSearch() {
@@ -293,19 +295,16 @@ async function doFaceSearch() {
   faceSearched.value = false;
 
   try {
-    const form = new FormData();
-    form.append("image", selectedFile.value);
+    const finalJob = await runJobSearch(async () => {
+      const form = new FormData();
+      form.append("image", selectedFile.value!);
+      const res = await cgfFetch(`${CGF_API}/search`, { method: "POST", body: form });
+      const job = await res.json() as Job;
+      faceJobUrls.value = job.urls;
+      return job;
+    });
 
-    const res = await cgfFetch(`${CGF_API}/search`, { method: "POST", body: form });
-    const job: Job = await res.json();
-
-    faceJobUrls.value = job.urls;
-
-    let finalJob = job;
-    if (job.status === "active") {
-      finalJob = await pollJob(job.id);
-      faceJobUrls.value = finalJob.urls;
-    }
+    faceJobUrls.value = finalJob.urls;
 
     if (finalJob.status === "noface") {
       faceError.value = t("finder.face.noFace");
@@ -313,9 +312,7 @@ async function doFaceSearch() {
       faceError.value = finalJob.error ?? t("finder.face.searchFailed");
     } else {
       faceResults.value = finalJob.predictions ?? [];
-      verifyAll(
-        faceResults.value.filter((p) => p.platform === "sc").map((p) => p.model)
-      );
+      verifyAll(faceResults.value.filter((p) => p.platform === "sc").map((p) => p.model));
     }
   } catch (e) {
     faceError.value = e instanceof Error ? e.message : String(e);
@@ -346,13 +343,9 @@ async function doNameSearch() {
   nameSearched.value = false;
 
   try {
-    const res = await cgfFetch(
-      `${CGF_API}/models/search?model=${encodeURIComponent(q)}`
-    );
+    const res = await cgfFetch(`${CGF_API}/models/search?model=${encodeURIComponent(q)}`);
     nameResults.value = await res.json() as ModelResult[];
-    verifyAll(
-      nameResults.value.filter((m) => m.platform === "sc").map((m) => m.name)
-    );
+    verifyAll(nameResults.value.filter((m) => m.platform === "sc").map((m) => m.name));
   } catch (e) {
     nameError.value = e instanceof Error ? e.message : String(e);
   } finally {
@@ -390,27 +383,21 @@ async function openSimilarDialog(m: ModelResult) {
   bgMode.value = false;
 
   try {
-    const res = await cgfFetch(
-      `${CGF_API}/search?url=${encodeURIComponent(faceUrl)}`
-    );
-    const job: Job = await res.json();
-
-    let finalJob = job;
-    if (job.status === "active") {
-      finalJob = await pollJob(job.id);
-    }
+    const finalJob = await runJobSearch(async () => {
+      const res = await cgfFetch(`${CGF_API}/search?url=${encodeURIComponent(faceUrl)}`);
+      return await res.json() as Job;
+    });
 
     if (finalJob.status === "noface") {
       dialogError.value = t("finder.dialog.noFace");
     } else if (finalJob.status === "failed") {
       dialogError.value = finalJob.error ?? t("finder.face.searchFailed");
     } else {
+      // 过滤掉来源主播本身
       dialogResults.value = (finalJob.predictions ?? []).filter(
         (p) => !(p.platform === m.platform && p.model === m.name)
       );
-      verifyAll(
-        dialogResults.value.filter((p) => p.platform === "sc").map((p) => p.model)
-      );
+      verifyAll(dialogResults.value.filter((p) => p.platform === "sc").map((p) => p.model));
     }
   } catch (e) {
     dialogError.value = e instanceof Error ? e.message : String(e);
@@ -531,11 +518,8 @@ async function openSimilarDialog(m: ModelResult) {
                 <template v-if="p.platform !== 'sc'">
                   <span class="text-xs text-muted-foreground self-end">{{ t("finder.card.scOnly") }}</span>
                 </template>
-                <template v-else-if="verifyCache.get(p.model) === 'not_found'">
+                <template v-else-if="verifyCache[p.model] === 'not_found'">
                   <span class="text-xs text-destructive self-end">{{ t("finder.card.notFound") }}</span>
-                </template>
-                <template v-else-if="verifyCache.get(p.model) === 'timeout'">
-                  <span class="text-xs text-yellow-500 self-end">{{ t("finder.card.timeout") }}</span>
                 </template>
                 <template v-else-if="isAdded(p.model)">
                   <span class="text-xs text-muted-foreground self-end">{{ t("finder.card.added") }}</span>
@@ -544,11 +528,11 @@ async function openSimilarDialog(m: ModelResult) {
                   <Button
                     size="sm"
                     variant="outline"
-                    :disabled="addingSet.has(p.model) || verifyCache.get(p.model) === 'checking'"
+                    :disabled="addingSet.has(p.model) || verifyCache[p.model] === 'checking'"
                     class="text-xs h-7 px-2"
                     @click="addToRecord(p.model)"
                   >
-                    {{ addingSet.has(p.model) ? t("finder.card.adding") : verifyCache.get(p.model) === 'checking' ? t("finder.card.verifying") : t("finder.card.addRecord") }}
+                    {{ addingSet.has(p.model) ? t("finder.card.adding") : verifyCache[p.model] === 'checking' ? t("finder.card.verifying") : t("finder.card.addRecord") }}
                   </Button>
                 </template>
               </div>
@@ -728,11 +712,8 @@ async function openSimilarDialog(m: ModelResult) {
                       <template v-if="p.platform !== 'sc'">
                         <span class="text-[10px] text-muted-foreground text-center mt-0.5">{{ t("finder.card.scOnly") }}</span>
                       </template>
-                      <template v-else-if="verifyCache.get(p.model) === 'not_found'">
+                      <template v-else-if="verifyCache[p.model] === 'not_found'">
                         <span class="text-[10px] text-destructive text-center mt-0.5">{{ t("finder.card.notFound") }}</span>
-                      </template>
-                      <template v-else-if="verifyCache.get(p.model) === 'timeout'">
-                        <span class="text-[10px] text-yellow-500 text-center mt-0.5">{{ t("finder.card.timeout") }}</span>
                       </template>
                       <template v-else-if="isAdded(p.model)">
                         <span class="text-[10px] text-muted-foreground text-center mt-0.5">{{ t("finder.card.added") }}</span>
@@ -741,11 +722,11 @@ async function openSimilarDialog(m: ModelResult) {
                         <Button
                           size="sm"
                           variant="outline"
-                          :disabled="addingSet.has(p.model) || verifyCache.get(p.model) === 'checking'"
+                          :disabled="addingSet.has(p.model) || verifyCache[p.model] === 'checking'"
                           class="text-[10px] h-6 px-2 mt-0.5 w-full"
                           @click="addToRecord(p.model)"
                         >
-                          {{ addingSet.has(p.model) ? t("finder.card.adding") : verifyCache.get(p.model) === 'checking' ? t("finder.card.verifying") : t("finder.card.addRecordLong") }}
+                          {{ addingSet.has(p.model) ? t("finder.card.adding") : verifyCache[p.model] === 'checking' ? t("finder.card.verifying") : t("finder.card.addRecordLong") }}
                         </Button>
                       </template>
                     </div>

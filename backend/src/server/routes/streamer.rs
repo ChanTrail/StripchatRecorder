@@ -110,6 +110,27 @@ pub async fn add_streamer(
                         "streamer-added",
                         &serde_json::json!({ "username": username }),
                     );
+                    // 首次添加成功后在后台异步拉取 camgirlfinder schedule，
+                    // 与后续的状态轮询并行，不阻塞当前 HTTP 响应。
+                    // 拉取失败（网络/CGF 无此主播）时静默忽略，不影响录制功能。
+                    //
+                    // After a successful first-add, fetch the CGF schedule in the
+                    // background in parallel with the upcoming status poll.
+                    // Failures (network error or account absent in CGF) are
+                    // silently ignored — schedule data is best-effort only.
+                    {
+                        let app_state = Arc::clone(&s.app_state);
+                        let uname = username.clone();
+                        let proxy = s.app_state.get_settings().cgf_proxy_url;
+                        tokio::spawn(async move {
+                            if let Some(sched) = crate::platform::monitor::cgf_fetch_schedule(&uname, proxy.as_deref()).await {
+                                app_state.set_schedule(&uname, sched);
+                                tracing::info!("{}", crate::tl!("scheduler.cgfRefreshUpdated", username = uname));
+                            } else {
+                                tracing::warn!("{}", crate::tl!("scheduler.cgfRefreshUnavailable", username = uname));
+                            }
+                        });
+                    }
                     success += 1;
                     (true, false, None)
                 }
@@ -175,10 +196,74 @@ pub async fn remove_streamer(
             .map_err(ApiError::from)?;
     }
     let settings = s.app_state.get_settings();
-    let dir = std::path::PathBuf::from(&settings.output_dir).join(&name);
-    if dir.exists() {
-        let _ = std::fs::remove_dir_all(&dir);
+
+    // 1. 删除 TS 分片目录 {output_dir}/{username}/
+    // 1. Remove TS segment directory {output_dir}/{username}/
+    let ts_dir = std::path::PathBuf::from(&settings.output_dir).join(&name);
+    if ts_dir.exists() {
+        let _ = std::fs::remove_dir_all(&ts_dir);
     }
+
+    // 2. 删除 meta 子目录 {meta_dir}/{username}/
+    // 2. Remove meta subdirectory {meta_dir}/{username}/
+    let meta_dir = crate::recording::meta::meta_dir_for(&name);
+    if meta_dir.exists() {
+        let _ = std::fs::remove_dir_all(&meta_dir);
+    }
+
+    // 3. 删除 ts_merge 合并输出中属于该主播的文件
+    //    - split_by_streamer=true：删除 {merge_output_dir}/{username}/ 整个子目录
+    //    - split_by_streamer=false：删除 {merge_output_dir}/{username}_*.{format} 匹配的文件
+    //
+    // 3. Remove the streamer's merged output files from ts_merge output directory.
+    //    - split_by_streamer=true: remove {merge_output_dir}/{username}/ subdirectory
+    //    - split_by_streamer=false: remove files matching {merge_output_dir}/{username}_*.{format}
+    let pipeline = s.app_state.get_pipeline();
+    if let Some(node) = pipeline.nodes.iter().find(|n| n.module_id == "ts_merge" && n.enabled) {
+        let merge_output_dir = node.params.get("output_dir")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(std::path::PathBuf::from);
+
+        if let Some(merge_dir) = merge_output_dir {
+            let split_by_streamer = node.params.get("split_by_streamer")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let format = node.params.get("format")
+                .and_then(|v| v.as_str())
+                .unwrap_or("mp4");
+
+            if split_by_streamer {
+                // 按主播子目录存放：直接删除 {merge_dir}/{username}/
+                // Per-streamer subdirectory: remove {merge_dir}/{username}/
+                let streamer_dir = merge_dir.join(&name);
+                if streamer_dir.exists() {
+                    let _ = std::fs::remove_dir_all(&streamer_dir);
+                }
+            } else if merge_dir.is_dir() {
+                // 平铺模式：删除所有 {merge_dir}/{username}_*.{format} 文件
+                // Flat mode: remove all files matching {merge_dir}/{username}_*.{format}
+                let prefix = format!("{}_", name);
+                let suffix = format!(".{}", format);
+                if let Ok(entries) = std::fs::read_dir(&merge_dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if !path.is_file() {
+                            continue;
+                        }
+                        let fname = path.file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("");
+                        if fname.starts_with(&prefix) && fname.ends_with(&suffix) {
+                            let _ = std::fs::remove_file(&path);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     s.app_state.remove_streamer(&name).map_err(ApiError::from)?;
     // 清除 monitor 内存 dead 集合，避免重新添加同名主播后仍被跳过
     // Clear monitor in-memory dead set so re-adding the same username isn't skipped

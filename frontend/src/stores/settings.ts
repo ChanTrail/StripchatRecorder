@@ -54,10 +54,12 @@ export interface Settings {
 	community_terms_accepted: boolean;
 	/** 首次启动向导是否已完成 / Whether the first-launch setup wizard has been completed */
 	setup_done: boolean;
-	/** 后处理最大并发数（0 = 自动 = CPU 核心数；≥1 = 固定）/ Max concurrent post-processing tasks (0 = auto; ≥1 = fixed) */
+	/** 后处理最大并发数（0 = 自动 = CPU 逻辑核心数 × 2；≥1 = 固定，上限 CPU × 2）/ Max concurrent post-processing tasks (0 = auto = logical CPU count × 2; ≥1 = fixed, capped at CPU × 2) */
 	max_pp_concurrent: number;
 	/** 是否检查预发布（beta/rc）版本更新 / Whether to check for pre-release (beta/rc) updates */
 	check_prerelease: boolean;
+	/** camgirlfinder 代理地址 / camgirlfinder proxy URL */
+	cgf_proxy_url: string | null;
 }
 
 /** Mouflon 密钥存储结构（含时间戳）/ Mouflon key store (with timestamps) */
@@ -94,6 +96,7 @@ export const useSettingsStore = defineStore("settings", () => {
 		setup_done: false,
 		max_pp_concurrent: 0,
 		check_prerelease: false,
+		cgf_proxy_url: null,
 	});
 	/** 是否正在加载 / Whether loading */
 	const loading = ref(false);

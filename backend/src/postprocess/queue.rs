@@ -9,7 +9,8 @@
 //! ## 设计 / Design
 //!
 //! - 并发度由用户设置中的 `max_pp_concurrent` 决定，通过 [`PpQueue::set_concurrency`] 动态更新。
-//! - 0 = 自动（CPU 逻辑核心数 × 2）；≥1 = 固定并发数。
+//! - 0 = 自动（= CPU 逻辑核心数 × 2）；≥1 = 手动固定并发数，上限同为 CPU × 2。
+//!   手动设置的意义在于主动限制到低于自动值。
 //! - 并发控制使用纯同步原语（`Mutex<usize>` + `Condvar`）实现计数信号量，
 //!   不依赖 tokio async，避免在 `spawn_blocking` 栈上调用 `block_on` 导致栈溢出。
 //! - `cancel_flags` 允许调用方（如取消按钮）异步请求中止某个正在运行或排队的任务。
@@ -18,7 +19,8 @@
 //!
 //! Concurrency is determined by the `max_pp_concurrent` user setting,
 //! updated dynamically via [`PpQueue::set_concurrency`].
-//! 0 = auto (logical CPU count × 2); ≥1 = fixed count.
+//! 0 = auto (= logical CPU count × 2); ≥1 = fixed count, capped at the same CPU × 2.
+//! Manual values are useful for deliberately going below the automatic default.
 //! Concurrency control uses a pure sync counting semaphore (`Mutex<usize>` + `Condvar`)
 //! to avoid calling `block_on` on a `spawn_blocking` stack (which causes stack overflow).
 
@@ -156,16 +158,16 @@ impl Default for PpQueue {
 
 /// 将用户配置的并发数（0=自动）解析为实际许可数。
 ///
-/// 后处理任务以磁盘 I/O（ts_merge）为主，每个任务都会驱动一个 ffmpeg 进程，
-/// 过高并发会导致磁盘争抢和 CPU 过载反而降速。自动模式取 `cpu` 作为默认值；
-/// 用户手动设置时上限为 `cpu × 2`，防止过度并发。
+/// 后处理任务以磁盘 I/O（ts_merge）为主，每个任务都会驱动一个 ffmpeg 进程。
+/// 自动模式取 `cpu × 2` 作为默认值；用户手动设置时上限同样为 `cpu × 2`，
+/// 两者一致，手动设置的意义在于可以低于自动值以主动限制并发。
 ///
 /// Resolve the configured concurrency (0 = auto) to the actual permit count.
 ///
 /// Post-processing tasks are primarily disk-I/O-bound (ts_merge drives one ffmpeg
-/// process per task); excessive concurrency causes disk contention and CPU saturation
-/// that hurts rather than helps throughput. Auto mode uses `cpu` as the default;
-/// the hard cap for manually-set values is `cpu × 2`.
+/// process per task). Auto mode uses `cpu × 2`; the hard cap for manually-set
+/// values is also `cpu × 2` — the purpose of manual setting is to go *below*
+/// the automatic value to limit concurrency intentionally.
 pub fn resolve_concurrency(n: usize) -> usize {
     let cpu = std::thread::available_parallelism()
         .map(|n| n.get())
@@ -173,8 +175,8 @@ pub fn resolve_concurrency(n: usize) -> usize {
     // 上限为 cpu * 2 / Hard cap at cpu * 2
     let cap = (cpu * 2).max(1);
     if n == 0 {
-        // 自动：取 cpu（每核一个任务）/ Auto: one task per core
-        cpu.min(cap)
+        // 自动：取 cpu × 2 / Auto: twice the core count
+        cap
     } else {
         n.min(cap)
     }
@@ -203,14 +205,14 @@ impl PpQueue {
     /// 调用后正在等待的任务会立即以新的许可数重新竞争。
     /// 已持有许可正在运行的任务不受影响，继续运行直至完成。
     ///
-    /// `n = 0` 表示自动（由 `resolve_concurrency` 映射为 CPU × 2）。
+    /// `n = 0` 表示自动（由 `resolve_concurrency` 映射为 CPU 逻辑核心数 × 2）。
     ///
     /// Dynamically update concurrency (from user config change).
     ///
     /// Also updates the theoretical upper bound (`max_permits`); subsequent
     /// `adjust_for_load` calls will never exceed this value.
     ///
-    /// `n = 0` means auto (mapped to CPU × 2 by `resolve_concurrency`).
+    /// `n = 0` means auto (= logical CPU count × 2); manually set values are capped at the same CPU × 2 by `resolve_concurrency`.
     pub fn set_concurrency(&self, n: usize) {
         let permits = resolve_concurrency(n);
         self.max_permits.store(permits, Ordering::Relaxed);

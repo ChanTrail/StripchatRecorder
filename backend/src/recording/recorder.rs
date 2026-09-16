@@ -547,6 +547,11 @@ impl RecorderManager {
         const MAX_PLAYLIST_REFRESH_FAILURES: u32 = 5;
         const CDN_FAILURE_REFRESH_THRESHOLD: usize = 3;
 
+        // 分片重试结果 channel：失败分片在后台 spawn retry task，成功后通过此 channel 发结果
+        // Segment retry result channel: failed segments spawn background retry tasks that
+        // report successes (sequence number) via this channel, without blocking main loop.
+        let (retry_tx, mut retry_rx) = tokio::sync::mpsc::unbounded_channel::<u32>();
+
         tracing::info!("{}", crate::tl!("recorder.started", username = username, dir = session_dir.display()));
 
         loop {
@@ -587,6 +592,18 @@ impl RecorderManager {
             }
             let mouflon_keys = api.mouflon_keys().clone();
 
+            // 收集上轮（或之前）后台 retry task 已完成的成功结果
+            // Collect completed successful retry results from background tasks
+            while let Ok(seq) = retry_rx.try_recv() {
+                if downloaded_sequences.insert(seq) {
+                    // retry 成功：归还 total_failed 中的一次计数，增加 total_downloaded
+                    // Retry succeeded: reverse one count from total_failed, add to total_downloaded
+                    total_failed = total_failed.saturating_sub(1);
+                    total_downloaded += 1;
+                    consecutive_cdn_failures = consecutive_cdn_failures.saturating_sub(1);
+                }
+            }
+
             let mut wait_next_round = true;
             tokio::select! {
                 _ = stop_rx.recv() => {
@@ -605,6 +622,7 @@ impl RecorderManager {
                     &mut cached_init_url,
                     &mut recorded_secs,
                     &emitter,
+                    &retry_tx,
                 ) => {
                     match result {
                         Ok((n, cdn_fail)) => {
@@ -782,6 +800,7 @@ impl RecorderManager {
         cached_init_url: &mut Option<String>,
         recorded_secs: &mut f64,
         emitter: &Arc<dyn Emitter>,
+        retry_tx: &tokio::sync::mpsc::UnboundedSender<u32>,
     ) -> Result<(usize, usize)> {
         let playlist = api.fetch_playlist(playlist_url).await?;
         let segments = parse_playlist(&playlist, url_prefix, mouflon_keys)?;
@@ -945,14 +964,124 @@ impl RecorderManager {
                             Err(e) => {
                                 tracing::error!("{}", crate::tl!("recorder.ffmpegConvertFailed", seq = segment.sequence, error = e)
                                 );
+                                // ffmpeg 失败（本地问题，无需重试 CDN），直接计失败
+                                // ffmpeg failure is local; no CDN retry needed, count as failed directly
                                 cdn_failures += 1;
                             }
                         }
                     }
                 }
                 Err(e) => {
-                    tracing::error!("{}", crate::tl!("recorder.segmentDownloadFailed", seq = segment.sequence, error = e));
+                    // 首次下载失败：spawn 后台 retry task，最多重试 3 次，不阻塞主循环。
+                    // 失败分片的 mp4_header 在此快照（当前 init header 可能在后续分片中变化）。
+                    // retry task 成功后通过 retry_tx 发送 sequence，主循环在下轮收集并修正计数。
+                    //
+                    // First download failed: spawn a background retry task (max 3 attempts)
+                    // without blocking the main loop.
+                    // Snapshot the current mp4_header for this segment (it may change later).
+                    // On success, send the sequence via retry_tx; main loop collects it next round.
+                    tracing::warn!("{}", crate::tl!("recorder.segmentDownloadFailed", seq = segment.sequence, error = e));
                     cdn_failures += 1;
+
+                    let api_clone = api.clone();
+                    let seg_url = segment.url.clone();
+                    let seq = segment.sequence;
+                    let ts_path_clone = session_dir
+                        .join(format!("{}_segment{:06}.ts", username, seq));
+                    let header_snapshot: Option<Vec<u8>> = mp4_header.clone();
+                    let tx = retry_tx.clone();
+                    let uname = username.to_string();
+                    tokio::spawn(async move {
+                        const MAX_SEG_RETRIES: u32 = 3;
+                        // 重试间隔：500ms → 1s → 2s（指数退避）
+                        // Retry delays: 500ms → 1s → 2s (exponential backoff)
+                        let delays_ms: [u64; 3] = [500, 1000, 2000];
+                        for attempt in 0..MAX_SEG_RETRIES {
+                            tokio::time::sleep(tokio::time::Duration::from_millis(
+                                delays_ms[attempt as usize],
+                            )).await;
+                            match api_clone.download_segment(&seg_url).await {
+                                Ok(data) if data.len() > 1000 => {
+                                    let fmp4: Vec<u8> = match header_snapshot.as_deref() {
+                                        Some(h) => {
+                                            let mut v = Vec::with_capacity(h.len() + data.len());
+                                            v.extend_from_slice(h);
+                                            v.extend_from_slice(&data);
+                                            v
+                                        }
+                                        None => data,
+                                    };
+                                    match convert_to_ts(fmp4, &ts_path_clone).await {
+                                        Ok(_) => {
+                                            append_to_m3u8(
+                                                ts_path_clone.parent().unwrap_or(&ts_path_clone),
+                                                &ts_path_clone,
+                                            );
+                                            tracing::info!(
+                                                "{}",
+                                                crate::tl!(
+                                                    "recorder.segmentRetrySuccess",
+                                                    seq = seq,
+                                                    username = uname,
+                                                    attempt = attempt + 1
+                                                )
+                                            );
+                                            let _ = tx.send(seq);
+                                            return;
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!(
+                                                "{}",
+                                                crate::tl!(
+                                                    "recorder.segmentRetryFfmpegFailed",
+                                                    seq = seq,
+                                                    username = uname,
+                                                    attempt = attempt + 1,
+                                                    error = e
+                                                )
+                                            );
+                                            // ffmpeg 失败不再重试
+                                            // Don't retry ffmpeg failures
+                                            return;
+                                        }
+                                    }
+                                }
+                                Ok(_) => {
+                                    tracing::warn!(
+                                        "{}",
+                                        crate::tl!(
+                                            "recorder.segmentRetryTooSmall",
+                                            seq = seq,
+                                            username = uname,
+                                            attempt = attempt + 1
+                                        )
+                                    );
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "{}",
+                                        crate::tl!(
+                                            "recorder.segmentRetryAttemptFailed",
+                                            seq = seq,
+                                            username = uname,
+                                            attempt = attempt + 1,
+                                            max = MAX_SEG_RETRIES,
+                                            error = e
+                                        )
+                                    );
+                                }
+                            }
+                        }
+                        tracing::error!(
+                            "{}",
+                            crate::tl!(
+                                "recorder.segmentPermanentFailed",
+                                seq = seq,
+                                username = uname,
+                                max = MAX_SEG_RETRIES
+                            )
+                        );
+                    });
                 }
             }
 

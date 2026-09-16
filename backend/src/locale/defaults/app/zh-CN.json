@@ -345,7 +345,7 @@
     },
     "maxPpConcurrent": {
       "label": "最大并发后处理数",
-      "hint": "同时处理的后处理任务数。0 = 自动（CPU 核心数）；上限为 CPU 核心数。"
+      "hint": "同时处理的后处理任务数。0 = 自动（= CPU 逻辑核心数 × 2）；手动设置时上限同为 CPU 逻辑核心数 × 2，可设置低于自动值以主动限制并发。"
     },
     "pollInterval": {
       "label": "轮询间隔（秒）"
@@ -398,6 +398,11 @@
       "label": "模块社区加速站（在 GitHub 地址前加前缀，留空不使用）",
       "placeholder": "https://ghproxy.com",
       "hint": "同时填写模块社区代理与加速站时，将通过模块社区代理访问加速站"
+    },
+    "cgfProxy": {
+      "label": "camgirlfinder 代理（访问 camgirlfinder.net，留空不使用）",
+      "placeholder": "socks5://127.0.0.1:10808",
+      "hint": "主播查找页面（人脸/名字搜索）为纯前端功能，直接从浏览器访问 camgirlfinder.net，无需此代理。本设置仅用于后端在后台获取主播历史在线规律（schedule），以自适应调整轮询间隔节省流量。修改后按回车或点击其他区域确认"
     },
     "mouflonKeysDesc": "Stripchat 对 HLS 分片文件名进行了加密（Mouflon 系统）。录制前需在此填入对应的 pkey → pdkey 密钥对，密钥可从社区渠道获取。",
     "mouflonTable": {

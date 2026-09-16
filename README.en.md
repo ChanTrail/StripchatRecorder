@@ -52,14 +52,16 @@ services:
     restart: unless-stopped
     environment:
       - TZ=Asia/Shanghai
-      # - LANGUAGE=en-US  # Set interface language: zh-CN (default) or en-US
-      # - PORT=3030        # Set server port (default: 3030)
+      # - LANGUAGE=zh-CN  # Set to en-US or zh-CN to override interface language
+      # - PORT=3030        # Set to override the server port (default: 3030)
     ports:
       - "${PORT:-3030}:${PORT:-3030}"
     volumes:
       - ./data/logs:/app/stripchat-recorder/logs
+      - ./data/ts_fragment:/app/stripchat-recorder/ts_fragment
       - ./data/recordings:/app/stripchat-recorder/recordings
       - ./data/modules:/app/stripchat-recorder/modules
+      - ./data/meta:/app/stripchat-recorder/meta
       - ./data/config:/app/stripchat-recorder/config
 ```
 
@@ -82,8 +84,10 @@ docker run -d \
   -e PORT=3030 \
   -p 3030:3030 \
   -v ./data/logs:/app/stripchat-recorder/logs \
+  -v ./data/ts_fragment:/app/stripchat-recorder/ts_fragment \
   -v ./data/recordings:/app/stripchat-recorder/recordings \
   -v ./data/modules:/app/stripchat-recorder/modules \
+  -v ./data/meta:/app/stripchat-recorder/meta \
   -v ./data/config:/app/stripchat-recorder/config \
   chantrail/stripchat-recorder:latest
 ```
@@ -98,7 +102,7 @@ The following options are available in the Web UI under Settings:
 | ------------------------------ | --------------------------------------------------------------------------------------- |
 | TS stream output directory     | Path where TS segment streams from recordings are stored                                |
 | Max concurrent recordings      | Maximum number of simultaneous recordings; `0` means unlimited                          |
-| Max concurrent post-processing | Number of simultaneous post-processing tasks; `0` = auto (= logical CPU count)         |
+| Max concurrent post-processing | Number of simultaneous post-processing tasks; `0` = auto (= logical CPU count); manually set values are capped at logical CPU count × 2 |
 | Poll interval (seconds)        | How often to check if a streamer is live; range 10–300                                  |
 | Preferred recording resolution | Target recording quality (0 = original/highest); configures fallback direction when unavailable |
 | Recording file duration (s)    | Max duration per segment file; `0` = unlimited; useful for splitting long broadcasts    |
@@ -161,7 +165,7 @@ The post-processing pipeline is a **DAG (directed acyclic graph)**. Use the visu
 
 The "Module Community" page in the Web UI lets you browse, install, and update third-party post-processing modules contributed by the community. A disclaimer is shown before installation. Download proxy and mirror settings are configurable in Settings.
 
-Custom modules placed in the `modules` volume directory are discovered automatically and will not be overwritten when the container restarts. See the [Module Development Guide](docs/module-development.en.md) for details.
+Custom modules placed in the `modules` volume directory are discovered automatically and will not be overwritten when the container restarts. See the [Module Development Guide](docs/module-development.en.md) and [Community Module Registry](docs/community-registry.en.md) for details.
 
 > **Filename format:** The host only discovers executables whose filename matches `{name}-{platform}-{version}[.exe]`.
 

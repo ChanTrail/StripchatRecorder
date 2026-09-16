@@ -399,5 +399,120 @@ pub fn start_all(
     start_meta_cleanup(Arc::clone(&app_state), Arc::clone(&emitter));
     start_output_dir_maintenance(Arc::clone(&app_state), Arc::clone(&emitter), recorder);
     start_update_check(Arc::clone(&app_state), Arc::clone(&emitter));
-    start_pp_load_monitor(app_state);
+    start_pp_load_monitor(Arc::clone(&app_state));
+    start_schedule_refresh(app_state);
+}
+
+/// 对所有非失效主播执行一轮 CGF schedule 刷新，每次请求间隔 3 秒。
+///
+/// 每次刷新前从 AppState 实时读取代理配置，确保设置变更后下轮生效。
+///
+/// Run one full CGF schedule refresh pass for all non-dead streamers,
+/// with 3-second gaps between requests to respect CGF rate limits.
+/// The proxy URL is read fresh from AppState before each pass so that
+/// settings changes take effect on the next cycle.
+/// 对所有非失效主播并发执行一轮 CGF schedule 刷新。
+///
+/// 并发度上限为 10（`CGF_REFRESH_CONCURRENCY`），以避免触发 CGF 免费 API 的 rate limit。
+/// 每个请求在获取信号量后立即发出，完成后释放，下一个等待中的请求随即开始。
+/// 代理配置在每次 pass 开始前从 AppState 读取一次。
+///
+/// Run one full CGF schedule refresh pass for all non-dead streamers with bounded concurrency.
+///
+/// At most `CGF_REFRESH_CONCURRENCY` (= 10) requests run in parallel to avoid
+/// triggering CGF's rate limits. Each request acquires the semaphore before sending
+/// and releases it on completion, allowing the next waiting request to start immediately.
+/// The proxy URL is read from AppState once at the start of each pass.
+async fn run_schedule_refresh_pass(app_state: &Arc<AppState>) {
+    /// 最大并发请求数 / Maximum concurrent requests
+    const CGF_REFRESH_CONCURRENCY: usize = 10;
+
+    let proxy = app_state.get_settings().cgf_proxy_url;
+
+    let usernames: Vec<String> = app_state
+        .get_streamers()
+        .into_iter()
+        .filter(|s| !s.is_dead)
+        .map(|s| s.username)
+        .collect();
+
+    if usernames.is_empty() {
+        return;
+    }
+
+    tracing::info!("{}", crate::tl!("scheduler.cgfRefreshStart", count = usernames.len()));
+
+    let sem = Arc::new(tokio::sync::Semaphore::new(CGF_REFRESH_CONCURRENCY));
+    let mut tasks = tokio::task::JoinSet::new();
+
+    for username in usernames {
+        let permit = Arc::clone(&sem).acquire_owned().await.expect("semaphore closed");
+        let app_state = Arc::clone(app_state);
+        let proxy_owned = proxy.clone();
+
+        tasks.spawn(async move {
+            let _permit = permit; // 持有信号量直到请求完成
+            if let Some(sched) = crate::platform::monitor::cgf_fetch_schedule(
+                &username,
+                proxy_owned.as_deref(),
+            ).await {
+                app_state.set_schedule(&username, sched);
+                tracing::info!("{}", crate::tl!("scheduler.cgfRefreshUpdated", username = username));
+            } else {
+                tracing::warn!("{}", crate::tl!("scheduler.cgfRefreshUnavailable", username = username));
+            }
+        });
+    }
+
+    // 等待所有任务完成
+    // Wait for all tasks to complete
+    while tasks.join_next().await.is_some() {}
+
+    tracing::info!("{}", crate::tl!("scheduler.cgfRefreshDone"));
+}
+
+/// 启动 CGF schedule 定时刷新任务。
+///
+/// 执行策略：
+/// 1. 启动后延迟 15 秒立即执行一次全量刷新（等待主流程完成初始化）。
+/// 2. 之后每天 UTC 00:00 再执行一次全量刷新，保持 schedule 数据与 CGF 同步。
+///
+/// 全量刷新对所有非失效主播并发发起请求（最多 3 个），快速完成整轮刷新同时不触发
+/// CGF 免费 API 的 rate limit。
+///
+/// Starts the CGF schedule periodic refresh task.
+///
+/// Strategy:
+/// 1. One immediate full-refresh pass 15 seconds after launch (lets the main flow initialize).
+/// 2. Then a full-refresh pass at each UTC 00:00, keeping schedule data in sync with CGF.
+///
+/// Each pass fires requests concurrently (up to 3 at a time) for fast completion
+/// while staying within CGF's free API rate limits.
+pub fn start_schedule_refresh(app_state: Arc<AppState>) {
+    tokio::spawn(async move {
+        // 延迟 15 秒等主流程初始化完成
+        // Delay 15 s for the main flow to finish startup
+        tokio::time::sleep(tokio::time::Duration::from_secs(15)).await;
+
+        // 启动时立即执行一次全量刷新
+        // Immediate full refresh on startup
+        run_schedule_refresh_pass(&app_state).await;
+
+        // 之后每天 UTC 00:00 执行
+        // Then run daily at UTC 00:00
+        loop {
+            // 计算距下一个 UTC 00:00 的秒数
+            // Compute seconds until the next UTC midnight
+            let now = chrono::Utc::now();
+            let secs_until_midnight = {
+                use chrono::Timelike as _;
+                let elapsed_today = now.hour() as u64 * 3600
+                    + now.minute() as u64 * 60
+                    + now.second() as u64;
+                86400u64.saturating_sub(elapsed_today)
+            };
+            tokio::time::sleep(tokio::time::Duration::from_secs(secs_until_midnight)).await;
+            run_schedule_refresh_pass(&app_state).await;
+        }
+    });
 }

@@ -1,6 +1,6 @@
 {
   "productName": "StripchatRecorder",
-  "version": "0.4.1-beta",
+  "version": "0.4.2-beta",
   "identifier": "com.chantrail.stripchat-recorder",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -14,9 +14,9 @@
       {
         "title": "StripchatRecorder",
         "width": 1600,
-        "height": 800,
+        "height": 900,
         "minWidth": 1600,
-        "minHeight": 800,
+        "minHeight": 900,
         "resizable": true,
         "fullscreen": false,
         "visible": false

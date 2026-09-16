@@ -24,8 +24,7 @@ jobs:
             archive-name: StripchatRecorder-server-linux-x86_64.zip
 
           - platform: linux-aarch64
-            os: ubuntu-22.04
-            cargo-target: aarch64-unknown-linux-gnu
+            os: ubuntu-22.04-arm
             artifact-name: StripchatRecorder-server-linux-aarch64
             archive-name: StripchatRecorder-server-linux-aarch64.zip
 
@@ -77,30 +76,20 @@ jobs:
 
       # ── 系统依赖（仅 Linux）/ System libraries (Linux only) ──
       - name: Install Linux dependencies
-        if: matrix.os == 'ubuntu-22.04'
+        if: startsWith(matrix.os, 'ubuntu')
         run: |
           sudo apt-get update
           sudo apt-get install -y pkg-config build-essential libssl-dev
-
-      - name: Install aarch64 cross-compilation toolchain
-        if: matrix.platform == 'linux-aarch64'
-        run: sudo apt-get install -y gcc-aarch64-linux-gnu
 
       - name: Install macOS system dependencies
         if: startsWith(matrix.os, 'macos')
         run: brew install pkg-config
 
-      - name: Add Rust cross-compile target
-        if: matrix.cargo-target
-        run: rustup target add ${{ matrix.cargo-target }}
-
       # ── 构建 / Build ──
       - name: Full release build
         run: node scripts/release.js
         env:
-          CARGO_BUILD_TARGET: ${{ matrix.cargo-target }}
           CARGO_BUILD_PLATFORM: ${{ matrix.platform }}
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
 
       # ── 打包（Linux / macOS）/ Assemble package (Linux / macOS) ──
       - name: Assemble package (Unix)
@@ -149,6 +138,9 @@ jobs:
           - platform: linux-x86_64
             os: ubuntu-22.04
             artifact-name: StripchatRecorder-desktop-linux-x86_64
+          - platform: linux-aarch64
+            os: ubuntu-22.04-arm
+            artifact-name: StripchatRecorder-desktop-linux-aarch64
           - platform: windows-x86_64
             os: windows-latest
             artifact-name: StripchatRecorder-desktop-windows-x86_64
@@ -194,7 +186,7 @@ jobs:
 
       # ── 平台系统依赖 / Platform-specific system dependencies ──
       - name: Install Linux system dependencies
-        if: matrix.os == 'ubuntu-22.04'
+        if: startsWith(matrix.os, 'ubuntu')
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -228,7 +220,7 @@ jobs:
 
       # ── 上传 Linux 产物 / Upload Linux artifacts ──
       - name: Upload Linux installers
-        if: matrix.os == 'ubuntu-22.04'
+        if: startsWith(matrix.os, 'ubuntu')
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact-name }}

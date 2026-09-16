@@ -23,11 +23,11 @@ pub async fn get_settings(
 pub struct SystemInfo {
     /// 逻辑 CPU 核心数 / Logical CPU core count
     pub cpu_count: usize,
-    /// 后处理并发数的输入上限（= cpu * 4）
-    /// Input cap for post-processing concurrency (= cpu * 4)
+    /// 后处理并发数的输入上限（= cpu × 2，与后端 resolve_concurrency 的 cap 一致）
+    /// Input cap for post-processing concurrency (= cpu × 2, matching backend resolve_concurrency cap)
     pub max_pp_concurrent_cap: usize,
-    /// 录制并发数的输入上限（= cpu * 4，0 = 不限制时不受限）
-    /// Input cap for recording concurrency (= cpu * 4)
+    /// 录制并发数的输入上限（= cpu × 2，0 = 不限制时不受限）
+    /// Input cap for recording concurrency (= cpu × 2, not applied when 0 = unlimited)
     pub max_concurrent_cap: usize,
 }
 

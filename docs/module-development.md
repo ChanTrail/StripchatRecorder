@@ -19,8 +19,9 @@
 9. [pp_utils 工具库](#pp_utils-工具库)
 10. [完整示例](#完整示例)
 11. [部署模块](#部署模块)
-12. [内置模块](#内置模块)
-13. [注意事项](#注意事项)
+12. [发布到社区](#发布到社区)
+13. [内置模块](#内置模块)
+14. [注意事项](#注意事项)
 
 ---
 
@@ -593,6 +594,14 @@ Desktop 端的模块安装到每用户数据目录的 `modules` 子目录：
 | Windows | `%APPDATA%\com.chantrail.stripchat-recorder\modules\`                             |
 | macOS   | `~/Library/Application Support/com.chantrail.stripchat-recorder/modules/`         |
 | Linux   | `~/.local/share/com.chantrail.stripchat-recorder/modules/`（或 `$XDG_DATA_HOME`）|
+
+---
+
+## 发布到社区
+
+模块开发完成后，可以通过社区模块市场分享给其他用户。社区采用**两级 registry** 设计——维护者仓库由 CI 自动维护元数据，向中央索引提交 PR **只需一次**，后续版本升级完全自动化。
+
+详细的发布流程、CI 模板配置和中央索引注册步骤见[社区模块发布指南](community-registry.md)。
 
 ---
 

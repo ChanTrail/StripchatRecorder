@@ -92,6 +92,7 @@
 		setup_done: true,
 		max_pp_concurrent: 0,
 		check_prerelease: false,
+		cgf_proxy_url: null,
 	});
 
 	const originalOutputDir = ref("");
@@ -102,6 +103,7 @@
 	const originalMouflonSyncToken = ref<string | null>(null);
 	const originalCommunityProxy = ref<string | null>(null);
 	const originalCommunityMirror = ref<string | null>(null);
+	const originalCgfProxy = ref<string | null>(null);
 	let initialized = false;
 
 	const unlisteners: (() => void)[] = [];
@@ -118,6 +120,7 @@
 		originalMouflonSyncToken.value = form.mouflon_sync_token;
 		originalCommunityProxy.value = form.community_proxy_url;
 		originalCommunityMirror.value = form.community_mirror_url;
+		originalCgfProxy.value = form.cgf_proxy_url;
 		await nextTick();
 		initialized = true;
 		await loadKeys();
@@ -171,6 +174,7 @@
 			originalMouflonSyncToken.value = newSettings.mouflon_sync_token;
 			originalCommunityProxy.value = newSettings.community_proxy_url;
 			originalCommunityMirror.value = newSettings.community_mirror_url;
+			originalCgfProxy.value = newSettings.cgf_proxy_url;
 			nextTick(() => { initialized = true; });
 			toast(t("settings.updatedByOther"), "info");
 		},
@@ -178,7 +182,7 @@
 	);
 
 	async function saveProxy(
-		field: "api_proxy_url" | "cdn_proxy_url" | "sc_mirror_url" | "mouflon_sync_url" | "mouflon_sync_token" | "community_proxy_url" | "community_mirror_url",
+		field: "api_proxy_url" | "cdn_proxy_url" | "sc_mirror_url" | "mouflon_sync_url" | "mouflon_sync_token" | "community_proxy_url" | "community_mirror_url" | "cgf_proxy_url",
 	) {
 		if (!initialized) return;
 		const originalMap = {
@@ -189,6 +193,7 @@
 			mouflon_sync_token: originalMouflonSyncToken,
 			community_proxy_url: originalCommunityProxy,
 			community_mirror_url: originalCommunityMirror,
+			cgf_proxy_url: originalCgfProxy,
 		};
 		const original = originalMap[field];
 		if (form[field] === original.value) return;
@@ -585,6 +590,18 @@
 						@blur="saveProxy('community_mirror_url')"
 					/>
 					<p class="text-xs text-muted-foreground">{{ t("settings.communityMirror.hint") }}</p>
+				</div>
+				<div class="flex flex-col gap-1.5">
+					<Label>{{ t("settings.cgfProxy.label") }}</Label>
+					<Input
+						:model-value="form.cgf_proxy_url ?? ''"
+						:placeholder="t('settings.cgfProxy.placeholder')"
+						autocomplete="url"
+						@update:model-value="form.cgf_proxy_url = ($event as string) || null"
+						@keyup.enter="saveProxy('cgf_proxy_url')"
+						@blur="saveProxy('cgf_proxy_url')"
+					/>
+					<p class="text-xs text-muted-foreground">{{ t("settings.cgfProxy.hint") }}</p>
 				</div>
 			</section>
 

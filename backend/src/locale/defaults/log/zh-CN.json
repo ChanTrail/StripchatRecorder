@@ -19,7 +19,12 @@
     "rotateFailed": "录制 {username}：轮转会话失败：{error}",
     "ffmpegConvertFailed": "ffmpeg 转换失败 → 分片 {seq}：{error}",
     "segmentDownloadFailed": "下载分片 {seq} 失败：{error}",
-    "recordingError": "录制错误 → {username}：{error}"
+    "recordingError": "录制错误 → {username}：{error}",
+    "segmentRetrySuccess": "分片 {seq} 重试成功 → {username}（第 {attempt} 次）",
+    "segmentRetryFfmpegFailed": "分片 {seq} 重试 ffmpeg 失败 → {username}（第 {attempt} 次）：{error}",
+    "segmentRetryTooSmall": "分片 {seq} 重试响应过小 → {username}（第 {attempt} 次）",
+    "segmentRetryAttemptFailed": "分片 {seq} 第 {attempt}/{max} 次重试失败 → {username}：{error}",
+    "segmentPermanentFailed": "分片 {seq} 已永久失败 → {username}（重试 {max} 次）"
   },
   "relay": {
     "workerStarted": "Relay worker 已启动，主播：{username}",
@@ -47,7 +52,13 @@
     "streamerDead": "主播 {username} 已确认失效（用户名和 model_id 均无法找到），后续将跳过轮询",
     "pollFailed": "轮询失败 → {username}：{error}",
     "streamerRenamed": "主播已改名：{oldUsername} → {newUsername}",
-    "streamerRenameSkipped": "主播改名跳过 {username}：{error}"
+    "streamerRenameSkipped": "主播改名跳过 {username}：{error}",
+    "cgfProxyInvalid": "CGF 代理 URL 无效，跳过代理：{error}",
+    "cgfClientFailed": "构建 CGF HTTP 客户端失败 {username}：{error}",
+    "cgfRequestFailed": "CGF 请求失败 {username}：{error}",
+    "cgfHttpError": "CGF 返回 HTTP {status} → {username}",
+    "cgfParseFailed": "CGF 响应解析失败 {username}：{error}",
+    "cgfScheduleNull": "CGF schedule 为 null → {username}（历史数据不足）"
   },
   "maintenance": {
     "tmpCleanup": "tmp 清理：已删除 {count} 个过期文件，释放 {mb} MB"
@@ -87,7 +98,11 @@
     "updateAvailable": "发现新版本：{latest}（当前：{current}）",
     "updateUpToDate": "版本检查：已是最新版本 {current}",
     "updateCheckFailed": "版本检查失败（将在 24 小时后重试）：{error}",
-    "recordingConcurrencyAdjusted": "录制并发度调整：有效值={effective}（用户配置={user}，录制中={running}，cpu={cpu}%，内存={mem}%，可用={avail}MB）"
+    "recordingConcurrencyAdjusted": "录制并发度调整：有效值={effective}（用户配置={user}，录制中={running}，cpu={cpu}%，内存={mem}%，可用={avail}MB）",
+    "cgfRefreshStart": "CGF schedule 刷新：{count} 个主播",
+    "cgfRefreshUpdated": "CGF schedule 已更新：{username}",
+    "cgfRefreshUnavailable": "CGF schedule 不可用：{username}（CGF 无此主播或网络错误）",
+    "cgfRefreshDone": "CGF schedule 刷新完成"
   },
   "watcher": {
     "recordingsCreateDirFailed": "创建监控目录 {dir} 失败：{error}",

@@ -345,7 +345,7 @@
     },
     "maxPpConcurrent": {
       "label": "Maximum Concurrent Post-processing",
-      "hint": "Number of post-processing tasks to run simultaneously. 0 = auto (CPU count); capped at CPU core count."
+      "hint": "Number of post-processing tasks to run simultaneously. 0 = auto (= logical CPU count × 2); manually set values are capped at the same CPU × 2 — useful for deliberately reducing concurrency below the automatic default."
     },
     "pollInterval": {
       "label": "Polling Interval (seconds)"
@@ -398,6 +398,11 @@
       "label": "Community Mirror (prefix for GitHub URLs, leave empty to disable)",
       "placeholder": "https://ghproxy.com",
       "hint": "When both community proxy and mirror are set, the proxy will be used to access the mirror"
+    },
+    "cgfProxy": {
+      "label": "camgirlfinder Proxy (for accessing camgirlfinder.net, leave empty to disable)",
+      "placeholder": "socks5://127.0.0.1:10808",
+      "hint": "The Streamer Finder page (face/name search) is a pure frontend feature that accesses camgirlfinder.net directly from the browser — this proxy is not used for it. This setting is only used by the backend to fetch each streamer's historical online schedule in the background, enabling adaptive poll intervals to reduce bandwidth. Press Enter or click elsewhere to confirm after change"
     },
     "mouflonKeysDesc": "Stripchat encrypts HLS segment filenames (Mouflon system). Before recording, you need to fill in the corresponding pkey → pdkey key pairs here. Keys can be obtained from community sources.",
     "mouflonTable": {

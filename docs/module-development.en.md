@@ -19,8 +19,9 @@ This document describes how to write custom post-processing modules for Stripcha
 9. [pp_utils Library](#pp_utils-library)
 10. [Full Example](#full-example)
 11. [Deploying a Module](#deploying-a-module)
-12. [Built-in Modules](#built-in-modules)
-13. [Notes](#notes)
+12. [Publishing to the Community](#publishing-to-the-community)
+13. [Built-in Modules](#built-in-modules)
+14. [Notes](#notes)
 
 ---
 
@@ -594,6 +595,14 @@ Desktop modules go into the per-user data directory's `modules` subdirectory:
 | Windows  | `%APPDATA%\com.chantrail.stripchat-recorder\modules\`                             |
 | macOS    | `~/Library/Application Support/com.chantrail.stripchat-recorder/modules/`         |
 | Linux    | `~/.local/share/com.chantrail.stripchat-recorder/modules/` (or `$XDG_DATA_HOME`) |
+
+---
+
+## Publishing to the Community
+
+Once your module is ready, you can share it with other users through the community module marketplace. The community uses a **two-level registry** design — the maintainer's repo has its metadata managed automatically by CI, and a PR to the central index is only needed **once**. All subsequent version releases are fully automated.
+
+For the full publishing workflow, CI template setup, and central index registration steps, see the [Community Module Publishing Guide](community-registry.en.md).
 
 ---
 

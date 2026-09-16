@@ -52,14 +52,16 @@ services:
     restart: unless-stopped
     environment:
       - TZ=Asia/Shanghai
-      # - LANGUAGE=en-US  # 设置界面语言，支持 zh-CN（默认）或 en-US
+      # - LANGUAGE=zh-CN  # 设置界面语言，支持 zh-CN 或 en-US
       # - PORT=3030        # 设置服务端口（默认 3030）
     ports:
       - "${PORT:-3030}:${PORT:-3030}"
     volumes:
       - ./data/logs:/app/stripchat-recorder/logs
+      - ./data/ts_fragment:/app/stripchat-recorder/ts_fragment
       - ./data/recordings:/app/stripchat-recorder/recordings
       - ./data/modules:/app/stripchat-recorder/modules
+      - ./data/meta:/app/stripchat-recorder/meta
       - ./data/config:/app/stripchat-recorder/config
 ```
 
@@ -78,12 +80,14 @@ docker run -d \
   --name stripchat-recorder \
   --restart unless-stopped \
   -e TZ=Asia/Shanghai \
-  -e LANGUAGE=en-US \
+  -e LANGUAGE=zh-CN \
   -e PORT=3030 \
   -p 3030:3030 \
   -v ./data/logs:/app/stripchat-recorder/logs \
+  -v ./data/ts_fragment:/app/stripchat-recorder/ts_fragment \
   -v ./data/recordings:/app/stripchat-recorder/recordings \
   -v ./data/modules:/app/stripchat-recorder/modules \
+  -v ./data/meta:/app/stripchat-recorder/meta \
   -v ./data/config:/app/stripchat-recorder/config \
   chantrail/stripchat-recorder:latest
 ```
@@ -98,7 +102,7 @@ docker run -d \
 | ----------------------------- | -------------------------------------------------------------------------------------- |
 | TS 流输出目录                 | TS 分片流存放路径（录制产生的原始分片）                                                |
 | 最大并发录制数                | 同时录制的最大主播数，`0` 表示不限制                                                   |
-| 后处理最大并发数              | 同时运行的后处理任务数，`0` 表示自动（= CPU 逻辑核心数）                               |
+| 后处理最大并发数              | 同时运行的后处理任务数，`0` 表示自动（= CPU 逻辑核心数）；手动设置时上限为 CPU 逻辑核心数 × 2         |
 | 轮询间隔（秒）                | 检查主播是否上线的间隔，范围 10–300                                                    |
 | 首选录制分辨率                | 目标录制画质（0 = 原始/最高画质），可设置画质不可用时的回退方向                        |
 | 录制文件时长（秒）            | 每个分片文件的最长时长，`0` 表示不限制；可用于按时段切割长播录制                       |
@@ -161,7 +165,7 @@ http://localhost:3030/stream/{modelname}
 
 在 Web UI 的「模块社区」页面可以浏览、安装和更新由社区贡献的第三方后处理模块。安装前会展示免责声明；支持通过设置页配置下载代理和加速镜像。
 
-自定义模块放入 `modules` 数据卷目录后会被自动发现，且不会在容器重启时被覆盖。详见[后处理模块开发文档](docs/module-development.md)。
+自定义模块放入 `modules` 数据卷目录后会被自动发现，且不会在容器重启时被覆盖。详见[后处理模块开发文档](docs/module-development.md)和[社区模块文档](docs/community-registry.md)。
 
 > **文件名格式：** 主程序只加载文件名符合 `{name}-{platform}-{version}` 格式的可执行文件。
 

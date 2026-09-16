@@ -101,14 +101,18 @@ pub struct Settings {
     /// Argon2 hash of the admin password (PHC string format). None = password not yet set (first run).
     #[serde(default)]
     pub admin_password_hash: Option<String>,
-    /// 后处理最大并发数（0 = 自动 = CPU 逻辑核心数；≥1 = 固定并发数）。
-    /// Max concurrent post-processing tasks (0 = auto = logical CPU count; ≥1 = fixed).
+    /// 后处理最大并发数（0 = 自动 = CPU 逻辑核心数 × 2；≥1 = 固定并发数，上限 CPU × 2）。
+    /// Max concurrent post-processing tasks (0 = auto = logical CPU count × 2; ≥1 = fixed, capped at CPU × 2).
     #[serde(default)]
     pub max_pp_concurrent: usize,
-    /// 是否检查预发布（beta/rc）版本更新（true = 同时检查 prerelease；beta 版本强制为 true）。
-    /// Whether to check for pre-release (beta/rc) updates (true = include prereleases; forced true on beta builds).
+    /// 是否检查预发布（beta）版本更新（true = 同时检查 prerelease；beta 版本强制为 true）。
+    /// Whether to check for pre-release (beta) updates (true = include prereleases; forced true on beta builds).
     #[serde(default)]
     pub check_prerelease: bool,
+    /// camgirlfinder.net API 代理地址（用于拉取主播 schedule，留空不使用）。
+    /// Proxy URL for accessing camgirlfinder.net API (used when fetching streamer schedules, empty = disabled).
+    #[serde(default)]
+    pub cgf_proxy_url: Option<String>,
 }
 
 /// Mouflon 同步地址的默认值 / Default value for Mouflon sync URL
@@ -220,6 +224,7 @@ impl Default for Settings {
             admin_password_hash: None,
             max_pp_concurrent: 0,
             check_prerelease: false,
+            cgf_proxy_url: None,
         }
     }
 }
@@ -281,6 +286,92 @@ pub struct StreamerData {
     /// in the frontend for the user to take action.
     #[serde(default)]
     pub is_dead: bool,
+    /// 来自 camgirlfinder.net 的历史在线规律（7×48 float 矩阵，序列化为 base64 字符串）。
+    ///
+    /// **内存格式**：`Vec<Vec<f32>>`，外层长度 7（星期，0=周日），内层长度 48（30 分钟时段）。
+    /// **存储格式**：336 字节（每格量化为 u8，0–255 对应 0.0–1.0）经 Base64 编码后的字符串，
+    /// 比原始 JSON float 数组小约 3 倍（~448 字符 vs ~1.5 KB）。
+    ///
+    /// Historical online schedule from camgirlfinder.net (7×48 float matrix,
+    /// serialized as a base64-encoded string).
+    ///
+    /// **In-memory**: `Vec<Vec<f32>>`, outer length 7 (weekday, 0=Sunday),
+    /// inner length 48 (half-hour buckets).
+    /// **On-disk**: 336 bytes (each cell quantized to u8 in [0,255]) encoded as Base64
+    /// (~448 chars vs ~1.5 KB for raw JSON floats, ~3× smaller).
+    #[serde(default, with = "schedule_serde")]
+    pub schedule: Option<Vec<Vec<f32>>>,
+}
+
+/// 自定义 serde 模块：将 `Option<Vec<Vec<f32>>>` 序列化为 Base64 字符串以节省空间。
+///
+/// **编码**：将 7×48 矩阵展平为 336 字节，每个 f32 值量化为 u8（0–255 对应 0.0–1.0），
+/// 然后 Base64 编码为约 448 字符的字符串，比原始 JSON float 数组小约 3 倍。
+///
+/// **解码**：Base64 字符串 → 336 字节 → 反量化为 f32 → 7×48 矩阵。
+/// `null` 和缺失字段均解码为 `None`（`#[serde(default)]` 处理缺失字段）。
+///
+/// Custom serde module: serializes `Option<Vec<Vec<f32>>>` as a Base64 string to save space.
+///
+/// **Encoding**: flatten 7×48 matrix to 336 bytes, quantize each f32 to u8 (0–255 → 0.0–1.0),
+/// then Base64-encode to ~448 chars — ~3× smaller than raw JSON float arrays.
+/// **Decoding**: Base64 → 336 bytes → dequantize to f32 → 7×48 matrix.
+/// `null` and missing fields both decode to `None`.
+mod schedule_serde {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    const ROWS: usize = 7;
+    const COLS: usize = 48;
+    const BYTES: usize = ROWS * COLS; // 336
+
+    pub fn serialize<S>(value: &Option<Vec<Vec<f32>>>, ser: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match value {
+            None => ser.serialize_none(),
+            Some(matrix) => {
+                let mut buf = Vec::with_capacity(BYTES);
+                for row in matrix {
+                    for &v in row {
+                        // 量化：f32 [0.0, 1.0] → u8 [0, 255]
+                        // Quantize: f32 [0.0, 1.0] → u8 [0, 255]
+                        buf.push((v.clamp(0.0, 1.0) * 255.0).round() as u8);
+                    }
+                }
+                STANDARD.encode(&buf).serialize(ser)
+            }
+        }
+    }
+
+    pub fn deserialize<'de, D>(de: D) -> Result<Option<Vec<Vec<f32>>>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s: Option<String> = Option::deserialize(de)?;
+        let s = match s {
+            None => return Ok(None),
+            Some(s) => s,
+        };
+        let bytes = STANDARD.decode(&s).map_err(serde::de::Error::custom)?;
+        if bytes.len() != BYTES {
+            return Err(serde::de::Error::custom(format!(
+                "schedule base64 decoded to {} bytes, expected {}",
+                bytes.len(),
+                BYTES
+            )));
+        }
+        let matrix = bytes
+            .as_chunks::<COLS>().0.iter()
+            .map(|row| {
+                // 反量化：u8 [0, 255] → f32 [0.0, 1.0]
+                // Dequantize: u8 [0, 255] → f32 [0.0, 1.0]
+                row.iter().map(|&b| b as f32 / 255.0).collect()
+            })
+            .collect();
+        Ok(Some(matrix))
+    }
 }
 
 /// 应用运行时全局状态，通过 `Arc<AppState>` 在各模块间共享。
@@ -514,6 +605,7 @@ impl AppState {
             added_at: chrono::Utc::now().to_rfc3339(),
             model_id,
             is_dead: false,
+            schedule: None,
         });
         drop(data);
         self.save()
@@ -602,6 +694,21 @@ impl AppState {
         }
         drop(data);
         self.save()
+    }
+
+    /// 保存从 camgirlfinder 获取的主播历史在线规律（7×48 矩阵）。
+    /// 仅当主播存在时写入；若已有 schedule 则覆盖更新（schedule 会随时间变化）。
+    ///
+    /// Persist the streamer's historical online schedule fetched from camgirlfinder
+    /// (7×48 matrix). Only writes when the streamer exists; overwrites any existing
+    /// schedule since it changes over time.
+    pub fn set_schedule(&self, username: &str, schedule: Vec<Vec<f32>>) {
+        let mut data = self.data.write();
+        if let Some(s) = data.streamers.iter_mut().find(|s| s.username == username) {
+            s.schedule = Some(schedule);
+            drop(data);
+            let _ = self.save();
+        }
     }
 
     /// 获取所有 Mouflon 解密密钥的克隆副本（仅 keys 部分，供录制/转发使用）。
