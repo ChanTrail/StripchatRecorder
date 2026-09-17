@@ -23,20 +23,20 @@ jobs:
             artifact-name: StripchatRecorder-server-linux-x86_64
             archive-name: StripchatRecorder-server-linux-x86_64.zip
 
-          - platform: linux-aarch64
+          - platform: linux-arm64
             os: ubuntu-22.04-arm
-            artifact-name: StripchatRecorder-server-linux-aarch64
-            archive-name: StripchatRecorder-server-linux-aarch64.zip
+            artifact-name: StripchatRecorder-server-linux-arm64
+            archive-name: StripchatRecorder-server-linux-arm64.zip
 
           - platform: windows-x86_64
             os: windows-latest
             artifact-name: StripchatRecorder-server-windows-x86_64
             archive-name: StripchatRecorder-server-windows-x86_64.zip
 
-          - platform: darwin-aarch64
+          - platform: darwin-arm64
             os: macos-latest
-            artifact-name: StripchatRecorder-server-darwin-aarch64
-            archive-name: StripchatRecorder-server-darwin-aarch64.zip
+            artifact-name: StripchatRecorder-server-darwin-arm64
+            archive-name: StripchatRecorder-server-darwin-arm64.zip
 
     steps:
       - name: Checkout
@@ -138,15 +138,15 @@ jobs:
           - platform: linux-x86_64
             os: ubuntu-22.04
             artifact-name: StripchatRecorder-desktop-linux-x86_64
-          - platform: linux-aarch64
+          - platform: linux-arm64
             os: ubuntu-22.04-arm
-            artifact-name: StripchatRecorder-desktop-linux-aarch64
+            artifact-name: StripchatRecorder-desktop-linux-arm64
           - platform: windows-x86_64
             os: windows-latest
             artifact-name: StripchatRecorder-desktop-windows-x86_64
-          - platform: macos-aarch64
+          - platform: macos-arm64
             os: macos-latest
-            artifact-name: StripchatRecorder-desktop-macos-aarch64
+            artifact-name: StripchatRecorder-desktop-macos-arm64
 
     steps:
       - name: Checkout
@@ -191,7 +191,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             pkg-config build-essential libssl-dev \
-            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
+            xdg-utils
 
       - name: Install macOS system dependencies
         if: startsWith(matrix.os, 'macos')
