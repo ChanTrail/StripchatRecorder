@@ -348,7 +348,16 @@ impl StatusMonitor {
         // Use a channel to collect newly-dead streamers from this round, then merge into one notification
         let (dead_tx, mut dead_rx) = tokio::sync::mpsc::channel::<String>(16);
 
-        let tasks: Vec<_> = streamers
+        // 限制同时进行中的 API 请求数，避免主播过多时同时打出大量请求触发限流。
+        // 10 路并发足以在正常延迟下及时完成一轮轮询，同时对 SC 服务器友好。
+        //
+        // Limit concurrent in-flight API requests to prevent rate-limiting when
+        // there are many tracked streamers. 10 concurrent requests is enough to
+        // finish a round quickly under normal latency while remaining polite to SC.
+        const POLL_CONCURRENCY: usize = 10;
+        let sem = Arc::new(tokio::sync::Semaphore::new(POLL_CONCURRENCY));
+
+        let active_streamers: Vec<_> = streamers
             .into_iter()
             // 过滤已确认失效的主播（永久跳过）
             // Filter permanently-dead streamers
@@ -372,14 +381,22 @@ impl StatusMonitor {
                     None => true, // 从未轮询过，立即执行
                 }
             })
+            .collect();
+
+        let tasks: Vec<_> = active_streamers
+            .into_iter()
             .map(|streamer| {
                 let api = Arc::clone(&api);
                 let monitor = Arc::clone(self);
                 let emitter = Arc::clone(emitter);
                 let auto_record_global = settings.auto_record;
                 let dead_tx = dead_tx.clone();
+                let sem = Arc::clone(&sem);
 
                 tokio::spawn(async move {
+                    // 在发起 API 请求前获取信号量许可，限制并发数
+                    // Acquire a semaphore permit before making the API request to cap concurrency
+                    let _permit = sem.acquire().await;
                     let newly_dead = monitor
                         .poll_streamer(&api, streamer, &emitter, auto_record_global, base_secs, SCHEDULE_MAX_SECS)
                         .await;

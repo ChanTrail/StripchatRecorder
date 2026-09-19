@@ -104,7 +104,7 @@ pub async fn add_streamer(
         let Ok((username, verify_result)) = res else { continue };
 
         let (ok, skipped_entry, error_msg) = match verify_result {
-            Ok(model_id) => match s.app_state.add_streamer(&username, model_id) {
+            Ok(model_id) => match s.app_state.add_streamer(&username, Some(model_id)) {
                 Ok(()) => {
                     s.emitter.emit(
                         "streamer-added",

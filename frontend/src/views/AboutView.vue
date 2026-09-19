@@ -9,6 +9,7 @@
 <script setup lang="ts">
 	import { ref, onMounted, onUnmounted, computed } from "vue";
 	import { useI18n } from "vue-i18n";
+	import { marked } from "marked";
 	import {
 		Bug, ExternalLink, Scale, Users, Link, RefreshCw,
 		ChevronDown, ChevronUp, Container, Download,
@@ -117,6 +118,13 @@
 	const currentVersion = computed(() =>
 		updateInfo.value?.current_version ?? __APP_VERSION__
 	);
+
+	/** 将 release_notes Markdown 转为 HTML，供 v-html 渲染 */
+	const changelogHtml = computed(() => {
+		const notes = updateInfo.value?.release?.release_notes;
+		if (!notes) return null;
+		return marked(notes) as string;
+	});
 
 	// ── API ───────────────────────────────────────────────────────────────────
 	const GH_API = `https://api.github.com/repos/${owner}/${repo}`;
@@ -454,9 +462,22 @@
 						<!-- 展开的更新日志 -->
 						<div v-if="changelogExpanded && updateInfo.release?.release_notes"
 							class="border-t px-4 py-3">
-							<p class="text-xs text-muted-foreground whitespace-pre-line leading-relaxed">
-								{{ updateInfo.release.release_notes }}
-							</p>
+							<div
+								class="text-xs leading-relaxed overflow-x-hidden
+									[&_h1]:text-sm [&_h1]:font-bold [&_h1]:mt-3 [&_h1]:mb-1.5
+									[&_h2]:text-sm [&_h2]:font-semibold [&_h2]:mt-3 [&_h2]:mb-1.5
+									[&_h3]:text-xs [&_h3]:font-semibold [&_h3]:mt-2 [&_h3]:mb-1
+									[&_p]:my-1.5 [&_p]:text-muted-foreground
+									[&_ul]:my-1.5 [&_ul]:pl-4 [&_ul]:list-disc
+									[&_ol]:my-1.5 [&_ol]:pl-4 [&_ol]:list-decimal
+									[&_li]:my-0.5 [&_li]:text-muted-foreground
+									[&_code]:bg-muted [&_code]:px-1 [&_code]:rounded [&_code]:text-xs [&_code]:font-mono
+									[&_pre]:bg-muted [&_pre]:p-2 [&_pre]:rounded [&_pre]:overflow-x-auto [&_pre]:my-1.5
+									[&_a]:text-primary [&_a]:underline [&_a]:underline-offset-2
+									[&_hr]:border-border [&_hr]:my-2
+									[&>*:first-child]:mt-0"
+								v-html="changelogHtml"
+							/>
 							<a :href="updateInfo.release.release_url"
 								target="_blank" rel="noopener noreferrer"
 								class="mt-2 text-xs flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors">

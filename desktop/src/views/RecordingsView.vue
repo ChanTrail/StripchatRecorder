@@ -350,6 +350,7 @@
 		unlisteners.push(await on("postprocess-meta-update", (payload) => {
 			const p = payload as {
 				path: string;
+				old_path?: string | null;
 				meta: {
 					pp_execution?: import("@/types/recordings").PpExecutionEntry[] | null;
 					pp_progress?: import("@/types/recordings").PpNodeProgress | null;
@@ -358,19 +359,19 @@
 			};
 			if (!p.meta) return;
 
-			if (!ppStatus.value[p.path]) {
-				const currentPaths = new Set(files.value.map((f) => f.path));
-				const oldPath = Object.keys(ppStatus.value).find(
-					(path) => ppStatus.value[path] === "running" && !currentPaths.has(path)
-				);
-				if (oldPath) {
-					ppStatus.value[p.path] = ppStatus.value[oldPath];
-					if (ppProgress.value[oldPath]) ppProgress.value[p.path] = ppProgress.value[oldPath];
-					if (moduleOutputs.value[oldPath]) moduleOutputs.value[p.path] = moduleOutputs.value[oldPath];
-					delete ppStatus.value[oldPath];
-					delete ppProgress.value[oldPath];
-					delete moduleOutputs.value[oldPath];
-				}
+			// 路径迁移：ts_merge 成功后后端会在同一事件里携带 old_path，
+			// 用精确的旧路径完成迁移，避免多任务并发时靠搜索猜测导致的状态错乱。
+			// Path migration: after ts_merge the backend includes old_path in the same event;
+			// use the precise old path to migrate state, avoiding corruption when multiple
+			// tasks run concurrently and guessing the old path would pick the wrong one.
+			const oldPath = p.old_path ?? null;
+			if (!ppStatus.value[p.path] && oldPath && ppStatus.value[oldPath]) {
+				ppStatus.value[p.path] = ppStatus.value[oldPath];
+				if (ppProgress.value[oldPath]) ppProgress.value[p.path] = ppProgress.value[oldPath];
+				if (moduleOutputs.value[oldPath]) moduleOutputs.value[p.path] = moduleOutputs.value[oldPath];
+				delete ppStatus.value[oldPath];
+				delete ppProgress.value[oldPath];
+				delete moduleOutputs.value[oldPath];
 			}
 
 			ppProgress.value[p.path] = ppProgressFromMeta(

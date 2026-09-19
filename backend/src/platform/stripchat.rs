@@ -264,33 +264,18 @@ impl StripchatApi {
 
     /// 解析 v1/broadcasts/{username} 响应，统一处理"用户不存在"判定。
     ///
-    /// 关键点：Stripchat 对不存在的用户名返回的是 **HTTP 404**（而不是文档假设的
-    /// 200），body 是 `{"title":"An error occurred","description":"...not found..."}`。
-    /// 若先检查 `status.is_success()` 再决定是否解析 body（旧实现的做法），404 会在
-    /// body 被检查之前就被当作普通网络错误短路返回，导致"用户不存在"永远被误判为
-    /// 泛化的 API 错误——改名反查兜底也就永远不会被触发（`get_stream_info` 只在
-    /// 拿到 `UserNotFound` 时才走反查逻辑）。
-    ///
-    /// 因此这里反过来：无论 HTTP 状态码是什么，先尝试把 body 解析为 JSON 并检查
-    /// 是否匹配"用户不存在"的错误形状；只有当 body 完全无法解析、或状态失败且
-    /// body 也不是这个已知错误形状时，才归类为其他网络/API 错误。
+    /// 主播不存在时，Stripchat 固定返回：
+    ///   `{"title":"An error occurred","description":"Entity \"Model\" not found"}`
+    /// 其他任何非 2xx（包括 404、429、5xx 等）均视为网络/API 错误，
+    /// 不会被误判为"用户不存在"。
     ///
     /// Parse the v1/broadcasts/{username} response, uniformly handling "user not
     /// found" detection.
     ///
-    /// Key point: Stripchat returns **HTTP 404** (not 200, as previously assumed) for a
-    /// nonexistent username, with body
-    /// `{"title":"An error occurred","description":"...not found..."}`. If
-    /// `status.is_success()` is checked before deciding whether to parse the body (the
-    /// old implementation's approach), a 404 short-circuits as a generic network error
-    /// before the body is ever inspected — meaning "user not found" was permanently
-    /// misclassified as a generic API error, and the rename-lookup fallback (which only
-    /// triggers on `UserNotFound`, see `get_stream_info`) never fired.
-    ///
-    /// So this is inverted here: regardless of HTTP status, first try parsing the body
-    /// as JSON and check whether it matches the "user not found" error shape; only when
-    /// the body can't be parsed at all, or the status failed AND the body doesn't match
-    /// this known error shape, is it classified as some other network/API error.
+    /// When a streamer does not exist, Stripchat always returns exactly:
+    ///   `{"title":"An error occurred","description":"Entity \"Model\" not found"}`
+    /// Any other non-2xx response (404, 429, 5xx, etc.) is treated as a
+    /// network/API error and is NOT misclassified as "user not found".
     async fn parse_broadcast_response(
         resp: Response,
         username: &str,
@@ -298,6 +283,34 @@ impl StripchatApi {
         let status = resp.status();
         let bytes = resp.bytes().await?;
 
+        // 先检查 HTTP 状态：非 2xx 时，仅精确匹配已知的"用户不存在"body，
+        // 否则一律视为网络/API 错误。
+        // Check HTTP status first: for non-2xx, only the exact known "user not
+        // found" body maps to UserNotFound; everything else is a network/API error.
+        if !status.is_success() {
+            // 精确匹配唯一已知的"用户不存在"响应形状
+            // Exact match for the one known "user not found" response shape
+            if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                let title = json["title"].as_str().unwrap_or("");
+                let description = json["description"].as_str().unwrap_or("");
+                if title == "An error occurred"
+                    && description == "Entity \"Model\" not found"
+                {
+                    return Err(AppError::UserNotFound(format!(
+                        "Model {} not found",
+                        username
+                    )));
+                }
+            }
+            return Err(AppError::Other(format!(
+                "API return {} ({})",
+                status.as_u16(),
+                username
+            )));
+        }
+
+        // 2xx：正常解析 JSON
+        // 2xx: parse JSON normally
         let json: serde_json::Value = match serde_json::from_slice(&bytes) {
             Ok(v) => v,
             Err(_) => {
@@ -308,32 +321,6 @@ impl StripchatApi {
                 )));
             }
         };
-
-        // "用户不存在"的错误形状：无论 HTTP 状态码是 200 还是 404 都可能出现。
-        // Stripchat 目前已知的两种形态：
-        //   1. { "title": "An error occurred", "description": "Entity \"Model\" not found" }  (200)
-        //   2. 其他含 "not found" 的 description（404 或 200）
-        // "User not found" error shape: can appear under either HTTP 200 or 404.
-        // Two known variants from Stripchat:
-        //   1. { "title": "An error occurred", "description": "Entity \"Model\" not found" }  (200)
-        //   2. Other descriptions containing "not found" (under 404 or 200)
-        let is_not_found = json["description"]
-            .as_str()
-            .is_some_and(|d| {
-                let lower = d.to_lowercase();
-                lower.contains("not found") || lower.contains("entity") && lower.contains("model")
-            });
-        if is_not_found {
-            return Err(AppError::UserNotFound(format!("Model {} not found", username)));
-        }
-
-        if !status.is_success() {
-            return Err(AppError::Other(format!(
-                "API return {} ({})",
-                status.as_u16(),
-                username
-            )));
-        }
 
         Ok(json)
     }
@@ -510,18 +497,25 @@ impl StripchatApi {
             .map(|s| s.to_string())
     }
 
-    /// 验证主播用户名是否存在，仅发一次轻量请求，不解析直播状态。
-    /// 专用于添加主播时的用户名校验，避免触发 groupShow 二次请求等额外开销。
-    /// 成功时返回该主播的 model_id（来自响应的 `modelId` 字段），供添加流程
-    /// 一并持久化，供日后改名反查使用。
+    /// 通过 `/api/front/users/user-ids/{username}` 获取主播的内部 ID。
     ///
-    /// Verify whether a streamer username exists with a single lightweight request,
-    /// without parsing any live status. Intended for username validation on add,
-    /// avoiding the extra groupShow secondary request overhead. On success, returns the
-    /// streamer's model_id (from the response's `modelId` field) for the add flow to
-    /// persist alongside, for later rename lookups.
-    pub async fn verify_user_exists(&self, username: &str) -> Result<Option<i64>> {
-        let path = format!("/api/front/v1/broadcasts/{}", username);
+    /// 专用于添加主播时的用户名校验，返回值直接是数字 ID，
+    /// 避免从嵌套 JSON 中查找 `modelId` 字段。
+    ///
+    /// 主播不存在时 Stripchat 返回：
+    ///   `{"title":"An error occurred","description":"User {username} not found"}`
+    /// 其他非 2xx 均视为网络/API 错误。
+    ///
+    /// Fetch a streamer's internal ID via `/api/front/users/user-ids/{username}`.
+    ///
+    /// Intended for username validation on add; the response is a plain `{"id": N}`
+    /// with no nesting, so there's no need to dig for a `modelId` field.
+    ///
+    /// Stripchat returns the following when the streamer does not exist:
+    ///   `{"title":"An error occurred","description":"User {username} not found"}`
+    /// Any other non-2xx is treated as a network/API error.
+    async fn fetch_model_id_by_username(&self, username: &str) -> Result<i64> {
+        let path = format!("/api/front/users/user-ids/{}", username);
         let url = self.api_url(&format!("https://stripchat.com{}", path));
 
         let resp = self
@@ -531,69 +525,274 @@ impl StripchatApi {
             .send()
             .await?;
 
-        let json = Self::parse_broadcast_response(resp, username).await?;
+        let status = resp.status();
+        let bytes = resp.bytes().await?;
 
-        Ok(json["item"]["modelId"].as_i64())
+        if !status.is_success() {
+            // 精确匹配"用户不存在"响应：description 为 "User {username} not found"
+            // Exact match for "user not found": description is "User {username} not found"
+            if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                let title = json["title"].as_str().unwrap_or("");
+                let description = json["description"].as_str().unwrap_or("");
+                let expected_desc = format!("User {} not found", username);
+                if title == "An error occurred" && description == expected_desc {
+                    return Err(AppError::UserNotFound(format!(
+                        "User {} not found",
+                        username
+                    )));
+                }
+            }
+            return Err(AppError::Other(format!(
+                "API return {} ({})",
+                status.as_u16(),
+                username
+            )));
+        }
+
+        let json: serde_json::Value = serde_json::from_slice(&bytes).map_err(|_| {
+            AppError::Other(format!("API return {} ({})", status.as_u16(), username))
+        })?;
+
+        json["id"].as_i64().ok_or_else(|| {
+            AppError::Other(format!("missing id field in user-ids response ({})", username))
+        })
     }
+
+    /// 验证主播用户名是否存在，仅发一次轻量请求，不解析直播状态。
+    /// 专用于添加主播时的用户名校验，成功时返回该主播的 model_id，
+    /// 供添加流程持久化，用于日后改名反查。
     ///
-    /// 主接口使用 v1/broadcasts/{username}，该接口轻量且无需登录。
-    /// - 在线且状态为 groupShow 时，追加请求 v2/models/{model_id}/cam 获取具体秀类型。
-    /// - 仅 public 状态时才获取播放列表 URL。
-    /// - 若 v1/broadcasts/{username} 查不到该用户，且提供了 `known_model_id`
-    ///   （之前缓存的该主播内部 ID），会用它反查 v2/models/{model_id}/cam 确认是否
-    ///   为改名（而非账号被删/封禁）；确认改名后自动改用新用户名重新走一次完整查询，
-    ///   返回结果的 `renamed_to` 字段会带上新用户名，供调用方更新持久化记录。
+    /// Verify whether a streamer username exists with a single lightweight request,
+    /// without parsing any live status. Intended for username validation on add.
+    /// On success, returns the streamer's model_id for the add flow to persist,
+    /// enabling future rename lookups.
+    pub async fn verify_user_exists(&self, username: &str) -> Result<i64> {
+        self.fetch_model_id_by_username(username).await
+    }
+
+    /// 通过主播内部 ID 查询直播状态，使用 `/api/front/v2/broadcasts/{model_id}`。
     ///
-    /// # 参数 / Parameters
-    /// - `username`: 主播用户名 / Streamer username
-    /// - `fetch_playlist`: 是否同时获取 HLS 播放列表 URL（仅在可录制时有效）/ Whether to also fetch the HLS playlist URL (only effective when recordable)
-    /// - `known_model_id`: 调用方缓存的该主播内部 ID，用于用户名查询失败时的改名反查兜底
-    ///   （可为 `None`，此时查询失败直接返回 `UserNotFound`，不做改名检测）/
-    ///   Caller-cached internal ID for this streamer, used as a fallback rename lookup
-    ///   when the username query fails (`None` means no fallback; a failed lookup
-    ///   returns `UserNotFound` directly without rename detection)
+    /// 响应结构与 v1/broadcasts/{username} 相同（`item` 对象），同时包含
+    /// `item.username` 字段——若该字段与调用方记录的 username 不一致，
+    /// 即可直接得知主播已改名，无需额外的 cam 接口反查。
+    ///
+    /// 主播不存在时，与 v1 相同，精确匹配
+    ///   `{"title":"An error occurred","description":"Entity \"Model\" not found"}`
+    /// 才返回 `UserNotFound`；其他非 2xx（429、5xx 等）视为网络/API 错误，
+    /// 不会误判为主播失效。
+    ///
+    /// Query live status by internal model ID via `/api/front/v2/broadcasts/{model_id}`.
+    ///
+    /// The response structure is identical to v1/broadcasts/{username} (an `item`
+    /// object), but also includes `item.username` — if that field differs from the
+    /// caller's recorded username, we know the streamer has been renamed directly,
+    /// with no extra cam-endpoint round-trip needed.
+    ///
+    /// When the streamer no longer exists, the v2 endpoint returns the same exact
+    /// error body as v1: `{"title":"An error occurred","description":"Entity \"Model\" not found"}`.
+    /// Only that precise body maps to `UserNotFound`; any other non-2xx (429, 5xx,
+    /// network issues, etc.) is treated as a transient error and does NOT mark the
+    /// streamer as dead.
+    async fn fetch_stream_info_by_model_id(
+        &self,
+        model_id: i64,
+        known_username: &str,
+        fetch_playlist: bool,
+    ) -> Result<StreamInfo> {
+        let path = format!("/api/front/v2/broadcasts/{}", model_id);
+        let url = self.api_url(&format!("https://stripchat.com{}", path));
+
+        let resp = self
+            .api_client
+            .get(&url)
+            .header("Referer", self.referer_for_path(&path))
+            .send()
+            .await?;
+
+        let status = resp.status();
+        let bytes = resp.bytes().await?;
+
+        if !status.is_success() {
+            // 与 v1 相同：仅精确匹配已知的"用户不存在"body 才返回 UserNotFound，
+            // 其他非 2xx（429、5xx、网络错误等）均视为网络/API 错误，不误判为失效。
+            // Same as v1: only the exact known "entity not found" body maps to
+            // UserNotFound; any other non-2xx (429, 5xx, network issues, etc.) is
+            // treated as a transient network/API error, not a dead-streamer signal.
+            if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                let title = json["title"].as_str().unwrap_or("");
+                let description = json["description"].as_str().unwrap_or("");
+                if title == "An error occurred"
+                    && description == "Entity \"Model\" not found"
+                {
+                    return Err(AppError::UserNotFound(format!(
+                        "Model {} not found (id={})",
+                        known_username, model_id
+                    )));
+                }
+            }
+            return Err(AppError::Other(format!(
+                "API return {} (id={})",
+                status.as_u16(),
+                model_id
+            )));
+        }
+
+        let json: serde_json::Value = serde_json::from_slice(&bytes).map_err(|_| {
+            AppError::Other(format!(
+                "API return {} (id={})",
+                status.as_u16(),
+                model_id
+            ))
+        })?;
+
+        let item = &json["item"];
+
+        // 检测改名：v2 响应中 item.username 是当前真实用户名
+        // Detect rename: item.username in the v2 response is the current real username
+        let current_username = item["username"].as_str().unwrap_or(known_username);
+        let renamed_to = if current_username.to_lowercase() != known_username.to_lowercase() {
+            tracing::info!(
+                "{}",
+                crate::tl!(
+                    "stripchat.streamerRenamed",
+                    username = known_username,
+                    newUsername = current_username,
+                    modelId = model_id
+                )
+            );
+            Some(current_username.to_string())
+        } else {
+            None
+        };
+
+        // 用当前实际用户名（可能已改名）进行后续解析，保持日志和缓存的一致性
+        // Use the current real username (possibly renamed) for subsequent parsing
+        let username = renamed_to.as_deref().unwrap_or(known_username);
+
+        let is_live = item["isLive"].as_bool().unwrap_or(false);
+        let status_text = item["status"].as_str().unwrap_or("unknown");
+
+        let status = if is_live && status_text == "groupShow" {
+            match self.get_group_show_detail(username, model_id).await {
+                Some(ref detail) if detail.starts_with("groupShow:") => {
+                    match detail.strip_prefix("groupShow:").unwrap_or("") {
+                        "ticket" => "票务秀".to_string(),
+                        "perMinute" => "计时秀".to_string(),
+                        _ => "群组秀".to_string(),
+                    }
+                }
+                Some(ref mode) => match mode.as_str() {
+                    "private" => "私密秀".to_string(),
+                    "p2pVoice" | "p2p" => "P2P".to_string(),
+                    "virtualPrivate" => "虚拟私密".to_string(),
+                    _ => "群组秀".to_string(),
+                },
+                None => "群组秀".to_string(),
+            }
+        } else {
+            match status_text {
+                "public" => "公开秀".to_string(),
+                "private" => "私密秀".to_string(),
+                "virtualPrivate" => "虚拟私密".to_string(),
+                "p2p" | "p2pVoice" => "P2P".to_string(),
+                "idle" => "等待".to_string(),
+                "off" => "离线".to_string(),
+                _ => status_text.to_string(),
+            }
+        };
+
+        let thumbnail_url = if is_live {
+            let snapshot_ts = item["snapshotTimestamp"]
+                .as_i64()
+                .or_else(|| {
+                    item["snapshotTimestamp"]
+                        .as_str()
+                        .and_then(|s| s.parse().ok())
+                })
+                .unwrap_or(0);
+            let stream_name = item["streamName"].as_str().unwrap_or("");
+            if snapshot_ts > 0 && !stream_name.is_empty() {
+                Some(format!(
+                    "https://img.doppiocdn.net/thumbs/{}/{}",
+                    snapshot_ts, stream_name
+                ))
+            } else {
+                item["previewUrl"].as_str().map(|s| s.to_string())
+            }
+        } else {
+            // 离线时无 previewUrl，回退到 cam 接口获取
+            // Offline: no previewUrl, fall back to cam endpoint
+            self.get_cam_preview_url(username, model_id).await
+        };
+
+        let is_recordable = is_live && status_text == "public";
+
+        let playlist_url = if is_recordable && fetch_playlist {
+            self.get_playlist_url(username, model_id).await.ok()
+        } else {
+            None
+        };
+
+        Ok(StreamInfo {
+            is_online: is_live,
+            is_recordable,
+            status,
+            thumbnail_url,
+            playlist_url,
+            model_id: Some(model_id),
+            renamed_to,
+        })
+    }
+
+    /// 查询主播直播状态。
+    ///
+    /// - 若有 `known_model_id`（绝大多数情况），直接用 v2/broadcasts/{id} 查询：
+    ///   - 响应中 `item.username` 与记录不同时，直接得知改名，无需额外请求。
+    ///   - 非 2xx 视为主播不存在（`UserNotFound`），触发上层死亡标记流程。
+    /// - 无 `known_model_id`（仅兼容升级前未回填的旧数据）时，
+    ///   回退到 v1/broadcasts/{username} 查询；查询成功时返回的 `model_id`
+    ///   由调用方（`poll_streamer`）通过 `backfill_model_id` 回填，
+    ///   下次轮询即可走 v2 路径。
+    ///
+    /// Query a streamer's live status.
+    ///
+    /// - When `known_model_id` is present (the common case), queries via
+    ///   `v2/broadcasts/{id}` directly:
+    ///   - If `item.username` in the response differs from the recorded username,
+    ///     a rename is detected immediately with no extra round-trip.
+    ///   - Any non-2xx is treated as `UserNotFound`, triggering the dead-streamer
+    ///     marking flow upstream.
+    /// - When `known_model_id` is absent (only for pre-upgrade data that hasn't
+    ///   been backfilled), falls back to `v1/broadcasts/{username}`; the `model_id`
+    ///   returned on success is backfilled by the caller (`poll_streamer`) via
+    ///   `backfill_model_id`, so the v2 path is used from the next poll onward.
     pub async fn get_stream_info(
         &self,
         username: &str,
         fetch_playlist: bool,
         known_model_id: Option<i64>,
     ) -> Result<StreamInfo> {
-        match self.fetch_stream_info_by_username(username, fetch_playlist).await {
-            Ok(info) => Ok(info),
-            Err(AppError::UserNotFound(_)) if known_model_id.is_some() => {
-                let model_id = known_model_id.unwrap();
-                match self.lookup_username_by_model_id(model_id).await {
-                    Some(new_username) if new_username.to_lowercase() != username.to_lowercase() => {
-                        tracing::info!("{}", crate::tl!("stripchat.streamerRenamed", username = username, newUsername = new_username, modelId = model_id)
-                        );
-                        let mut info = self
-                            .fetch_stream_info_by_username(&new_username, fetch_playlist)
-                            .await?;
-                        info.renamed_to = Some(new_username);
-                        Ok(info)
-                    }
-                    // model_id 反查也找不到用户名（None），或反查到的用户名与旧用户名相同
-                    // （说明不是改名问题，可能是账号被封禁/删除等其他原因导致 v1/broadcasts
-                    // 查不到），原样返回最初的 UserNotFound，不掩盖真实错误原因。
-                    //
-                    // The model_id lookup also failed to find a username (None), or found
-                    // the same username as before (meaning this isn't a rename — likely
-                    // the account being banned/deleted or another reason v1/broadcasts
-                    // can't find it). Return the original UserNotFound as-is, without
-                    // masking the real cause.
-                    _ => Err(AppError::UserNotFound(format!("Model {} not found", username))),
-                }
-            }
-            Err(e) => Err(e),
+        if let Some(model_id) = known_model_id {
+            // 主路径：直接用 model_id 走 v2 接口
+            // Primary path: query v2 directly by model_id
+            self.fetch_stream_info_by_model_id(model_id, username, fetch_playlist)
+                .await
+        } else {
+            // 兼容路径：旧数据尚无 model_id，回退到 v1 by-username
+            // Compat path: old data with no model_id, fall back to v1 by-username
+            self.fetch_stream_info_by_username(username, fetch_playlist)
+                .await
         }
     }
 
-    /// `get_stream_info` 的实际实现：按用户名查询一次，不含改名回退逻辑。
-    /// 拆出为独立函数，便于改名确认后用新用户名重新调用一次完整查询。
+    /// `get_stream_info` 的兼容回退实现：按用户名查询 v1/broadcasts/{username}。
+    /// 仅用于升级前未回填 model_id 的旧数据，一旦成功查询后 `poll_streamer` 会
+    /// 立即通过 `backfill_model_id` 补全 model_id，下次轮询即走 v2 主路径。
     ///
-    /// The actual implementation behind `get_stream_info`: a single username-based
-    /// query, without rename fallback logic. Split out as its own function so it can be
-    /// re-invoked with the new username once a rename is confirmed.
+    /// Compat fallback behind `get_stream_info`: queries `v1/broadcasts/{username}`.
+    /// Only used for pre-upgrade entries without a model_id. Once a successful query
+    /// returns, `poll_streamer` immediately backfills the model_id via
+    /// `backfill_model_id`, so the v2 primary path is used from the next poll onward.
     async fn fetch_stream_info_by_username(
         &self,
         username: &str,
@@ -680,8 +879,6 @@ impl StripchatApi {
 
         let is_recordable = is_live && status_text == "public";
 
-        // 构建一个最小化的 model_json 供 get_playlist_url 使用（仅需 user.user.id）
-        // Build a minimal model_json for get_playlist_url (only needs user.user.id)
         let playlist_url = if is_recordable && fetch_playlist {
             if let Some(mid) = model_id {
                 self.get_playlist_url(username, mid).await.ok()

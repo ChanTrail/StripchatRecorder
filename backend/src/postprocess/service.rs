@@ -252,6 +252,7 @@ pub fn run_postprocess_inner(
         video_path: &std::path::Path,
         emitter: &Arc<dyn Emitter>,
         path_str: &str,
+        old_path: Option<&str>,
     ) {
         use crate::core::emitter::EmitterExt;
         if let Some(meta) = crate::recording::meta::read_meta(video_path) {
@@ -260,7 +261,12 @@ pub fn run_postprocess_inner(
             );
             emitter.emit(
                 "postprocess-meta-update",
-                &serde_json::json!({ "path": path_str, "meta": meta, "module_outputs": module_outputs }),
+                &serde_json::json!({
+                    "path": path_str,
+                    "old_path": old_path,
+                    "meta": meta,
+                    "module_outputs": module_outputs,
+                }),
             );
         }
     }
@@ -313,7 +319,7 @@ pub fn run_postprocess_inner(
                     mod_done: 0,
                 },
             );
-            emit_meta_update(&video_path_buf, &emitter_ref, &path_str_ref.lock().unwrap());
+            emit_meta_update(&video_path_buf, &emitter_ref, &path_str_ref.lock().unwrap(), None);
         },
         // on_node_done：完成 pp_execution 条目，清空 pp_progress，更新整体进度，推送 meta 快照
         // on_node_done: finish pp_execution entry, clear pp_progress, update overall progress, push meta snapshot
@@ -349,16 +355,30 @@ pub fn run_postprocess_inner(
             // build_effective_pipeline), on_node_done never fires for it at all, so writing
             // here would leave these two fields permanently unfilled for any recording that
             // was already merged before this logic existed.
-            if result.module_id == "ts_merge"
-                && result.is_success()
-                && let Some(output_path) = result.outputs.first()
-            {
-                if let Some(mut meta) = crate::recording::meta::read_meta(&video_path_buf) {
-                    meta.video_path = Some(output_path.to_string_lossy().to_string());
-                    crate::recording::meta::write_meta(&video_path_buf, &meta);
-                }
-                *path_str_ref.lock().unwrap() = output_path.to_string_lossy().to_string();
-            }
+            //
+            // old_path_for_migration：路径切换时记录旧路径，随本次 postprocess-meta-update
+            // 一并推送，供前端精确完成 path 迁移，避免多任务并发时靠"搜索所有 running 路径"
+            // 猜测旧路径导致的状态错乱。
+            //
+            // old_path_for_migration: when the path changes, record the old path and include
+            // it in this postprocess-meta-update push, so the frontend can perform the path
+            // migration precisely rather than guessing by searching all running paths — which
+            // causes state corruption when multiple tasks are running concurrently.
+            let old_path_for_migration: Option<String> =
+                if result.module_id == "ts_merge"
+                    && result.is_success()
+                    && let Some(output_path) = result.outputs.first()
+                {
+                    if let Some(mut meta) = crate::recording::meta::read_meta(&video_path_buf) {
+                        meta.video_path = Some(output_path.to_string_lossy().to_string());
+                        crate::recording::meta::write_meta(&video_path_buf, &meta);
+                    }
+                    let old = path_str_ref.lock().unwrap().clone();
+                    *path_str_ref.lock().unwrap() = output_path.to_string_lossy().to_string();
+                    Some(old)
+                } else {
+                    None
+                };
 
             crate::recording::meta::clear_pp_progress(&video_path_buf);
             *current_node_module_id.lock().unwrap() = String::new();
@@ -377,7 +397,12 @@ pub fn run_postprocess_inner(
                 done_val,
                 total,
             );
-            emit_meta_update(&video_path_buf, &emitter_ref, &path_str_ref.lock().unwrap());
+            emit_meta_update(
+                &video_path_buf,
+                &emitter_ref,
+                &path_str_ref.lock().unwrap(),
+                old_path_for_migration.as_deref(),
+            );
         },
         // on_progress：直接用共享变量中的 module_id，无需 read_meta，大幅降低磁盘 I/O
         // on_progress: use module_id from shared variable directly, no read_meta needed,
@@ -394,7 +419,7 @@ pub fn run_postprocess_inner(
                     mod_done,
                 },
             );
-            emit_meta_update(&video_path_buf, &emitter_ref, &path_str_ref.lock().unwrap());
+            emit_meta_update(&video_path_buf, &emitter_ref, &path_str_ref.lock().unwrap(), None);
         },
         // on_log：模块 stdout/stderr 日志，保持不变
         // on_log: module stdout/stderr log lines, unchanged
