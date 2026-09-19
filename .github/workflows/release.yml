@@ -219,6 +219,75 @@ jobs:
           Compress-Archive -Path build\desktop\modules\* `
             -DestinationPath build\desktop\modules-${{ matrix.platform }}.zip
 
+      # ── 重命名产物为统一格式 StripchatRecorder-desktop-{platform}-{version}.ext
+      #    模块 zip 保持原名不变 / Rename artifacts to unified format; modules zip unchanged
+      - name: Rename Linux artifacts
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PLAT="${{ matrix.platform }}"
+          BASE="StripchatRecorder-desktop-${PLAT}-${TAG}"
+
+          # AppImage + sig
+          for f in build/desktop/appimage/*.AppImage; do
+            [ -f "$f" ] || continue
+            mv "$f" "build/desktop/appimage/${BASE}.AppImage"
+          done
+          for f in build/desktop/appimage/*.AppImage.sig; do
+            [ -f "$f" ] || continue
+            mv "$f" "build/desktop/appimage/${BASE}.AppImage.sig"
+          done
+
+          # deb
+          for f in build/desktop/deb/*.deb; do
+            [ -f "$f" ] || continue
+            mv "$f" "build/desktop/deb/${BASE}.deb"
+          done
+
+          # rpm
+          for f in build/desktop/rpm/*.rpm; do
+            [ -f "$f" ] || continue
+            mv "$f" "build/desktop/rpm/${BASE}.rpm"
+          done
+
+      - name: Rename macOS artifacts
+        if: startsWith(matrix.os, 'macos')
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PLAT="${{ matrix.platform }}"
+          BASE="StripchatRecorder-desktop-${PLAT}-${TAG}"
+
+          # dmg
+          for f in build/desktop/dmg/*.dmg; do
+            [ -f "$f" ] || continue
+            mv "$f" "build/desktop/dmg/${BASE}.dmg"
+          done
+
+          # app.tar.gz + sig
+          for f in build/desktop/macos/*.app.tar.gz; do
+            [ -f "$f" ] || continue
+            mv "$f" "build/desktop/macos/${BASE}.app.tar.gz"
+          done
+          for f in build/desktop/macos/*.app.tar.gz.sig; do
+            [ -f "$f" ] || continue
+            mv "$f" "build/desktop/macos/${BASE}.app.tar.gz.sig"
+          done
+
+      - name: Rename Windows artifacts
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $TAG  = ($env:GITHUB_REF_NAME -replace '^v', '')
+          $PLAT = "${{ matrix.platform }}"
+          $BASE = "StripchatRecorder-desktop-${PLAT}-${TAG}"
+
+          Get-ChildItem build\desktop\nsis\*-setup.exe | ForEach-Object {
+            Rename-Item $_.FullName "${BASE}.exe"
+          }
+          Get-ChildItem build\desktop\nsis\*-setup.exe.sig | ForEach-Object {
+            Rename-Item $_.FullName "${BASE}.exe.sig"
+          }
+
       # ── 上传 Linux 产物 / Upload Linux artifacts ──
       - name: Upload Linux installers
         if: startsWith(matrix.os, 'ubuntu')
@@ -287,10 +356,12 @@ jobs:
       # ── 生成 latest.json（tauri-plugin-updater 检查更新的 manifest）──────────
       # 遍历各平台的 .sig 签名文件，提取签名内容与对应安装包 URL，
       # 组装成 tauri-plugin-updater 所要求的 latest.json 格式。
+      # 平台键名规则：aarch64 统一写成 arm64。
       #
       # Build latest.json (the update manifest consumed by tauri-plugin-updater).
       # For each platform we locate the .sig file, read its signature, and pair it
       # with the GitHub release download URL of the corresponding installer.
+      # Platform key convention: aarch64 is always written as arm64.
       - name: Generate latest.json
         run: |
           TAG="${{ github.ref_name }}"
@@ -299,47 +370,43 @@ jobs:
           BASE="https://github.com/${REPO}/releases/download/${TAG}"
           NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-          # ── Windows x86_64: prefer NSIS .exe over MSI ──
-          WIN_SIG=""
-          WIN_URL=""
-          WIN_SIG_FILE=$(find artifacts -name "*_x64-setup.exe.sig" | head -1)
-          WIN_EXE_FILE=$(find artifacts -name "*_x64-setup.exe" ! -name "*.sig" | head -1)
-          if [ -n "$WIN_SIG_FILE" ] && [ -n "$WIN_EXE_FILE" ]; then
-            WIN_SIG=$(cat "$WIN_SIG_FILE")
-            WIN_URL="${BASE}/$(basename $WIN_EXE_FILE)"
-          fi
+          # ── Windows x86_64 ──
+          WIN_X64_SIG=""; WIN_X64_URL=""
+          f=$(find artifacts -name "StripchatRecorder-desktop-windows-x86_64-*.exe.sig" | head -1)
+          e=$(find artifacts -name "StripchatRecorder-desktop-windows-x86_64-*.exe" ! -name "*.sig" | head -1)
+          if [ -n "$f" ] && [ -n "$e" ]; then WIN_X64_SIG=$(cat "$f"); WIN_X64_URL="${BASE}/$(basename $e)"; fi
 
           # ── Linux x86_64: AppImage ──
-          LINUX_SIG=""
-          LINUX_URL=""
-          LINUX_SIG_FILE=$(find artifacts -name "*.AppImage.sig" | head -1)
-          LINUX_APPIMAGE=$(find artifacts -name "*.AppImage" ! -name "*.sig" | head -1)
-          if [ -n "$LINUX_SIG_FILE" ] && [ -n "$LINUX_APPIMAGE" ]; then
-            LINUX_SIG=$(cat "$LINUX_SIG_FILE")
-            LINUX_URL="${BASE}/$(basename $LINUX_APPIMAGE)"
-          fi
+          LINUX_X64_SIG=""; LINUX_X64_URL=""
+          f=$(find artifacts -name "StripchatRecorder-desktop-linux-x86_64-*.AppImage.sig" | head -1)
+          e=$(find artifacts -name "StripchatRecorder-desktop-linux-x86_64-*.AppImage" ! -name "*.sig" | head -1)
+          if [ -n "$f" ] && [ -n "$e" ]; then LINUX_X64_SIG=$(cat "$f"); LINUX_X64_URL="${BASE}/$(basename $e)"; fi
 
-          # ── macOS aarch64: .app.tar.gz (Tauri updater bundle) ──
-          MAC_SIG=""
-          MAC_URL=""
-          MAC_SIG_FILE=$(find artifacts -name "*.app.tar.gz.sig" | head -1)
-          MAC_TGZ=$(find artifacts -name "*.app.tar.gz" ! -name "*.sig" | head -1)
-          if [ -n "$MAC_SIG_FILE" ] && [ -n "$MAC_TGZ" ]; then
-            MAC_SIG=$(cat "$MAC_SIG_FILE")
-            MAC_URL="${BASE}/$(basename $MAC_TGZ)"
-          fi
+          # ── Linux arm64: AppImage ──
+          LINUX_ARM64_SIG=""; LINUX_ARM64_URL=""
+          f=$(find artifacts -name "StripchatRecorder-desktop-linux-arm64-*.AppImage.sig" | head -1)
+          e=$(find artifacts -name "StripchatRecorder-desktop-linux-arm64-*.AppImage" ! -name "*.sig" | head -1)
+          if [ -n "$f" ] && [ -n "$e" ]; then LINUX_ARM64_SIG=$(cat "$f"); LINUX_ARM64_URL="${BASE}/$(basename $e)"; fi
+
+          # ── macOS arm64 (macos-arm64 platform): .app.tar.gz ──
+          MAC_ARM64_SIG=""; MAC_ARM64_URL=""
+          f=$(find artifacts -name "StripchatRecorder-desktop-macos-arm64-*.app.tar.gz.sig" | head -1)
+          e=$(find artifacts -name "StripchatRecorder-desktop-macos-arm64-*.app.tar.gz" ! -name "*.sig" | head -1)
+          if [ -n "$f" ] && [ -n "$e" ]; then MAC_ARM64_SIG=$(cat "$f"); MAC_ARM64_URL="${BASE}/$(basename $e)"; fi
 
           # ── 组装 JSON / Assemble JSON ──
           python3 - <<PYEOF
           import json, sys
 
           platforms = {}
-          if "${WIN_SIG}" and "${WIN_URL}":
-              platforms["windows-x86_64"] = {"signature": """${WIN_SIG}""", "url": "${WIN_URL}"}
-          if "${LINUX_SIG}" and "${LINUX_URL}":
-              platforms["linux-x86_64"] = {"signature": """${LINUX_SIG}""", "url": "${LINUX_URL}"}
-          if "${MAC_SIG}" and "${MAC_URL}":
-              platforms["darwin-aarch64"] = {"signature": """${MAC_SIG}""", "url": "${MAC_URL}"}
+          if "${WIN_X64_SIG}" and "${WIN_X64_URL}":
+              platforms["windows-x86_64"] = {"signature": """${WIN_X64_SIG}""", "url": "${WIN_X64_URL}"}
+          if "${LINUX_X64_SIG}" and "${LINUX_X64_URL}":
+              platforms["linux-x86_64"] = {"signature": """${LINUX_X64_SIG}""", "url": "${LINUX_X64_URL}"}
+          if "${LINUX_ARM64_SIG}" and "${LINUX_ARM64_URL}":
+              platforms["linux-arm64"] = {"signature": """${LINUX_ARM64_SIG}""", "url": "${LINUX_ARM64_URL}"}
+          if "${MAC_ARM64_SIG}" and "${MAC_ARM64_URL}":
+              platforms["darwin-arm64"] = {"signature": """${MAC_ARM64_SIG}""", "url": "${MAC_ARM64_URL}"}
 
           manifest = {
               "version": "${VER}",
