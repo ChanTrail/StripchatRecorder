@@ -9,6 +9,16 @@ use std::path::PathBuf;
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
 
+/// 使用系统本地时间格式化日志时间戳。
+/// Format log timestamps using the system local time.
+struct LocalTimer;
+
+impl tracing_subscriber::fmt::time::FormatTime for LocalTimer {
+    fn format_time(&self, w: &mut tracing_subscriber::fmt::format::Writer<'_>) -> std::fmt::Result {
+        write!(w, "{}", chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.3f"))
+    }
+}
+
 /// 初始化日志系统：创建日志目录、清理旧日志、配置控制台和文件输出层。
 /// Initialize the logging system: create log directory, clean up old logs,
 /// configure console and file output layers.
@@ -29,6 +39,7 @@ pub fn init_logging(log_dir: &PathBuf) -> std::io::Result<()> {
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     let console_layer = fmt::layer()
+        .with_timer(LocalTimer)
         .with_writer(std::io::stdout)
         .with_ansi(true)
         .with_target(true)
@@ -37,6 +48,7 @@ pub fn init_logging(log_dir: &PathBuf) -> std::io::Result<()> {
     // 文件层：固定 INFO 级别，包含文件名和行号，不含 ANSI 颜色码
     // File layer: fixed INFO level, includes filename and line number, no ANSI color codes
     let file_layer = fmt::layer()
+        .with_timer(LocalTimer)
         .with_writer(log_file)
         .with_ansi(false)
         .with_target(true)
