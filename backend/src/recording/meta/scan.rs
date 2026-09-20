@@ -63,7 +63,11 @@ fn repair_meta(meta: &VideoMeta, path: &Path) -> Option<VideoMeta> {
     if m.size_bytes == 0 {
         let actual = if path.is_dir() {
             std::fs::read_dir(path)
-                .map(|e| e.flatten().filter_map(|f| std::fs::metadata(f.path()).ok().map(|md| md.len())).sum())
+                .map(|e| {
+                    e.flatten()
+                        .filter_map(|f| std::fs::metadata(f.path()).ok().map(|md| md.len()))
+                        .sum()
+                })
                 .unwrap_or(0)
         } else {
             std::fs::metadata(path).map(|md| md.len()).unwrap_or(0)
@@ -153,7 +157,9 @@ pub fn ensure_meta_files(
     }
 
     if !pp_pending.is_empty() {
-        tracing::info!("{}", crate::tl!("meta.scanPpPending", count = pp_pending.len())
+        tracing::info!(
+            "{}",
+            crate::tl!("meta.scanPpPending", count = pp_pending.len())
         );
     }
 
@@ -200,42 +206,43 @@ fn scan_and_ensure_meta(
     //   pp_running we also fall back to checking meta.video_path (the authoritative path
     //   used by the active post-processing task) — the status is genuinely active if either
     //   path is tracked.
-    let is_genuinely_active = |path: &Path, status: &str, meta_video_path: Option<&str>| match status {
-        "recording" => recorder.is_file_locked(path),
-        "pp_waiting" | "pp_running" => {
-            // 先查当前扫描路径，找不到再用 meta.video_path 兜底
-            // Check the scanned path first; fall back to meta.video_path if not found
-            if state.pp_queue.is_tracked(&path.to_string_lossy()) {
-                return true;
-            }
-            if let Some(vp) = meta_video_path
-                && state.pp_queue.is_tracked(vp)
-            {
-                return true;
-            }
-            // 若扫描的是视频文件（有扩展名），还需检查同名的 session_dir 是否在追踪中。
-            // ts_merge 完成前后处理以 session_dir 路径为 key 入队；ts_merge 完成后
-            // meta.video_path 已更新为 .mkv，但 pp_queue 里的 key 仍是 session_dir，
-            // 若不检查 session_dir，scan 扫到 .mkv 时会误判为陈旧而重复触发后处理。
-            //
-            // If scanning a video file (has an extension), also check if the corresponding
-            // session_dir (same parent and stem, no extension) is tracked.
-            // Post-processing is queued with the session_dir path as key; after ts_merge
-            // meta.video_path switches to .mkv, but the pp_queue key remains the session_dir.
-            // Without this check, scanning a .mkv would be misclassified as stale and
-            // trigger a duplicate post-processing run.
-            if path.extension().is_some() {
-                if let (Some(parent), Some(stem)) = (path.parent(), path.file_stem()) {
+    let is_genuinely_active =
+        |path: &Path, status: &str, meta_video_path: Option<&str>| match status {
+            "recording" => recorder.is_file_locked(path),
+            "pp_waiting" | "pp_running" => {
+                // 先查当前扫描路径，找不到再用 meta.video_path 兜底
+                // Check the scanned path first; fall back to meta.video_path if not found
+                if state.pp_queue.is_tracked(&path.to_string_lossy()) {
+                    return true;
+                }
+                if let Some(vp) = meta_video_path
+                    && state.pp_queue.is_tracked(vp)
+                {
+                    return true;
+                }
+                // 若扫描的是视频文件（有扩展名），还需检查同名的 session_dir 是否在追踪中。
+                // ts_merge 完成前后处理以 session_dir 路径为 key 入队；ts_merge 完成后
+                // meta.video_path 已更新为 .mkv，但 pp_queue 里的 key 仍是 session_dir，
+                // 若不检查 session_dir，scan 扫到 .mkv 时会误判为陈旧而重复触发后处理。
+                //
+                // If scanning a video file (has an extension), also check if the corresponding
+                // session_dir (same parent and stem, no extension) is tracked.
+                // Post-processing is queued with the session_dir path as key; after ts_merge
+                // meta.video_path switches to .mkv, but the pp_queue key remains the session_dir.
+                // Without this check, scanning a .mkv would be misclassified as stale and
+                // trigger a duplicate post-processing run.
+                if path.extension().is_some()
+                    && let (Some(parent), Some(stem)) = (path.parent(), path.file_stem())
+                {
                     let session_dir = parent.join(stem);
                     if state.pp_queue.is_tracked(&session_dir.to_string_lossy()) {
                         return true;
                     }
                 }
+                false
             }
-            false
-        }
-        _ => false,
-    };
+            _ => false,
+        };
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return,
@@ -250,8 +257,14 @@ fn scan_and_ensure_meta(
 
         // ── 独立视频文件 / Standalone video files ─────────────────────────────
         if path.is_file() {
-            let ext = path.extension().and_then(|e| e.to_str()).map(|s| s.to_ascii_lowercase());
-            if !matches!(ext.as_deref(), Some("mp4") | Some("mkv") | Some("ts") | Some("avi") | Some("mov")) {
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|s| s.to_ascii_lowercase());
+            if !matches!(
+                ext.as_deref(),
+                Some("mp4") | Some("mkv") | Some("ts") | Some("avi") | Some("mov")
+            ) {
                 continue;
             }
             let meta_path = match meta_path_for(&path) {
@@ -287,16 +300,27 @@ fn scan_and_ensure_meta(
                     pp_progress: None,
                 };
                 write_meta(&path, &meta);
-                tracing::info!("{}", crate::tl!("meta.scanCreatedVideo", path = path.display()));
+                tracing::info!(
+                    "{}",
+                    crate::tl!("meta.scanCreatedVideo", path = path.display())
+                );
                 pp_pending.push(path.clone());
             } else if meta_path.exists() && read_meta(&path).is_none() {
                 // meta 文件存在但解析失败（JSON 损坏）→ 重新创建
                 // Meta file exists but failed to parse (corrupt JSON) → recreate
-                tracing::warn!("{}", crate::tl!("meta.scanCorruptVideo", path = path.display()));
+                tracing::warn!(
+                    "{}",
+                    crate::tl!("meta.scanCorruptVideo", path = path.display())
+                );
                 let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
                 let started_at = parse_timestamp_from_stem(stem).unwrap_or_else(|| {
-                    std::fs::metadata(&path).ok().and_then(|m| m.modified().ok())
-                        .map(|t| { let dt: chrono::DateTime<chrono::Local> = t.into(); dt.to_rfc3339() })
+                    std::fs::metadata(&path)
+                        .ok()
+                        .and_then(|m| m.modified().ok())
+                        .map(|t| {
+                            let dt: chrono::DateTime<chrono::Local> = t.into();
+                            dt.to_rfc3339()
+                        })
                         .unwrap_or_default()
                 });
                 let size_bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
@@ -323,8 +347,17 @@ fn scan_and_ensure_meta(
                 if is_genuinely_active(&path, meta.status.as_str(), meta.video_path.as_deref()) {
                     continue;
                 }
-                if matches!(meta.status.as_str(), "recording" | "pp_waiting" | "pp_running") {
-                    tracing::warn!("{}", crate::tl!("meta.scanStaleVideo", path = path.display(), status = meta.status)
+                if matches!(
+                    meta.status.as_str(),
+                    "recording" | "pp_waiting" | "pp_running"
+                ) {
+                    tracing::warn!(
+                        "{}",
+                        crate::tl!(
+                            "meta.scanStaleVideo",
+                            path = path.display(),
+                            status = meta.status
+                        )
                     );
                     pp_pending.push(path.clone());
                     continue;
@@ -332,47 +365,66 @@ fn scan_and_ensure_meta(
                 // pp_error：上次后处理失败，仅启动时自动重试（定时扫描跳过）
                 // pp_error: failed last time; auto-retry only on startup, skip on periodic scan
                 if meta.status == "pp_error" && retry_pp_error {
-                    tracing::info!("{}", crate::tl!("meta.scanRetryVideo", path = path.display()));
+                    tracing::info!(
+                        "{}",
+                        crate::tl!("meta.scanRetryVideo", path = path.display())
+                    );
                     pp_pending.push(path.clone());
                     continue;
                 }
                 // 尝试修复字段，若无法修复（status 非法）则按缺失 meta 处理（触发后处理）
                 // Try to repair fields; if unrepairable (invalid status), treat as missing meta
                 match repair_meta(&meta, &path) {
-                    Some(repaired) if repaired.meta_version == META_VERSION
-                        && repaired.started_at == meta.started_at
-                        && repaired.video_path == meta.video_path
-                        && repaired.size_bytes == meta.size_bytes => {
+                    Some(repaired)
+                        if repaired.meta_version == META_VERSION
+                            && repaired.started_at == meta.started_at
+                            && repaired.video_path == meta.video_path
+                            && repaired.size_bytes == meta.size_bytes =>
+                    {
                         // 无需修改 / No changes needed
                     }
                     Some(repaired) => {
-                        tracing::info!("{}", crate::tl!("meta.scanRepairedVideo", path = path.display()));
+                        tracing::info!(
+                            "{}",
+                            crate::tl!("meta.scanRepairedVideo", path = path.display())
+                        );
                         write_meta(&path, &repaired);
                     }
                     None => {
                         // status 非法，无法推断 → 重建为 pp_waiting，触发后处理
                         // Invalid status, cannot infer → rebuild as pp_waiting, trigger pp
-                        tracing::warn!("{}", crate::tl!("meta.scanUnrepairableVideo", path = path.display()));
+                        tracing::warn!(
+                            "{}",
+                            crate::tl!("meta.scanUnrepairableVideo", path = path.display())
+                        );
                         let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
                         let started_at = parse_timestamp_from_stem(stem).unwrap_or_else(|| {
-                            std::fs::metadata(&path).ok().and_then(|m| m.modified().ok())
-                                .map(|t| { let dt: chrono::DateTime<chrono::Local> = t.into(); dt.to_rfc3339() })
+                            std::fs::metadata(&path)
+                                .ok()
+                                .and_then(|m| m.modified().ok())
+                                .map(|t| {
+                                    let dt: chrono::DateTime<chrono::Local> = t.into();
+                                    dt.to_rfc3339()
+                                })
                                 .unwrap_or_default()
                         });
                         let size_bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-                        write_meta(&path, &VideoMeta {
-                            meta_version: META_VERSION,
-                            status: "pp_waiting".to_string(),
-                            started_at,
-                            size_bytes,
-                            video_duration_secs: None,
-                            video_resolution: None,
-                            pp_execution: None,
-                            segments_downloaded: None,
-                            segments_failed: None,
-                            video_path: None,
-                            pp_progress: None,
-                        });
+                        write_meta(
+                            &path,
+                            &VideoMeta {
+                                meta_version: META_VERSION,
+                                status: "pp_waiting".to_string(),
+                                started_at,
+                                size_bytes,
+                                video_duration_secs: None,
+                                video_resolution: None,
+                                pp_execution: None,
+                                segments_downloaded: None,
+                                segments_failed: None,
+                                video_path: None,
+                                pp_progress: None,
+                            },
+                        );
                         pp_pending.push(path.clone());
                     }
                 }
@@ -447,19 +499,34 @@ fn scan_and_ensure_meta(
                     pp_progress: None,
                 };
                 write_meta(&path, &meta);
-                tracing::info!("{}", crate::tl!("meta.scanCreatedSessionDir", path = path.display()));
+                tracing::info!(
+                    "{}",
+                    crate::tl!("meta.scanCreatedSessionDir", path = path.display())
+                );
                 pp_pending.push(path.clone());
             } else if meta_path.exists() && read_meta(&path).is_none() {
                 // meta 文件存在但 JSON 损坏 → 重建并加入待后处理列表
                 // Meta file exists but JSON is corrupt → rebuild and add to pending list
-                tracing::warn!("{}", crate::tl!("meta.scanCorruptSessionDir", path = path.display()));
+                tracing::warn!(
+                    "{}",
+                    crate::tl!("meta.scanCorruptSessionDir", path = path.display())
+                );
                 let started_at = parse_timestamp_from_stem(name).unwrap_or_else(|| {
-                    std::fs::metadata(&path).ok().and_then(|m| m.modified().ok())
-                        .map(|t| { let dt: chrono::DateTime<chrono::Local> = t.into(); dt.to_rfc3339() })
+                    std::fs::metadata(&path)
+                        .ok()
+                        .and_then(|m| m.modified().ok())
+                        .map(|t| {
+                            let dt: chrono::DateTime<chrono::Local> = t.into();
+                            dt.to_rfc3339()
+                        })
                         .unwrap_or_default()
                 });
                 let size_bytes = std::fs::read_dir(&path)
-                    .map(|e| e.flatten().filter_map(|f| std::fs::metadata(f.path()).ok().map(|m| m.len())).sum())
+                    .map(|e| {
+                        e.flatten()
+                            .filter_map(|f| std::fs::metadata(f.path()).ok().map(|m| m.len()))
+                            .sum()
+                    })
                     .unwrap_or(0);
                 let meta = VideoMeta {
                     meta_version: META_VERSION,
@@ -486,8 +553,17 @@ fn scan_and_ensure_meta(
                 if is_genuinely_active(&path, meta.status.as_str(), meta.video_path.as_deref()) {
                     continue;
                 }
-                if matches!(meta.status.as_str(), "recording" | "pp_waiting" | "pp_running") {
-                    tracing::warn!("{}", crate::tl!("meta.scanStaleSessionDir", path = path.display(), status = meta.status)
+                if matches!(
+                    meta.status.as_str(),
+                    "recording" | "pp_waiting" | "pp_running"
+                ) {
+                    tracing::warn!(
+                        "{}",
+                        crate::tl!(
+                            "meta.scanStaleSessionDir",
+                            path = path.display(),
+                            status = meta.status
+                        )
                     );
                     pp_pending.push(path.clone());
                     continue;
@@ -495,42 +571,66 @@ fn scan_and_ensure_meta(
                 // pp_error：上次后处理失败，仅启动时自动重试（定时扫描跳过）
                 // pp_error: failed last time; auto-retry only on startup, skip on periodic scan
                 if meta.status == "pp_error" && retry_pp_error {
-                    tracing::info!("{}", crate::tl!("meta.scanRetrySessionDir", path = path.display()));
+                    tracing::info!(
+                        "{}",
+                        crate::tl!("meta.scanRetrySessionDir", path = path.display())
+                    );
                     pp_pending.push(path.clone());
                     continue;
                 }
                 match repair_meta(&meta, &path) {
-                    Some(repaired) if repaired.meta_version == META_VERSION
-                        && repaired.started_at == meta.started_at
-                        && repaired.video_path == meta.video_path
-                        && repaired.size_bytes == meta.size_bytes => {}
+                    Some(repaired)
+                        if repaired.meta_version == META_VERSION
+                            && repaired.started_at == meta.started_at
+                            && repaired.video_path == meta.video_path
+                            && repaired.size_bytes == meta.size_bytes => {}
                     Some(repaired) => {
-                        tracing::info!("{}", crate::tl!("meta.scanRepairedSessionDir", path = path.display()));
+                        tracing::info!(
+                            "{}",
+                            crate::tl!("meta.scanRepairedSessionDir", path = path.display())
+                        );
                         write_meta(&path, &repaired);
                     }
                     None => {
-                        tracing::warn!("{}", crate::tl!("meta.scanUnrepairableSessionDir", path = path.display()));
+                        tracing::warn!(
+                            "{}",
+                            crate::tl!("meta.scanUnrepairableSessionDir", path = path.display())
+                        );
                         let started_at = parse_timestamp_from_stem(name).unwrap_or_else(|| {
-                            std::fs::metadata(&path).ok().and_then(|m| m.modified().ok())
-                                .map(|t| { let dt: chrono::DateTime<chrono::Local> = t.into(); dt.to_rfc3339() })
+                            std::fs::metadata(&path)
+                                .ok()
+                                .and_then(|m| m.modified().ok())
+                                .map(|t| {
+                                    let dt: chrono::DateTime<chrono::Local> = t.into();
+                                    dt.to_rfc3339()
+                                })
                                 .unwrap_or_default()
                         });
                         let size_bytes = std::fs::read_dir(&path)
-                            .map(|e| e.flatten().filter_map(|f| std::fs::metadata(f.path()).ok().map(|m| m.len())).sum())
+                            .map(|e| {
+                                e.flatten()
+                                    .filter_map(|f| {
+                                        std::fs::metadata(f.path()).ok().map(|m| m.len())
+                                    })
+                                    .sum()
+                            })
                             .unwrap_or(0);
-                        write_meta(&path, &VideoMeta {
-                            meta_version: META_VERSION,
-                            status: "pp_waiting".to_string(),
-                            started_at,
-                            size_bytes,
-                            video_duration_secs: None,
-                            video_resolution: None,
-                            pp_execution: None,
-                            segments_downloaded: None,
-                            segments_failed: None,
-                            video_path: None,
-                            pp_progress: None,
-                        });
+                        write_meta(
+                            &path,
+                            &VideoMeta {
+                                meta_version: META_VERSION,
+                                status: "pp_waiting".to_string(),
+                                started_at,
+                                size_bytes,
+                                video_duration_secs: None,
+                                video_resolution: None,
+                                pp_execution: None,
+                                segments_downloaded: None,
+                                segments_failed: None,
+                                video_path: None,
+                                pp_progress: None,
+                            },
+                        );
                         pp_pending.push(path.clone());
                     }
                 }
@@ -554,9 +654,14 @@ fn scan_and_ensure_meta(
 /// - `split_by_streamer=false`: returns `output_dir` directly as the flat output location
 ///
 /// Returns `None` if the node is absent, disabled, or `output_dir` is empty.
-pub fn ts_merge_output_dir(state: &crate::config::app_state::AppState) -> Option<std::path::PathBuf> {
+pub fn ts_merge_output_dir(
+    state: &crate::config::app_state::AppState,
+) -> Option<std::path::PathBuf> {
     let pipeline = state.get_pipeline();
-    let node = pipeline.nodes.iter().find(|n| n.module_id == "ts_merge" && n.enabled)?;
+    let node = pipeline
+        .nodes
+        .iter()
+        .find(|n| n.module_id == "ts_merge" && n.enabled)?;
     let dir = node.params.get("output_dir")?.as_str()?.trim();
     if dir.is_empty() {
         None

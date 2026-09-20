@@ -19,6 +19,7 @@ A self-hosted Stripchat live stream recorder with a web-based management UI. Sup
   - Name search: search by username keyword
   - One-click add to recording list directly from result cards
   - Launch a similar-face search from any streamer card
+- **Rename tracking**: at add time, fetches and persists the Stripchat internal user ID via the user-ID API; all subsequent status polls query by ID directly, enabling automatic rename detection and record updates without manual re-adding
 - **HLS Relay**: proxy a streamer's live stream to any player without recording — open `/stream/{modelname}` to start automatically; supports multiple simultaneous clients
 - Supports split network proxies: configure Stripchat API proxy and CDN chunk proxy separately
 - Supports configurable Stripchat mirror site (replaces `stripchat.com` in requests with your mirror domain)
@@ -31,7 +32,7 @@ A self-hosted Stripchat live stream recorder with a web-based management UI. Sup
   - **notify_telegram** — send recording info, cover image, and video via MTProto (supports files >2 GB, HTTP/SOCKS5 proxy)
   - **cleanup** — clean up recording-related files and temporary caches after post-processing
 - **Community module marketplace**: browse, install, and update community-contributed post-processing modules directly from the Web UI; supports download proxy and mirror configuration
-- **About page / auto-update**: check for new releases on GitHub; non-Docker builds support one-click download and automatic binary replacement; Docker builds prompt for manual image update
+- **About page / auto-update**: check for new releases on GitHub; non-Docker builds support one-click download and automatic binary replacement; Docker builds prompt for manual image update; release notes are rendered as Markdown
 - Disk space monitoring on the recordings page, with a warning highlight when less than 5 GB remains
 - Dual runtime: Tauri desktop app or headless server accessible via browser
 - Real-time UI updates via Server-Sent Events with multi-client sync
@@ -57,12 +58,12 @@ services:
     ports:
       - "${PORT:-3030}:${PORT:-3030}"
     volumes:
-      - ./data/logs:/app/stripchat-recorder/logs
-      - ./data/ts_fragment:/app/stripchat-recorder/ts_fragment
-      - ./data/recordings:/app/stripchat-recorder/recordings
-      - ./data/modules:/app/stripchat-recorder/modules
-      - ./data/meta:/app/stripchat-recorder/meta
-      - ./data/config:/app/stripchat-recorder/config
+      - ./data/logs:/app/stripchat-recorder/logs           # Runtime logs
+      - ./data/ts_fragment:/app/stripchat-recorder/ts_fragment  # TS segments during recording (TS stream output dir)
+      - ./data/recordings:/app/stripchat-recorder/recordings  # Video output from ts_merge and other modules
+      - ./data/modules:/app/stripchat-recorder/modules     # Post-processing module executables
+      - ./data/meta:/app/stripchat-recorder/meta           # Recording metadata
+      - ./data/config:/app/stripchat-recorder/config       # Config files (including settings.json)
 ```
 
 ```bash
@@ -98,17 +99,17 @@ docker run -d \
 
 The following options are available in the Web UI under Settings:
 
-| Setting                        | Description                                                                             |
-| ------------------------------ | --------------------------------------------------------------------------------------- |
-| TS stream output directory     | Path where TS segment streams from recordings are stored                                |
-| Max concurrent recordings      | Maximum number of simultaneous recordings; `0` means unlimited                          |
-| Max concurrent post-processing | Number of simultaneous post-processing tasks; `0` = auto (= logical CPU count); manually set values are capped at logical CPU count × 2 |
-| Poll interval (seconds)        | How often to check if a streamer is live; range 10–300                                  |
-| Preferred recording resolution | Target recording quality (0 = original/highest); configures fallback direction when unavailable |
-| Recording file duration (s)    | Max duration per segment file; `0` = unlimited; useful for splitting long broadcasts    |
-| Auto-record on stream start    | Whether newly added streamers have auto-record enabled by default                       |
-| Max post-process tmp dir (GB)  | Size limit for temporary files created by post-processing modules; oldest files are deleted when exceeded; `0` = unlimited, default 50 GB |
-| Check for beta updates         | Whether to also check pre-release (beta/rc) builds; forced on for beta builds           |
+| Setting                        | Description                                                                                                                                             |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| TS stream output directory     | Path where TS segment streams from recordings are stored                                                                                                |
+| Max concurrent recordings      | Maximum number of simultaneous recordings; `0` means unlimited                                                                                          |
+| Max concurrent post-processing | Number of simultaneous post-processing tasks; `0` = auto (= logical CPU count × 2); manually set values are capped at the same CPU × 2, useful for intentionally going below the automatic value |
+| Poll interval (seconds)        | How often to check if a streamer is live; range 10–300                                                                                                  |
+| Preferred recording resolution | Target recording quality (0 = original/highest); configures fallback direction when unavailable                                                         |
+| Recording file duration (s)    | Max duration per segment file; `0` = unlimited; useful for splitting long broadcasts                                                                    |
+| Auto-record on stream start    | Whether newly added streamers have auto-record enabled by default                                                                                       |
+| Max post-process tmp dir (GB)  | Size limit for temporary files created by post-processing modules; oldest files are deleted when exceeded; `0` = unlimited, default 50 GB               |
+| Check for beta updates         | Whether to also check pre-release (beta/rc) builds; forced on for beta builds                                                                           |
 
 ### Network Proxies and Mirror
 
