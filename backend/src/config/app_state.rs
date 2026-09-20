@@ -602,7 +602,7 @@ impl AppState {
         data.streamers.push(StreamerData {
             username: username.to_string(),
             auto_record,
-            added_at: chrono::Utc::now().to_rfc3339(),
+            added_at: chrono::Local::now().to_rfc3339(),
             model_id,
             is_dead: false,
             schedule: None,
@@ -728,7 +728,7 @@ impl AppState {
     pub fn add_mouflon_key(&self, pkey: &str, pdkey: &str) -> Result<()> {
         let mut data = self.data.write();
         data.mouflon_keys.keys.insert(pkey.to_string(), pdkey.to_string());
-        data.mouflon_keys.manual_updated_at = Some(chrono::Utc::now().to_rfc3339());
+        data.mouflon_keys.manual_updated_at = Some(chrono::Local::now().to_rfc3339());
         drop(data);
         self.save()
     }
@@ -738,7 +738,7 @@ impl AppState {
     pub fn remove_mouflon_key(&self, pkey: &str) -> Result<()> {
         let mut data = self.data.write();
         data.mouflon_keys.keys.remove(pkey);
-        data.mouflon_keys.manual_updated_at = Some(chrono::Utc::now().to_rfc3339());
+        data.mouflon_keys.manual_updated_at = Some(chrono::Local::now().to_rfc3339());
         drop(data);
         self.save()
     }

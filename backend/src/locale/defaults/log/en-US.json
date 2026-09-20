@@ -101,7 +101,7 @@
     "recordingConcurrencyAdjusted": "recording: effective={effective} (user={user}, running={running}, cpu={cpu}%, mem={mem}%, mem_avail={avail}MB)",
     "cgfRefreshStart": "CGF schedule refresh: {count} streamer(s)",
     "cgfRefreshUpdated": "CGF schedule updated for {username}",
-    "cgfRefreshUnavailable": "CGF schedule not available for {username} (absent in CGF or network error)",
+    "cgfRefreshUnavailable": "CGF schedule not available for {username} (CGF does not have this anchor data or there is a network error)",
     "cgfRefreshDone": "CGF schedule refresh pass complete"
   },
   "watcher": {

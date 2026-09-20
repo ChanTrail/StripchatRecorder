@@ -79,8 +79,8 @@ pub fn list_recordings_inner(
     // 1. Currently active recording session_dirs (real-time progress)
     for (session_dir, started_dt) in &sessions {
         let session_dir_str = session_dir.to_string_lossy().to_string();
-        let local: chrono::DateTime<chrono::Local> = (*started_dt).into();
-        let elapsed = chrono::Utc::now()
+        let local = started_dt;
+        let elapsed = chrono::Local::now()
             .signed_duration_since(*started_dt)
             .num_seconds()
             .max(0) as u64;

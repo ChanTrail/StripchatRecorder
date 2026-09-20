@@ -213,6 +213,25 @@ fn scan_and_ensure_meta(
             {
                 return true;
             }
+            // 若扫描的是视频文件（有扩展名），还需检查同名的 session_dir 是否在追踪中。
+            // ts_merge 完成前后处理以 session_dir 路径为 key 入队；ts_merge 完成后
+            // meta.video_path 已更新为 .mkv，但 pp_queue 里的 key 仍是 session_dir，
+            // 若不检查 session_dir，scan 扫到 .mkv 时会误判为陈旧而重复触发后处理。
+            //
+            // If scanning a video file (has an extension), also check if the corresponding
+            // session_dir (same parent and stem, no extension) is tracked.
+            // Post-processing is queued with the session_dir path as key; after ts_merge
+            // meta.video_path switches to .mkv, but the pp_queue key remains the session_dir.
+            // Without this check, scanning a .mkv would be misclassified as stale and
+            // trigger a duplicate post-processing run.
+            if path.extension().is_some() {
+                if let (Some(parent), Some(stem)) = (path.parent(), path.file_stem()) {
+                    let session_dir = parent.join(stem);
+                    if state.pp_queue.is_tracked(&session_dir.to_string_lossy()) {
+                        return true;
+                    }
+                }
+            }
             false
         }
         _ => false,

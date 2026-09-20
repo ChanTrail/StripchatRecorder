@@ -35,7 +35,7 @@ pub struct RecordingSession {
     /// 录制会话目录路径（存放 .ts 分片）/ Recording session directory path (stores .ts segments)
     pub dir_path: PathBuf,
     /// 录制开始时间 / Recording start time
-    pub started_at: chrono::DateTime<chrono::Utc>,
+    pub started_at: chrono::DateTime<chrono::Local>,
     /// 停止录制的信号发送端 / Sender to signal recording stop
     stop_tx: mpsc::Sender<()>,
 }
@@ -114,7 +114,7 @@ impl RecorderManager {
 
     /// 获取所有活跃录制会话的目录路径和开始时间列表。
     /// Get a list of all active recording session directory paths and start times.
-    pub fn get_active_sessions(&self) -> Vec<(PathBuf, chrono::DateTime<chrono::Utc>)> {
+    pub fn get_active_sessions(&self) -> Vec<(PathBuf, chrono::DateTime<chrono::Local>)> {
         self.sessions
             .read()
             .values()
@@ -170,7 +170,7 @@ impl RecorderManager {
 
         let session = RecordingSession {
             dir_path: session_dir.clone(),
-            started_at: chrono::Utc::now(),
+            started_at: chrono::Local::now(),
             stop_tx,
         };
 
@@ -226,7 +226,7 @@ impl RecorderManager {
             }
 
             let record_duration_secs = manager.sessions.read().get(&username).map(|s| {
-                chrono::Utc::now()
+                chrono::Local::now()
                     .signed_duration_since(s.started_at)
                     .num_seconds()
                     .max(0) as u64
@@ -279,10 +279,9 @@ impl RecorderManager {
                     .unwrap_or("unknown");
                 let started_at =
                     crate::recording::service::parse_timestamp_from_stem_pub(stem)
-                        .unwrap_or_else(|| {
-                            let local: chrono::DateTime<chrono::Local> = chrono::Utc::now().into();
-                            local.to_rfc3339()
-                        });
+                    .unwrap_or_else(|| {
+                        chrono::Local::now().to_rfc3339()
+                    });
 
                 // session_dir 作为流水线的初始输入和 meta 占位路径
                 // session_dir acts as both pipeline initial input and meta placeholder path
@@ -364,7 +363,7 @@ impl RecorderManager {
         };
 
         // 更新 sessions 表中的 dir_path，并记录开始时间
-        let now = chrono::Utc::now();
+        let now = chrono::Local::now();
         {
             let mut sessions = self.sessions.write();
             if let Some(session) = sessions.get_mut(username) {

@@ -413,19 +413,19 @@ pub fn start_all(
 /// settings changes take effect on the next cycle.
 /// 对所有非失效主播并发执行一轮 CGF schedule 刷新。
 ///
-/// 并发度上限为 10（`CGF_REFRESH_CONCURRENCY`），以避免触发 CGF 免费 API 的 rate limit。
+/// 并发度上限为 5（`CGF_REFRESH_CONCURRENCY`），以避免触发 CGF 免费 API 的 rate limit。
 /// 每个请求在获取信号量后立即发出，完成后释放，下一个等待中的请求随即开始。
 /// 代理配置在每次 pass 开始前从 AppState 读取一次。
 ///
 /// Run one full CGF schedule refresh pass for all non-dead streamers with bounded concurrency.
 ///
-/// At most `CGF_REFRESH_CONCURRENCY` (= 10) requests run in parallel to avoid
+/// At most `CGF_REFRESH_CONCURRENCY` (= 5) requests run in parallel to avoid
 /// triggering CGF's rate limits. Each request acquires the semaphore before sending
 /// and releases it on completion, allowing the next waiting request to start immediately.
 /// The proxy URL is read from AppState once at the start of each pass.
 async fn run_schedule_refresh_pass(app_state: &Arc<AppState>) {
     /// 最大并发请求数 / Maximum concurrent requests
-    const CGF_REFRESH_CONCURRENCY: usize = 10;
+    const CGF_REFRESH_CONCURRENCY: usize = 5;
 
     let proxy = app_state.get_settings().cgf_proxy_url;
 
@@ -498,12 +498,12 @@ pub fn start_schedule_refresh(app_state: Arc<AppState>) {
         // Immediate full refresh on startup
         run_schedule_refresh_pass(&app_state).await;
 
-        // 之后每天 UTC 00:00 执行
-        // Then run daily at UTC 00:00
+        // 之后每天本地时间 00:00 执行
+        // Then run daily at local midnight
         loop {
-            // 计算距下一个 UTC 00:00 的秒数
-            // Compute seconds until the next UTC midnight
-            let now = chrono::Utc::now();
+            // 计算距下一个本地时间 00:00 的秒数
+            // Compute seconds until the next local midnight
+            let now = chrono::Local::now();
             let secs_until_midnight = {
                 use chrono::Timelike as _;
                 let elapsed_today = now.hour() as u64 * 3600

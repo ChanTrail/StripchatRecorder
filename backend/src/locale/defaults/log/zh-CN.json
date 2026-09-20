@@ -101,7 +101,7 @@
     "recordingConcurrencyAdjusted": "录制并发度调整：有效值={effective}（用户配置={user}，录制中={running}，cpu={cpu}%，内存={mem}%，可用={avail}MB）",
     "cgfRefreshStart": "CGF schedule 刷新：{count} 个主播",
     "cgfRefreshUpdated": "CGF schedule 已更新：{username}",
-    "cgfRefreshUnavailable": "CGF schedule 不可用：{username}（CGF 无此主播或网络错误）",
+    "cgfRefreshUnavailable": "CGF schedule 不可用：{username}（CGF 无此主播数据或网络错误）",
     "cgfRefreshDone": "CGF schedule 刷新完成"
   },
   "watcher": {

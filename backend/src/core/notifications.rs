@@ -9,7 +9,6 @@
 //! later in the same process lifetime can still pull unread notifications via
 //! GET /api/notifications.
 
-use chrono::Utc;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -114,7 +113,7 @@ impl NotificationStore {
             message: message.into(),
             message_key: None,
             message_args: None,
-            created_at: Utc::now().to_rfc3339(),
+            created_at: chrono::Local::now().to_rfc3339(),
             action,
         };
         inner.notifications.push(n.clone());
@@ -204,7 +203,7 @@ impl NotificationStore {
             message: message.into(),
             message_key: Some(message_key.into()),
             message_args,
-            created_at: Utc::now().to_rfc3339(),
+            created_at: chrono::Local::now().to_rfc3339(),
             action: None,
         });
     }
@@ -247,7 +246,7 @@ impl NotificationStore {
             message: message.into(),
             message_key: Some(message_key.into()),
             message_args,
-            created_at: Utc::now().to_rfc3339(),
+            created_at: chrono::Local::now().to_rfc3339(),
             action,
         };
         inner.notifications.push(n.clone());

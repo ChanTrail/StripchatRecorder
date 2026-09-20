@@ -159,7 +159,7 @@ pub fn schedule_poll_interval(
         None => return base_secs, // 无数据：不节流
     };
 
-    let now = chrono::Utc::now();
+    let now = chrono::Local::now();
     // chrono weekday: Mon=0…Sun=6;  CGF convention: Sun=0…Sat=6
     let cgf_day = now.weekday().num_days_from_sunday() as usize;
     let bucket = (now.hour() * 2 + now.minute() / 30) as usize;
@@ -349,12 +349,12 @@ impl StatusMonitor {
         let (dead_tx, mut dead_rx) = tokio::sync::mpsc::channel::<String>(16);
 
         // 限制同时进行中的 API 请求数，避免主播过多时同时打出大量请求触发限流。
-        // 10 路并发足以在正常延迟下及时完成一轮轮询，同时对 SC 服务器友好。
+        // 5 路并发足以在正常延迟下及时完成一轮轮询，同时对 SC 服务器友好。
         //
         // Limit concurrent in-flight API requests to prevent rate-limiting when
-        // there are many tracked streamers. 10 concurrent requests is enough to
+        // there are many tracked streamers. 5 concurrent requests is enough to
         // finish a round quickly under normal latency while remaining polite to SC.
-        const POLL_CONCURRENCY: usize = 10;
+        const POLL_CONCURRENCY: usize = 5;
         let sem = Arc::new(tokio::sync::Semaphore::new(POLL_CONCURRENCY));
 
         let active_streamers: Vec<_> = streamers
