@@ -109,7 +109,7 @@ The following options are available in the Web UI under Settings:
 | Recording file duration (s)    | Max duration per segment file; `0` = unlimited; useful for splitting long broadcasts                                                                    |
 | Auto-record on stream start    | Whether newly added streamers have auto-record enabled by default                                                                                       |
 | Max post-process tmp dir (GB)  | Size limit for temporary files created by post-processing modules; oldest files are deleted when exceeded; `0` = unlimited, default 50 GB               |
-| Check for beta updates         | Whether to also check pre-release (beta/rc) builds; forced on for beta builds                                                                           |
+| Check for beta updates         | Whether to also check pre-release (beta) builds; forced on for beta builds                                                                           |
 
 ### Network Proxies and Mirror
 

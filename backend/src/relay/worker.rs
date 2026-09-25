@@ -103,7 +103,7 @@ async fn worker_loop(
             Err(_) => {
                 // CDN 失败（可能真的离线），回退到完整 API 查询做确认
                 // CDN failed (possibly really offline); fall back to full API query
-                match api.get_stream_info(&username, true, Some(mid)).await {
+                match api.get_stream_info(&username, true, Some(mid), false).await {
                     Ok(info) if info.playlist_url.is_some() => {
                         // 同步 backfill model_id（改名后新 model_id 可能不同）
                         if let Some(new_mid) = info.model_id {
@@ -134,7 +134,7 @@ async fn worker_loop(
     } else {
         // 没有缓存 model_id：必须走完整 API 查询
         // No cached model_id: must use full API query
-        match api.get_stream_info(&username, true, None).await {
+        match api.get_stream_info(&username, true, None, false).await {
             Ok(info) if info.playlist_url.is_some() => {
                 // 回填 model_id 供下次直接使用
                 // Backfill model_id for next time
@@ -360,7 +360,7 @@ async fn feed_live(
                     // 回退到完整 API 查询（含改名回退）
                     // Fall back to full API query (with rename fallback)
                     let known_mid = if model_id != 0 { Some(model_id) } else { None };
-                    match api.get_stream_info(username, true, known_mid).await {
+                    match api.get_stream_info(username, true, known_mid, false).await {
                         Ok(info) if info.playlist_url.is_some() => {
                             if let Some(mid) = info.model_id {
                                 app_state.backfill_model_id(username, mid);

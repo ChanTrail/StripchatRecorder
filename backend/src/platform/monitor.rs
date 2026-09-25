@@ -296,13 +296,16 @@ impl StatusMonitor {
         }
     }
 
-    /// 监控主循环：立即轮询一次，然后按配置的间隔周期性轮询。
-    /// Monitor main loop: poll once immediately, then poll periodically at the configured interval.
+    /// 监控主循环：延迟 10 秒后轮询一次，然后按配置的间隔周期性轮询。
+    /// Monitor main loop: wait 10 s then poll once, then poll periodically at the configured interval.
     async fn monitor_loop(
         self: Arc<Self>,
         emitter: Arc<dyn Emitter>,
         mut restart_rx: mpsc::Receiver<()>,
     ) {
+        // 延迟 10 秒等网络稳定后再发起首次轮询，避免启动瞬间网络不稳导致报错
+        // Wait 10 s for network to stabilize before the first poll, avoiding errors on startup
+        tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
         self.poll_all_with_emitter(&emitter).await;
 
         loop {
@@ -517,7 +520,7 @@ impl StatusMonitor {
         // not currently recording + this streamer has auto-record on + global auto-record is on.
         // The manual-record button does not rely on this cached URL; it fetches on demand.
         let need_playlist = !is_recording && streamer.auto_record && auto_record_global;
-        let info = match api.get_stream_info(&username, need_playlist, streamer.model_id).await {
+        let info = match api.get_stream_info(&username, need_playlist, streamer.model_id, false).await {
             Ok(i) => i,
             Err(crate::core::error::AppError::UserNotFound(_)) => {
                 // 用户名查不到，且 model_id 反查也失败（get_stream_info 已处理改名回退）
@@ -618,7 +621,18 @@ impl StatusMonitor {
                 info.is_recordable
             },
             status: info.status.clone(),
-            thumbnail_url: info.thumbnail_url.clone(),
+            // 离线时 thumbnail_url 为 None（日常轮询不请求 cam 接口），
+            // 用 StreamerData 中持久化的缓存值兜底，保证前端始终有预览图可显示。
+            // 在线时直接用 API 返回的直播缩略图，不使用缓存。
+            //
+            // When offline, thumbnail_url is None (cam endpoint not queried during routine polling);
+            // fall back to the cached value from StreamerData so the frontend always has a preview.
+            // When online, use the live thumbnail from the API directly — cache is irrelevant.
+            thumbnail_url: if info.is_online {
+                info.thumbnail_url.clone()
+            } else {
+                info.thumbnail_url.clone().or_else(|| streamer.cached_preview_url.clone())
+            },
             playlist_url: info.playlist_url.clone(),
             playlist_resolution: api.preferred_resolution(),
             playlist_prefers_higher: api.prefers_higher_resolution(),

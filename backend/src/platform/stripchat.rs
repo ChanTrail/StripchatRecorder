@@ -436,6 +436,23 @@ impl StripchatApi {
             .map(|s| s.to_string())
     }
 
+    /// 直接从 v2/models/{model_id}/cam 接口获取主播的 previewUrl。
+    ///
+    /// 供定时刷新任务使用：不关心在线状态，专门更新 `cached_preview_url` 字段。
+    /// 与 `get_cam_preview_url` 逻辑相同但公开，避免通过 `get_stream_info` 绕一圈。
+    ///
+    /// Fetch the streamer's previewUrl directly from v2/models/{model_id}/cam.
+    ///
+    /// Used by the scheduled refresh task: ignores online status, only updates
+    /// the `cached_preview_url` field. Same logic as `get_cam_preview_url` but
+    /// public, avoiding a full round-trip through `get_stream_info`.
+    pub async fn fetch_preview_url(&self, model_id: i64) -> Option<String> {
+        let json = self.fetch_cam_json("", model_id).await?;
+        json["user"]["user"]["previewUrl"]
+            .as_str()
+            .map(|s| s.to_string())
+    }
+
     /// 请求 v2/models/{model_id}/cam 接口，返回解析后的 JSON。
     /// 供 get_group_show_detail 和 get_cam_preview_url 共用，避免重复请求逻辑。
     ///
@@ -598,6 +615,7 @@ impl StripchatApi {
         model_id: i64,
         known_username: &str,
         fetch_playlist: bool,
+        fetch_offline_preview: bool,
     ) -> Result<StreamInfo> {
         let path = format!("/api/front/v2/broadcasts/{}", model_id);
         let url = self.api_url(&format!("https://stripchat.com{}", path));
@@ -720,9 +738,15 @@ impl StripchatApi {
                 item["previewUrl"].as_str().map(|s| s.to_string())
             }
         } else {
-            // 离线时无 previewUrl，回退到 cam 接口获取
-            // Offline: no previewUrl, fall back to cam endpoint
-            self.get_cam_preview_url(username, model_id).await
+            // 离线时：仅当 fetch_offline_preview=true 时才请求 cam 接口（定时刷新用），
+            // 日常轮询直接返回 None，由调用方使用缓存值。
+            // Offline: only call cam endpoint when fetch_offline_preview=true (for scheduled refresh);
+            // daily polling returns None and the caller uses the cached value instead.
+            if fetch_offline_preview {
+                self.get_cam_preview_url(username, model_id).await
+            } else {
+                None
+            }
         };
 
         let is_recordable = is_live && status_text == "public";
@@ -771,16 +795,17 @@ impl StripchatApi {
         username: &str,
         fetch_playlist: bool,
         known_model_id: Option<i64>,
+        fetch_offline_preview: bool,
     ) -> Result<StreamInfo> {
         if let Some(model_id) = known_model_id {
             // 主路径：直接用 model_id 走 v2 接口
             // Primary path: query v2 directly by model_id
-            self.fetch_stream_info_by_model_id(model_id, username, fetch_playlist)
+            self.fetch_stream_info_by_model_id(model_id, username, fetch_playlist, fetch_offline_preview)
                 .await
         } else {
             // 兼容路径：旧数据尚无 model_id，回退到 v1 by-username
             // Compat path: old data with no model_id, fall back to v1 by-username
-            self.fetch_stream_info_by_username(username, fetch_playlist)
+            self.fetch_stream_info_by_username(username, fetch_playlist, fetch_offline_preview)
                 .await
         }
     }
@@ -797,6 +822,7 @@ impl StripchatApi {
         &self,
         username: &str,
         fetch_playlist: bool,
+        fetch_offline_preview: bool,
     ) -> Result<StreamInfo> {
         let path = format!("/api/front/v1/broadcasts/{}", username);
         let url = self.api_url(&format!("https://stripchat.com{}", path));
@@ -869,11 +895,15 @@ impl StripchatApi {
                 item["previewUrl"].as_str().map(|s| s.to_string())
             }
         } else {
-            // v1/broadcasts 离线数据不含 previewUrl，回退到 cam 接口获取
-            // v1/broadcasts offline data has no previewUrl; fall back to cam endpoint
-            match model_id {
-                Some(mid) => self.get_cam_preview_url(username, mid).await,
-                None => None,
+            // v1/broadcasts 离线数据不含 previewUrl，仅当 fetch_offline_preview=true 时才请求 cam 接口
+            // v1/broadcasts offline data has no previewUrl; only call cam endpoint when fetch_offline_preview=true
+            if fetch_offline_preview {
+                match model_id {
+                    Some(mid) => self.get_cam_preview_url(username, mid).await,
+                    None => None,
+                }
+            } else {
+                None
             }
         };
 

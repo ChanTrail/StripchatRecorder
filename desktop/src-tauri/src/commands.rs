@@ -95,7 +95,7 @@ pub async fn add_streamer(
         match api_res {
             Err(e) => { failed += 1; tracing::warn!("add_streamer: api init failed for {username}: {e}"); }
             Ok(api) => {
-                match api.get_stream_info(&username, false, None).await {
+                match api.get_stream_info(&username, false, None, false).await {
                     Err(_) => { failed += 1; }
                     Ok(info) => {
                         let model_id = info.model_id;
@@ -171,7 +171,7 @@ pub async fn start_recording(
         )
         .map_err(map_err)?
         .with_mouflon_keys(state.app_state.get_mouflon_keys());
-        let info = api.get_stream_info(&username, true, None).await.map_err(map_err)?;
+        let info = api.get_stream_info(&username, true, None, false).await.map_err(map_err)?;
         info.playlist_url
             .ok_or_else(|| format!("Stream offline: {}", username))?
     };
@@ -210,7 +210,7 @@ pub async fn verify_streamer(
         Some(settings.sc_mirror_scheme.as_str()),
     )
     .map_err(map_err)?;
-    match api.get_stream_info(&username, false, None).await {
+    match api.get_stream_info(&username, false, None, false).await {
         Ok(_) => Ok(serde_json::json!({ "exists": true })),
         Err(AppError::UserNotFound(_)) => Ok(serde_json::json!({ "exists": false })),
         Err(e) => Err(e.to_string()),

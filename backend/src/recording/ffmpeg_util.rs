@@ -14,12 +14,89 @@ use crate::core::no_window::NoWindowExt;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::LazyLock;
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::Semaphore;
 
-/// 全局 ffmpeg 并发信号量，限制同时运行的 ffmpeg 进程数（最多 4 个）。
-/// Global ffmpeg concurrency semaphore, limiting simultaneous ffmpeg processes (max 4).
-static FFMPEG_SEMAPHORE: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(4));
+/// 当前 FFmpeg 信号量许可数（由 `set_ffmpeg_concurrency` 维护，用于差值更新）。
+/// Current FFmpeg semaphore permit count (maintained by `set_ffmpeg_concurrency` for delta updates).
+static FFMPEG_SEMAPHORE_PERMITS: AtomicUsize = AtomicUsize::new(0);
+
+/// 全局 FFmpeg 并发信号量。
+/// 由 `set_ffmpeg_concurrency` 首次调用时（`AppState::new()` 阶段）初始化，
+/// 此后只通过该函数的差值逻辑动态调整，不设任何硬编码初始值。
+///
+/// Global FFmpeg concurrency semaphore.
+/// Initialized on the first call to `set_ffmpeg_concurrency` (during `AppState::new()`),
+/// then adjusted dynamically via delta logic in that function — no hardcoded initial value.
+static FFMPEG_SEMAPHORE: OnceLock<Semaphore> = OnceLock::new();
+
+/// 获取 FFmpeg 信号量引用，若尚未初始化则 panic（调用方保证在 `AppState::new()` 之后使用）。
+/// Get a reference to the FFmpeg semaphore, panicking if not yet initialized
+/// (callers guarantee use only after `AppState::new()`).
+fn ffmpeg_semaphore() -> &'static Semaphore {
+    FFMPEG_SEMAPHORE.get().expect("ffmpeg semaphore not initialized — call set_ffmpeg_concurrency first")
+}
+
+/// 动态更新 FFmpeg 并发许可数，使其与后处理并发数（`max_pp_concurrent`）保持一致。
+///
+/// **初始化**：首次调用（`AppState::new()` 阶段）会创建信号量，许可数由
+/// `resolve_concurrency(n)` 决定（`n=0` 时为自动，即 CPU × 2）。
+///
+/// **后续更新**：用差值法调整现有信号量：
+/// - 新 > 旧：`add_permits(diff)` 增加许可
+/// - 新 < 旧：`try_acquire_many(diff).forget()` 减少可用许可
+///   （若当前全部被占用则延迟消耗，持有者 drop 时自然归还并被消耗）
+///
+/// Dynamically update the FFmpeg concurrency permit count to match `max_pp_concurrent`.
+///
+/// **Initialization**: the first call (during `AppState::new()`) creates the semaphore
+/// with a permit count determined by `resolve_concurrency(n)` (auto = CPU × 2 when n=0).
+///
+/// **Subsequent updates**: adjusts the existing semaphore with a delta approach:
+/// - new > old: `add_permits(diff)`
+/// - new < old: `try_acquire_many(diff).forget()` — deferred if all permits are held
+pub fn set_ffmpeg_concurrency(n: usize) {
+    let new_permits = crate::postprocess::queue::resolve_concurrency(n);
+
+    // 首次调用：初始化信号量，不做差值运算
+    // First call: initialize the semaphore, no delta needed
+    if FFMPEG_SEMAPHORE.get().is_none() {
+        let _ = FFMPEG_SEMAPHORE.set(Semaphore::new(new_permits));
+        FFMPEG_SEMAPHORE_PERMITS.store(new_permits, Ordering::Relaxed);
+        tracing::debug!("ffmpeg_concurrency initialized: permits={}", new_permits);
+        return;
+    }
+
+    let old_permits = FFMPEG_SEMAPHORE_PERMITS.swap(new_permits, Ordering::Relaxed);
+
+    match new_permits.cmp(&old_permits) {
+        std::cmp::Ordering::Greater => {
+            let diff = new_permits - old_permits;
+            ffmpeg_semaphore().add_permits(diff);
+        }
+        std::cmp::Ordering::Less => {
+            let diff = old_permits - new_permits;
+            // try_acquire_many 在许可不足时直接失败（不阻塞），forget 永久移除这些许可。
+            // 若许可全被占用，持有者 drop 后归还的许可会超出 new_permits，
+            // 下一次 acquire 完成后自然消耗到目标数。
+            //
+            // try_acquire_many fails fast if permits are insufficient; forget removes
+            // them permanently. If all permits are held, the excess returned on drop
+            // will be consumed naturally after the next acquire completes.
+            if let Ok(permit) = ffmpeg_semaphore().try_acquire_many(diff as u32) {
+                permit.forget();
+            }
+        }
+        std::cmp::Ordering::Equal => {}
+    }
+
+    tracing::debug!(
+        "ffmpeg_concurrency updated: old={}, new={}",
+        old_permits,
+        new_permits
+    );
+}
 
 /// 检查 ffmpeg 是否在 PATH 中可用。
 /// Check if ffmpeg is available on PATH.
@@ -34,13 +111,17 @@ pub fn ffmpeg_available() -> bool {
 }
 
 /// 使用 ffmpeg 将 fMP4 数据转换为 MPEG-TS 格式（通过 stdin 管道传入）。
+///
+/// 录制分片转码是实时路径，不参与后处理 FFmpeg 并发信号量的排队——信号量只约束
+/// 后处理模块（`pipeline/exec.rs`）启动的 FFmpeg 进程，保证录制完整性优先。
+///
 /// Convert fMP4 data to MPEG-TS format using ffmpeg (piped via stdin).
+///
+/// Segment transcoding is on the real-time recording path and does NOT go through
+/// the post-processing FFmpeg concurrency semaphore — the semaphore only throttles
+/// FFmpeg processes spawned by post-processing modules (`pipeline/exec.rs`),
+/// ensuring recording integrity takes priority.
 pub(crate) async fn convert_to_ts(fmp4_data: Vec<u8>, ts_path: &PathBuf) -> Result<()> {
-    let _permit = FFMPEG_SEMAPHORE
-        .acquire()
-        .await
-        .map_err(|e| AppError::Other(format!("ffmpeg semaphore: {}", e)))?;
-
     let mut child = tokio::process::Command::new("ffmpeg")
         .args(["-y", "-i", "pipe:0", "-c", "copy", "-f", "mpegts"])
         .arg(ts_path)

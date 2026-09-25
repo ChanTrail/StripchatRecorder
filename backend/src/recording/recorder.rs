@@ -691,7 +691,7 @@ impl RecorderManager {
                                 tracing::error!("{}", crate::tl!("recorder.fetchErrCdnRefresh", username = username, count = consecutive_cdn_failures)
                                 );
                                 consecutive_cdn_failures = 0;
-                                match api.get_stream_info(username, true, known_model_id()).await {
+                                match api.get_stream_info(username, true, known_model_id(), false).await {
                                     Ok(info) => {
                                         if let Some(new_url) = info.playlist_url {
                                             tracing::info!("{}", crate::tl!("recorder.playlistRefreshed", username = username));
@@ -721,7 +721,7 @@ impl RecorderManager {
                         Err(e) => {
                             tracing::error!("{}", crate::tl!("recorder.fetchErrRefresh", username = username, error = e));
                             consecutive_cdn_failures = 0;
-                            match api.get_stream_info(username, true, known_model_id()).await {
+                            match api.get_stream_info(username, true, known_model_id(), false).await {
                                 Ok(info) => {
                                     if let Some(new_url) = info.playlist_url {
                                         tracing::info!("{}", crate::tl!("recorder.playlistRefreshed", username = username));

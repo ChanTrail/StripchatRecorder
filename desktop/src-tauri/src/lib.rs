@@ -23,7 +23,7 @@ use stripchat_recorder_lib::{
         meta::schedule_meta_version_check,
         recorder::RecorderManager,
     },
-    server::scheduler::{start_monitor, start_mouflon_sync, start_meta_cleanup, start_pp_load_monitor},
+    server::scheduler::{start_monitor, start_mouflon_sync, start_meta_cleanup, start_pp_load_monitor, start_schedule_refresh, start_preview_url_refresh},
     watcher::fs_watch::{start_modules_dir_watcher, start_recordings_dir_watcher},
 };
 
@@ -255,6 +255,14 @@ async fn setup_app(app_handle: tauri::AppHandle) {
     // 后处理并发度负载自适应调节器（每 5 秒采样 CPU/内存动态调整并发许可）
     // Post-processing concurrency load-adaptive regulator (samples CPU/mem every 5s)
     start_pp_load_monitor(Arc::clone(&app_state));
+
+    // CGF schedule 定时刷新（启动后 15 秒执行一次，之后每天 0 点执行）
+    // CGF schedule periodic refresh (once 15 s after launch, then daily at midnight)
+    start_schedule_refresh(Arc::clone(&app_state));
+
+    // 离线预览图 URL 定时刷新（启动后 30 秒执行一次，之后每天 0 点执行）
+    // Offline preview URL periodic refresh (once 30 s after launch, then daily at midnight)
+    start_preview_url_refresh(Arc::clone(&app_state));
 
     // 输出目录维护调度器：扫描/修复 meta，触发遗漏后处理，合并遗留 TS 分片
     // Output directory maintenance: scan/repair meta, trigger missed pp, merge leftover segments

@@ -314,7 +314,7 @@ pub async fn start_recording(
             &settings.resolution_preference,
         );
         let info = api
-            .get_stream_info(&name, true, None)
+            .get_stream_info(&name, true, None, false)
             .await
             .map_err(ApiError::from)?;
         info.playlist_url

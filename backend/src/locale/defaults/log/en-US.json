@@ -102,7 +102,9 @@
     "cgfRefreshStart": "CGF schedule refresh: {count} streamer(s)",
     "cgfRefreshUpdated": "CGF schedule updated for {username}",
     "cgfRefreshUnavailable": "CGF schedule not available for {username} (CGF does not have this anchor data or there is a network error)",
-    "cgfRefreshDone": "CGF schedule refresh pass complete"
+    "cgfRefreshDone": "CGF schedule refresh pass complete",
+    "previewRefreshStart": "Offline preview URL refresh: {count} streamer(s)",
+    "previewRefreshDone": "Offline preview URL refresh pass complete"
   },
   "watcher": {
     "recordingsCreateDirFailed": "Failed to create watch dir {dir}: {error}",

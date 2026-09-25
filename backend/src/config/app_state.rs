@@ -301,6 +301,16 @@ pub struct StreamerData {
     /// (~448 chars vs ~1.5 KB for raw JSON floats, ~3× smaller).
     #[serde(default, with = "schedule_serde")]
     pub schedule: Option<Vec<Vec<f32>>>,
+    /// 主播离线时的预览图 URL 缓存（来自 v2/models/{model_id}/cam 接口）。
+    /// 每天 0 点由定时刷新任务统一更新，轮询期间离线时直接使用此缓存，
+    /// 避免每次轮询都向 cam 接口发起 HTTP 请求。
+    ///
+    /// Cached offline preview image URL (from v2/models/{model_id}/cam endpoint).
+    /// Updated daily at midnight by the scheduled refresh task; used directly
+    /// during polling when the streamer is offline, avoiding a cam endpoint
+    /// HTTP request on every poll cycle.
+    #[serde(default)]
+    pub cached_preview_url: Option<String>,
 }
 
 /// 自定义 serde 模块：将 `Option<Vec<Vec<f32>>>` 序列化为 Base64 字符串以节省空间。
@@ -511,6 +521,9 @@ impl AppState {
         // Initialize the semaphore from the max_pp_concurrent setting
         let init_concurrency = state.data.read().settings.max_pp_concurrent;
         state.pp_queue.set_concurrency(init_concurrency);
+        // 同步初始化 FFmpeg 并发信号量
+        // Also initialize the FFmpeg concurrency semaphore to match
+        crate::recording::ffmpeg_util::set_ffmpeg_concurrency(init_concurrency);
 
         Ok(state)
     }
@@ -554,8 +567,60 @@ impl AppState {
             || old.mouflon_sync_token != settings.mouflon_sync_token;
         let pp_concurrent_changed = old.max_pp_concurrent != settings.max_pp_concurrent;
         let new_pp_concurrent = settings.max_pp_concurrent;
+        let output_dir_changed = old.output_dir != settings.output_dir;
+        let new_output_dir = settings.output_dir.clone();
+        let old_output_dir = old.output_dir.clone();
         self.data.write().settings = settings;
         self.save()?;
+
+        // 若 TS 分片输出目录发生变化，检查 ts_merge 节点的合并输出目录是否遵循
+        // "与 TS 分片目录同级的 recordings 子目录"的默认关系；若是则联动更新，
+        // 若用户已手动配置为其他路径则保持不变。
+        //
+        // If the TS fragment output directory changed, check whether the ts_merge node's
+        // output_dir follows the default convention of "a 'recordings' sibling of the TS
+        // fragment dir"; if so, update it to match the new location. If the user configured
+        // a custom path, leave it unchanged.
+        if output_dir_changed {
+            let old_default = std::path::PathBuf::from(&old_output_dir)
+                .parent()
+                .map(|p| p.join("recordings"));
+            let mut pipeline = self.data.read().pipeline.clone();
+            let mut pipeline_changed = false;
+            for node in &mut pipeline.nodes {
+                if node.module_id != "ts_merge" {
+                    continue;
+                }
+                let current_ts_out = node.params
+                    .get("output_dir")
+                    .and_then(|v| v.as_str())
+                    .map(|s| std::path::PathBuf::from(s.trim()));
+                // 仅当当前值等于旧的默认推导路径时才联动更新
+                // Only update when the current value equals the old default-derived path
+                if let (Some(old_def), Some(current)) = (&old_default, &current_ts_out)
+                    && current == old_def {
+                        let new_default = std::path::PathBuf::from(&new_output_dir)
+                            .parent()
+                            .map(|p| p.join("recordings"))
+                            .unwrap_or_else(|| std::path::PathBuf::from(&new_output_dir));
+                        node.params.insert(
+                            "output_dir".to_string(),
+                            serde_json::json!(new_default.to_string_lossy()),
+                        );
+                        pipeline_changed = true;
+                        tracing::info!(
+                            "ts_merge output_dir synced: {} → {}",
+                            old_def.display(),
+                            new_default.display()
+                        );
+                    }
+            }
+            if pipeline_changed {
+                self.data.write().pipeline = pipeline;
+                self.save()?;
+            }
+        }
+
         if poll_interval_changed
             && let Some(tx) = self.poll_interval_notify_tx.read().as_ref() {
             let _ = tx.try_send(());
@@ -566,6 +631,9 @@ impl AppState {
         }
         if pp_concurrent_changed {
             self.pp_queue.set_concurrency(new_pp_concurrent);
+            // 同步更新 FFmpeg 并发上限，使 FFmpeg 信号量与后处理槽位数保持一致
+            // Sync FFmpeg concurrency cap to match the new post-processing slot count
+            crate::recording::ffmpeg_util::set_ffmpeg_concurrency(new_pp_concurrent);
         }
         // 用户修改录制并发数时，重置 effective_max_concurrent 为新配置值，
         // 下次负载采样时会再次动态调整。
@@ -606,6 +674,7 @@ impl AppState {
             model_id,
             is_dead: false,
             schedule: None,
+            cached_preview_url: None,
         });
         drop(data);
         self.save()
@@ -709,6 +778,22 @@ impl AppState {
             drop(data);
             let _ = self.save();
         }
+    }
+
+    /// 更新指定主播的离线预览图 URL 缓存（每天 0 点由定时刷新任务调用）。
+    /// 仅当值确实发生变化时才写盘，避免无意义的 I/O。
+    ///
+    /// Update the cached offline preview image URL for a streamer
+    /// (called daily by the scheduled refresh task at midnight).
+    /// Only writes to disk when the value actually changes.
+    pub fn set_cached_preview_url(&self, username: &str, url: Option<String>) {
+        let mut data = self.data.write();
+        if let Some(s) = data.streamers.iter_mut().find(|s| s.username == username)
+            && s.cached_preview_url != url {
+                s.cached_preview_url = url;
+                drop(data);
+                let _ = self.save();
+            }
     }
 
     /// 获取所有 Mouflon 解密密钥的克隆副本（仅 keys 部分，供录制/转发使用）。
