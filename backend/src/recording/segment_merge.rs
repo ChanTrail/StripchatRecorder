@@ -212,21 +212,29 @@ pub fn startup_merge_leftover_segments(
     merged_paths
 }
 
-/// 递归清理输出目录下的所有空目录。
-/// Recursively remove all empty directories under the output directory.
-pub fn startup_remove_empty_dirs(output_dir: &std::path::Path) {
+/// 递归清理输出目录下的所有空目录，跳过活跃录制会话的目录。
+/// Recursively remove all empty directories under the output directory,
+/// skipping directories locked by active recording sessions.
+pub fn startup_remove_empty_dirs(
+    output_dir: &std::path::Path,
+    recorder: &crate::recording::recorder::RecorderManager,
+) {
     if !output_dir.exists() {
         return;
     }
 
-    let removed = remove_empty_dirs_recursive(output_dir, false);
+    let removed = remove_empty_dirs_recursive(output_dir, false, recorder);
     if removed > 0 {
         tracing::info!("{}", crate::tl!("segment.startupRemovedEmpty", count = removed, dir = output_dir.display())
         );
     }
 }
 
-fn remove_empty_dirs_recursive(dir: &std::path::Path, remove_self: bool) -> usize {
+fn remove_empty_dirs_recursive(
+    dir: &std::path::Path,
+    remove_self: bool,
+    recorder: &crate::recording::recorder::RecorderManager,
+) -> usize {
     let mut removed = 0;
 
     let entries = match fs::read_dir(dir) {
@@ -237,11 +245,17 @@ fn remove_empty_dirs_recursive(dir: &std::path::Path, remove_self: bool) -> usiz
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            removed += remove_empty_dirs_recursive(&path, true);
+            removed += remove_empty_dirs_recursive(&path, true, recorder);
         }
     }
 
     if remove_self {
+        // 跳过活跃录制会话的目录，避免删掉刚创建但还未写入第一个分片的 session 目录
+        // Skip directories locked by active recording sessions to avoid deleting a
+        // session directory that was just created but hasn't received its first segment yet
+        if recorder.is_file_locked(dir) {
+            return removed;
+        }
         let is_empty = fs::read_dir(dir)
             .map(|mut entries| entries.next().is_none())
             .unwrap_or(false);

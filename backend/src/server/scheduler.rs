@@ -558,7 +558,7 @@ async fn run_preview_url_refresh_pass(app_state: &Arc<AppState>) {
     ) {
         Ok(a) => std::sync::Arc::new(a.with_mouflon_keys(app_state.get_mouflon_keys())),
         Err(e) => {
-            tracing::warn!("preview_url_refresh: failed to build API client: {}", e);
+            tracing::warn!("{}", crate::tl!("scheduler.previewRefreshApiBuildFailed", error = e));
             return;
         }
     };
@@ -597,9 +597,8 @@ async fn run_preview_url_refresh_pass(app_state: &Arc<AppState>) {
 
             app_state.set_cached_preview_url(&streamer.username, url.clone());
             tracing::debug!(
-                "preview_url_refresh: {} → {:?}",
-                streamer.username,
-                url
+                "{}",
+                crate::tl!("scheduler.previewRefreshUpdated", username = streamer.username, url = url.as_deref().unwrap_or(""))
             );
         });
     }

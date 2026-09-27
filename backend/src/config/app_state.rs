@@ -609,9 +609,8 @@ impl AppState {
                         );
                         pipeline_changed = true;
                         tracing::info!(
-                            "ts_merge output_dir synced: {} → {}",
-                            old_def.display(),
-                            new_default.display()
+                            "{}",
+                            crate::tl!("scheduler.tsMergeOutputDirSynced", old = old_def.display(), new = new_default.display())
                         );
                     }
             }

@@ -104,7 +104,10 @@
     "cgfRefreshUnavailable": "CGF schedule 不可用：{username}（CGF 无此主播数据或网络错误）",
     "cgfRefreshDone": "CGF schedule 刷新完成",
     "previewRefreshStart": "离线预览图 URL 刷新：{count} 个主播",
-    "previewRefreshDone": "离线预览图 URL 刷新完成"
+    "previewRefreshDone": "离线预览图 URL 刷新完成",
+    "previewRefreshApiBuildFailed": "离线预览图 URL 刷新：API 客户端构建失败：{error}",
+    "previewRefreshUpdated": "离线预览图 URL 刷新：{username} → {url}",
+    "tsMergeOutputDirSynced": "ts_merge 输出目录已联动更新：{old} → {new}"
   },
   "watcher": {
     "recordingsCreateDirFailed": "创建监控目录 {dir} 失败：{error}",
@@ -169,6 +172,9 @@
     "concurrencySet": "后处理并发度已设置为 {n}"
   },
   "ffmpegUtil": {
+    "concurrencyInitialized": "FFmpeg 并发信号量初始化：许可数={n}",
+    "concurrencyUpdated": "FFmpeg 并发许可数更新：{old} → {new}",
+    "stdinWriteIgnored": "convert_to_ts：stdin 写入错误已忽略（ffmpeg 正常退出）：{error}",
     "openPlaylistFailed": "打开 playlist.m3u8 失败：{error}",
     "writeM3u8HeaderFailed": "写入 M3U8 头部失败：{error}",
     "updateM3u8Failed": "更新 playlist.m3u8 失败：{error}"

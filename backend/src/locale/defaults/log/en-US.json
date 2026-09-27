@@ -104,7 +104,10 @@
     "cgfRefreshUnavailable": "CGF schedule not available for {username} (CGF does not have this anchor data or there is a network error)",
     "cgfRefreshDone": "CGF schedule refresh pass complete",
     "previewRefreshStart": "Offline preview URL refresh: {count} streamer(s)",
-    "previewRefreshDone": "Offline preview URL refresh pass complete"
+    "previewRefreshDone": "Offline preview URL refresh pass complete",
+    "previewRefreshApiBuildFailed": "Offline preview URL refresh: failed to build API client: {error}",
+    "previewRefreshUpdated": "Offline preview URL refresh: {username} → {url}",
+    "tsMergeOutputDirSynced": "ts_merge output_dir synced: {old} → {new}"
   },
   "watcher": {
     "recordingsCreateDirFailed": "Failed to create watch dir {dir}: {error}",
@@ -169,6 +172,9 @@
     "concurrencySet": "post-processing concurrency set to {n}"
   },
   "ffmpegUtil": {
+    "concurrencyInitialized": "FFmpeg concurrency initialized: permits={n}",
+    "concurrencyUpdated": "FFmpeg concurrency updated: {old} → {new}",
+    "stdinWriteIgnored": "convert_to_ts: stdin write error ignored (ffmpeg exited OK): {error}",
     "openPlaylistFailed": "Failed to open playlist.m3u8: {error}",
     "writeM3u8HeaderFailed": "Failed to write M3U8 header: {error}",
     "updateM3u8Failed": "Failed to update playlist.m3u8: {error}"

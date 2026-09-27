@@ -385,8 +385,9 @@ pub async fn maintain_output_dir(
 
     // 步骤 3：后处理（含 ts_merge 合并）可能遗留空目录，统一清理一次
     // Step 3: post-processing (including ts_merge merges) may leave empty directories; clean up once
+    let recorder_for_cleanup = Arc::clone(&recorder);
     let _ = tokio::task::spawn_blocking(move || {
-        crate::recording::segment_merge::startup_remove_empty_dirs(&output_dir);
+        crate::recording::segment_merge::startup_remove_empty_dirs(&output_dir, &recorder_for_cleanup);
     })
     .await;
 

@@ -64,7 +64,7 @@ pub fn set_ffmpeg_concurrency(n: usize) {
     if FFMPEG_SEMAPHORE.get().is_none() {
         let _ = FFMPEG_SEMAPHORE.set(Semaphore::new(new_permits));
         FFMPEG_SEMAPHORE_PERMITS.store(new_permits, Ordering::Relaxed);
-        tracing::debug!("ffmpeg_concurrency initialized: permits={}", new_permits);
+        tracing::debug!("{}", crate::tl!("ffmpegUtil.concurrencyInitialized", n = new_permits));
         return;
     }
 
@@ -92,9 +92,8 @@ pub fn set_ffmpeg_concurrency(n: usize) {
     }
 
     tracing::debug!(
-        "ffmpeg_concurrency updated: old={}, new={}",
-        old_permits,
-        new_permits
+        "{}",
+        crate::tl!("ffmpegUtil.concurrencyUpdated", old = old_permits, new = new_permits)
     );
 }
 
@@ -127,27 +126,58 @@ pub(crate) async fn convert_to_ts(fmp4_data: Vec<u8>, ts_path: &PathBuf) -> Resu
         .arg(ts_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())   // 捕获 stderr，失败时记录原因 / Capture stderr for failure diagnostics
         .no_window()
         .spawn()
         .map_err(|e| AppError::Other(format!("Failed to spawn ffmpeg: {}", e)))?;
 
-    if let Some(mut stdin) = child.stdin.take() {
+    // 写入 stdin：写完后必须主动 drop 关闭管道，ffmpeg 才能感知到 EOF 并继续处理。
+    // 若 ffmpeg 在写完前就因输入非法而提前退出，write_all 会收到 Broken pipe——
+    // 这是 ffmpeg 自身检测到数据问题的信号，不应立即返回错误，而是继续 wait()
+    // 获取真实的退出码和 stderr，再决定如何上报。
+    //
+    // Write to stdin: must explicitly drop (close) the pipe after writing so ffmpeg
+    // sees EOF and can continue. If ffmpeg exits early due to invalid input, write_all
+    // returns Broken pipe — this signals a data problem detected by ffmpeg itself.
+    // Don't return immediately; instead fall through to wait() to get the real exit
+    // code and stderr before deciding how to report the error.
+    let write_err = if let Some(mut stdin) = child.stdin.take() {
         use tokio::io::AsyncWriteExt;
-        stdin
-            .write_all(&fmp4_data)
-            .await
-            .map_err(|e| AppError::Other(format!("ffmpeg stdin write: {}", e)))?;
-    }
+        let result = stdin.write_all(&fmp4_data).await;
+        // drop(stdin) 隐式发生在这里，关闭管道写端，ffmpeg 收到 EOF
+        // drop(stdin) happens implicitly here, closing the write end so ffmpeg gets EOF
+        result.err()
+    } else {
+        None
+    };
 
-    let status = child
-        .wait()
+    // 同时等待进程退出并收集 stderr / Wait for exit and collect stderr concurrently
+    let output = child
+        .wait_with_output()
         .await
         .map_err(|e| AppError::Other(format!("ffmpeg wait: {}", e)))?;
 
-    if !status.success() {
-        return Err(AppError::Other(format!("ffmpeg exited with {}", status)));
+    if !output.status.success() {
+        // 优先展示 ffmpeg 自身的错误信息，方便排查数据问题
+        // Prefer ffmpeg's own error message for diagnosing data issues
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr = stderr.trim();
+        let detail = if !stderr.is_empty() {
+            stderr.to_string()
+        } else if let Some(e) = write_err {
+            format!("stdin write: {}", e)
+        } else {
+            format!("exit {}", output.status)
+        };
+        return Err(AppError::Other(format!("ffmpeg: {}", detail)));
     }
+
+    // 进程成功退出，但写入时发生过错误（理论上不应出现，防御性处理）
+    // Process exited successfully but a write error occurred (shouldn't happen; defensive)
+    if let Some(e) = write_err {
+        tracing::warn!("{}", crate::tl!("ffmpegUtil.stdinWriteIgnored", error = e));
+    }
+
     Ok(())
 }
 

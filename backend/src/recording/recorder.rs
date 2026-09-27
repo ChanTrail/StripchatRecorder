@@ -900,7 +900,7 @@ impl RecorderManager {
                     }
                 };
 
-                tracing::info!("{}", crate::tl!("recorder.initSegmentCached", username = username, bytes = init_data.len()));
+                tracing::debug!("{}", crate::tl!("recorder.initSegmentCached", username = username, bytes = init_data.len()));
                 *mp4_header = Some(init_data);
                 *cached_init_url = Some(new_init_url.clone());
 
@@ -990,6 +990,17 @@ impl RecorderManager {
                     let header_snapshot: Option<Vec<u8>> = mp4_header.clone();
                     let tx = retry_tx.clone();
                     let uname = username.to_string();
+
+                    // 立即标记为"已处理"，防止主循环在 retry task 的 sleep 窗口期内
+                    // 再次遇到相同 sequence 时重复起一个 ffmpeg 对同一 ts_path 并发写入。
+                    // 重试失败时 sequence 留在集合里即可（该分片永久丢失，不影响其他分片）。
+                    //
+                    // Mark as "handled" immediately so the main loop doesn't spawn another
+                    // ffmpeg for the same ts_path if this sequence appears again during the
+                    // retry task's sleep window. On retry failure, leaving the sequence in
+                    // the set is correct — the segment is permanently lost.
+                    downloaded_sequences.insert(seq);
+
                     tokio::spawn(async move {
                         const MAX_SEG_RETRIES: u32 = 3;
                         // 重试间隔：500ms → 1s → 2s（指数退避）
@@ -1087,12 +1098,14 @@ impl RecorderManager {
             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         }
 
-        // 本轮结束，取消任何剩余的飞行中预取任务（下轮循环会重新决定是否需要它）
-        // Cancel any remaining in-flight prefetch task at end of round; the next round
-        // will re-evaluate whether it is still needed.
-        if let Some((_, handle)) = prefetch.take() {
-            handle.abort();
-        }
+        // 本轮结束，保留飞行中的预取任务到下一轮复用——若 URL 未变，下轮可直接 await
+        // 已有结果，避免 abort 产生不必要的 HTTP/2 RST_STREAM。
+        // 只有当 playlist 更新后 URL 变更时，maybe_prefetch! 才会 abort 并重新 spawn。
+        //
+        // Retain any in-flight prefetch task across rounds — if the URL hasn't changed,
+        // the next round can await the already-completed result directly, avoiding an
+        // unnecessary HTTP/2 RST_STREAM from aborting. maybe_prefetch! will abort and
+        // re-spawn only when the URL changes after a playlist update.
 
         if new_segments > 0 && cdn_failures == new_segments {
             return Ok((0, cdn_failures));
