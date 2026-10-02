@@ -183,10 +183,12 @@ pub fn build_router(state: ServerState) -> Router {
 /// 初始化并启动 HTTP 服务器模式。
 /// Initialize and start the HTTP server mode.
 pub async fn run_server(port: u16) {
-    let log_dir = AppState::log_dir();
-    if let Err(e) = crate::core::logging::init_logging(&log_dir) {
-        eprintln!("Failed to initialize logging: {}", e);
-    }
+    // 启动顺序与 Desktop 一致，详见 server::startup 模块文档。
+    // 日志与日志翻译在 AppState::new 之前初始化，让之后所有日志都有译文
+    // Startup order matches Desktop; see the server::startup module docs.
+    // Logging and log translations are initialized before AppState::new so every later log
+    // line is translated
+    crate::server::startup::init_logging_and_locale();
 
     let app_state = AppState::new().expect("Failed to initialize app state");
     let recorder = RecorderManager::new(Arc::clone(&app_state));
@@ -194,18 +196,18 @@ pub async fn run_server(port: u16) {
     let emitter: Arc<dyn crate::core::emitter::Emitter> = Arc::new(BroadcastEmitter(tx.clone()));
     let monitor = StatusMonitor::new(Arc::clone(&app_state), Arc::clone(&recorder));
 
-    // 执行所有启动时一次性初始化任务（locale 初始化、ffmpeg 检查、FS 监控）。
+    // 执行所有启动时一次性任务（清空 tmp、meta 迁移、ffmpeg 检查、语言文件校验、FS 监控）。
     // 输出目录维护（重建 meta、触发遗漏后处理、清理空目录等）由下方的定时任务首次执行覆盖，
     // 不在此处单独重复。
     //
-    // Run all one-shot startup tasks (locale init, ffmpeg check, FS watchers).
-    // Output-directory maintenance (rebuilding meta, triggering missed post-processing,
-    // removing empty dirs, etc.) is
-    // covered by the scheduled task's immediate first run below, not duplicated here.
+    // Run all one-shot startup tasks (clear tmp, meta migrations, ffmpeg check, locale file
+    // validation, FS watchers). Output-directory maintenance (rebuilding meta, triggering missed
+    // post-processing, removing empty dirs, etc.) is covered by the scheduled task's first run
+    // below, not duplicated here.
     crate::server::startup::run_all(Arc::clone(&app_state), Arc::clone(&emitter));
 
-    // 启动所有后台定时任务（状态轮询、密钥同步、meta 清理、输出目录维护）
-    // Launch all background scheduled tasks (status polling, key sync, meta cleanup, output dir maintenance)
+    // 启动所有后台定时任务（与 Desktop 完全相同）
+    // Launch all background scheduled tasks (identical to Desktop)
     crate::server::scheduler::start_all(
         Arc::clone(&app_state),
         Arc::clone(&monitor),

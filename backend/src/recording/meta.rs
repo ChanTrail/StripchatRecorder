@@ -43,8 +43,8 @@ mod scan;
 mod store;
 
 pub use maintenance::{
-    cleanup_orphaned_meta_files, maintain_output_dir, migrate_flat_meta_files,
-    migrate_truncated_stem_meta_files, schedule_meta_version_check,
+    cleanup_orphaned_meta_files, cleanup_tmp_on_startup, maintain_output_dir,
+    migrate_flat_meta_files, migrate_truncated_stem_meta_files, schedule_meta_version_check,
 };
 pub use model::{
     META_VERSION, PpExecCode, PpExecResult, PpExecutionEntry, PpModuleResult,

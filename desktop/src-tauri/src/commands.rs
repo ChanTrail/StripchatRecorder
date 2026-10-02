@@ -229,7 +229,14 @@ pub async fn save_settings_cmd(
     new_settings: Settings,
     state: State<'_, DesktopState>,
 ) -> CmdResult<serde_json::Value> {
+    // 与 Server 路由一致：语言变化时重新加载日志翻译
+    // Same as the Server route: reload log translations when the language changes
+    let old_lang = state.app_state.get_settings().language;
+    let new_lang = new_settings.language.clone();
     state.app_state.update_settings(new_settings).map_err(map_err)?;
+    if old_lang != new_lang {
+        stripchat_recorder_lib::locale::manager::load_log_translations(&new_lang);
+    }
     state.emitter.emit("settings-updated", &state.app_state.get_settings());
     Ok(serde_json::json!({ "ok": true }))
 }

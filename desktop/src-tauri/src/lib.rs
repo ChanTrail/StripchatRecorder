@@ -19,12 +19,8 @@ use stripchat_recorder_lib::{
     config::app_state::AppState,
     core::emitter::Emitter,
     platform::monitor::StatusMonitor,
-    recording::{
-        meta::schedule_meta_version_check,
-        recorder::RecorderManager,
-    },
-    server::scheduler::{start_monitor, start_mouflon_sync, start_meta_cleanup, start_pp_load_monitor, start_schedule_refresh, start_preview_url_refresh},
-    watcher::fs_watch::{start_modules_dir_watcher, start_recordings_dir_watcher},
+    recording::recorder::RecorderManager,
+    server::{scheduler, startup},
 };
 
 /// Tauri 应用的运行入口，由 `main.rs` 调用。
@@ -158,21 +154,16 @@ async fn setup_app(app_handle: tauri::AppHandle) {
         ),
     }
 
-    // 初始化日志 / Initialize logging
-    let log_dir = AppState::log_dir();
-    if let Err(e) = stripchat_recorder_lib::core::logging::init_logging(&log_dir) {
-        eprintln!("Failed to initialize logging: {}", e);
-    }
+    // 以下启动顺序与 Server（run_server）一致，详见 server::startup 模块文档
+    // The startup order below matches Server (run_server); see the server::startup module docs
+
+    // 在 AppState::new 之前初始化日志、locale 目录与日志翻译，让之后所有日志都有译文
+    // Initialize logging, locale dirs and log translations before AppState::new so every later
+    // log line is translated
+    startup::init_logging_and_locale();
 
     // 初始化应用状态 / Initialize application state
     let app_state = AppState::new().expect("Failed to initialize app state");
-
-    // 初始化 locale 目录并加载日志翻译 / Initialize locale dirs and load log translations
-    stripchat_recorder_lib::locale::manager::init_locale_dirs();
-    {
-        let locale_code = app_state.get_settings().language;
-        stripchat_recorder_lib::locale::manager::load_log_translations(&locale_code);
-    }
 
     // 创建 TauriEmitter / Create TauriEmitter
     let emitter: Arc<dyn Emitter> = Arc::new(TauriEmitter::new(app_handle.clone()));
@@ -183,58 +174,9 @@ async fn setup_app(app_handle: tauri::AppHandle) {
     // 创建状态监控器 / Create status monitor
     let monitor = StatusMonitor::new(Arc::clone(&app_state), Arc::clone(&recorder));
 
-    // 检测 ffmpeg 是否可用，不可用时推送通知
-    // Check ffmpeg availability; push notification if unavailable
-    if !stripchat_recorder_lib::recording::ffmpeg_util::ffmpeg_available() {
-        app_state.notification_store.emit_i18n(            emitter.as_ref(),
-            stripchat_recorder_lib::core::notifications::NotificationLevel::Error,
-            "startup",
-            "ffmpeg not found. Recording and post-processing will be unavailable.",
-            "notifications.backend.ffmpegMissing",
-            None,
-        );
-    }
-
-    // 一次性启动迁移（旧 meta 文件扁平迁移到按主播子目录），迁移了文件时写入通知
-    // One-shot migration of legacy flat meta files; push a notification if any were migrated
-    {
-        let count = stripchat_recorder_lib::recording::meta::migrate_flat_meta_files();
-        if count > 0 {
-            use std::collections::HashMap;
-            let mut args = HashMap::new();
-            args.insert("count".to_string(), serde_json::json!(count));
-            app_state.notification_store.emit_i18n(
-                emitter.as_ref(),
-                stripchat_recorder_lib::core::notifications::NotificationLevel::Info,
-                "startup",
-                format!("Migrated {} legacy meta file(s) to per-streamer subdirectory layout.", count),
-                "notifications.backend.metaMigrated",
-                Some(args),
-            );
-        }
-        // 修正旧 stem 规则截断文件名的 meta（含 '.' 用户名，B16），只记日志；须在首次扫描前执行
-        // Fix meta files truncated by the old stem rule (usernames with '.', B16); logs only;
-        // must run before the first scan
-        stripchat_recorder_lib::recording::meta::migrate_truncated_stem_meta_files();
-    }
-
-    // 校验并推送自定义 locale 文件警告 / Validate and push custom locale warnings
-    {
-        let emitter_clone = Arc::clone(&emitter);
-        tokio::task::spawn_blocking(move || {
-            use stripchat_recorder_lib::core::emitter::EmitterExt;
-            let warnings = stripchat_recorder_lib::locale::manager::check_custom_locale_files();
-            if !warnings.is_empty() {
-                let payload: Vec<serde_json::Value> = warnings
-                    .into_iter()
-                    .map(|(path, reason)| serde_json::json!({ "path": path, "reason": reason }))
-                    .collect();
-                emitter_clone.emit("locale-warnings", &payload);
-            }
-        });
-    }
-
-    // 将 DesktopState 注册为 Tauri 托管状态 / Register DesktopState as Tauri-managed state
+    // 尽早注册 DesktopState：只持有 Arc，没有初始化副作用，前端一加载就能调用命令
+    // Register DesktopState as early as possible: it only holds Arcs with no init side effects,
+    // so frontend commands work as soon as the webview loads
     app_handle.manage(DesktopState {
         app_state: Arc::clone(&app_state),
         recorder: Arc::clone(&recorder),
@@ -243,46 +185,21 @@ async fn setup_app(app_handle: tauri::AppHandle) {
         pending_update: parking_lot::RwLock::new(None),
     });
 
-    // ── 启动后台异步任务 / Start background async tasks ──────────────────────
+    // 启动时一次性任务（与 Server 共用）：清空 tmp → meta 迁移 → ffmpeg 检查 →
+    // 自定义语言文件校验 → 文件系统监控
+    // One-shot startup tasks (shared with Server): clear tmp → meta migrations → ffmpeg check →
+    // custom locale file validation → file system watchers
+    startup::run_all(Arc::clone(&app_state), Arc::clone(&emitter));
 
-    // 状态监控轮询（start_monitor 内部注入 restart channel 到 app_state 和 monitor）
-    // Status monitor polling (start_monitor injects restart channel into app_state and monitor)
-    start_monitor(Arc::clone(&app_state), Arc::clone(&monitor), Arc::clone(&emitter));
-
-    // Mouflon Keys 自动同步（start_mouflon_sync 内部注入 notify channel 到 app_state）
-    // Mouflon Keys auto-sync (start_mouflon_sync injects notify channel into app_state)
-    start_mouflon_sync(Arc::clone(&app_state), Arc::clone(&emitter));
-
-    // 孤立 meta 文件清理（每小时）/ Orphaned meta file cleanup (every hour)
-    start_meta_cleanup(Arc::clone(&app_state), Arc::clone(&emitter));
-
-    // 后处理并发度负载自适应调节器（每 5 秒采样 CPU/内存动态调整并发许可）
-    // Post-processing concurrency load-adaptive regulator (samples CPU/mem every 5s)
-    start_pp_load_monitor(Arc::clone(&app_state));
-
-    // CGF schedule 定时刷新（启动后 15 秒执行一次，之后每天 0 点执行）
-    // CGF schedule periodic refresh (once 15 s after launch, then daily at midnight)
-    start_schedule_refresh(Arc::clone(&app_state));
-
-    // 离线预览图 URL 定时刷新（启动后 30 秒执行一次，之后每天 0 点执行）
-    // Offline preview URL periodic refresh (once 30 s after launch, then daily at midnight)
-    start_preview_url_refresh(Arc::clone(&app_state));
-
-    // 输出目录维护调度器：扫描/修复 meta，触发遗漏后处理（含未合并的 session_dir），清理空目录
-    // Output directory maintenance: scan/repair meta, trigger missed pp (incl. unmerged session_dirs), remove empty dirs
-    {
-        let app_state_m = Arc::clone(&app_state);
-        let emitter_m = Arc::clone(&emitter);
-        let recorder_m = Arc::clone(&recorder);
-        tokio::spawn(async move {
-            schedule_meta_version_check(app_state_m, emitter_m, recorder_m, 300).await;
-        });
-    }
-
-    // 文件系统监控 / File system watchers
-    start_recordings_dir_watcher(Arc::clone(&app_state), Arc::clone(&emitter));
-    start_modules_dir_watcher(Arc::clone(&emitter));
-    stripchat_recorder_lib::watcher::fs_watch::start_locale_dir_watcher(Arc::clone(&emitter));
+    // 启动全部后台定时任务（与 Server 完全相同，含版本更新检查，输出目录维护启动 10 秒后首次执行）
+    // Start every background scheduled task (identical to Server, including the version update
+    // check; output-dir maintenance first runs 10 s after launch)
+    scheduler::start_all(
+        Arc::clone(&app_state),
+        Arc::clone(&monitor),
+        Arc::clone(&emitter),
+        Arc::clone(&recorder),
+    );
 
     // ── 阶段一结束：显示主窗口 / Phase 1 complete: show the main window ────────
     if let Some(window) = app_handle.get_webview_window("main") {

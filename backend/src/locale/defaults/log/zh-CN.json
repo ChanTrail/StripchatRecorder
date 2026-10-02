@@ -54,6 +54,10 @@
     "autoStart": "自动开始录制 → {username}（just_online={justOnline}, dropped={dropped}, natural_stop={naturalStop}, should_be={shouldBe}）",
     "streamerDead": "主播 {username} 已确认失效（用户名和 model_id 均无法找到），后续将跳过轮询",
     "pollFailed": "轮询失败 → {username}：{error}",
+    "pollRetrying": "轮询网络错误，{secs} 秒后第 {attempt}/{max} 次重试 → {username}：{error}",
+    "apiClientRebuilt": "代理或镜像站设置已变更，重建轮询用的 API 客户端",
+    "previewRefreshed": "离线预览图已刷新 → {username}：{url}",
+    "previewRefreshFailed": "离线预览图获取失败（今天第 {attempt}/{max} 次），下一轮重试 → {username}",
     "streamerRenamed": "主播已改名：{oldUsername} → {newUsername}",
     "streamerRenameSkipped": "主播改名跳过 {username}：{error}",
     "cgfProxyInvalid": "CGF 代理 URL 无效，跳过代理：{error}",
@@ -64,7 +68,9 @@
     "cgfScheduleNull": "CGF schedule 为 null → {username}（历史数据不足）"
   },
   "maintenance": {
-    "tmpCleanup": "tmp 清理：已删除 {count} 个过期文件，释放 {mb} MB"
+    "tmpCleanup": "tmp 清理：已删除 {count} 个过期文件，释放 {mb} MB",
+    "tmpStartupCleanup": "启动 tmp 清理：已删除上次运行残留的 {count} 个文件，释放 {mb} MB",
+    "tmpStartupDeleteFailed": "启动 tmp 清理：删除 {path} 失败：{error}"
   },
   "meta": {
     "migrationCreateDirFailed": "Meta 迁移：创建目录 {dir} 失败：{error}",
@@ -80,6 +86,8 @@
     "cleanupDeleteFailed": "Meta 清理：删除 {name} 失败：{error}",
     "cleanupDeleted": "Meta 清理：已删除孤立 meta {name}",
     "cleanupDone": "Meta 清理：已删除 {count} 个孤立 meta 文件",
+    "cleanupTmpDeleteFailed": "Meta 清理：删除残留临时文件 {name} 失败：{error}",
+    "cleanupTmpDone": "Meta 清理：已删除 {count} 个中断写入残留的临时文件",
     "scanSkipEmpty": "Meta 扫描：{count} 个视频需要后处理，但流水线为空，跳过",
     "scanSkipOwnedVideo": "Meta 扫描：视频 {path} 已由其他 meta 记录管理，跳过",
     "scanSkipFinishedBeforeTrigger": "Meta 扫描：{path} 在触发前已完成后处理或已不存在，跳过",
@@ -113,10 +121,6 @@
     "cgfRefreshUpdated": "CGF schedule 已更新：{username}",
     "cgfRefreshUnavailable": "CGF schedule 不可用：{username}（CGF 无此主播数据或网络错误）",
     "cgfRefreshDone": "CGF schedule 刷新完成",
-    "previewRefreshStart": "离线预览图 URL 刷新：{count} 个主播",
-    "previewRefreshDone": "离线预览图 URL 刷新完成",
-    "previewRefreshApiBuildFailed": "离线预览图 URL 刷新：API 客户端构建失败：{error}",
-    "previewRefreshUpdated": "离线预览图 URL 刷新：{username} → {url}",
     "tsMergeOutputDirSynced": "ts_merge 输出目录已联动更新：{old} → {new}"
   },
   "watcher": {
@@ -142,11 +146,15 @@
     "rebuiltFile": "已重建 locale 文件 {path}",
     "rebuildFailed": "重建 locale 文件 {path} 失败：{error}",
     "parseFileFailed": "解析 locale 文件 {path} 失败：{error}",
-    "readFileFailed": "读取 locale 文件 {path} 失败：{error}"
+    "readFileFailed": "读取 locale 文件 {path} 失败：{error}",
+    "dirsInitialized": "Locale 目录初始化完成：{dir}"
   },
   "startup": {
     "ffmpegMissing": "未检测到 ffmpeg，录制和后处理功能将不可用",
-    "localeFileWarning": "自定义 locale 文件校验警告：{payload}"
+    "localeFileWarning": "自定义 locale 文件校验警告：{payload}",
+    "settingsCreateFailed": "创建默认配置文件 {path} 失败：{error}",
+    "configInvalidBackedUp": "配置文件 {path} 无法读取或解析（{error}），已备份为 {backup}，本次改用默认值",
+    "configInvalidBackupFailed": "配置文件 {path} 无法读取或解析（{error}），备份失败（{backup_error}），本次改用默认值，下次保存时原文件会被覆盖"
   },
   "sse": {
     "broadcastLagged": "SSE 广播队列溢出，丢失 {count} 条事件"

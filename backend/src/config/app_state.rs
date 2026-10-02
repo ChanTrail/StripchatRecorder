@@ -9,10 +9,11 @@
 use crate::core::error::{AppError, Result};
 use crate::postprocess::pipeline::PipelineConfig;
 use parking_lot::RwLock;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// Mouflon 密钥存储结构，持久化到 mouflon_keys.json。
@@ -34,7 +35,14 @@ pub struct MouflonKeysStore {
 }
 
 /// 用户可配置的录制器设置 / User-configurable recorder settings
+///
+/// 容器级 `#[serde(default)]`：settings.json 缺少的字段取 `Settings::default()` 中的值，
+/// 因此 `{}` 或只写了部分字段的手动编辑文件也能正常读取，而不是整个文件解析失败。
+/// Container-level `#[serde(default)]`: fields missing from settings.json take their value from
+/// `Settings::default()`, so `{}` or a hand-edited file with only some fields still loads
+/// instead of failing to parse as a whole.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Settings {
     /// TS 分片流输出目录 / TS segment stream output directory
     pub output_dir: String,
@@ -194,6 +202,104 @@ pub fn exe_dir() -> PathBuf {
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
 }
 
+/// 去掉字符串开头的 UTF-8 BOM（`U+FEFF`）。
+///
+/// Windows 记事本等编辑器保存 UTF-8 文件时可能在开头加 BOM，serde_json 会把它当成非法字符，
+/// 导致整个文件解析失败。读取用户可能手动编辑的 JSON（`config/`、`locale/`）前都先调用本函数。
+///
+/// Strip a leading UTF-8 BOM (`U+FEFF`) from a string.
+///
+/// Editors such as Windows Notepad may prepend a BOM when saving UTF-8, which serde_json treats
+/// as an invalid character, failing the whole file. Call this before parsing any JSON the user
+/// may edit by hand (`config/`, `locale/`).
+pub fn strip_utf8_bom(s: &str) -> &str {
+    s.strip_prefix('\u{FEFF}').unwrap_or(s)
+}
+
+/// 读取 `config/` 下 JSON 配置文件的结果 / Result of reading a JSON config file under `config/`
+enum ConfigFile<T> {
+    /// 文件不存在，或内容为空白（含只有 BOM）/ File missing, or blank (including BOM only)
+    Missing,
+    /// 解析成功 / Parsed successfully
+    Parsed(T),
+    /// 文件存在但无法读取（如不是 UTF-8 编码）或解析失败，附错误信息
+    /// File exists but can't be read (e.g. not UTF-8) or fails to parse, with the error
+    Invalid(String),
+}
+
+/// 读取并解析 JSON 配置文件：先去掉 UTF-8 BOM，空白文件视为不存在。
+/// Read and parse a JSON config file: the UTF-8 BOM is stripped first and a blank file counts
+/// as missing.
+fn load_config_file<T: DeserializeOwned>(path: &Path) -> ConfigFile<T> {
+    let content = match fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return ConfigFile::Missing,
+        Err(e) => return ConfigFile::Invalid(e.to_string()),
+    };
+    let content = strip_utf8_bom(&content);
+    if content.trim().is_empty() {
+        return ConfigFile::Missing;
+    }
+    match serde_json::from_str(content) {
+        Ok(v) => ConfigFile::Parsed(v),
+        Err(e) => ConfigFile::Invalid(e.to_string()),
+    }
+}
+
+/// 配置文件无法读取或解析时：把原文件复制为 `{文件名}.invalid-{时间}` 备份并记录警告。
+///
+/// 本次启动对该文件改用默认值；之后任意一次保存（`save()` 会写全部配置文件）都会用默认值
+/// 覆盖原文件，备份保证手动编辑过的内容不会就此丢失。
+///
+/// When a config file can't be read or parsed: copy it to `{file name}.invalid-{time}` as a
+/// backup and log a warning.
+///
+/// This run uses defaults for that file; any later save (`save()` writes every config file)
+/// overwrites the original with defaults, so the backup keeps hand-edited content from being lost.
+fn backup_invalid_config(path: &Path, error: &str) {
+    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("config.json");
+    let backup = path.with_file_name(format!(
+        "{}.invalid-{}",
+        file_name,
+        chrono::Local::now().format("%Y%m%d_%H%M%S")
+    ));
+    match fs::copy(path, &backup) {
+        Ok(_) => tracing::warn!(
+            "{}",
+            crate::tl!(
+                "startup.configInvalidBackedUp",
+                path = path.display(),
+                error = error,
+                backup = backup.display()
+            )
+        ),
+        Err(e) => tracing::warn!(
+            "{}",
+            crate::tl!(
+                "startup.configInvalidBackupFailed",
+                path = path.display(),
+                error = error,
+                backup_error = e
+            )
+        ),
+    }
+}
+
+/// 读取配置文件；无法读取或解析时先备份原文件（见 [`backup_invalid_config`]）。
+/// 不存在、为空或无效时返回 `None`。
+/// Read a config file, backing it up first when it can't be read or parsed (see
+/// [`backup_invalid_config`]). Returns `None` when missing, blank or invalid.
+fn load_config_or_backup<T: DeserializeOwned>(path: &Path) -> Option<T> {
+    match load_config_file(path) {
+        ConfigFile::Parsed(v) => Some(v),
+        ConfigFile::Missing => None,
+        ConfigFile::Invalid(err) => {
+            backup_invalid_config(path, &err);
+            None
+        }
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         // 默认输出目录为可执行文件同目录下的 ts_fragment 文件夹（存放 TS 分片流）
@@ -302,13 +408,14 @@ pub struct StreamerData {
     #[serde(default, with = "schedule_serde")]
     pub schedule: Option<Vec<Vec<f32>>>,
     /// 主播离线时的预览图 URL 缓存（来自 v2/models/{model_id}/cam 接口）。
-    /// 每天 0 点由定时刷新任务统一更新，轮询期间离线时直接使用此缓存，
-    /// 避免每次轮询都向 cam 接口发起 HTTP 请求。
+    /// 由状态轮询在每个主播每天（本地时间）第一次轮询成功时顺带更新，与在线状态无关
+    /// （失败时下一轮再试，每天最多 3 次）；离线轮询直接使用此缓存，避免每次轮询都向 cam
+    /// 接口发起 HTTP 请求。
     ///
     /// Cached offline preview image URL (from v2/models/{model_id}/cam endpoint).
-    /// Updated daily at midnight by the scheduled refresh task; used directly
-    /// during polling when the streamer is offline, avoiding a cam endpoint
-    /// HTTP request on every poll cycle.
+    /// Updated by status polling on each streamer's first successful poll of the (local) day,
+    /// regardless of online status (retried the next round on failure, at most 3 times a day);
+    /// offline polls use this cache directly, avoiding a cam endpoint HTTP request on every poll.
     #[serde(default)]
     pub cached_preview_url: Option<String>,
 }
@@ -431,17 +538,20 @@ impl AppState {
         exe_dir().join("config")
     }
 
-    /// 只读取 config/settings.json；文件不存在或解析失败时返回 `Settings::default()`。
-    /// 不创建目录、不初始化信号量，适合只需读取个别配置项的场景，避免构造完整 AppState 的副作用。
+    /// 只读取 config/settings.json（去掉 UTF-8 BOM）；文件不存在、为空或解析失败时返回
+    /// `Settings::default()`。不创建目录、不初始化信号量、不备份也不记日志（会被频繁调用，
+    /// 无效文件的备份和警告由 [`AppState::new`] 在启动时处理一次），适合只需读取个别配置项的场景。
     ///
-    /// Read only config/settings.json; returns `Settings::default()` if the file is missing
-    /// or fails to parse. Creates no directories and initializes no semaphores, suitable when
-    /// only a single setting is needed, avoiding the side effects of building a full AppState.
+    /// Read only config/settings.json (UTF-8 BOM stripped); returns `Settings::default()` if
+    /// the file is missing, blank or fails to parse. Creates no directories, initializes no
+    /// semaphores, and neither backs up nor logs (it's called often; [`AppState::new`] handles
+    /// the backup and warning for an invalid file once at startup). Suitable when only a single
+    /// setting is needed.
     pub fn load_settings_from_disk() -> Settings {
-        fs::read_to_string(Self::config_dir().join("settings.json"))
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+        match load_config_file(&Self::config_dir().join("settings.json")) {
+            ConfigFile::Parsed(s) => s,
+            ConfigFile::Missing | ConfigFile::Invalid(_) => Settings::default(),
+        }
     }
 
     /// 从磁盘加载配置并初始化应用状态，确保输出目录存在。
@@ -451,23 +561,58 @@ impl AppState {
         fs::create_dir_all(&config_dir)?;
         fs::create_dir_all(crate::recording::meta::meta_dir())?;
 
-        // 从拆分文件加载各部分数据 / Load each section from split files
-        let load_json = |name: &str| -> Option<String> {
-            fs::read_to_string(config_dir.join(name)).ok()
+        // 从拆分文件加载各部分数据：读取时去掉 UTF-8 BOM，空白文件视为不存在；
+        // 无法读取或解析的文件先备份再改用默认值（见 backup_invalid_config）
+        // Load each section from split files: the UTF-8 BOM is stripped and blank files count
+        // as missing; files that can't be read or parsed are backed up before falling back to
+        // defaults (see backup_invalid_config)
+        let settings_path = config_dir.join("settings.json");
+        let (settings, settings_missing): (Settings, bool) = match load_config_file(&settings_path) {
+            ConfigFile::Parsed(s) => (s, false),
+            ConfigFile::Missing => (Settings::default(), true),
+            ConfigFile::Invalid(err) => {
+                backup_invalid_config(&settings_path, &err);
+                (Settings::default(), false)
+            }
         };
 
-        let settings: Settings = Self::load_settings_from_disk();
-        let streamers: Vec<StreamerData> = load_json("streamers.json")
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default();
-        let mouflon_keys: MouflonKeysStore = load_json("mouflon_keys.json")
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default();
-        let pipeline: PipelineConfig = {
-            let raw = load_json("pipeline.json");
-            // pipeline.json 不存在时（首次启动），注入默认 ts_merge 节点
-            // On first startup (pipeline.json absent), inject default ts_merge node
-            if raw.is_none() {
+        // 首次运行（settings.json 不存在或为空）时立即用默认值落盘，保证文件始终存在、可被读写；
+        // Server 与 Desktop 都经由此处初始化，两端行为一致。文件无效时不在此覆盖（已备份），
+        // 之后第一次保存时再写入。
+        //
+        // On first run (settings.json absent or blank), persist the defaults immediately so the
+        // file always exists and can be read/written; both Server and Desktop initialize through
+        // here, so the behavior is identical on both ends. An invalid file isn't overwritten here
+        // (it has been backed up); the first later save writes it.
+        if settings_missing {
+            let write_result = serde_json::to_string_pretty(&settings)
+                .map_err(|e| e.to_string())
+                .and_then(|json| fs::write(&settings_path, json).map_err(|e| e.to_string()));
+            if let Err(e) = write_result {
+                // 两端都在 AppState::new 之前调用 startup::init_logging_and_locale 加载了日志翻译
+                // Both ends load log translations via startup::init_logging_and_locale before
+                // AppState::new
+                tracing::warn!(
+                    "{}",
+                    crate::tl!("startup.settingsCreateFailed", path = settings_path.display(), error = e)
+                );
+            }
+        }
+
+        let streamers: Vec<StreamerData> =
+            load_config_or_backup(&config_dir.join("streamers.json")).unwrap_or_default();
+        let mouflon_keys: MouflonKeysStore =
+            load_config_or_backup(&config_dir.join("mouflon_keys.json")).unwrap_or_default();
+        let pipeline_path = config_dir.join("pipeline.json");
+        let pipeline: PipelineConfig = match load_config_file(&pipeline_path) {
+            ConfigFile::Parsed(p) => p,
+            ConfigFile::Invalid(err) => {
+                backup_invalid_config(&pipeline_path, &err);
+                PipelineConfig::default()
+            }
+            // pipeline.json 不存在或为空时（首次启动），注入默认 ts_merge 节点
+            // On first startup (pipeline.json absent or blank), inject default ts_merge node
+            ConfigFile::Missing => {
                 let mut p = PipelineConfig::default();
                 // ts_merge 的 output_dir 默认指向程序所在目录下的 recordings 文件夹，
                 // 与录制输出目录（ts_fragment）分离，便于区分原始分片和合并后视频。
@@ -500,9 +645,6 @@ impl AppState {
                     },
                 });
                 p
-            } else {
-                raw.and_then(|s| serde_json::from_str(&s).ok())
-                    .unwrap_or_default()
             }
         };
         let data = AppData { settings, streamers, mouflon_keys, pipeline };
@@ -790,11 +932,11 @@ impl AppState {
         }
     }
 
-    /// 更新指定主播的离线预览图 URL 缓存（每天 0 点由定时刷新任务调用）。
+    /// 更新指定主播的离线预览图 URL 缓存（由状态轮询每天刷新时调用，与在线状态无关）。
     /// 仅当值确实发生变化时才写盘，避免无意义的 I/O。
     ///
     /// Update the cached offline preview image URL for a streamer
-    /// (called daily by the scheduled refresh task at midnight).
+    /// (called by status polling's daily refresh, regardless of online status).
     /// Only writes to disk when the value actually changes.
     pub fn set_cached_preview_url(&self, username: &str, url: Option<String>) {
         let mut data = self.data.write();
@@ -1003,3 +1145,58 @@ impl AppState {
 
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 带 BOM 的文件能解析；空白、只有 BOM、不存在的文件都视为缺失；缺少字段时取默认值。
+    /// Files with a BOM parse; blank, BOM-only and missing files count as missing; missing
+    /// fields take default values.
+    #[test]
+    fn config_file_strips_bom_and_treats_blank_as_missing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("settings.json");
+
+        std::fs::write(&path, "\u{FEFF}{\"language\":\"en-US\"}").expect("write bom");
+        match load_config_file::<Settings>(&path) {
+            ConfigFile::Parsed(s) => {
+                assert_eq!(s.language, "en-US");
+                assert_eq!(s.poll_interval_secs, Settings::default().poll_interval_secs);
+            }
+            _ => panic!("BOM file should parse"),
+        }
+
+        for blank in ["", "  \r\n", "\u{FEFF}"] {
+            std::fs::write(&path, blank).expect("write blank");
+            assert!(matches!(load_config_file::<Settings>(&path), ConfigFile::Missing));
+        }
+        assert!(matches!(
+            load_config_file::<Settings>(&dir.path().join("missing.json")),
+            ConfigFile::Missing
+        ));
+    }
+
+    /// 无法解析的文件被复制为 `.invalid-*` 备份并返回 None，原文件保留不动。
+    /// An unparseable file is copied to an `.invalid-*` backup and None is returned; the
+    /// original is left untouched.
+    #[test]
+    fn invalid_config_is_backed_up() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("streamers.json");
+        std::fs::write(&path, "[{ broken").expect("write broken");
+
+        assert!(load_config_or_backup::<Vec<StreamerData>>(&path).is_none());
+        assert_eq!(std::fs::read_to_string(&path).expect("read original"), "[{ broken");
+        let backups: Vec<_> = std::fs::read_dir(dir.path())
+            .expect("read dir")
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with("streamers.json.invalid-"))
+            .collect();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(backups[0].path()).expect("read backup"),
+            "[{ broken"
+        );
+    }
+}

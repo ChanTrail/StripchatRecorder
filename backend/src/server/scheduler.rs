@@ -57,11 +57,11 @@ fn secs_until_midnight() -> tokio::time::Duration {
     tokio::time::Duration::from_secs(if secs == 0 { 86400 } else { secs })
 }
 
-/// 启动 Mouflon Keys 自动同步调度器：启动时延迟 10 秒执行一次，之后每天 UTC 00:00 同步一次。
+/// 启动 Mouflon Keys 自动同步调度器：启动时延迟 10 秒执行一次，之后每天本地时间 00:00 同步一次。
 /// 若 Settings 中未配置 mouflon_sync_url，则静默跳过。
 /// 同步失败超出重试上限时写入错误通知。
 ///
-/// Start the Mouflon Keys auto-sync scheduler: run once 10 s after launch, then daily at UTC 00:00.
+/// Start the Mouflon Keys auto-sync scheduler: run once 10 s after launch, then daily at local 00:00.
 /// Silently skips if mouflon_sync_url is not configured in Settings.
 /// Pushes an error notification when sync fails after all retries.
 async fn schedule_mouflon_sync_inner(
@@ -127,8 +127,8 @@ async fn schedule_mouflon_sync_inner(
                 }
             }
         }
-        // 等待到次日 UTC 0 点，或收到立即同步通知
-        // Wait until next UTC midnight, or until an immediate sync notification arrives
+        // 等待到次日本地时间 0 点，或收到立即同步通知
+        // Wait until the next local midnight, or until an immediate sync notification arrives
         tokio::select! {
             _ = tokio::time::sleep(secs_until_midnight()) => {}
             v = notify_rx.recv() => {
@@ -142,12 +142,12 @@ async fn schedule_mouflon_sync_inner(
     }
 }
 
-/// 启动 Mouflon 密钥自动同步调度器（启动时立即执行一次，之后每天 UTC 0 点执行）。
+/// 启动 Mouflon 密钥自动同步调度器（启动 10 秒后执行一次，之后每天本地时间 0 点执行）。
 ///
 /// 将通知发送端注入 `AppState`，使手动触发同步（`/api/mouflon-keys/sync`）
 /// 同样能够重置调度器计时器。
 ///
-/// Start the Mouflon key auto-sync scheduler (runs once immediately, then daily at UTC midnight).
+/// Start the Mouflon key auto-sync scheduler (runs once 10 s after launch, then daily at local midnight).
 ///
 /// The notifier sender is injected into `AppState` so that a manual sync trigger
 /// (`/api/mouflon-keys/sync`) can also reset the scheduler timer.
@@ -221,14 +221,15 @@ pub fn start_output_dir_maintenance(
     });
 }
 
-/// 启动版本更新检查调度器（启动后延迟 60 秒执行第一次，之后每 24 小时检查一次）。
+/// 启动版本更新检查调度器（启动后延迟 10 秒执行第一次，之后每 24 小时检查一次），Server 与 Desktop 共用。
 ///
 /// 发现新版本时推送 Info 通知，携带 `view_update` action 供前端跳转关于页。
 /// 防重复逻辑：记录上次已通知的版本号，同一版本在进程生命周期内只通知一次。
 /// Docker 环境下仍然通知（提示用户更新镜像），非 Docker 环境同样通知（提示下载）。
 /// 检查失败时静默处理，不写入错误通知，等待下次周期自动重试。
 ///
-/// Start the version update check scheduler (runs 60 s after launch, then every 24 h).
+/// Start the version update check scheduler (runs 10 s after launch, then every 24 h), shared by
+/// Server and Desktop.
 ///
 /// Pushes an Info notification with a `view_update` action for the frontend to navigate
 /// to the About page when a new version is found.
@@ -396,9 +397,21 @@ pub fn start_pp_load_monitor(app_state: Arc<AppState>) {
     });
 }
 
-/// 在 `run_server()` 中统一启动所有后台定时任务。
+/// 统一启动所有后台定时任务，Server（`run_server`）与 Desktop（`setup_app`）都调用本函数，
+/// 两端的定时任务集合与首次执行时间完全一致：状态轮询、Mouflon 同步、孤立 meta 清理、
+/// 输出目录维护、版本更新检查、负载自适应、CGF schedule 刷新。
 ///
-/// Launch all background scheduled tasks from `run_server()`.
+/// 需要请求 Stripchat API 的工作都集中在状态轮询里（离线预览图刷新、model_id 回填都随轮询
+/// 进行），共用同一个跨轮复用的 API 客户端和同一个并发上限，不会在启动时另起一批请求。
+///
+/// Launch all background scheduled tasks. Both Server (`run_server`) and Desktop (`setup_app`)
+/// call this, so both ends run exactly the same set of scheduled tasks with the same first-run
+/// timing: status polling, Mouflon sync, orphaned meta cleanup, output-dir maintenance, version
+/// update check, load-adaptive concurrency, CGF schedule refresh.
+///
+/// All work that hits the Stripchat API lives in status polling (offline preview refresh and
+/// model_id backfill happen as part of polling), sharing one API client reused across rounds and
+/// one concurrency cap, so no separate burst of requests starts at launch.
 pub fn start_all(
     app_state: Arc<AppState>,
     monitor: Arc<StatusMonitor>,
@@ -415,18 +428,9 @@ pub fn start_all(
     start_output_dir_maintenance(Arc::clone(&app_state), Arc::clone(&emitter), recorder);
     start_update_check(Arc::clone(&app_state), Arc::clone(&emitter));
     start_pp_load_monitor(Arc::clone(&app_state));
-    start_schedule_refresh(Arc::clone(&app_state));
-    start_preview_url_refresh(app_state);
+    start_schedule_refresh(app_state);
 }
 
-/// 对所有非失效主播执行一轮 CGF schedule 刷新，每次请求间隔 3 秒。
-///
-/// 每次刷新前从 AppState 实时读取代理配置，确保设置变更后下轮生效。
-///
-/// Run one full CGF schedule refresh pass for all non-dead streamers,
-/// with 3-second gaps between requests to respect CGF rate limits.
-/// The proxy URL is read fresh from AppState before each pass so that
-/// settings changes take effect on the next cycle.
 /// 对所有非失效主播并发执行一轮 CGF schedule 刷新。
 ///
 /// 并发度上限为 5（`CGF_REFRESH_CONCURRENCY`），以避免触发 CGF 免费 API 的 rate limit。
@@ -490,28 +494,28 @@ async fn run_schedule_refresh_pass(app_state: &Arc<AppState>) {
 /// 启动 CGF schedule 定时刷新任务。
 ///
 /// 执行策略：
-/// 1. 启动后延迟 15 秒立即执行一次全量刷新（等待主流程完成初始化）。
-/// 2. 之后每天 UTC 00:00 再执行一次全量刷新，保持 schedule 数据与 CGF 同步。
+/// 1. 启动后延迟 10 秒执行一次全量刷新（等待主流程完成初始化）。
+/// 2. 之后每天本地时间 00:00 再执行一次全量刷新，保持 schedule 数据与 CGF 同步。
 ///
-/// 全量刷新对所有非失效主播并发发起请求（最多 3 个），快速完成整轮刷新同时不触发
-/// CGF 免费 API 的 rate limit。
+/// 全量刷新对所有非失效主播并发发起请求（最多 5 个，见 `CGF_REFRESH_CONCURRENCY`），
+/// 快速完成整轮刷新同时不触发 CGF 免费 API 的 rate limit。
 ///
 /// Starts the CGF schedule periodic refresh task.
 ///
 /// Strategy:
-/// 1. One immediate full-refresh pass 15 seconds after launch (lets the main flow initialize).
-/// 2. Then a full-refresh pass at each UTC 00:00, keeping schedule data in sync with CGF.
+/// 1. One full-refresh pass 10 seconds after launch (lets the main flow initialize).
+/// 2. Then a full-refresh pass daily at local 00:00, keeping schedule data in sync with CGF.
 ///
-/// Each pass fires requests concurrently (up to 3 at a time) for fast completion
-/// while staying within CGF's free API rate limits.
+/// Each pass fires requests concurrently (up to 5 at a time, see `CGF_REFRESH_CONCURRENCY`)
+/// for fast completion while staying within CGF's free API rate limits.
 pub fn start_schedule_refresh(app_state: Arc<AppState>) {
     tokio::spawn(async move {
         // 延迟 10 秒等主流程初始化完成
         // Delay 10 s for the main flow to finish startup
         tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
 
-        // 启动时立即执行一次全量刷新
-        // Immediate full refresh on startup
+        // 延迟结束后执行一次全量刷新
+        // One full refresh once the startup delay has passed
         run_schedule_refresh_pass(&app_state).await;
 
         // 之后每天本地时间 00:00 执行，复用 secs_until_midnight()
@@ -519,121 +523,6 @@ pub fn start_schedule_refresh(app_state: Arc<AppState>) {
         loop {
             tokio::time::sleep(secs_until_midnight()).await;
             run_schedule_refresh_pass(&app_state).await;
-        }
-    });
-}
-
-// ─── 离线预览图 URL 定时刷新 / Offline Preview URL Scheduled Refresh ──────────
-
-/// 对所有非失效且有 model_id 的主播执行一轮离线预览图 URL 刷新。
-///
-/// 通过 `get_cam_preview_url`（v2/models/{model_id}/cam 接口）获取最新预览图地址，
-/// 有变化时通过 `set_cached_preview_url` 持久化到 streamers.json。
-/// 并发度上限为 5，避免触发 API 限流。
-///
-/// Run one pass of offline preview URL refresh for all non-dead streamers with a model_id.
-///
-/// Fetches the latest preview URL via `get_cam_preview_url` (v2/models/{model_id}/cam),
-/// persists any changes via `set_cached_preview_url` to streamers.json.
-/// Concurrency is capped at 5 to avoid triggering API rate limits.
-async fn run_preview_url_refresh_pass(app_state: &Arc<AppState>) {
-    const PREVIEW_REFRESH_CONCURRENCY: usize = 5;
-
-    let streamers: Vec<_> = app_state
-        .get_streamers()
-        .into_iter()
-        .filter(|s| !s.is_dead && s.model_id.is_some())
-        .collect();
-
-    if streamers.is_empty() {
-        return;
-    }
-
-    tracing::info!(
-        "{}",
-        crate::tl!("scheduler.previewRefreshStart", count = streamers.len())
-    );
-
-    let settings = app_state.get_settings();
-    let api = match crate::platform::stripchat::StripchatApi::new_api_only(
-        settings.api_proxy_url.as_deref(),
-        settings.cdn_proxy_url.as_deref(),
-        settings.sc_mirror_url.as_deref(),
-        Some(settings.sc_mirror_scheme.as_str()),
-    ) {
-        Ok(a) => std::sync::Arc::new(a.with_mouflon_keys(app_state.get_mouflon_keys())),
-        Err(e) => {
-            tracing::warn!("{}", crate::tl!("scheduler.previewRefreshApiBuildFailed", error = e));
-            return;
-        }
-    };
-
-    let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(PREVIEW_REFRESH_CONCURRENCY));
-    let mut tasks = tokio::task::JoinSet::new();
-
-    for streamer in streamers {
-        let permit = std::sync::Arc::clone(&sem)
-            .acquire_owned()
-            .await
-            .expect("semaphore closed");
-        let app_state = std::sync::Arc::clone(app_state);
-        let api = std::sync::Arc::clone(&api);
-
-        tasks.spawn(async move {
-            let _permit = permit;
-            let model_id = match streamer.model_id {
-                Some(id) => id,
-                None => return,
-            };
-
-            // 直接调用 cam 接口获取 previewUrl，与在线状态无关。
-            // 在线时前端优先展示实时截图，但 previewUrl 作为降级图片始终应保持最新。
-            //
-            // Directly call the cam endpoint to fetch previewUrl, regardless of online status.
-            // When online the frontend prefers the live snapshot, but previewUrl as a
-            // fallback image should always be kept up to date.
-            let url = api.fetch_preview_url(model_id).await;
-
-            // cam 接口失败时 url 为 None，不覆盖现有缓存，避免把有效 URL 抹掉
-            // If the cam endpoint failed, url is None — skip to avoid wiping a valid cached URL
-            if url.is_none() {
-                return;
-            }
-
-            app_state.set_cached_preview_url(&streamer.username, url.clone());
-            tracing::debug!(
-                "{}",
-                crate::tl!("scheduler.previewRefreshUpdated", username = streamer.username, url = url.as_deref().unwrap_or(""))
-            );
-        });
-    }
-
-    while tasks.join_next().await.is_some() {}
-
-    tracing::info!("{}", crate::tl!("scheduler.previewRefreshDone"));
-}
-
-/// 启动离线预览图 URL 定时刷新任务。
-///
-/// 执行策略（与所有其他启动任务一致）：
-/// 1. 启动后延迟 10 秒执行一次全量刷新（等待主流程初始化完成）。
-/// 2. 之后每天本地时间 00:00 再执行一次，保持图片 URL 持续有效。
-///
-/// Starts the offline preview URL periodic refresh task.
-///
-/// Strategy (same as all other startup tasks):
-/// 1. One full pass 10 seconds after launch (waits for main flow to initialize).
-/// 2. Then a full pass daily at local midnight to keep URLs valid.
-pub fn start_preview_url_refresh(app_state: Arc<AppState>) {
-    tokio::spawn(async move {
-        // 延迟 10 秒等主流程初始化完成 / Delay 10 s for the main flow to finish startup
-        tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
-
-        run_preview_url_refresh_pass(&app_state).await;
-
-        loop {
-            tokio::time::sleep(secs_until_midnight()).await;
-            run_preview_url_refresh_pass(&app_state).await;
         }
     });
 }

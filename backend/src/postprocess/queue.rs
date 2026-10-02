@@ -696,6 +696,29 @@ impl PpQueue {
         self.active.lock().contains_key(recording_key)
     }
 
+    /// 返回所有已被 claim（排队或执行后处理中）的录制的 stem（录制身份键 `.../{stem}.json`
+    /// 的文件名部分）。不含维护扫描占位。tmp 定时清理用它保护运行中任务的临时文件——
+    /// 模块写入 tmp 的文件/目录名都带输入视频的 stem。
+    ///
+    /// Return the stems of all claimed recordings (queued or running post-processing), i.e.
+    /// the file-name part of the identity key `.../{stem}.json`. Scan reservations are
+    /// excluded. The scheduled tmp cleanup uses it to protect running tasks' temp files —
+    /// modules name their tmp files/dirs after the input video's stem.
+    pub fn active_recording_stems(&self) -> Vec<String> {
+        self.active
+            .lock()
+            .iter()
+            .filter(|(_, e)| matches!(e, ActiveEntry::Claimed(_)))
+            .filter_map(|(k, _)| {
+                Path::new(k)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+            })
+            .collect()
+    }
+
     /// 判断是否有已被 claim 的录制与给定文件名 stem 相同（录制身份键是 `.../{stem}.json`）。
     /// 只统计流水线 claim，不统计扫描占位（扫描自身的占位不能挡住自己）。
     /// 用于 split_by_streamer=false 时：合并文件落在扁平目录、推导出的身份键不同，
@@ -998,6 +1021,21 @@ mod tests {
         assert!(q.is_tracked(SESSION_DIR));
         assert!(!q.is_recording_active(&key));
         assert!(q.try_claim(&key, SESSION_DIR).is_ok());
+    }
+
+    /// active_recording_stems 只返回已 claim 录制的 stem，不含扫描占位；claim drop 后不再返回。
+    /// active_recording_stems returns only claimed recordings' stems, not scan reservations;
+    /// a stem is gone once its claim drops.
+    #[test]
+    fn active_recording_stems_lists_claims_only() {
+        let q = PpQueue::new();
+        let key = recording_key(Path::new(SESSION_DIR));
+        let other = recording_key(Path::new("X:/out/ts_fragment/bob/bob_20240101_120000"));
+        let claim = q.try_claim(&key, SESSION_DIR).expect("claim");
+        let _r = q.try_reserve(&other).expect("reserve");
+        assert_eq!(q.active_recording_stems(), vec!["alice_20240101_120000".to_string()]);
+        drop(claim);
+        assert!(q.active_recording_stems().is_empty());
     }
 
     /// 扫描占位不被 is_stem_active 统计。

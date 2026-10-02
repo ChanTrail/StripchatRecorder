@@ -454,13 +454,14 @@ fn read_http_response(stream: &mut dyn Read) -> Result<(u16, String), String> {
 /// apart from "possibly processed".
 #[derive(Debug)]
 enum SendError {
-    /// 请求肯定未被处理（未完整写出、连接失败或 4xx 拒绝），可以安全重试。
-    /// The request was certainly not processed (not fully written, connect failure, or a 4xx
-    /// rejection); safe to retry.
+    /// 请求未被处理（未完整写出、连接失败、4xx 拒绝，或 502/503/504 网关/服务不可用），
+    /// 可以重试。
+    /// The request was not processed (not fully written, connect failure, a 4xx rejection, or
+    /// a 502/503/504 gateway/service-unavailable response); safe to retry.
     NotDelivered(String),
-    /// 请求已完整写出但结果未知（读响应失败、5xx、状态码无法解析），重试可能重复发消息。
-    /// The request was fully written but the outcome is unknown (response read failure, 5xx,
-    /// unparseable status); retrying may post a duplicate.
+    /// 请求已完整写出但结果未知（读响应失败、其他 5xx、状态码无法解析），重试可能重复发消息。
+    /// The request was fully written but the outcome is unknown (response read failure, other
+    /// 5xx, unparseable status); retrying may post a duplicate.
     Uncertain(String),
 }
 
@@ -480,7 +481,13 @@ enum StatusOutcome {
     Delivered,
     /// 4xx（含 429）：服务端明确拒绝，消息未发出 / 4xx (incl. 429): explicitly rejected, nothing posted
     Rejected,
-    /// 5xx、0（无法解析）及其他：可能已处理 / 5xx, 0 (unparseable) and others: possibly processed
+    /// 502/503/504：网关错误或服务暂不可用，通常是请求没有到达 Discord 的应用层（由
+    /// Cloudflare 或代理直接返回），按可重试处理；极少数情况下可能已处理而导致重复一条。
+    /// 502/503/504: gateway error or service temporarily unavailable; the request usually never
+    /// reached Discord's application layer (answered by Cloudflare or the proxy), so it is
+    /// treated as retryable; in rare cases it may already have been processed and post a duplicate.
+    Unavailable,
+    /// 其他 5xx、0（无法解析）及其他：可能已处理 / Other 5xx, 0 (unparseable) and others: possibly processed
     Uncertain,
 }
 
@@ -489,6 +496,7 @@ fn status_outcome(status: u16) -> StatusOutcome {
     match status {
         200..=299 => StatusOutcome::Delivered,
         400..=499 => StatusOutcome::Rejected,
+        502..=504 => StatusOutcome::Unavailable,
         _ => StatusOutcome::Uncertain,
     }
 }
@@ -500,10 +508,10 @@ fn finish_response(stream: &mut dyn Read) -> Result<(), SendError> {
     let (status, body) = read_http_response(stream).map_err(SendError::Uncertain)?;
     match status_outcome(status) {
         StatusOutcome::Delivered => Ok(()),
-        StatusOutcome::Rejected => Err(SendError::NotDelivered(format!(
-            "Discord returned {}: {}",
-            status, body
-        ))),
+        // 502/503/504 与 4xx 一样按可重试处理 / 502/503/504 are retried just like 4xx
+        StatusOutcome::Rejected | StatusOutcome::Unavailable => Err(SendError::NotDelivered(
+            format!("Discord returned {}: {}", status, body),
+        )),
         StatusOutcome::Uncertain => Err(SendError::Uncertain(format!(
             "Discord returned {}: {}",
             status, body
@@ -725,7 +733,7 @@ fn run() -> Result<(), String> {
     const RETRY_DELAYS: [u64; 6] = [10, 20, 30, 40, 50, 60];
 
     let mut attempt = 0u32;
-    loop {
+    let send_result: Result<(), String> = loop {
         let result = send_once(
             &webhook_url,
             &proxy,
@@ -734,23 +742,23 @@ fn run() -> Result<(), String> {
             effective_cover.as_ref(),
         );
         match result {
-            Ok(()) => break,
+            Ok(()) => break Ok(()),
             // 请求已完整写出但结果未知：Webhook 无幂等键，重试可能重复发消息。
             // 取舍：宁可少发一条（报错给用户），也不重复发送。
             // Request fully written but outcome unknown: webhooks have no idempotency key, so a
             // retry may post a duplicate. Trade-off: fail (and report) rather than risk a duplicate.
             Err(SendError::Uncertain(msg)) => {
-                return Err(format!(
+                break Err(format!(
                     "{} (delivery status unknown; not retrying to avoid a duplicate message)",
                     msg
                 ));
             }
-            // 请求肯定未被处理，可安全重试 / Request certainly not processed; safe to retry
+            // 请求未被处理（含 502/503/504），可重试 / Request not processed (incl. 502/503/504); retry
             Err(e @ SendError::NotDelivered(_)) => {
                 let e = e.message().to_string();
                 attempt += 1;
                 if attempt >= RETRY_DELAYS.len() as u32 {
-                    return Err(e);
+                    break Err(e);
                 }
                 let delay = RETRY_DELAYS[(attempt as usize - 1).min(RETRY_DELAYS.len() - 1)];
                 eprintln!(
@@ -763,7 +771,19 @@ fn run() -> Result<(), String> {
                 std::thread::sleep(Duration::from_secs(delay));
             }
         }
+    };
+
+    // 无论成功失败都删除本次为 Discord 压缩生成的封面临时文件（tmp/{stem}_dc_resized.jpg），
+    // 之前从不删除，只能等后端定时清理；重新运行时会重新压缩，代价很小。
+    // Remove the cover temp file compressed for Discord this run (tmp/{stem}_dc_resized.jpg)
+    // regardless of the outcome; it used to be left for the backend's scheduled cleanup,
+    // and re-running simply compresses it again, which is cheap.
+    if let (Some(img), Some(resized)) = (cover.as_ref(), effective_cover.as_ref())
+        && resized != img
+    {
+        let _ = fs::remove_file(resized);
     }
+    send_result?;
 
     emit_progress_step(3, 3);
     pp_utils::output_ok(&[&bundle_input.to_string_lossy()], "Discord notification sent");
@@ -802,11 +822,35 @@ mod tests {
         assert_eq!(status_outcome(429), StatusOutcome::Rejected);
     }
 
-    /// 5xx 与无法解析的状态码视为结果未知 / 5xx and unparseable status are uncertain
+    /// 502/503/504 视为网关/服务不可用，可重试 / 502/503/504 are gateway/unavailable, retryable
     #[test]
-    fn status_5xx_and_unknown_is_uncertain() {
+    fn status_gateway_errors_are_unavailable() {
+        assert_eq!(status_outcome(502), StatusOutcome::Unavailable);
+        assert_eq!(status_outcome(503), StatusOutcome::Unavailable);
+        assert_eq!(status_outcome(504), StatusOutcome::Unavailable);
+    }
+
+    /// 502/503/504 映射为可重试的 NotDelivered，其他 5xx 仍为 Uncertain。
+    /// 502/503/504 map to the retryable NotDelivered; other 5xx stay Uncertain.
+    #[test]
+    fn gateway_errors_map_to_not_delivered() {
+        let resp = |status: u16| {
+            format!("HTTP/1.1 {} X\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", status)
+        };
+        for status in [502u16, 503, 504] {
+            let r = finish_response(&mut resp(status).as_bytes());
+            assert!(matches!(r, Err(SendError::NotDelivered(_))), "status {status}");
+        }
+        let r = finish_response(&mut resp(500).as_bytes());
+        assert!(matches!(r, Err(SendError::Uncertain(_))));
+    }
+
+    /// 其他 5xx 与无法解析的状态码视为结果未知 / Other 5xx and unparseable status are uncertain
+    #[test]
+    fn status_other_5xx_and_unknown_is_uncertain() {
         assert_eq!(status_outcome(500), StatusOutcome::Uncertain);
-        assert_eq!(status_outcome(502), StatusOutcome::Uncertain);
+        assert_eq!(status_outcome(501), StatusOutcome::Uncertain);
+        assert_eq!(status_outcome(505), StatusOutcome::Uncertain);
         assert_eq!(status_outcome(0), StatusOutcome::Uncertain);
     }
 }

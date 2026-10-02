@@ -54,6 +54,10 @@
     "autoStart": "Auto-starting recording → {username} (just_online={justOnline}, dropped={dropped}, natural_stop={naturalStop}, should_be={shouldBe})",
     "streamerDead": "Streamer {username} confirmed dead (not found by username or model_id), skipping future polls",
     "pollFailed": "Poll failed → {username}: {error}",
+    "pollRetrying": "Poll network error, retry {attempt}/{max} in {secs}s → {username}: {error}",
+    "apiClientRebuilt": "Proxy or mirror settings changed; rebuilding the polling API client",
+    "previewRefreshed": "Offline preview refreshed → {username}: {url}",
+    "previewRefreshFailed": "Failed to fetch offline preview (attempt {attempt}/{max} today), retrying next round → {username}",
     "streamerRenamed": "Streamer renamed: {oldUsername} -> {newUsername}",
     "streamerRenameSkipped": "Streamer rename skipped for {username}: {error}",
     "cgfProxyInvalid": "CGF proxy URL invalid, skipping proxy: {error}",
@@ -64,7 +68,9 @@
     "cgfScheduleNull": "CGF schedule is null for {username} (insufficient history data)"
   },
   "maintenance": {
-    "tmpCleanup": "tmp cleanup: removed {count} stale file(s), freed {mb} MB"
+    "tmpCleanup": "tmp cleanup: removed {count} stale file(s), freed {mb} MB",
+    "tmpStartupCleanup": "Startup tmp cleanup: removed {count} leftover file(s) from the previous run, freed {mb} MB",
+    "tmpStartupDeleteFailed": "Startup tmp cleanup: failed to delete {path}: {error}"
   },
   "meta": {
     "migrationCreateDirFailed": "Meta migration: failed to create dir {dir}: {error}",
@@ -80,6 +86,8 @@
     "cleanupDeleteFailed": "Meta cleanup: failed to delete {name}: {error}",
     "cleanupDeleted": "Meta cleanup: deleted orphaned meta {name}",
     "cleanupDone": "Meta cleanup: deleted {count} orphaned meta file(s)",
+    "cleanupTmpDeleteFailed": "Meta cleanup: failed to delete leftover temp file {name}: {error}",
+    "cleanupTmpDone": "Meta cleanup: deleted {count} leftover temp file(s) from interrupted meta writes",
     "scanSkipEmpty": "Meta scan: {count} video(s) need post-processing but pipeline is empty, skipping",
     "scanSkipOwnedVideo": "Meta scan: video {path} is already managed by another meta record, skipping",
     "scanSkipFinishedBeforeTrigger": "Meta scan: {path} already finished post-processing or no longer exists before trigger, skipping",
@@ -113,10 +121,6 @@
     "cgfRefreshUpdated": "CGF schedule updated for {username}",
     "cgfRefreshUnavailable": "CGF schedule not available for {username} (CGF does not have this anchor data or there is a network error)",
     "cgfRefreshDone": "CGF schedule refresh pass complete",
-    "previewRefreshStart": "Offline preview URL refresh: {count} streamer(s)",
-    "previewRefreshDone": "Offline preview URL refresh pass complete",
-    "previewRefreshApiBuildFailed": "Offline preview URL refresh: failed to build API client: {error}",
-    "previewRefreshUpdated": "Offline preview URL refresh: {username} → {url}",
     "tsMergeOutputDirSynced": "ts_merge output_dir synced: {old} → {new}"
   },
   "watcher": {
@@ -142,11 +146,15 @@
     "rebuiltFile": "Rebuilt locale file {path}",
     "rebuildFailed": "Failed to rebuild locale file {path}: {error}",
     "parseFileFailed": "Failed to parse locale file {path}: {error}",
-    "readFileFailed": "Failed to read locale file {path}: {error}"
+    "readFileFailed": "Failed to read locale file {path}: {error}",
+    "dirsInitialized": "Locale directories initialized: {dir}"
   },
   "startup": {
     "ffmpegMissing": "ffmpeg not found on PATH",
-    "localeFileWarning": "Custom locale file validation warnings: {payload}"
+    "localeFileWarning": "Custom locale file validation warnings: {payload}",
+    "settingsCreateFailed": "Failed to create default settings file {path}: {error}",
+    "configInvalidBackedUp": "Config file {path} could not be read or parsed ({error}); backed up to {backup}, using defaults for this run",
+    "configInvalidBackupFailed": "Config file {path} could not be read or parsed ({error}) and backing it up failed ({backup_error}); using defaults, the file will be overwritten on the next save"
   },
   "sse": {
     "broadcastLagged": "SSE broadcast lagged, {count} events dropped"

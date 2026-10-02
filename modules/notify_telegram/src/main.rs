@@ -278,11 +278,15 @@ fn split_video(input: &Path, max_bytes: u64) -> Result<Vec<PathBuf>, String> {
     let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("part");
     let ext  = input.extension().and_then(|e| e.to_str()).unwrap_or("mp4");
     // 目录名由文件内容特征（mtime_nanos + size）确定，同一个视频文件每次产生相同路径，
-    // 允许跨进程复用已有的分割片段，同时也保证不同视频之间不会冲突。
+    // 允许上传失败后的重试复用已有的分割片段，同时也保证不同视频之间不会冲突。
+    // 注意：主程序启动时会清空 tmp，超过 1 小时的残留也会被定时清理，因此只有同一次运行、
+    // 1 小时内的重试才能复用。
     //
     // Directory name is derived from the file's identity (mtime_nanos + size) so the same
-    // input file always maps to the same directory, enabling reuse of existing split segments
-    // across process restarts, while different files remain collision-free.
+    // input file always maps to the same directory, letting retries after a failed upload reuse
+    // existing split segments, while different files remain collision-free.
+    // Note: the host app clears tmp at startup and the scheduled cleanup removes leftovers older
+    // than 1 hour, so only retries within the same run and within the hour can reuse them.
     let mtime_nanos = meta.modified()
         .map(|t| t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos())
         .unwrap_or(0);
@@ -1603,12 +1607,36 @@ fn run() -> Result<(), String> {
                 }
             }
         }
-        // 分割产生的片段文件：目录名现在基于视频文件的 mtime+size，是稳定的，
-        // 保留片段文件供下次运行复用；缩略图已在上方循环中清理。
+        // 分割产生的片段文件（每个分片都是原视频的完整拷贝，体积与原视频相当）：
+        // 上传成功后整个 split 目录不再需要，直接删除，避免每条大录制都在 tmp 里留下一份
+        // 完整副本、要等后端定时清理；上传失败时保留，目录名由视频的 mtime+size 决定，
+        // 同一次运行内 1 小时内的重试可直接复用、跳过重新切割（主程序重启会清空 tmp）。
+        // 缩略图已在上方循环中清理。
+        // 只删除 tmp 根目录下名为 split_* 的目录，防止误删其他路径。
         //
-        // Split segment files: the directory name is now stable (derived from the video's
-        // mtime+size), so segment files are kept for reuse on the next run.
-        // Thumbnails have already been cleaned up in the loop above.
+        // Split segment files (each part is a full copy of the source, together as large as the
+        // original video): once the upload succeeds the whole split directory is no longer
+        // needed and is removed right away, so every large recording doesn't leave a full copy
+        // in tmp until the backend's scheduled cleanup; on failure it is kept, and since its
+        // name derives from the video's mtime+size a retry within the hour in the same run
+        // reuses it without re-splitting (a host app restart clears tmp). Thumbnails have
+        // already been cleaned up in the loop above.
+        // Only a split_* directory directly under the tmp root is removed, never another path.
+        if send_video
+            && upload_result.is_ok()
+            && let Some(split_dir) = video_parts
+                .first()
+                .filter(|p| p.as_path() != input.as_path())
+                .and_then(|p| p.parent())
+            && split_dir.parent() == Some(tmp.as_path())
+            && split_dir
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("split_"))
+            && let Err(e) = fs::remove_dir_all(split_dir)
+        {
+            eprintln!("failed to remove split dir {}: {}", split_dir.display(), e);
+        }
     }
 
     upload_result?;

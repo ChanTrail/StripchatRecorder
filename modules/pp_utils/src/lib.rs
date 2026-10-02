@@ -360,6 +360,11 @@ impl ModuleInput {
     /// 从 stdin 读取并解析 JSON 输入。
     /// 若 stdin 为空或解析失败，回退到旧协议（`PP_INPUT` 环境变量）。
     ///
+    /// 解析成功后，若 JSON 中的 `max_tmp_mb` 大于 0，会写入 `PP_MAX_TMP_MB`，
+    /// 让 [`tmp_dir`] 的大小兜底清理生效。
+    /// On successful parse, a `max_tmp_mb` greater than 0 is written into `PP_MAX_TMP_MB`
+    /// so [`tmp_dir`]'s size-cap cleanup takes effect.
+    ///
     /// 解析成功后，若 JSON 中的 `exe_dir` 字段非空，会将其写入 `PP_EXE_DIR`
     /// 环境变量——这样 [`tmp_dir`] 无论在 `ModuleInput::read()` 调用前还是调用后
     /// 被使用，都能读到同一个值，不需要每个模块自己在 `main()` 里手动转发这个字段。
@@ -397,6 +402,19 @@ impl ModuleInput {
             // read/write race on the environment from other threads.
             unsafe {
                 env::set_var("PP_EXE_DIR", dir);
+            }
+        }
+        // 同理转发 tmp 大小上限：tmp_dir() 只读 PP_MAX_TMP_MB 环境变量，之前没有转发时
+        // 后端传入的 max_tmp_mb 从未生效，模块侧的大小兜底清理是死代码。
+        // Forward the tmp size cap the same way: tmp_dir() only reads the PP_MAX_TMP_MB env
+        // var, and without forwarding the backend's max_tmp_mb never took effect, leaving the
+        // module-side size cleanup as dead code.
+        if let Some(mb) = parsed.max_tmp_mb
+            && mb > 0
+        {
+            // SAFETY: 同上，单线程的一次性解析阶段 / SAFETY: same as above, single-threaded one-time parse
+            unsafe {
+                env::set_var("PP_MAX_TMP_MB", mb.to_string());
             }
         }
         parsed

@@ -424,30 +424,17 @@ impl StripchatApi {
         Some(mode.to_string())
     }
 
-    /// 从 v2/models/{model_id}/cam 接口获取主播的离线预览图 URL。
-    /// 仅在主播离线且 v1/broadcasts 没有 previewUrl 时调用。
+    /// 从 v2/models/{model_id}/cam 接口获取主播的离线预览图 URL（previewUrl），与在线状态无关。
+    /// 状态轮询用它每天为每个主播刷新 `cached_preview_url`；`get_stream_info` 在
+    /// `fetch_offline_preview=true` 且主播离线时也会调用。请求失败或没有该字段时返回 None。
     ///
-    /// Fetch the offline preview image URL from the v2/models/{model_id}/cam endpoint.
-    /// Only called when the streamer is offline and v1/broadcasts has no previewUrl.
-    async fn get_cam_preview_url(&self, username: &str, model_id: i64) -> Option<String> {
+    /// Fetch the offline preview image URL (previewUrl) from the v2/models/{model_id}/cam
+    /// endpoint, regardless of online status. Status polling uses it to refresh each streamer's
+    /// `cached_preview_url` daily; `get_stream_info` also calls it when
+    /// `fetch_offline_preview=true` and the streamer is offline. Returns None when the request
+    /// fails or the field is absent.
+    pub async fn get_cam_preview_url(&self, username: &str, model_id: i64) -> Option<String> {
         let json = self.fetch_cam_json(username, model_id).await?;
-        json["user"]["user"]["previewUrl"]
-            .as_str()
-            .map(|s| s.to_string())
-    }
-
-    /// 直接从 v2/models/{model_id}/cam 接口获取主播的 previewUrl。
-    ///
-    /// 供定时刷新任务使用：不关心在线状态，专门更新 `cached_preview_url` 字段。
-    /// 与 `get_cam_preview_url` 逻辑相同但公开，避免通过 `get_stream_info` 绕一圈。
-    ///
-    /// Fetch the streamer's previewUrl directly from v2/models/{model_id}/cam.
-    ///
-    /// Used by the scheduled refresh task: ignores online status, only updates
-    /// the `cached_preview_url` field. Same logic as `get_cam_preview_url` but
-    /// public, avoiding a full round-trip through `get_stream_info`.
-    pub async fn fetch_preview_url(&self, model_id: i64) -> Option<String> {
-        let json = self.fetch_cam_json("", model_id).await?;
         json["user"]["user"]["previewUrl"]
             .as_str()
             .map(|s| s.to_string())
@@ -738,10 +725,11 @@ impl StripchatApi {
                 item["previewUrl"].as_str().map(|s| s.to_string())
             }
         } else {
-            // 离线时：仅当 fetch_offline_preview=true 时才请求 cam 接口（定时刷新用），
-            // 日常轮询直接返回 None，由调用方使用缓存值。
-            // Offline: only call cam endpoint when fetch_offline_preview=true (for scheduled refresh);
-            // daily polling returns None and the caller uses the cached value instead.
+            // 离线时：仅当 fetch_offline_preview=true 时才请求 cam 接口，否则直接返回 None，
+            // 由调用方使用缓存值（状态轮询通过 get_cam_preview_url 单独刷新离线预览图）。
+            // Offline: only call the cam endpoint when fetch_offline_preview=true; otherwise
+            // return None and the caller uses the cached value (status polling refreshes the
+            // offline preview separately via get_cam_preview_url).
             if fetch_offline_preview {
                 self.get_cam_preview_url(username, model_id).await
             } else {

@@ -35,7 +35,7 @@
 //!             └── en-US.json
 //! ```
 
-use crate::config::app_state::exe_dir;
+use crate::config::app_state::{exe_dir, strip_utf8_bom};
 use std::path::PathBuf;
 
 /// 返回 locale 根目录路径（`<exe_dir>/locale`）。
@@ -168,7 +168,7 @@ pub fn init_locale_dirs() {
 
     for dir in [&app_dir, &modules_dir, &log_dir] {
         if let Err(e) = std::fs::create_dir_all(dir) {
-            tracing::warn!(dir = ?dir, error = %e, "Failed to create locale dir {:?}: {}", dir, e);
+            tracing::warn!("{}", crate::tl!("locale.createDirFailed", dir = dir.display(), error = e));
         }
     }
 
@@ -206,7 +206,7 @@ pub fn init_locale_dirs() {
     for (module_id, locale_code, content) in MODULE_DEFAULTS {
         let dir = module_locale_dir(module_id);
         if let Err(e) = std::fs::create_dir_all(&dir) {
-            tracing::warn!(dir = ?dir, error = %e, "Failed to create module locale dir {:?}: {}", dir, e);
+            tracing::warn!("{}", crate::tl!("locale.createDirFailed", dir = dir.display(), error = e));
             continue;
         }
         let file_path = dir.join(format!("{}.json", locale_code));
@@ -223,7 +223,7 @@ pub fn init_locale_dirs() {
         );
     }
 
-    tracing::info!("Locale dirs initialized at {:?}", locale_dir());
+    tracing::info!("{}", crate::tl!("locale.dirsInitialized", dir = locale_dir().display()));
 }
 
 /// 校验后端日志翻译文件：必须是 JSON object，且包含至少一个子 object（对应一个日志模块分组）。
@@ -241,28 +241,133 @@ fn validate_log_locale(value: &serde_json::Value, _default_content: &str) -> Res
     Ok(())
 }
 
-/// 读取后端日志翻译文件（`locale/log/<locale_code>.json`）。
-/// 若文件不存在则回退内置默认值；若指定语言不存在则回退 en-US。
+/// 读取后端日志翻译（`locale/log/<locale_code>.json`），缺失的条目用内置默认文案兜底，
+/// 回退语言为简体中文（规则见 [`read_with_embedded_fallback`]）：磁盘上有的条目优先
+/// （保留用户的自定义），磁盘缺失的条目（如升级后新增的日志文案）使用内置文案，不会显示成
+/// key 名。不修改磁盘文件。
 ///
-/// Read the backend log locale file (`locale/log/<locale_code>.json`).
-/// Falls back to embedded default if file doesn't exist; falls back to en-US if locale not found.
+/// Read the backend log translations (`locale/log/<locale_code>.json`), with missing entries
+/// filled in from the embedded defaults; the fallback language is Simplified Chinese (rules in
+/// [`read_with_embedded_fallback`]): entries present on disk win (keeping user customizations),
+/// and entries missing on disk (e.g. log messages added in an upgrade) use the embedded text
+/// instead of showing the raw key. Disk files are never modified.
 pub fn read_log_locale(locale_code: &str) -> serde_json::Value {
-    let dir = log_locale_dir();
-    // 优先读取指定语言文件 / Try the requested locale first
-    if let Some(v) = read_locale_file(&dir.join(format!("{}.json", locale_code))) {
-        return v;
-    }
-    // 回退到 en-US 磁盘文件 / Fall back to en-US on disk
-    if locale_code != "en-US"
-        && let Some(v) = read_locale_file(&dir.join("en-US.json")) {
-        return v;
-    }
-    // 最终回退到内置默认值 / Final fallback to embedded defaults
-    let content = match locale_code {
-        "zh-CN" => LOG_ZH_CN,
-        _ => LOG_EN_US,
+    read_log_locale_in(&log_locale_dir(), locale_code)
+}
+
+/// [`read_log_locale`] 的实现，作用于指定的日志翻译目录。
+/// Implementation of [`read_log_locale`] for the given log locale directory.
+fn read_log_locale_in(dir: &std::path::Path, locale_code: &str) -> serde_json::Value {
+    read_with_embedded_fallback(dir, locale_code, Some(LOG_ZH_CN), Some(LOG_EN_US))
+        .unwrap_or(serde_json::Value::Object(Default::default()))
+}
+
+/// 回退语言：某个语言缺少翻译时，用这个语言的翻译补上。
+/// Fallback language: used to fill in entries a language has no translation for.
+const FALLBACK_LOCALE: &str = "zh-CN";
+
+/// 读取某个翻译目录下指定语言的文件，并以内置默认翻译兜底缺失的条目，回退语言为
+/// 简体中文（[`FALLBACK_LOCALE`]）。日志翻译、界面翻译与内置模块翻译共用这一规则，
+/// 自下而上逐层合并（上层条目覆盖下层）：
+///
+/// 1. **内置简体中文**：所有语言的底；没有内置中文时（只有英文默认值）用内置英文
+/// 2. **该语言自己的内置翻译**（如 en-US）：有就叠加上去，所以英文界面缺的条目显示中文，
+///    而不是 key 名；自定义语言（如 ja-JP）没有内置翻译，缺的条目直接显示中文
+/// 3. **磁盘文件**：该语言自己的文件（磁盘条目优先，保留用户自定义）；该语言没有内置翻译
+///    且磁盘上也没有它的文件时，改用磁盘上的 zh-CN 文件
+/// 4. 以上都没有时返回 `None`（如未提供翻译文件的社区模块）
+///
+/// 结果只在内存中合并，不修改磁盘文件。
+///
+/// Read a locale file for the given language from a translation directory, filling in missing
+/// entries from the embedded defaults; the fallback language is Simplified Chinese
+/// ([`FALLBACK_LOCALE`]). Log, UI and built-in module translations share this rule, merged layer
+/// by layer from the bottom up (upper entries override lower ones):
+///
+/// 1. **embedded Simplified Chinese**: the base for every language; the embedded English is used
+///    when there is no embedded Chinese (only an English default exists)
+/// 2. **the language's own embedded translation** (e.g. en-US): layered on when present, so an
+///    English UI shows Chinese rather than the raw key for missing entries; custom languages
+///    (e.g. ja-JP) have none, so their missing entries show Chinese directly
+/// 3. **disk file**: the language's own file (disk entries win, keeping user customizations);
+///    when the language has no embedded translation and no file of its own on disk, the zh-CN
+///    file on disk is used instead
+/// 4. returns `None` when there is nothing at all (e.g. a community module that ships no locale
+///    files)
+///
+/// The result is merged in memory only; disk files are never modified.
+fn read_with_embedded_fallback(
+    dir: &std::path::Path,
+    locale_code: &str,
+    zh_default: Option<&str>,
+    en_default: Option<&str>,
+) -> Option<serde_json::Value> {
+    let parse = |c: &str| serde_json::from_str::<serde_json::Value>(c).ok();
+    let own_default = match locale_code {
+        "zh-CN" => zh_default,
+        "en-US" => en_default,
+        _ => None,
     };
-    serde_json::from_str(content).unwrap_or(serde_json::Value::Object(Default::default()))
+    let mut merged: Option<serde_json::Value> = None;
+    // 1. 回退语言（简体中文）的内置翻译打底，没有时用内置英文
+    // 1. the fallback language's (Simplified Chinese) embedded translation as the base, or the
+    //    embedded English when there is none
+    layer_json(&mut merged, zh_default.or(en_default).and_then(parse));
+    // 2. 叠加该语言自己的内置翻译；第 1 层已经是它时（zh-CN，或没有内置中文时的 en-US）跳过
+    // 2. layer the language's own embedded translation; skipped when layer 1 already is it
+    //    (zh-CN, or en-US when there is no embedded Chinese)
+    if locale_code != FALLBACK_LOCALE && zh_default.is_some() {
+        layer_json(&mut merged, own_default.and_then(parse));
+    }
+    // 3. 磁盘文件 / disk file
+    let disk = read_locale_file(&dir.join(format!("{}.json", locale_code))).or_else(|| {
+        if own_default.is_none() && locale_code != FALLBACK_LOCALE {
+            read_locale_file(&dir.join(format!("{}.json", FALLBACK_LOCALE)))
+        } else {
+            None
+        }
+    });
+    layer_json(&mut merged, disk);
+    merged
+}
+
+/// 把 `overlay` 合并到 `base` 上（见 [`merge_json`]）；`base` 为空时直接取 `overlay`。
+/// Merge `overlay` onto `base` (see [`merge_json`]); takes `overlay` as is when `base` is empty.
+fn layer_json(base: &mut Option<serde_json::Value>, overlay: Option<serde_json::Value>) {
+    let Some(overlay) = overlay else {
+        return;
+    };
+    match base {
+        Some(b) => merge_json(b, overlay),
+        None => *base = Some(overlay),
+    }
+}
+
+/// 查找内置模块的默认翻译 / Look up a built-in module's embedded default translation
+fn module_default(module_id: &str, locale_code: &str) -> Option<&'static str> {
+    MODULE_DEFAULTS
+        .iter()
+        .find(|(id, code, _)| *id == module_id && *code == locale_code)
+        .map(|(_, _, content)| *content)
+}
+
+/// 把 `overlay` 逐层合并进 `base`：两边都是对象时按 key 递归合并，否则 `overlay` 覆盖 `base`。
+/// Merge `overlay` into `base` level by level: objects are merged key by key recursively;
+/// otherwise `overlay` replaces `base`.
+fn merge_json(base: &mut serde_json::Value, overlay: serde_json::Value) {
+    match (base, overlay) {
+        (serde_json::Value::Object(b), serde_json::Value::Object(o)) => {
+            for (k, v) in o {
+                match b.get_mut(&k) {
+                    Some(bv) => merge_json(bv, v),
+                    None => {
+                        b.insert(k, v);
+                    }
+                }
+            }
+        }
+        (b, o) => *b = o,
+    }
 }
 
 /// 校验主程序语言文件：
@@ -405,7 +510,7 @@ fn write_or_rebuild_if_invalid(
     if !path.exists() {
         // 文件不存在，直接写入 / File missing, write it
         if let Err(e) = std::fs::write(path, default_content) {
-            tracing::warn!(path = ?path, error = %e, "Failed to write locale file {:?}: {}", path, e);
+            tracing::warn!("{}", crate::tl!("locale.writeFileFailed", path = path.display(), error = e));
         }
         return;
     }
@@ -414,7 +519,9 @@ fn write_or_rebuild_if_invalid(
     let result = std::fs::read_to_string(path)
         .map_err(|e| format!("read error: {}", e))
         .and_then(|content| {
-            serde_json::from_str::<serde_json::Value>(&content)
+            // 去掉 BOM，避免用户用记事本编辑过的文件被误判为损坏并重建
+            // Strip the BOM so a file edited in Notepad isn't misjudged as corrupt and rebuilt
+            serde_json::from_str::<serde_json::Value>(strip_utf8_bom(&content))
                 .map_err(|e| format!("JSON parse error: {}", e))
         })
         .and_then(|value| validator(&value, default_content));
@@ -426,18 +533,13 @@ fn write_or_rebuild_if_invalid(
         Err(reason) => {
             // 校验失败，重建文件 / Validation failed, rebuild the file
             tracing::warn!(
-                path = ?path,
-                label = label,
-                reason = reason,
-                "Locale file {:?} failed validation ({}): \"{}\". Rebuilding from default.",
-                path,
-                label,
-                reason
+                "{}",
+                crate::tl!("locale.validationFailed", path = path.display(), label = label, reason = reason)
             );
             if let Err(e) = std::fs::write(path, default_content) {
-                tracing::warn!(path = ?path, error = %e, "Failed to rebuild locale file {:?}: {}", path, e);
+                tracing::warn!("{}", crate::tl!("locale.rebuildFailed", path = path.display(), error = e));
             } else {
-                tracing::info!(path = ?path, "Rebuilt locale file {:?}", path);
+                tracing::info!("{}", crate::tl!("locale.rebuiltFile", path = path.display()));
             }
         }
     }
@@ -459,7 +561,7 @@ fn validate_file_at_path(
 ) -> Result<(), String> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| format!("read error: {}", e))?;
-    let value: serde_json::Value = serde_json::from_str(&content)
+    let value: serde_json::Value = serde_json::from_str(strip_utf8_bom(&content))
         .map_err(|e| format!("JSON parse error: {}", e))?;
 
     match file_type {
@@ -580,48 +682,49 @@ pub fn validate_locale_file(locale_code: &str) -> Option<String> {
     validate_file_at_path(&path, "app").err()
 }
 
-/// 读取主程序指定语言的 locale JSON。
-/// 若文件不存在则返回内置默认内容（fallback to embedded defaults）。
+/// 读取主程序界面的 locale JSON，缺失的条目用内置默认文案兜底
+/// （规则见 [`read_with_embedded_fallback`]）：已有安装升级后，`locale/app/` 里的旧文件缺少
+/// 新增的界面文案时，界面显示内置文案而不是 key 名。磁盘文件里的条目优先。
 ///
-/// Read the app locale JSON for the given locale code.
-/// Falls back to embedded defaults if the file doesn't exist.
+/// Read the app UI locale JSON, filling in missing entries from the embedded defaults (rules in
+/// [`read_with_embedded_fallback`]): after an upgrade, when the old file in `locale/app/` lacks
+/// newly added UI text, the UI shows the embedded text instead of the raw key. Disk entries win.
 pub fn read_app_locale(locale_code: &str) -> serde_json::Value {
-    let path = app_locale_dir().join(format!("{}.json", locale_code));
-    read_locale_file(&path).unwrap_or_else(|| {
-        // 内置 fallback / Embedded fallback
-        let content = match locale_code {
-            "en-US" => APP_EN_US,
-            _ => APP_ZH_CN,
-        };
-        serde_json::from_str(content).unwrap_or(serde_json::Value::Object(Default::default()))
-    })
+    read_app_locale_in(&app_locale_dir(), locale_code)
 }
 
-/// 读取指定模块指定语言的 locale JSON。
-/// 若目标语言文件不存在，自动回退到 en-US；
-/// en-US 也不存在时返回 None（模块将使用自身 --describe 中的默认值）。
+/// [`read_app_locale`] 的实现，作用于指定目录 / Implementation of [`read_app_locale`] for the given dir
+fn read_app_locale_in(dir: &std::path::Path, locale_code: &str) -> serde_json::Value {
+    read_with_embedded_fallback(dir, locale_code, Some(APP_ZH_CN), Some(APP_EN_US))
+        .unwrap_or(serde_json::Value::Object(Default::default()))
+}
+
+/// 读取指定模块指定语言的 locale JSON。内置模块缺失的条目用内置默认翻译兜底；
+/// 没有内置翻译的模块（如社区模块）沿用磁盘文件，目标语言文件不存在时回退 zh-CN 文件
+/// （规则见 [`read_with_embedded_fallback`]）。都没有时返回 None（模块将使用自身
+/// --describe 中的默认值）。
 ///
-/// Read the locale JSON for a specific module and locale code.
-/// Falls back to en-US if the target locale file doesn't exist.
-/// Returns None if en-US is also absent (module uses its --describe defaults).
+/// Read the locale JSON for a specific module and locale code. Missing entries of built-in
+/// modules fall back to the embedded defaults; modules without embedded translations (e.g.
+/// community modules) use their disk files, falling back to the zh-CN file when the target
+/// language file doesn't exist (rules in [`read_with_embedded_fallback`]). Returns None when
+/// there's nothing (the module uses its --describe defaults).
 pub fn read_module_locale(module_id: &str, locale_code: &str) -> Option<serde_json::Value> {
-    let dir = module_locale_dir(module_id);
-    let path = dir.join(format!("{}.json", locale_code));
+    read_module_locale_in(&module_locale_dir(module_id), module_id, locale_code)
+}
 
-    // 目标语言文件存在则直接返回 / Return target locale if it exists
-    if let Some(v) = read_locale_file(&path) {
-        return Some(v);
-    }
-
-    // 目标语言不是 en-US 时 fallback 到 en-US / Fall back to en-US when target isn't already en-US
-    if locale_code != "en-US" {
-        let fallback = dir.join("en-US.json");
-        if let Some(v) = read_locale_file(&fallback) {
-            return Some(v);
-        }
-    }
-
-    None
+/// [`read_module_locale`] 的实现，作用于指定目录 / Implementation of [`read_module_locale`] for the given dir
+fn read_module_locale_in(
+    dir: &std::path::Path,
+    module_id: &str,
+    locale_code: &str,
+) -> Option<serde_json::Value> {
+    read_with_embedded_fallback(
+        dir,
+        locale_code,
+        module_default(module_id, "zh-CN"),
+        module_default(module_id, "en-US"),
+    )
 }
 
 /// 从文件路径读取并解析 JSON；返回 None 表示文件不存在或解析失败。
@@ -631,15 +734,20 @@ fn read_locale_file(path: &std::path::Path) -> Option<serde_json::Value> {
         return None;
     }
     match std::fs::read_to_string(path) {
-        Ok(content) => match serde_json::from_str(&content) {
+        Ok(content) => match serde_json::from_str(strip_utf8_bom(&content)) {
             Ok(v) => Some(v),
+            // 加载日志翻译时也会调用本函数：tl! 只读取当前已加载的翻译，且 load_log_translations
+            // 先读完文件、再获取写锁，不会与这里的读锁冲突
+            // Also called while loading log translations: tl! only reads the translations already
+            // loaded, and load_log_translations finishes reading files before taking the write lock,
+            // so it never conflicts with the read lock taken here
             Err(e) => {
-                tracing::warn!(path = ?path, error = %e, "Failed to parse locale file {:?}: {}", path, e);
+                tracing::warn!("{}", crate::tl!("locale.parseFileFailed", path = path.display(), error = e));
                 None
             }
         },
         Err(e) => {
-            tracing::warn!(path = ?path, error = %e, "Failed to read locale file {:?}: {}", path, e);
+            tracing::warn!("{}", crate::tl!("locale.readFileFailed", path = path.display(), error = e));
             None
         }
     }
@@ -758,9 +866,11 @@ fn log_translations() -> &'static ParkingRwLock<serde_json::Value> {
     })
 }
 
-/// 加载指定语言的日志翻译到全局缓存。在设置语言后（`init_locale_dirs` 之后）调用一次。
-/// Load the log translations for the given locale into the global cache.
-/// Call once after the language is determined (after `init_locale_dirs`).
+/// 加载指定语言的日志翻译到全局缓存（缺失条目用内置文案兜底，见 [`read_log_locale`]）。
+/// 启动时（`startup::init_logging_and_locale`）和两端保存设置时语言发生变化时调用。
+/// Load the log translations for the given locale into the global cache (missing entries fall
+/// back to the embedded text, see [`read_log_locale`]). Called at startup
+/// (`startup::init_logging_and_locale`) and on both ends when a settings save changes the language.
 pub fn load_log_translations(locale_code: &str) {
     let value = read_log_locale(locale_code);
     *log_translations().write() = value;
@@ -798,4 +908,140 @@ pub fn tl_log(key: &str, params: &[(&str, &str)]) -> String {
         result = result.replace(&format!("{{{}}}", name), value);
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn embedded(content: &str) -> serde_json::Value {
+        serde_json::from_str(content).expect("embedded locale")
+    }
+
+    /// 磁盘文件（带 BOM）只含部分条目时：磁盘条目优先，缺失条目用内置中文兜底。
+    /// With a partial disk file (with BOM), disk entries win and missing ones fall back to the
+    /// embedded Chinese text.
+    #[test]
+    fn zh_missing_keys_fall_back_to_embedded() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("zh-CN.json"),
+            "\u{FEFF}{\"locale\":{\"rebuiltFile\":\"自定义\"}}",
+        )
+        .expect("write zh");
+        let zh = embedded(LOG_ZH_CN);
+        let merged = read_log_locale_in(dir.path(), "zh-CN");
+        assert_eq!(merged["locale"]["rebuiltFile"], "自定义");
+        assert_eq!(merged["locale"]["dirsInitialized"], zh["locale"]["dirsInitialized"]);
+        assert_eq!(merged["recorder"], zh["recorder"]);
+    }
+
+    /// zh-CN 文件缺失时用内置中文，不会被磁盘上的 en-US 文件替换成英文。
+    /// When the zh-CN file is missing the embedded Chinese is used, not the en-US file on disk.
+    #[test]
+    fn zh_missing_file_uses_embedded_not_en_disk() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("en-US.json"), "{\"locale\":{\"rebuiltFile\":\"custom en\"}}")
+            .expect("write en");
+        let zh = embedded(LOG_ZH_CN);
+        let merged = read_log_locale_in(dir.path(), "zh-CN");
+        assert_eq!(merged["locale"]["rebuiltFile"], zh["locale"]["rebuiltFile"]);
+    }
+
+    /// 自定义语言：自身文件的条目优先，缺失条目用内置中文；自身文件缺失时沿用磁盘 zh-CN 文件，
+    /// 不会改用磁盘上的 en-US 文件。
+    /// Custom language: its own entries win and missing ones use the embedded Chinese; when its
+    /// file is missing, the zh-CN file on disk is used, never the en-US file on disk.
+    #[test]
+    fn custom_language_falls_back_to_chinese() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let zh = embedded(LOG_ZH_CN);
+        std::fs::write(dir.path().join("ja-JP.json"), "{\"locale\":{\"dirsInitialized\":\"ja\"}}")
+            .expect("write ja");
+        std::fs::write(dir.path().join("en-US.json"), "{\"locale\":{\"rebuiltFile\":\"custom en\"}}")
+            .expect("write en");
+        let merged = read_log_locale_in(dir.path(), "ja-JP");
+        assert_eq!(merged["locale"]["dirsInitialized"], "ja");
+        assert_eq!(merged["locale"]["rebuiltFile"], zh["locale"]["rebuiltFile"]);
+
+        std::fs::write(dir.path().join("zh-CN.json"), "{\"locale\":{\"rebuiltFile\":\"自定义中文\"}}")
+            .expect("write zh");
+        let merged = read_log_locale_in(dir.path(), "ko-KR");
+        assert_eq!(merged["locale"]["rebuiltFile"], "自定义中文");
+        assert_eq!(merged["locale"]["dirsInitialized"], zh["locale"]["dirsInitialized"]);
+    }
+
+    /// en-US：缺的条目先用内置英文，内置英文也没有的才用内置中文；磁盘 en-US 条目优先。
+    /// en-US: missing entries use the embedded English first and the embedded Chinese only when
+    /// the English lacks them too; disk en-US entries win.
+    #[test]
+    fn english_falls_back_to_english_then_chinese() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let zh = r#"{"g":{"a":"甲","b":"乙","c":"丙"}}"#;
+        let en = r#"{"g":{"a":"A","b":"B"}}"#;
+        std::fs::write(dir.path().join("en-US.json"), r#"{"g":{"a":"disk A"}}"#).expect("write en");
+        let merged =
+            read_with_embedded_fallback(dir.path(), "en-US", Some(zh), Some(en)).expect("locale");
+        assert_eq!(merged["g"]["a"], "disk A");
+        assert_eq!(merged["g"]["b"], "B");
+        assert_eq!(merged["g"]["c"], "丙");
+    }
+
+    /// 界面翻译：旧文件只含部分条目时，磁盘条目优先，缺失的分组与嵌套条目用内置文案兜底；
+    /// 文件不存在时直接用内置翻译。
+    /// UI translations: with an old partial file, disk entries win and missing groups and nested
+    /// entries fall back to the embedded text; a missing file uses the embedded translation.
+    #[test]
+    fn app_missing_keys_fall_back_to_embedded() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("zh-CN.json"),
+            "{\"languageName\":\"自定义中文\",\"notifications\":{\"action\":{\"view_update\":\"自定义\"}}}",
+        )
+        .expect("write zh");
+        let zh = embedded(APP_ZH_CN);
+        let merged = read_app_locale_in(dir.path(), "zh-CN");
+        assert_eq!(merged["languageName"], "自定义中文");
+        assert_eq!(merged["notifications"]["action"]["view_update"], "自定义");
+        assert_eq!(
+            merged["notifications"]["action"]["remove_streamers"],
+            zh["notifications"]["action"]["remove_streamers"]
+        );
+        assert_eq!(merged["notifications"]["backend"], zh["notifications"]["backend"]);
+        assert_eq!(merged["settings"], zh["settings"]);
+
+        assert_eq!(read_app_locale_in(dir.path(), "en-US"), embedded(APP_EN_US));
+    }
+
+    /// 内置模块缺失的条目用内置翻译兜底；没有内置翻译的模块沿用磁盘文件（含 zh-CN 回退），
+    /// 什么都没有时返回 None。
+    /// Built-in modules fall back to embedded translations for missing entries; modules without
+    /// embedded translations use disk files (including the zh-CN fallback), and None when
+    /// nothing exists.
+    #[test]
+    fn module_locale_fallback() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("zh-CN.json"), "{\"name\":\"自定义\"}").expect("write zh");
+        let zh: serde_json::Value =
+            serde_json::from_str(module_default("filter_short", "zh-CN").expect("default"))
+                .expect("parse default");
+        let merged = read_module_locale_in(dir.path(), "filter_short", "zh-CN").expect("locale");
+        assert_eq!(merged["name"], "自定义");
+        assert_eq!(merged["description"], zh["description"]);
+        assert_eq!(merged["params"], zh["params"]);
+
+        let community = tempfile::tempdir().expect("tempdir");
+        assert!(read_module_locale_in(community.path(), "some_module", "en-US").is_none());
+        std::fs::write(community.path().join("zh-CN.json"), "{\"name\":\"某模块\"}").expect("write zh");
+        let merged =
+            read_module_locale_in(community.path(), "some_module", "en-US").expect("zh fallback");
+        assert_eq!(merged["name"], "某模块");
+        std::fs::write(community.path().join("en-US.json"), "{\"name\":\"Some\"}").expect("write en");
+        let merged =
+            read_module_locale_in(community.path(), "some_module", "en-US").expect("own file");
+        assert_eq!(merged["name"], "Some");
+        // 只有 en-US 文件时，zh-CN 请求不会用英文文件 / zh-CN requests never use the English file
+        std::fs::remove_file(community.path().join("zh-CN.json")).expect("remove zh");
+        assert!(read_module_locale_in(community.path(), "some_module", "zh-CN").is_none());
+    }
 }

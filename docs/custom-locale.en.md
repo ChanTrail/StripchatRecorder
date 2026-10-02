@@ -75,6 +75,8 @@ Copy `en-US.json` as a template and translate all string values (keep all keys a
 
 **That's it — no code changes required.** After restarting the program, `/api/locales` automatically includes the new language and both the Settings page and the setup wizard will display it in the language list.
 
+> **Fallback language:** Simplified Chinese. Entries your locale file doesn't translate (including text added in later versions) are shown in Simplified Chinese instead of the raw key; this applies to the UI, backend logs and module translations. Entries missing from English are shown in Simplified Chinese too.
+
 ---
 
 ## Module Translations
@@ -95,7 +97,7 @@ All fields are optional — any omitted field falls back to the module's own `--
 
 > **Priority:** Server-side locale JSON overrides `--describe` i18n → `--describe` i18n overrides the original default value.
 
-For third-party modules (not in the built-in list), simply create a folder with the module's `id` under `locale/modules/` and add the JSON files — the system discovers them automatically.
+For third-party modules (not in the built-in list), simply create a folder with the module's `id` under `locale/modules/` and add the JSON files — the system discovers them automatically. When there's no file for the current language, the folder's `zh-CN.json` is used.
 
 ### Built-in DAG node translations (`__builtin__`)
 

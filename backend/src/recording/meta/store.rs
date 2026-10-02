@@ -19,6 +19,26 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// Sequence number for meta atomic-write temp files (combined with the PID for unique names).
 static META_TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
+/// 判断文件名是否是 [`write_meta`] 原子写入产生的临时文件：`{stem}.json.{pid}.{seq}.tmp`。
+/// 与 `write_meta` 中的命名格式保持一致；进程在写入与 rename 之间崩溃时会残留这类文件。
+///
+/// Check whether a file name is a temp file produced by [`write_meta`]'s atomic write:
+/// `{stem}.json.{pid}.{seq}.tmp`. Must match the naming format in `write_meta`; such files are
+/// left behind when the process crashes between the write and the rename.
+pub(super) fn is_meta_write_tmp_name(name: &str) -> bool {
+    let all_digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    let Some(rest) = name.strip_suffix(".tmp") else {
+        return false;
+    };
+    let mut parts = rest.rsplitn(3, '.');
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some(seq), Some(pid), Some(base)) => {
+            all_digits(seq) && all_digits(pid) && base.ends_with(".json")
+        }
+        _ => false,
+    }
+}
+
 /// 读取视频文件对应的元数据，若文件不存在或解析失败则返回 `None`。
 /// 本模块的读/写/删除都通过 [`resolve_meta_path`] 定位 meta（派生 meta 缺失时查找归属 meta）。
 ///

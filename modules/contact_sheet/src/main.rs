@@ -107,9 +107,22 @@ fn run() -> Result<(), String> {
     let cols = grid::compute_cols(frame_count, forced_cols);
     let rows = grid::compute_rows(frame_count, cols, forced_rows);
 
-    // 创建临时目录存放截取的帧 / Create temp directory for extracted frames
-    let tmp_dir = std::env::temp_dir().join(format!(
-        "contact_sheet_{}",
+    // 创建临时目录存放截取的帧。放在后端统一管理的 tmp 目录（pp_utils::tmp_dir）而不是
+    // 系统临时目录：模块被取消（强制结束）时下面的清理闭包不会执行，放在系统临时目录的
+    // 残留帧永远没人清理，放在这里则由后端的 tmp 定时清理兜底。目录名带上输入视频的
+    // stem：后端定时清理会跳过名称包含运行中录制 stem 的条目，长视频截帧超过 1 小时也
+    // 不会被中途删掉。
+    // Create a temp directory for extracted frames under the backend-managed tmp dir
+    // (pp_utils::tmp_dir) instead of the system temp dir: when the module is cancelled (killed)
+    // the cleanup closure below never runs, and leftover frames in the system temp dir would
+    // never be cleaned, whereas here the backend's scheduled tmp cleanup removes them. The
+    // directory name includes the input video's stem: the backend's scheduled cleanup skips
+    // entries whose name contains a running recording's stem, so frame extraction on a long
+    // video isn't deleted midway even if it takes more than an hour.
+    let tmp_dir = pp_utils::tmp_dir().join(format!(
+        "contact_sheet_{}_{}_{}",
+        input.file_stem().and_then(|s| s.to_str()).unwrap_or("video"),
+        std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()

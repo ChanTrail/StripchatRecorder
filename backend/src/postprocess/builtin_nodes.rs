@@ -74,11 +74,13 @@ pub fn unpack_bundle(bundle: &std::path::Path) -> (PathBuf, Option<PathBuf>) {
 }
 
 /// 返回所有内置节点的 `ModuleInfo` 描述，注入到 `discover_modules` 返回列表。
-/// name 和 description 从合并的 `__builtin__` locale 文件读取，回退到内嵌的英文默认值。
+/// name 和 description 从合并的 `__builtin__` locale 文件读取（缺失条目由内置翻译兜底，
+/// 回退语言为简体中文），读不到时使用下方硬编码的中文默认值。
 ///
 /// Return `ModuleInfo` for all built-in nodes, injected into the `discover_modules` list.
-/// name and description are read from the merged `__builtin__` locale file,
-/// falling back to embedded English defaults.
+/// name and description are read from the merged `__builtin__` locale file (missing entries are
+/// filled from the embedded translations, falling back to Simplified Chinese), and the hardcoded
+/// Chinese defaults below are used when nothing can be read.
 pub fn builtin_module_infos() -> Vec<ModuleInfo> {
     // 读取当前语言设置：只读 settings.json，不构造完整 AppState（每次 discover_modules 都会调用，
     // 避免重复创建目录、初始化信号量等副作用）；配置不可读时回退为 Settings::default() 的语言。
@@ -100,15 +102,18 @@ pub fn builtin_module_infos() -> Vec<ModuleInfo> {
             .unwrap_or_else(|| (name_default.to_string(), desc_default.to_string()))
     };
 
+    // 最后一道兜底与回退语言一致，使用简体中文（与 locale/defaults/modules/__builtin__/zh-CN.json 相同）
+    // The last-resort defaults match the fallback language, Simplified Chinese (same as
+    // locale/defaults/modules/__builtin__/zh-CN.json)
     let (ri_name, ri_desc) = tr(
         "recording_input",
-        "Recording Input",
-        "Virtual recording input node — always the pipeline start point",
+        "录制输入",
+        "虚拟录制输入节点，始终作为流水线的起点",
     );
     let (unpack_name, unpack_desc) = tr(
         "unpack",
-        "Unpack Media Bundle",
-        "Split a media bundle into a video file (port 0) and an image file (port 1)",
+        "解组媒体包",
+        "将媒体包拆分为视频文件（端口 0）和图片文件（端口 1）",
     );
 
     // 内置节点没有独立的 Cargo.toml，也不随 backend 版本单独展示版本号——

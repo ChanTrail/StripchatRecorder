@@ -14,10 +14,18 @@ use super::model::{
     meta_dir_for, username_from_path,
 };
 use super::scan::{ensure_meta_files, ts_merge_output_dir};
-use super::store::{read_meta, write_meta};
+use super::store::{is_meta_write_tmp_name, read_meta, write_meta};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, SystemTime};
+
+/// meta 原子写入临时文件的最小清理年龄。`write_meta` 从写临时文件到 rename 只需毫秒级，
+/// 超过 1 小时仍存在的必然是进程崩溃留下的残留，不会误删正在写入的文件。
+/// Minimum age before a meta atomic-write temp file is cleaned up. `write_meta` goes from
+/// writing the temp file to the rename within milliseconds, so one still present after an
+/// hour is certainly a crash leftover and never a file being written.
+const META_TMP_MIN_AGE: Duration = Duration::from_secs(3600);
 
 /// 输出目录维护是否正在执行（保证 [`maintain_output_dir`] 单实例运行）。
 /// Whether output-directory maintenance is running (keeps [`maintain_output_dir`] single-instance).
@@ -207,6 +215,12 @@ fn migrate_truncated_stem_meta_files_in(root: &Path) -> usize {
 /// （包括因进程重启等原因卡在中间状态的陈旧记录），都应视为孤立并清理。
 /// 之前基于 status 的前置跳过会掩盖这类陈旧记录，导致孤立 meta 无法被清理。
 ///
+/// 每轮还会删除 `write_meta` 崩溃残留、超过 1 小时的临时文件（见
+/// [`cleanup_stale_meta_tmp_files_in`]）。
+///
+/// Each pass also removes `write_meta` crash-leftover temp files older than one hour (see
+/// [`cleanup_stale_meta_tmp_files_in`]).
+///
 /// Scan the meta/ directory (including all per-streamer subdirectories) and delete
 /// orphaned meta files whose corresponding video file or session_dir no longer exists;
 /// afterwards, every pass removes streamer subdirectories that have been empty for more than
@@ -260,6 +274,12 @@ pub fn cleanup_orphaned_meta_files() -> usize {
     if count > 0 {
         tracing::info!("{}", crate::tl!("meta.cleanupDone", count = count));
     }
+    // 清理 write_meta 崩溃残留的临时文件（不计入返回值：返回值用于"孤立 meta 已清理"通知）。
+    // 放在空子目录清理之前，否则只剩残留临时文件的子目录永远不会变空。
+    // Clean up temp files left by write_meta crashes (not counted in the return value, which
+    // drives the "orphaned meta cleaned" notification). Done before the empty-subdirectory
+    // cleanup, otherwise a subdirectory holding only leftover temp files would never become empty.
+    cleanup_stale_meta_tmp_files_in(&meta_dir(), META_TMP_MIN_AGE);
     // 每轮都清理空子目录（不只在本轮删过 meta 时）：有最小年龄保护后，本轮因删掉最后一个
     // meta 而变空的子目录修改时间刚被刷新，会被本轮跳过，需由下一轮清理
     // Clean up empty subdirectories on every pass (not only when this pass deleted meta): with
@@ -267,6 +287,59 @@ pub fn cleanup_orphaned_meta_files() -> usize {
     // has a fresh mtime and is skipped now, so a later pass has to remove it
     remove_empty_meta_subdirs();
     count
+}
+
+/// 删除 meta 根目录（含一层主播子目录）下 `write_meta` 原子写入残留的临时文件
+/// （`{stem}.json.{pid}.{seq}.tmp`，见 [`is_meta_write_tmp_name`]），只删除修改时间距今
+/// 不少于 `min_age` 的文件；读不到修改时间时保守跳过。返回删除数量。
+///
+/// Remove `write_meta` atomic-write temp files (`{stem}.json.{pid}.{seq}.tmp`, see
+/// [`is_meta_write_tmp_name`]) left under the meta root (including the single level of
+/// streamer subdirectories), only when modified at least `min_age` ago; files whose mtime
+/// can't be read are skipped conservatively. Returns the number removed.
+fn cleanup_stale_meta_tmp_files_in(root: &Path, min_age: Duration) -> usize {
+    let mut dirs = vec![root.to_path_buf()];
+    if let Ok(entries) = std::fs::read_dir(root) {
+        dirs.extend(entries.flatten().map(|e| e.path()).filter(|p| p.is_dir()));
+    }
+    let now = SystemTime::now();
+    let mut removed = 0usize;
+    for dir in dirs {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file()
+                || !path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(is_meta_write_tmp_name)
+            {
+                continue;
+            }
+            let old_enough = std::fs::metadata(&path)
+                .and_then(|m| m.modified())
+                .ok()
+                // 修改时间晚于当前时间（时钟误差）视为年龄 0 / mtime in the future (clock skew) counts as age 0
+                .map(|t| now.duration_since(t).unwrap_or(Duration::ZERO))
+                .is_some_and(|age| age >= min_age);
+            if !old_enough {
+                continue;
+            }
+            match std::fs::remove_file(&path) {
+                Ok(()) => removed += 1,
+                Err(e) => tracing::warn!(
+                    "{}",
+                    crate::tl!("meta.cleanupTmpDeleteFailed", name = path.display(), error = e)
+                ),
+            }
+        }
+    }
+    if removed > 0 {
+        tracing::info!("{}", crate::tl!("meta.cleanupTmpDone", count = removed));
+    }
+    removed
 }
 
 /// 移除 meta 根目录下已变空的主播子目录（如该主播的所有录制都已被删除/清理）。
@@ -577,12 +650,15 @@ pub async fn maintain_output_dir(
     })
     .await;
 
-    // 步骤 4：清理 tmp 目录中超过 24 小时未访问的残留文件和空子目录
-    // Step 4: clean up stale files (older than 24 h) and empty subdirectories in the tmp dir
+    // 步骤 4：清理 tmp 目录中超过 1 小时未修改的残留文件和空子目录，
+    // 跳过正在排队/执行后处理的录制的临时文件
+    // Step 4: clean up stale files (older than 1 h) and empty subdirectories in the tmp dir,
+    // skipping temp files of recordings that are queued for or running post-processing
     let max_tmp_gb = app_state.get_settings().max_tmp_dir_gb;
     let tmp_dir = crate::config::app_state::exe_dir().join("tmp");
+    let protected_stems = app_state.pp_queue.active_recording_stems();
     let _ = tokio::task::spawn_blocking(move || {
-        cleanup_stale_tmp(&tmp_dir, max_tmp_gb);
+        cleanup_stale_tmp(&tmp_dir, max_tmp_gb, &protected_stems);
     })
     .await;
 
@@ -640,46 +716,77 @@ pub async fn schedule_meta_version_check(
     }
 }
 
+/// tmp 过期文件的年龄阈值：修改时间距今超过该值的文件视为残留并删除。
+/// 维护每 5 分钟执行一次，因此残留文件最晚在约 1 小时 5 分钟后被清理。
+/// Age threshold for stale tmp files: files modified longer ago than this are treated as
+/// leftovers and removed. Maintenance runs every 5 minutes, so leftovers are gone within
+/// roughly 1 hour 5 minutes.
+const STALE_TMP_MAX_AGE: Duration = Duration::from_secs(3600);
+
 /// 清理 tmp 目录中的过期内容：
 ///
-/// 1. **过期文件**：修改时间超过 24 小时的文件直接删除（不受大小限制影响）。
-///    这类文件是后处理任务失败/中断时遗留的中间产物，不再被任何运行中任务使用。
+/// 1. **过期文件**：修改时间超过 [`STALE_TMP_MAX_AGE`]（1 小时）的文件直接删除
+///    （不受大小限制影响）。这类文件是后处理任务失败/中断时遗留的中间产物。
 /// 2. **空子目录**：删除文件后遗留的空子目录一并清理（跳过 60 秒内修改过的目录）。
 /// 3. **大小上限兜底**：若清理过期文件后目录仍超出 `max_tmp_gb` 限制，
 ///    再按修改时间从旧到新继续删文件，直到大小低于上限。
 ///
-/// `max_tmp_gb` 为 0 时跳过大小兜底逻辑（不限制大小，但仍清理 24 小时过期文件）。
+/// **运行中任务保护**：阈值缩短到 1 小时后，运行时间较长的任务（如通过慢速代理上传大分片
+/// 的 notify_telegram）自己创建、仍在使用的文件也可能超过 1 小时。模块写入 tmp 的顶层
+/// 文件/目录名都带输入视频的 stem，因此名称包含 `protected_stems`（已 claim 的录制 stem，
+/// 见 `PpQueue::active_recording_stems`）中任一项的顶层条目及其下所有内容在以上三步中都
+/// 整体跳过，等任务结束后再按规则清理。
+///
+/// `max_tmp_gb` 为 0 时跳过大小兜底逻辑（不限制大小，但仍清理过期文件）。
 ///
 /// Clean up stale content in the tmp directory:
 ///
-/// 1. **Stale files**: files not modified within the last 24 hours are deleted unconditionally
-///    (regardless of size limit). These are leftover intermediates from failed/interrupted
-///    post-processing tasks that no running task is using anymore.
+/// 1. **Stale files**: files not modified within [`STALE_TMP_MAX_AGE`] (1 hour) are deleted
+///    unconditionally (regardless of size limit). These are leftover intermediates from
+///    failed/interrupted post-processing tasks.
 /// 2. **Empty subdirectories**: empty subdirectories left after file deletion are also removed
 ///    (directories modified within the last 60 seconds are skipped).
 /// 3. **Size cap fallback**: if the directory still exceeds `max_tmp_gb` after removing
 ///    stale files, continue deleting from oldest to newest until under the limit.
 ///
-/// When `max_tmp_gb` is 0, the size cap fallback is skipped (size is unlimited, but
-/// 24-hour stale file cleanup still runs).
-fn cleanup_stale_tmp(tmp: &std::path::Path, max_tmp_gb: f64) {
+/// **Running-task protection**: with the threshold down to 1 hour, files a long-running task
+/// created and is still using (e.g. notify_telegram uploading large parts over a slow proxy)
+/// may also be older than an hour. Modules name their top-level tmp files/dirs after the input
+/// video's stem, so any top-level entry whose name contains one of `protected_stems` (stems of
+/// claimed recordings, see `PpQueue::active_recording_stems`) is skipped entirely, with
+/// everything under it, by all three steps, and is cleaned by the usual rules once the task ends.
+///
+/// When `max_tmp_gb` is 0, the size cap fallback is skipped (size is unlimited, but stale file
+/// cleanup still runs).
+fn cleanup_stale_tmp(tmp: &std::path::Path, max_tmp_gb: f64, protected_stems: &[String]) {
     if !tmp.exists() {
         return;
     }
 
-    let max_age = std::time::Duration::from_secs(24 * 3600);
+    let max_age = STALE_TMP_MAX_AGE;
     let now = std::time::SystemTime::now();
 
-    // 递归收集所有文件（含子目录内文件）
-    // Recursively collect all files (including inside subdirectories)
+    // 路径所属的 tmp 顶层条目名包含运行中录制的 stem 时视为受保护
+    // A path is protected when its top-level tmp entry's name contains a running recording's stem
+    let is_protected = |p: &Path| -> bool {
+        p.strip_prefix(tmp)
+            .ok()
+            .and_then(|rel| rel.components().next())
+            .and_then(|c| c.as_os_str().to_str())
+            .is_some_and(|name| protected_stems.iter().any(|s| name.contains(s.as_str())))
+    };
+
+    // 递归收集所有文件（含子目录内文件），排除受保护条目
+    // Recursively collect all files (including inside subdirectories), excluding protected entries
     let mut all_files: Vec<(std::path::PathBuf, u64, std::time::SystemTime)> = Vec::new();
     collect_files_recursive(tmp, &mut all_files);
+    all_files.retain(|(p, _, _)| !is_protected(p));
 
     let mut removed_bytes: u64 = 0;
     let mut removed_count: usize = 0;
 
-    // 第一轮：删除超过 24 小时未修改的文件
-    // Round 1: delete files not modified within the last 24 hours
+    // 第一轮：删除超过 1 小时未修改的文件
+    // Round 1: delete files not modified within the last hour
     let mut remaining_files: Vec<(std::path::PathBuf, u64, std::time::SystemTime)> = Vec::new();
     for (path, size, modified) in all_files {
         let age = now.duration_since(modified).unwrap_or(max_age);
@@ -724,10 +831,11 @@ fn cleanup_stale_tmp(tmp: &std::path::Path, max_tmp_gb: f64) {
     // 60 seconds, so split_* dirs just created by notify_telegram and not yet written by ffmpeg
     // aren't removed. Directories whose files/subdirs were removed in this pass get a fresh
     // mtime and are cleaned up by the next maintenance pass (5 minutes later).
+    // 运行中任务的受保护目录同样跳过 / Protected directories of running tasks are skipped as well
     crate::recording::segment_merge::remove_empty_dirs_recursive(
         tmp,
         false,
-        &|_| false,
+        &is_protected,
         crate::recording::segment_merge::EMPTY_DIR_MIN_AGE,
     );
 
@@ -737,6 +845,74 @@ fn cleanup_stale_tmp(tmp: &std::path::Path, max_tmp_gb: f64) {
             crate::tl!("maintenance.tmpCleanup", count = removed_count, mb = format!("{:.1}", removed_bytes as f64 / 1024.0 / 1024.0))
         );
     }
+}
+
+/// 程序启动时清空 tmp 目录（`exe_dir()/tmp`）中的全部内容，保留 tmp 根目录本身。
+///
+/// 启动时上一个进程的后处理都已结束，tmp 里的一切都是残留（中断的上传分片、缩略图、
+/// 截帧目录等），无需等定时清理的 1 小时阈值，也不需要运行中任务保护。必须在任何可能
+/// 运行模块的组件（状态监控、维护调度、录制）启动之前调用：两端都在启动迁移阶段调用。
+/// 代价：Telegram 上传失败后保留的分片不再能跨重启复用，下次重试会重新切割（流复制，较快）。
+///
+/// Clear everything in the tmp directory (`exe_dir()/tmp`) at program startup, keeping the
+/// tmp root itself.
+///
+/// At startup all post-processing of the previous process has ended, so everything in tmp is
+/// a leftover (interrupted upload parts, thumbnails, frame-extraction dirs, etc.); there is no
+/// need to wait for the scheduled cleanup's 1-hour threshold, nor for running-task protection.
+/// Must be called before any component that may run modules (status monitor, maintenance
+/// scheduler, recording) starts: both ends call it during the startup migration phase.
+/// Trade-off: split parts kept after a failed Telegram upload can no longer be reused across a
+/// restart; the next retry re-splits (stream copy, fairly fast).
+pub fn cleanup_tmp_on_startup() -> usize {
+    cleanup_tmp_on_startup_in(&crate::config::app_state::exe_dir().join("tmp"))
+}
+
+/// [`cleanup_tmp_on_startup`] 的实现，作用于指定 tmp 目录，返回删除的文件数。
+/// Implementation of [`cleanup_tmp_on_startup`] for the given tmp dir; returns the number of
+/// files removed.
+fn cleanup_tmp_on_startup_in(tmp: &Path) -> usize {
+    let Ok(entries) = std::fs::read_dir(tmp) else {
+        return 0;
+    };
+    let mut removed_count = 0usize;
+    let mut removed_bytes = 0u64;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        // 不跟随符号链接 / Don't follow symlinks
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        let (result, count, bytes) = if meta.is_dir() {
+            let mut files = Vec::new();
+            collect_files_recursive(&path, &mut files);
+            let bytes: u64 = files.iter().map(|(_, s, _)| s).sum();
+            (std::fs::remove_dir_all(&path), files.len(), bytes)
+        } else {
+            (std::fs::remove_file(&path), 1, meta.len())
+        };
+        match result {
+            Ok(()) => {
+                removed_count += count;
+                removed_bytes += bytes;
+            }
+            Err(e) => tracing::warn!(
+                "{}",
+                crate::tl!("maintenance.tmpStartupDeleteFailed", path = path.display(), error = e)
+            ),
+        }
+    }
+    if removed_count > 0 {
+        tracing::info!(
+            "{}",
+            crate::tl!(
+                "maintenance.tmpStartupCleanup",
+                count = removed_count,
+                mb = format!("{:.1}", removed_bytes as f64 / 1024.0 / 1024.0)
+            )
+        );
+    }
+    removed_count
 }
 
 /// 递归收集目录下所有文件及其元数据。
@@ -840,7 +1016,7 @@ mod tests {
         std::fs::create_dir_all(&other).expect("mkdir other");
         std::fs::write(other.join("file.bin"), b"x").expect("write file");
 
-        cleanup_stale_tmp(tmp, 0.0);
+        cleanup_stale_tmp(tmp, 0.0, &[]);
         assert!(nested.is_dir());
         assert!(split.is_dir());
         assert!(other.join("file.bin").is_file());
@@ -865,5 +1041,148 @@ mod tests {
         assert!(alice.is_dir());
         assert!(bob_meta.is_file());
         assert!(root.is_dir());
+    }
+
+    /// 把文件修改时间设为 `age` 之前 / Set a file's mtime to `age` ago
+    fn set_file_age(path: &Path, age: std::time::Duration) {
+        let t = std::time::SystemTime::now() - age;
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .expect("open for set_modified")
+            .set_modified(t)
+            .expect("set_modified");
+    }
+
+    /// tmp 清理删除超过 1 小时的文件（含子目录内的分片），保留 1 小时内修改过的文件。
+    /// The tmp cleanup removes files older than 1 h (including split parts in subdirectories)
+    /// and keeps files modified within the last hour.
+    #[test]
+    fn stale_tmp_cleanup_removes_old_files() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let tmp = dir.path();
+        let two_hours = std::time::Duration::from_secs(2 * 3600);
+        let old_cover = tmp.join("alice_dc_resized.jpg");
+        std::fs::write(&old_cover, b"x").expect("write old cover");
+        set_file_age(&old_cover, two_hours);
+        let split = tmp.join("split_alice_1_2");
+        std::fs::create_dir_all(&split).expect("mkdir split");
+        let old_part = split.join("alice_part000.mp4");
+        std::fs::write(&old_part, b"x").expect("write old part");
+        set_file_age(&old_part, two_hours);
+        let recent = tmp.join("carol_tg_resized.jpg");
+        std::fs::write(&recent, b"x").expect("write recent");
+        set_file_age(&recent, std::time::Duration::from_secs(30 * 60));
+        let fresh = tmp.join("bob_tg_resized.jpg");
+        std::fs::write(&fresh, b"x").expect("write fresh");
+
+        cleanup_stale_tmp(tmp, 0.0, &[]);
+        assert!(!old_cover.exists());
+        assert!(!old_part.exists());
+        assert!(recent.is_file());
+        assert!(fresh.is_file());
+    }
+
+    /// 名称包含运行中录制 stem 的顶层条目（文件和目录及其内容）即使超过 1 小时也不删除，
+    /// 大小兜底也不会删它们；其他录制的过期文件照常删除。
+    /// Top-level entries whose name contains a running recording's stem (files and directories
+    /// with their contents) are kept even when older than 1 h, and the size cap doesn't remove
+    /// them either; other recordings' stale files are removed as usual.
+    #[test]
+    fn stale_tmp_cleanup_skips_running_recordings() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let tmp = dir.path();
+        let two_hours = std::time::Duration::from_secs(2 * 3600);
+        let stem = "alice_20240101_120000";
+
+        let split = tmp.join(format!("split_{stem}_1_2"));
+        std::fs::create_dir_all(&split).expect("mkdir split");
+        let part = split.join(format!("{stem}_part000.mp4"));
+        std::fs::write(&part, b"x").expect("write part");
+        set_file_age(&part, two_hours);
+        let thumb = tmp.join(format!("{stem}_part000.tg_thumb.png"));
+        std::fs::write(&thumb, b"x").expect("write thumb");
+        set_file_age(&thumb, two_hours);
+        let other = tmp.join("bob_20240101_120000_tg_resized.jpg");
+        std::fs::write(&other, b"x").expect("write other");
+        set_file_age(&other, two_hours);
+
+        // 大小上限设为极小值，验证兜底也跳过受保护条目 / Tiny cap: the fallback must skip protected entries too
+        cleanup_stale_tmp(tmp, 1e-9, &[stem.to_string()]);
+        assert!(part.is_file());
+        assert!(thumb.is_file());
+        assert!(split.is_dir());
+        assert!(!other.exists());
+
+        // 任务结束后（不再受保护）按规则清理 / Cleaned by the usual rules once no longer protected
+        cleanup_stale_tmp(tmp, 0.0, &[]);
+        assert!(!part.exists());
+        assert!(!thumb.exists());
+    }
+
+    /// 启动清理删除 tmp 下的全部文件与子目录（不论新旧），保留 tmp 根目录，返回文件数。
+    /// The startup cleanup removes every file and subdirectory under tmp (regardless of age),
+    /// keeps the tmp root, and returns the file count.
+    #[test]
+    fn startup_tmp_cleanup_clears_everything() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let tmp = dir.path();
+        std::fs::write(tmp.join("alice_tg_resized.jpg"), b"x").expect("write cover");
+        let split = tmp.join("split_alice_1_2");
+        std::fs::create_dir_all(&split).expect("mkdir split");
+        std::fs::write(split.join("alice_part000.mp4"), b"xx").expect("write part0");
+        std::fs::write(split.join("alice_part001.mp4"), b"xx").expect("write part1");
+        std::fs::create_dir_all(tmp.join("empty_dir")).expect("mkdir empty");
+
+        assert_eq!(cleanup_tmp_on_startup_in(tmp), 3);
+        assert!(tmp.is_dir());
+        assert_eq!(std::fs::read_dir(tmp).expect("read tmp").count(), 0);
+        // tmp 不存在时直接返回 0 / Returns 0 when tmp doesn't exist
+        assert_eq!(cleanup_tmp_on_startup_in(&tmp.join("missing")), 0);
+    }
+
+    /// 只识别 write_meta 的临时文件命名 / Only write_meta's temp-file naming is recognized
+    #[test]
+    fn meta_write_tmp_name_rules() {
+        assert!(is_meta_write_tmp_name("alice_20240101_120000.json.1234.0.tmp"));
+        assert!(is_meta_write_tmp_name("a.b_20240101_120000.json.9.17.tmp"));
+        assert!(!is_meta_write_tmp_name("alice_20240101_120000.json"));
+        assert!(!is_meta_write_tmp_name("alice.json.tmp"));
+        assert!(!is_meta_write_tmp_name("alice.json.x.0.tmp"));
+        assert!(!is_meta_write_tmp_name("alice.txt.1.2.tmp"));
+        assert!(!is_meta_write_tmp_name("notes.tmp"));
+    }
+
+    /// 只删除超过最小年龄的 write_meta 临时文件（根目录与主播子目录），不动 meta 与其他文件；
+    /// 只剩残留临时文件的子目录在之后可被空目录清理删除。
+    /// Only write_meta temp files older than the minimum age are removed (root and streamer
+    /// subdirectories); meta and other files are untouched.
+    #[test]
+    fn stale_meta_tmp_files_are_removed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let hour = std::time::Duration::from_secs(3600);
+
+        let meta = root.join("alice").join("alice_20240101_120000.json");
+        write_test_meta(&meta, "X:/rec/alice/alice_20240101_120000.mp4");
+        set_file_age(&meta, 2 * hour);
+        let old_tmp = root.join("alice").join("alice_20240101_120000.json.42.0.tmp");
+        std::fs::write(&old_tmp, b"{").expect("write old tmp");
+        set_file_age(&old_tmp, 2 * hour);
+        let fresh_tmp = root.join("alice").join("alice_20240101_120001.json.42.1.tmp");
+        std::fs::write(&fresh_tmp, b"{").expect("write fresh tmp");
+        let root_tmp = root.join("legacy.json.7.3.tmp");
+        std::fs::write(&root_tmp, b"{").expect("write root tmp");
+        set_file_age(&root_tmp, 2 * hour);
+        let other = root.join("alice").join("notes.tmp");
+        std::fs::write(&other, b"x").expect("write other");
+        set_file_age(&other, 2 * hour);
+
+        assert_eq!(cleanup_stale_meta_tmp_files_in(root, hour), 2);
+        assert!(!old_tmp.exists());
+        assert!(!root_tmp.exists());
+        assert!(fresh_tmp.is_file());
+        assert!(meta.is_file());
+        assert!(other.is_file());
     }
 }
