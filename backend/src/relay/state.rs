@@ -3,16 +3,13 @@
 use parking_lot::RwLock;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{broadcast, mpsc};
 
 /// TS 数据预缓冲 ring buffer，保留最近约 N 字节，供新连接立即推送。
 /// Pre-buffer ring buffer for TS data; retains the last ~N bytes for immediate push to new connections.
 const PREBUFFER_MAX_BYTES: usize = 512 * 1024; // 512 KB ≈ 2–3 秒黑屏或 1–2 秒直播
-
-/// `subscribe_with_prebuffer` 的返回类型别名。
-/// Return type alias for `subscribe_with_prebuffer`.
-type SubscribeWithPrebuf = (broadcast::Receiver<Arc<Vec<u8>>>, Vec<Arc<Vec<u8>>>);
 
 /// 转发流的当前状态 / Current state of a relay stream
 #[derive(Debug, Clone, serde::Serialize)]
@@ -30,6 +27,10 @@ pub enum RelayStreamState {
 
 /// 转发会话 / Relay session
 pub struct RelaySession {
+    /// 会话唯一 ID（单调递增），worker 用它确认自己操作的仍是创建它的那个会话。
+    /// Unique, monotonically increasing session id; the worker uses it to make sure it
+    /// still operates on the session that spawned it.
+    pub id: u64,
     /// 上游播放列表 URL（若已获取）/ Upstream playlist URL (if obtained)
     pub playlist_url: Option<String>,
     /// 当前流状态 / Current stream state
@@ -57,82 +58,116 @@ pub struct RelaySession {
     pub prebuffer_bytes: usize,
 }
 
+/// 新会话需要启动的 worker 所持有的通道端。
+/// Channel ends handed to the worker that must be started for a newly created session.
+pub struct NewRelayWorker {
+    /// 停止信号接收端 / Stop signal receiver
+    pub stop_rx: mpsc::Receiver<()>,
+    /// TS 数据广播发送端 / TS data broadcast sender
+    pub ts_tx: broadcast::Sender<Arc<Vec<u8>>>,
+}
+
+/// `subscribe_or_create` 的结果。
+/// Result of `subscribe_or_create`.
+pub struct RelaySubscription {
+    /// 本次订阅所属会话的 ID / Id of the session this subscription belongs to
+    pub session_id: u64,
+    /// TS 数据接收端 / TS data receiver
+    pub rx: broadcast::Receiver<Arc<Vec<u8>>>,
+    /// 订阅时刻的预缓冲快照 / Prebuffer snapshot taken at subscription time
+    pub prebuffer: Vec<Arc<Vec<u8>>>,
+    /// 仅当本次调用新建了会话时为 Some，调用方必须用它启动唯一的 worker。
+    /// Some only when this call created the session; the caller must start the single worker with it.
+    pub new_worker: Option<NewRelayWorker>,
+}
+
 /// 全局转发会话管理器 / Global relay session manager
 pub struct RelayManager {
     pub sessions: RwLock<HashMap<String, RelaySession>>,
+    /// 下一个会话 ID（从 1 开始单调递增）/ Next session id (monotonically increasing from 1)
+    next_session_id: AtomicU64,
 }
 
 impl RelayManager {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             sessions: RwLock::new(HashMap::new()),
+            next_session_id: AtomicU64::new(1),
         })
     }
 
-    /// 创建或替换会话。
-    pub fn create_session(
-        &self,
-        username: &str,
-        stop_tx: mpsc::Sender<()>,
-        ts_tx: broadcast::Sender<Arc<Vec<u8>>>,
-    ) {
+    /// 订阅主播的转发流；若会话不存在则在同一把写锁内创建会话并返回 worker 通道。
+    /// 检查与创建在单次写锁内完成，因此同一主播的并发请求只会有一个拿到 `new_worker`，
+    /// 也就只会启动一个 worker。
+    ///
+    /// Subscribe to a streamer's relay stream; if no session exists, create one under the
+    /// same write lock and return the worker channels. Check and create happen within a
+    /// single write lock, so among concurrent requests for the same streamer only one gets
+    /// `new_worker`, and therefore only one worker is started.
+    pub fn subscribe_or_create(&self, username: &str) -> RelaySubscription {
+        let mut sessions = self.sessions.write();
+        if let Some(s) = sessions.get_mut(username) {
+            s.active_connections += 1;
+            s.last_active = Instant::now();
+            return RelaySubscription {
+                session_id: s.id,
+                rx: s.ts_tx.subscribe(),
+                prebuffer: s.prebuffer.iter().cloned().collect(),
+                new_worker: None,
+            };
+        }
+
+        let id = self.next_session_id.fetch_add(1, Ordering::Relaxed);
+        let (stop_tx, stop_rx) = mpsc::channel::<()>(1);
+        let (ts_tx, _) = broadcast::channel::<Arc<Vec<u8>>>(256);
+        let rx = ts_tx.subscribe();
         let now_instant = Instant::now();
         let created_at_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
-        self.sessions.write().insert(
+        sessions.insert(
             username.to_string(),
             RelaySession {
+                id,
                 playlist_url: None,
                 stream_state: RelayStreamState::Connecting,
                 streamer_is_online: false,
                 streamer_status: String::new(),
-                active_connections: 0,
+                active_connections: 1,
                 created_at: now_instant,
                 created_at_ms,
                 last_active: now_instant,
                 stop_tx,
-                ts_tx,
+                ts_tx: ts_tx.clone(),
                 prebuffer: VecDeque::new(),
                 prebuffer_bytes: 0,
             },
         );
-    }
-
-    /// 订阅 TS 数据流，同时增加连接计数。
-    pub fn subscribe(&self, username: &str) -> Option<broadcast::Receiver<Arc<Vec<u8>>>> {
-        let mut sessions = self.sessions.write();
-        if let Some(s) = sessions.get_mut(username) {
-            s.active_connections += 1;
-            s.last_active = Instant::now();
-            return Some(s.ts_tx.subscribe());
+        RelaySubscription {
+            session_id: id,
+            rx,
+            prebuffer: Vec::new(),
+            new_worker: Some(NewRelayWorker { stop_rx, ts_tx }),
         }
-        None
     }
 
-    /// 订阅 TS 数据流并同时返回当前预缓冲数据快照，供新连接立即推送。
-    /// Subscribe to TS data stream and return a prebuffer snapshot for immediate push to the new connection.
-    pub fn subscribe_with_prebuffer(
-        &self,
+    /// 取得 ID 匹配的会话的可变引用；会话不存在或 ID 不匹配时返回 None。
+    /// Get a mutable reference to the session only if its id matches; None otherwise.
+    fn current_mut<'a>(
+        sessions: &'a mut HashMap<String, RelaySession>,
         username: &str,
-    ) -> Option<SubscribeWithPrebuf> {
-        let mut sessions = self.sessions.write();
-        if let Some(s) = sessions.get_mut(username) {
-            s.active_connections += 1;
-            s.last_active = Instant::now();
-            let rx = s.ts_tx.subscribe();
-            let snapshot: Vec<Arc<Vec<u8>>> = s.prebuffer.iter().cloned().collect();
-            return Some((rx, snapshot));
-        }
-        None
+        session_id: u64,
+    ) -> Option<&'a mut RelaySession> {
+        sessions.get_mut(username).filter(|s| s.id == session_id)
     }
 
-    /// 将一块 TS 数据推入预缓冲 ring buffer，超出上限时淘汰最旧的块。
-    /// Push a TS chunk into the prebuffer, evicting the oldest chunk(s) when the limit is exceeded.
-    pub fn push_prebuffer(&self, username: &str, chunk: Arc<Vec<u8>>) {
+    /// 将一块 TS 数据推入预缓冲 ring buffer，超出上限时淘汰最旧的块；仅在会话 ID 匹配时生效。
+    /// Push a TS chunk into the prebuffer, evicting the oldest chunk(s) when the limit is
+    /// exceeded; only takes effect when the session id matches.
+    pub fn push_prebuffer(&self, username: &str, session_id: u64, chunk: Arc<Vec<u8>>) {
         let mut sessions = self.sessions.write();
-        if let Some(s) = sessions.get_mut(username) {
+        if let Some(s) = Self::current_mut(&mut sessions, username, session_id) {
             let len = chunk.len();
             s.prebuffer.push_back(chunk);
             s.prebuffer_bytes += len;
@@ -148,21 +183,25 @@ impl RelayManager {
         }
     }
 
-    /// 清空预缓冲（状态切换时调用，避免将旧内容推给新连接）。
-    /// Clear the prebuffer (called on state transition to avoid pushing stale content to new connections).
-    pub fn clear_prebuffer(&self, username: &str) {
+    /// 清空预缓冲（状态切换时调用，避免将旧内容推给新连接）；仅在会话 ID 匹配时生效。
+    /// Clear the prebuffer (called on state transition to avoid pushing stale content to new
+    /// connections); only takes effect when the session id matches.
+    pub fn clear_prebuffer(&self, username: &str, session_id: u64) {
         let mut sessions = self.sessions.write();
-        if let Some(s) = sessions.get_mut(username) {
+        if let Some(s) = Self::current_mut(&mut sessions, username, session_id) {
             s.prebuffer.clear();
             s.prebuffer_bytes = 0;
         }
     }
 
-    /// 减少连接计数，并在连接数归零时更新最后活跃时间。
-    /// Decrement connection count and update last_active when it reaches zero.
-    pub fn unsubscribe(&self, username: &str) {
+    /// 减少连接计数，并在连接数归零时更新最后活跃时间；仅在会话 ID 匹配时生效，
+    /// 避免旧会话的连接断开时扣减新会话的计数。
+    /// Decrement connection count and update last_active when it reaches zero; only takes
+    /// effect when the session id matches, so a connection of an old session cannot
+    /// decrement the count of a new one.
+    pub fn unsubscribe(&self, username: &str, session_id: u64) {
         let mut sessions = self.sessions.write();
-        if let Some(s) = sessions.get_mut(username) {
+        if let Some(s) = Self::current_mut(&mut sessions, username, session_id) {
             s.active_connections = s.active_connections.saturating_sub(1);
             if s.active_connections == 0 {
                 s.last_active = Instant::now();
@@ -171,53 +210,68 @@ impl RelayManager {
     }
 
     /// 检查会话是否处于空闲状态（无连接且超过指定秒数未活跃）。
-    /// Check if a session is idle (no connections and inactive for more than the given seconds).
-    pub fn is_idle(&self, username: &str, idle_secs: u64) -> bool {
+    /// 会话不存在或 ID 不匹配时返回 true，让旧 worker 尽快退出。
+    /// Check if a session is idle (no connections and inactive for more than the given
+    /// seconds). Returns true when the session is gone or the id does not match, so a
+    /// stale worker exits promptly.
+    pub fn is_idle(&self, username: &str, session_id: u64, idle_secs: u64) -> bool {
         let sessions = self.sessions.read();
-        if let Some(s) = sessions.get(username) {
-            s.active_connections == 0 && s.last_active.elapsed().as_secs() >= idle_secs
-        } else {
-            false
+        match sessions.get(username) {
+            Some(s) if s.id == session_id => {
+                s.active_connections == 0 && s.last_active.elapsed().as_secs() >= idle_secs
+            }
+            _ => true,
         }
     }
 
-    /// 更新流状态。
-    pub fn set_state(&self, username: &str, state: RelayStreamState) {
+    /// 更新流状态；仅在会话 ID 匹配时生效。
+    /// Update the stream state; only takes effect when the session id matches.
+    pub fn set_state(&self, username: &str, session_id: u64, state: RelayStreamState) {
         let mut sessions = self.sessions.write();
-        if let Some(s) = sessions.get_mut(username) {
+        if let Some(s) = Self::current_mut(&mut sessions, username, session_id) {
             s.stream_state = state;
             s.last_active = Instant::now();
         }
     }
 
-    /// 更新主播真实状态（由 worker 在每次 API 查询后调用）。
-    /// Update the streamer's real status (called by worker after each API query).
-    pub fn set_streamer_status(&self, username: &str, is_online: bool, status: String) {
+    /// 更新主播真实状态（由 worker 在每次 API 查询后调用）；仅在会话 ID 匹配时生效。
+    /// Update the streamer's real status (called by worker after each API query); only
+    /// takes effect when the session id matches.
+    pub fn set_streamer_status(&self, username: &str, session_id: u64, is_online: bool, status: String) {
         let mut sessions = self.sessions.write();
-        if let Some(s) = sessions.get_mut(username) {
+        if let Some(s) = Self::current_mut(&mut sessions, username, session_id) {
             s.streamer_is_online = is_online;
             s.streamer_status = status;
         }
     }
 
-    /// 更新播放列表 URL。
-    pub fn set_playlist_url(&self, username: &str, url: Option<String>) {
+    /// 更新播放列表 URL；仅在会话 ID 匹配时生效。
+    /// Update the playlist URL; only takes effect when the session id matches.
+    pub fn set_playlist_url(&self, username: &str, session_id: u64, url: Option<String>) {
         let mut sessions = self.sessions.write();
-        if let Some(s) = sessions.get_mut(username) {
+        if let Some(s) = Self::current_mut(&mut sessions, username, session_id) {
             s.playlist_url = url;
         }
     }
 
-    /// 停止并移除会话。
+    /// 停止并移除会话（不校验 ID，供手动停止接口使用）。
+    /// Stop and remove the session without checking the id (used by the manual stop endpoint).
     pub fn remove(&self, username: &str) {
         if let Some(session) = self.sessions.write().remove(username) {
             let _ = session.stop_tx.try_send(());
         }
     }
 
-    /// 检查是否有活跃会话。
-    pub fn has_session(&self, username: &str) -> bool {
-        self.sessions.read().contains_key(username)
+    /// 仅当当前会话 ID 匹配时停止并移除会话，防止旧 worker 退出时删掉新会话。
+    /// Stop and remove the session only if its id matches, so a stale worker exiting
+    /// cannot remove a newer session.
+    pub fn remove_if_current(&self, username: &str, session_id: u64) {
+        let mut sessions = self.sessions.write();
+        if sessions.get(username).is_some_and(|s| s.id == session_id)
+            && let Some(session) = sessions.remove(username)
+        {
+            let _ = session.stop_tx.try_send(());
+        }
     }
 
     /// 获取所有会话的状态快照（用于前端展示）。
@@ -254,4 +308,59 @@ pub struct RelaySessionStatus {
     /// 会话创建时的 Unix 时间戳（毫秒），供前端本地计时 / Session creation Unix timestamp (ms) for client-side timer
     pub created_at_ms: u64,
     pub stream_url: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn connections(m: &RelayManager, name: &str) -> u32 {
+        m.get_all_status()
+            .into_iter()
+            .find(|s| s.username == name)
+            .map(|s| s.active_connections)
+            .unwrap_or(0)
+    }
+
+    #[test]
+    fn subscribe_or_create_starts_single_worker() {
+        let m = RelayManager::new();
+        let first = m.subscribe_or_create("alice");
+        assert!(first.new_worker.is_some());
+        let second = m.subscribe_or_create("alice");
+        assert!(second.new_worker.is_none());
+        assert_eq!(first.session_id, second.session_id);
+        assert_eq!(connections(&m, "alice"), 2);
+    }
+
+    #[test]
+    fn stale_session_id_cannot_touch_new_session() {
+        let m = RelayManager::new();
+        let old = m.subscribe_or_create("bob");
+        m.remove("bob");
+        let new = m.subscribe_or_create("bob");
+        assert!(new.new_worker.is_some());
+        assert_ne!(old.session_id, new.session_id);
+
+        // 旧 ID 不能移除新会话 / Old id cannot remove the new session
+        m.remove_if_current("bob", old.session_id);
+        assert_eq!(connections(&m, "bob"), 1);
+
+        // 旧 ID 不能扣减新会话的连接数 / Old id cannot decrement the new session's count
+        m.unsubscribe("bob", old.session_id);
+        assert_eq!(connections(&m, "bob"), 1);
+
+        // 旧 worker 视为空闲以便退出 / Stale worker sees idle and exits
+        assert!(m.is_idle("bob", old.session_id, 3600));
+        assert!(!m.is_idle("bob", new.session_id, 3600));
+
+        // 旧 ID 不能修改新会话状态 / Old id cannot change the new session's state
+        m.set_state("bob", old.session_id, RelayStreamState::Error { message: "x".into() });
+        let st = m.get_all_status().into_iter().find(|s| s.username == "bob").unwrap();
+        assert!(matches!(st.stream_state, RelayStreamState::Connecting));
+
+        // 当前 ID 可以移除 / Current id can remove
+        m.remove_if_current("bob", new.session_id);
+        assert!(m.get_all_status().is_empty());
+    }
 }

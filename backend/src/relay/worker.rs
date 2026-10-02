@@ -11,7 +11,7 @@
 //! playlist URL is constructed directly from it, bypassing the
 //! /api/front/v1/broadcasts/{username} API call.
 
-use super::state::{RelayManager, RelayStreamState};
+use super::state::{NewRelayWorker, RelayManager, RelayStreamState};
 use crate::core::no_window::NoWindowExt;
 use crate::config::app_state::AppState;
 use crate::recording::hls::{get_url_prefix, parse_playlist};
@@ -22,30 +22,34 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{broadcast, mpsc};
 
+/// 为 `subscribe_or_create` 新建的会话启动 worker；通道由会话创建方提供，这里只负责 spawn。
+/// worker 的所有状态写入与退出时的移除都带 `session_id`，不会影响之后新建的同名会话。
+///
+/// Start the worker for a session newly created by `subscribe_or_create`; the channels
+/// come from the session creator and this function only spawns. Every state write and
+/// the final removal carry `session_id`, so they never affect a later session of the same name.
 pub fn start_streamer(
     username: String,
+    session_id: u64,
     app_state: Arc<AppState>,
     relay_manager: Arc<RelayManager>,
-) -> (mpsc::Sender<()>, broadcast::Sender<Arc<Vec<u8>>>) {
-    let (stop_tx, stop_rx) = mpsc::channel::<()>(1);
-    let (ts_tx, _) = broadcast::channel::<Arc<Vec<u8>>>(256);
-    let ts_tx_clone = ts_tx.clone();
-
+    worker: NewRelayWorker,
+) {
     tokio::spawn(worker_loop(
         username,
+        session_id,
         app_state,
         relay_manager,
-        stop_rx,
-        ts_tx_clone,
+        worker.stop_rx,
+        worker.ts_tx,
     ));
-
-    (stop_tx, ts_tx)
 }
 
 const IDLE_STOP_SECS: u64 = 30;
 
 async fn worker_loop(
     username: String,
+    session_id: u64,
     app_state: Arc<AppState>,
     relay_manager: Arc<RelayManager>,
     mut stop_rx: mpsc::Receiver<()>,
@@ -53,9 +57,9 @@ async fn worker_loop(
 ) {
     tracing::info!("{}", crate::tl!("relay.workerStarted", username = username));
 
-    if relay_manager.is_idle(&username, IDLE_STOP_SECS) {
+    if relay_manager.is_idle(&username, session_id, IDLE_STOP_SECS) {
         tracing::info!("{}", crate::tl!("relay.workerIdle", username = username));
-        relay_manager.remove(&username);
+        relay_manager.remove_if_current(&username, session_id);
         return;
     }
 
@@ -74,13 +78,13 @@ async fn worker_loop(
             ),
         Err(e) => {
             tracing::error!("{}", crate::tl!("relay.apiClientError", username = username, error = e));
-            relay_manager.set_state(&username, RelayStreamState::Error { message: e.to_string() });
-            relay_manager.remove(&username);
+            relay_manager.set_state(&username, session_id, RelayStreamState::Error { message: e.to_string() });
+            relay_manager.remove_if_current(&username, session_id);
             return;
         }
     };
 
-    relay_manager.set_state(&username, RelayStreamState::Connecting);
+    relay_manager.set_state(&username, session_id, RelayStreamState::Connecting);
 
     // 从 AppState 取缓存的 model_id，优先用它直接构造 playlist URL
     // Try the cached model_id first to build the playlist URL without an API call
@@ -96,8 +100,8 @@ async fn worker_loop(
         match api.get_playlist_url(&username, mid).await {
             Ok(url) => {
                 tracing::info!("{}", crate::tl!("relay.upstreamLive", username = username));
-                relay_manager.set_state(&username, RelayStreamState::Live);
-                relay_manager.clear_prebuffer(&username);
+                relay_manager.set_state(&username, session_id, RelayStreamState::Live);
+                relay_manager.clear_prebuffer(&username, session_id);
                 (url, mid)
             }
             Err(_) => {
@@ -109,23 +113,23 @@ async fn worker_loop(
                         if let Some(new_mid) = info.model_id {
                             app_state.backfill_model_id(&username, new_mid);
                         }
-                        relay_manager.set_state(&username, RelayStreamState::Live);
-                        relay_manager.set_streamer_status(&username, info.is_online, info.status);
-                        relay_manager.clear_prebuffer(&username);
+                        relay_manager.set_state(&username, session_id, RelayStreamState::Live);
+                        relay_manager.set_streamer_status(&username, session_id, info.is_online, info.status);
+                        relay_manager.clear_prebuffer(&username, session_id);
                         let new_mid = info.model_id.unwrap_or(mid);
                         (info.playlist_url.unwrap(), new_mid)
                     }
                     Ok(info) => {
                         tracing::info!("{}", crate::tl!("relay.upstreamOffline", username = username, status = info.status));
-                        relay_manager.set_state(&username, RelayStreamState::Offline { status: info.status.clone() });
-                        relay_manager.set_streamer_status(&username, info.is_online, info.status);
-                        relay_manager.remove(&username);
+                        relay_manager.set_state(&username, session_id, RelayStreamState::Offline { status: info.status.clone() });
+                        relay_manager.set_streamer_status(&username, session_id, info.is_online, info.status);
+                        relay_manager.remove_if_current(&username, session_id);
                         return;
                     }
                     Err(e) => {
                         tracing::warn!("{}", crate::tl!("relay.streamInfoFailed", username = username, error = e));
-                        relay_manager.set_state(&username, RelayStreamState::Error { message: e.to_string() });
-                        relay_manager.remove(&username);
+                        relay_manager.set_state(&username, session_id, RelayStreamState::Error { message: e.to_string() });
+                        relay_manager.remove_if_current(&username, session_id);
                         return;
                     }
                 }
@@ -141,37 +145,37 @@ async fn worker_loop(
                 if let Some(mid) = info.model_id {
                     app_state.backfill_model_id(&username, mid);
                 }
-                relay_manager.set_state(&username, RelayStreamState::Live);
-                relay_manager.set_streamer_status(&username, info.is_online, info.status);
-                relay_manager.clear_prebuffer(&username);
+                relay_manager.set_state(&username, session_id, RelayStreamState::Live);
+                relay_manager.set_streamer_status(&username, session_id, info.is_online, info.status);
+                relay_manager.clear_prebuffer(&username, session_id);
                 let mid = info.model_id.unwrap_or(0);
                 (info.playlist_url.unwrap(), mid)
             }
             Ok(info) => {
                 tracing::info!("{}", crate::tl!("relay.upstreamOffline", username = username, status = info.status));
-                relay_manager.set_state(&username, RelayStreamState::Offline { status: info.status.clone() });
-                relay_manager.set_streamer_status(&username, info.is_online, info.status);
-                relay_manager.remove(&username);
+                relay_manager.set_state(&username, session_id, RelayStreamState::Offline { status: info.status.clone() });
+                relay_manager.set_streamer_status(&username, session_id, info.is_online, info.status);
+                relay_manager.remove_if_current(&username, session_id);
                 return;
             }
             Err(e) => {
                 tracing::warn!("{}", crate::tl!("relay.streamInfoFailed", username = username, error = e));
-                relay_manager.set_state(&username, RelayStreamState::Error { message: e.to_string() });
-                relay_manager.remove(&username);
+                relay_manager.set_state(&username, session_id, RelayStreamState::Error { message: e.to_string() });
+                relay_manager.remove_if_current(&username, session_id);
                 return;
             }
         }
     };
 
-    relay_manager.set_playlist_url(&username, Some(playlist_url.clone()));
+    relay_manager.set_playlist_url(&username, session_id, Some(playlist_url.clone()));
 
     feed_live(
-        &username, &playlist_url, model_id,
+        &username, session_id, &playlist_url, model_id,
         &app_state, Arc::clone(&relay_manager), &ts_tx, &mut stop_rx,
     ).await;
 
-    relay_manager.set_playlist_url(&username, None);
-    relay_manager.remove(&username);
+    relay_manager.set_playlist_url(&username, session_id, None);
+    relay_manager.remove_if_current(&username, session_id);
     tracing::info!("{}", crate::tl!("relay.workerStopped", username = username));
 }
 
@@ -185,8 +189,10 @@ async fn worker_loop(
 /// `model_id`: internal streamer ID for rebuilding the playlist URL on failure without
 /// an API call. `0` means unknown (first-time path with no cached id), falling back to
 /// full API refresh.
+#[allow(clippy::too_many_arguments)]
 async fn feed_live(
     username: &str,
+    session_id: u64,
     initial_playlist_url: &str,
     model_id: i64,
     app_state: &AppState,
@@ -243,7 +249,7 @@ async fn feed_live(
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
                     let chunk = Arc::new(buf[..n].to_vec());
-                    relay_manager_clone.push_prebuffer(&username_conv, Arc::clone(&chunk));
+                    relay_manager_clone.push_prebuffer(&username_conv, session_id, Arc::clone(&chunk));
                     let _ = ts_tx_clone.send(chunk);
                 }
             }
@@ -284,7 +290,7 @@ async fn feed_live(
 
     loop {
         if stop_rx.try_recv().is_ok() { break; }
-        if relay_manager.is_idle(username, IDLE_STOP_SECS) {
+        if relay_manager.is_idle(username, session_id, IDLE_STOP_SECS) {
             tracing::info!("{}", crate::tl!("relay.liveIdle", username = username));
             break;
         }
@@ -324,7 +330,7 @@ async fn feed_live(
                     tokio::select! {
                         _ = stop_rx.recv() => break,
                         _ = tokio::time::sleep(tokio::time::Duration::from_millis(1000)) => {
-                            if relay_manager.is_idle(username, IDLE_STOP_SECS) { break; }
+                            if relay_manager.is_idle(username, session_id, IDLE_STOP_SECS) { break; }
                         }
                     }
                 }
@@ -372,8 +378,8 @@ async fn feed_live(
                         }
                         Ok(info) => {
                             tracing::info!("{}", crate::tl!("relay.upstreamOffline", username = username, status = info.status));
-                            relay_manager.set_state(username, RelayStreamState::Offline { status: info.status.clone() });
-                            relay_manager.set_streamer_status(username, info.is_online, info.status);
+                            relay_manager.set_state(username, session_id, RelayStreamState::Offline { status: info.status.clone() });
+                            relay_manager.set_streamer_status(username, session_id, info.is_online, info.status);
                             break;
                         }
                         Err(_) => { /* 查询失败，靠 MAX_FAILURES 自然退出 */ }
@@ -383,7 +389,7 @@ async fn feed_live(
                 tokio::select! {
                     _ = stop_rx.recv() => break,
                     _ = tokio::time::sleep(tokio::time::Duration::from_millis(500)) => {
-                        if relay_manager.is_idle(username, IDLE_STOP_SECS) { break; }
+                        if relay_manager.is_idle(username, session_id, IDLE_STOP_SECS) { break; }
                     }
                 }
             }

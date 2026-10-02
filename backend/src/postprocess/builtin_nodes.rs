@@ -80,11 +80,12 @@ pub fn unpack_bundle(bundle: &std::path::Path) -> (PathBuf, Option<PathBuf>) {
 /// name and description are read from the merged `__builtin__` locale file,
 /// falling back to embedded English defaults.
 pub fn builtin_module_infos() -> Vec<ModuleInfo> {
-    // 读取当前语言设置 / Read current language setting
-    let locale_code = crate::config::app_state::AppState::new()
-        .ok()
-        .map(|s| s.get_settings().language)
-        .unwrap_or_else(|| "en-US".to_string());
+    // 读取当前语言设置：只读 settings.json，不构造完整 AppState（每次 discover_modules 都会调用，
+    // 避免重复创建目录、初始化信号量等副作用）；配置不可读时回退为 Settings::default() 的语言。
+    // Read current language setting: read only settings.json instead of building a full
+    // AppState (called on every discover_modules; avoids repeated directory creation and
+    // semaphore init); falls back to Settings::default()'s language if unreadable.
+    let locale_code = crate::config::app_state::AppState::load_settings_from_disk().language;
 
     // 从合并的 __builtin__ locale 文件中取指定节点 key 的翻译
     // Read name/description for a node key from the merged __builtin__ locale file

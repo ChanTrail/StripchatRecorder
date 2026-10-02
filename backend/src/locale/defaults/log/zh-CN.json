@@ -1,6 +1,9 @@
 {
   "recorder": {
     "started": "开始录制 {username} → {dir}",
+    "deleteCancelTimeout": "删除录制：等待 {path} 的后处理任务退出超时（{secs} 秒），本次删除未执行",
+    "deleteWaitOtherTimeout": "删除录制：等待同一录制的另一个删除请求完成超时（{secs} 秒），{path} 本次删除未执行",
+    "deleteAlreadyRemoved": "删除录制：{path} 的文件与 meta 均已不存在（可能已被另一个删除请求删除），按删除成功处理",
     "finished": "录制完成 {username} → {dir}",
     "stopSignal": "收到停止信号 → {username}",
     "apiRebuilt": "录制 {username}：API 客户端因设置变更已重建",
@@ -69,10 +72,17 @@
     "migrationMoved": "Meta 迁移：已移动 {from} → {to}",
     "migrationMoveFailed": "Meta 迁移：移动 {path} 失败：{error}",
     "migrationDone": "Meta 迁移：已将 {count} 个旧版扁平 meta 文件移入按主播子目录的新结构",
+    "migrationStemMoved": "Meta 迁移：已将截断文件名的旧 meta {from} 重命名为 {to}",
+    "migrationStemTargetExists": "Meta 迁移：{path} 的目标 {to} 已存在，保留原文件不迁移",
+    "migrationStemMoveFailed": "Meta 迁移：重命名 {path} 失败：{error}",
+    "migrationStemDone": "Meta 迁移：共修正 {count} 个截断文件名的旧 meta",
+    "maintenanceAlreadyRunning": "输出目录维护：上一次维护仍在执行，跳过本次",
     "cleanupDeleteFailed": "Meta 清理：删除 {name} 失败：{error}",
     "cleanupDeleted": "Meta 清理：已删除孤立 meta {name}",
     "cleanupDone": "Meta 清理：已删除 {count} 个孤立 meta 文件",
     "scanSkipEmpty": "Meta 扫描：{count} 个视频需要后处理，但流水线为空，跳过",
+    "scanSkipOwnedVideo": "Meta 扫描：视频 {path} 已由其他 meta 记录管理，跳过",
+    "scanSkipFinishedBeforeTrigger": "Meta 扫描：{path} 在触发前已完成后处理或已不存在，跳过",
     "scanPpPending": "Meta 扫描：{count} 个路径需要（重新）触发后处理",
     "scanCreatedVideo": "Meta 扫描：已为视频 {path} 创建 pp_waiting meta",
     "scanCorruptVideo": "Meta 扫描：视频 {path} 的 meta 损坏，重新创建为 pp_waiting",
@@ -169,7 +179,10 @@
     "discoveryDescribeFailed": "描述模块 {path} 失败：{error}",
     "builtinUnpackImageNotFound": "unpack：图片路径未找到（跳过端口 1）：{path}",
     "ppQueueAdjusted": "pp_queue：许可数={permits}（上限={max}，运行中={running}，cpu={cpu}%，内存={mem}%，可用={avail}MB）",
-    "concurrencySet": "后处理并发度已设置为 {n}"
+    "concurrencySet": "后处理并发度已设置为 {n}",
+    "duplicateTriggerSkipped": "后处理：录制 {key} 已有任务在排队或执行中，跳过重复触发 → {path}",
+    "triggerSkippedRemoval": "后处理：录制 {key} 正在被删除，跳过触发 → {path}",
+    "claimWaitReservationTimeout": "后处理：等待录制 {key} 的扫描占位释放超时，跳过本次触发 → {path}"
   },
   "ffmpegUtil": {
     "concurrencyInitialized": "FFmpeg 并发信号量初始化：许可数={n}",

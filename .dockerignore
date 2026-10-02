@@ -37,3 +37,4 @@ LICENSE
 SCAPI Test/
 StripchatRecorderCommunity/
 modules/test_suffix/
+.agents/*

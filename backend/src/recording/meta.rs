@@ -42,11 +42,16 @@ mod model;
 mod scan;
 mod store;
 
-pub use maintenance::{cleanup_orphaned_meta_files, maintain_output_dir, migrate_flat_meta_files, schedule_meta_version_check};
+pub use maintenance::{
+    cleanup_orphaned_meta_files, maintain_output_dir, migrate_flat_meta_files,
+    migrate_truncated_stem_meta_files, schedule_meta_version_check,
+};
 pub use model::{
     META_VERSION, PpExecCode, PpExecResult, PpExecutionEntry, PpModuleResult,
     PpNodeProgress, VideoMeta, extract_verified_module_outputs, list_all_meta_paths,
-    meta_dir, meta_dir_for, meta_path_for, parse_timestamp_from_stem, username_from_path,
+    list_all_meta_paths_in, meta_dir, meta_dir_for, meta_path_for, meta_path_in,
+    parse_timestamp_from_stem, recording_stem, resolve_meta_path, resolve_meta_path_in,
+    username_from_path, username_from_stem,
 };
 pub use scan::{ensure_meta_files, ts_merge_output_dir};
 pub use store::{

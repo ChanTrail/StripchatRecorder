@@ -32,15 +32,15 @@ pub fn run() {
 
     // 解析端口：CLI 参数 > 环境变量 > 配置文件 > 默认值
     // Resolve port: CLI arg > env var > config file > default
+    // 只读 settings.json 取端口，不为此构造完整 AppState（避免重复初始化的副作用）；
+    // 完整状态只在 run_server 中构造一次。
+    // Read only settings.json for the port instead of building a full AppState (avoids
+    // duplicate initialization side effects); the full state is built once in run_server.
     let port: u16 = std::env::args()
         .nth(1)
         .and_then(|s| s.parse().ok())
         .or_else(|| std::env::var("PORT").ok().and_then(|s| s.parse().ok()))
-        .or_else(|| {
-            config::app_state::AppState::new()
-                .ok()
-                .map(|s| s.get_settings().server_port)
-        })
+        .or_else(|| Some(config::app_state::AppState::load_settings_from_disk().server_port))
         .unwrap_or(3030);
 
     let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");

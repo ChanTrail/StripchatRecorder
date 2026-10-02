@@ -431,6 +431,19 @@ impl AppState {
         exe_dir().join("config")
     }
 
+    /// 只读取 config/settings.json；文件不存在或解析失败时返回 `Settings::default()`。
+    /// 不创建目录、不初始化信号量，适合只需读取个别配置项的场景，避免构造完整 AppState 的副作用。
+    ///
+    /// Read only config/settings.json; returns `Settings::default()` if the file is missing
+    /// or fails to parse. Creates no directories and initializes no semaphores, suitable when
+    /// only a single setting is needed, avoiding the side effects of building a full AppState.
+    pub fn load_settings_from_disk() -> Settings {
+        fs::read_to_string(Self::config_dir().join("settings.json"))
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    }
+
     /// 从磁盘加载配置并初始化应用状态，确保输出目录存在。
     /// Load configuration from disk and initialize application state, ensuring the output directory exists.
     pub fn new() -> Result<Arc<Self>> {
@@ -443,9 +456,7 @@ impl AppState {
             fs::read_to_string(config_dir.join(name)).ok()
         };
 
-        let settings: Settings = load_json("settings.json")
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default();
+        let settings: Settings = Self::load_settings_from_disk();
         let streamers: Vec<StreamerData> = load_json("streamers.json")
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();

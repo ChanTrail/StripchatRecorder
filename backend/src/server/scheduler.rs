@@ -197,12 +197,17 @@ pub fn start_meta_cleanup(app_state: Arc<AppState>, emitter: Arc<dyn Emitter>) {
 
 /// 启动输出目录维护调度器（延迟 10 秒执行一次，之后每 5 分钟执行）。
 ///
-/// 这是程序启动时和周期性维护共用的唯一入口：合并遗留分片、清理空目录、
+/// 这是程序启动时和周期性维护共用的唯一入口：清理空目录、
 /// 重建缺失/损坏的 meta（含 ts_merge 自定义输出目录）、对因进程重启而遗留的
-/// 陈旧 pp_waiting/pp_running 视频以及遗漏的后处理任务重新触发。
+/// 陈旧 pp_waiting/pp_running 录制（含未合并的 session_dir）以及遗漏的后处理任务重新触发。
 /// 程序启动时不再需要单独执行一遍——首次延迟 10 秒执行已覆盖启动时检查的需求。
+/// 维护单实例运行（上一次未结束时跳过本次）；触发的后处理在后台执行，不阻塞维护流程。
 ///
 /// Start the output-directory maintenance scheduler (runs once after 10 s, then every 5 minutes).
+/// It is the single entry shared by startup and periodic maintenance: remove empty dirs, rebuild
+/// missing/corrupt meta, and re-trigger stale or missed post-processing (including unmerged
+/// session_dirs). Maintenance is single-instance (a run is skipped while the previous one is
+/// still in progress); triggered post-processing runs in the background without blocking it.
 pub fn start_output_dir_maintenance(
     app_state: Arc<AppState>,
     emitter: Arc<dyn Emitter>,

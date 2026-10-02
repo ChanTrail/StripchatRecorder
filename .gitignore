@@ -30,3 +30,4 @@ SCAPI Test/
 modules/test_suffix/
 
 StripchatRecorderCommunity/*
+.agents/*

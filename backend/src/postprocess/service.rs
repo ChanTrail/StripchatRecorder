@@ -2,12 +2,12 @@
 //!
 //! 提供模块发现、流水线配置读写、后处理任务触发/取消、进度查询等功能。
 //! 被 `server/routes/postprocess.rs`、`recording/recorder.rs`、
-//! `recording/meta/maintenance.rs`、`recording/segment_merge.rs` 调用。
+//! `recording/meta/maintenance.rs` 调用。
 //!
 //! Provides module discovery, pipeline config read/write,
 //! post-processing task triggering/cancellation, and progress queries.
 //! Called by `server/routes/postprocess.rs`, `recording/recorder.rs`,
-//! `recording/meta/maintenance.rs`, and `recording/segment_merge.rs`.
+//! and `recording/meta/maintenance.rs`.
 //!
 //! - 节点开始前：追加 PpExecutionEntry（finished_at/result 为 null，outputs 为空数组）
 //! - 节点完成后：更新对应条目（填入 finished_at、result、outputs）
@@ -21,6 +21,7 @@ use crate::recording::meta::{
     PpExecCode, PpExecResult, PpExecutionEntry, PpNodeProgress,
 };
 use crate::config::app_state::AppState;
+use crate::postprocess::queue::ClaimRejected;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
@@ -45,6 +46,48 @@ pub fn run_postprocess_for_path(
 ) {
     let path_str = video_path.to_string_lossy().to_string();
 
+    // 以录制身份（meta 路径）原子 claim：同一录制已有任务排队或执行时直接跳过，
+    // 不入队、不发事件、不改 meta。_claim 持有到流水线返回，drop 时清理队列记录。
+    // Atomically claim by recording identity (meta path): if a task for the same recording
+    // is already queued or running, skip without enqueuing, emitting or touching meta.
+    // _claim is held until the pipeline returns and cleans up queue records on drop.
+    let key = crate::postprocess::queue::recording_key(video_path);
+    // 维护扫描的占位只持续毫秒级：遇到占位时短暂等待它释放（最多 5 s），避免录制结束、
+    // 轮转或手动触发被吞掉；删除中的录制与重复触发直接跳过。
+    // A maintenance-scan reservation only lasts milliseconds: on a reservation, wait briefly
+    // for it to be released (up to 5 s) so recording-end, rotation or manual triggers aren't
+    // swallowed; recordings being deleted and duplicate triggers are skipped outright.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let _claim = loop {
+        match state.pp_queue.try_claim(&key, &path_str) {
+            Ok(c) => break c,
+            Err(ClaimRejected::Reserved) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Err(ClaimRejected::Reserved) => {
+                tracing::warn!(
+                    "{}",
+                    crate::tl!("postprocess.claimWaitReservationTimeout", key = key, path = path_str)
+                );
+                return;
+            }
+            Err(ClaimRejected::RemovalRequested) => {
+                tracing::info!(
+                    "{}",
+                    crate::tl!("postprocess.triggerSkippedRemoval", key = key, path = path_str)
+                );
+                return;
+            }
+            Err(ClaimRejected::AlreadyClaimed) => {
+                tracing::info!(
+                    "{}",
+                    crate::tl!("postprocess.duplicateTriggerSkipped", key = key, path = path_str)
+                );
+                return;
+            }
+        }
+    };
+
     state.pp_queue.enqueue(&path_str);
     emitter.emit(
         "postprocess-waiting",
@@ -54,7 +97,7 @@ pub fn run_postprocess_for_path(
     // 更新元数据文件中的后处理状态 / Update post-processing status in metadata file
     crate::recording::meta::set_status(video_path, "pp_waiting");
 
-    run_postprocess_inner(initial_path, video_path, pipeline, emitter, state);
+    run_postprocess_inner(initial_path, video_path, pipeline, emitter, &key, state);
 }
 
 // ─── 核心实现 / Core Implementation ──────────────────────────────────────────
@@ -74,15 +117,22 @@ pub fn run_postprocess_inner(
     video_path: &std::path::Path,
     pipeline: &PipelineConfig,
     emitter: &Arc<dyn Emitter>,
+    // 录制身份键（claim 时使用的 meta 路径）/ Recording identity key (meta path used for the claim)
+    recording_key: &str,
     state: &Arc<AppState>,
 ) {
     let path_str = video_path.to_string_lossy().to_string();
 
-    // 获取并发许可（阻塞直至有空闲槽位）/ Acquire concurrency permit (blocks until a slot is free)
-    let _pp_permit = state.pp_queue.acquire_concurrency_permit();
+    // 先取得取消标志，排队等待许可期间被取消时能立即退出
+    // Get the cancel flag first so a cancel while queued for a permit exits immediately
+    let cancel_flag = state.pp_queue.make_cancel_flag(&path_str);
 
-    // 检查是否在等待锁期间已被取消 / Check if cancelled while waiting for the lock
-    if state.pp_queue.is_cancelled(&path_str) {
+    // 获取并发许可（阻塞直至有空闲槽位或被取消）
+    // Acquire a concurrency permit (blocks until a slot is free or the task is cancelled)
+    let permit = state.pp_queue.acquire_concurrency_permit(&cancel_flag);
+
+    // 检查是否在等待许可期间已被取消 / Check if cancelled while waiting for the permit
+    if permit.is_none() || state.pp_queue.is_cancelled(&path_str) {
         // 写回 pp_error，避免 meta 卡在 pp_waiting 被扫描逻辑当作陈旧任务反复重新触发
         // Persist pp_error so meta doesn't stay stuck at pp_waiting and get endlessly
         // re-triggered by scan logic as a "stale" task
@@ -91,6 +141,7 @@ pub fn run_postprocess_inner(
         state.pp_queue.remove(&path_str);
         return;
     }
+    let _pp_permit = permit;
 
     // 锁等待期间用户可能已更新流水线，获取锁后重新读取最新配置，
     // 确保本次执行使用的是当前最新的流水线，而不是入队时的快照。
@@ -177,7 +228,6 @@ pub fn run_postprocess_inner(
 
     let total = effective_pipeline.nodes.iter().filter(|n| n.enabled).count();
     state.pp_queue.start(&path_str, total);
-    let cancel_flag = state.pp_queue.make_cancel_flag(&path_str);
 
     emitter.emit(
         "postprocess-started",
@@ -389,8 +439,10 @@ pub fn run_postprocess_inner(
             let done_val = *done;
 
             let pct = if total == 0 { 100.0f64 } else { (done_val as f64 * 100.0 / total as f64).min(100.0) };
+            // 队列键始终是 path_str（入队时的路径），不随 SSE 路径切换
+            // The queue key is always path_str (the enqueue path); it doesn't follow SSE path changes
             state_ref.pp_queue.progress(
-                &path_str_ref.lock().unwrap(),
+                &path_str,
                 pct,
                 0,
                 &result.module_id,
@@ -587,9 +639,12 @@ pub fn run_postprocess_inner(
     // `postprocess-meta-update`.
     let final_path_str = path_str_ref.lock().unwrap().clone();
 
-    // 后处理失败时写入通知，让用户在通知面板看到报错
-    // Push a notification on failure so the user sees it in the notification panel
-    if !all_ok {
+    // 后处理失败时写入通知，让用户在通知面板看到报错。
+    // 用户主动删除录制导致的取消不算失败，不推送通知；手动点取消的行为不变。
+    // Push a notification on failure so the user sees it in the notification panel.
+    // A cancellation caused by the user deleting the recording isn't a failure and gets no
+    // notification; manually clicking cancel behaves as before.
+    if !all_ok && !state.pp_queue.is_removal_requested(recording_key) {
         let file_name = std::path::Path::new(&final_path_str)
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())

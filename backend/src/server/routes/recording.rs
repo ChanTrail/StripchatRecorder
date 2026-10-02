@@ -79,16 +79,23 @@ pub async fn delete_recording(
     let recorder = Arc::clone(&s.recorder);
     let state = Arc::clone(&s.app_state);
     let path = body.path.clone();
-    tokio::task::spawn_blocking(move || {
+    let outcome = tokio::task::spawn_blocking(move || {
         crate::recording::service::delete_recording_inner(&path, &recorder, &state)
     })
     .await
     .map_err(|e| ApiError(e.to_string()))?
     .map_err(ApiError::from)?;
-    s.emitter.emit(
-        "recording-deleted",
-        &serde_json::json!({ "path": body.path }),
-    );
+    // 只有本次请求实际删除时才广播；已被其他请求删除时不重复广播，避免其他客户端
+    // 误报"已被其他客户端删除"。两种结果都返回成功
+    // Broadcast only when this request actually deleted it; when another request already
+    // did, don't broadcast again so other clients don't falsely report "deleted by another
+    // client". Both outcomes return success
+    if outcome == crate::recording::service::DeleteOutcome::Deleted {
+        s.emitter.emit(
+            "recording-deleted",
+            &serde_json::json!({ "path": body.path }),
+        );
+    }
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 

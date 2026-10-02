@@ -446,20 +446,91 @@ fn read_http_response(stream: &mut dyn Read) -> Result<(u16, String), String> {
     Ok((status, body))
 }
 
+/// 一次 Webhook 请求的失败类型。Discord Webhook 没有幂等键，同一请求重发就会多一条消息，
+/// 所以要区分"服务端肯定没处理"和"服务端可能已处理"。
+///
+/// Failure kind of a single webhook request. Discord webhooks have no idempotency key, so
+/// re-sending the same request posts another message; we must tell "certainly not processed"
+/// apart from "possibly processed".
+#[derive(Debug)]
+enum SendError {
+    /// 请求肯定未被处理（未完整写出、连接失败或 4xx 拒绝），可以安全重试。
+    /// The request was certainly not processed (not fully written, connect failure, or a 4xx
+    /// rejection); safe to retry.
+    NotDelivered(String),
+    /// 请求已完整写出但结果未知（读响应失败、5xx、状态码无法解析），重试可能重复发消息。
+    /// The request was fully written but the outcome is unknown (response read failure, 5xx,
+    /// unparseable status); retrying may post a duplicate.
+    Uncertain(String),
+}
+
+impl SendError {
+    /// 错误信息文本 / Error message text
+    fn message(&self) -> &str {
+        match self {
+            SendError::NotDelivered(m) | SendError::Uncertain(m) => m,
+        }
+    }
+}
+
+/// HTTP 状态码对应的投递结论 / Delivery verdict derived from an HTTP status code
+#[derive(Debug, PartialEq, Eq)]
+enum StatusOutcome {
+    /// 2xx：已送达 / 2xx: delivered
+    Delivered,
+    /// 4xx（含 429）：服务端明确拒绝，消息未发出 / 4xx (incl. 429): explicitly rejected, nothing posted
+    Rejected,
+    /// 5xx、0（无法解析）及其他：可能已处理 / 5xx, 0 (unparseable) and others: possibly processed
+    Uncertain,
+}
+
+/// 根据状态码判断投递结论 / Classify delivery outcome by status code
+fn status_outcome(status: u16) -> StatusOutcome {
+    match status {
+        200..=299 => StatusOutcome::Delivered,
+        400..=499 => StatusOutcome::Rejected,
+        _ => StatusOutcome::Uncertain,
+    }
+}
+
+/// 读取响应并按状态码转换为发送结果；读响应失败说明请求已写出但结果未知。
+/// Read the response and map its status to a send result; a read failure means the request
+/// was written but its outcome is unknown.
+fn finish_response(stream: &mut dyn Read) -> Result<(), SendError> {
+    let (status, body) = read_http_response(stream).map_err(SendError::Uncertain)?;
+    match status_outcome(status) {
+        StatusOutcome::Delivered => Ok(()),
+        StatusOutcome::Rejected => Err(SendError::NotDelivered(format!(
+            "Discord returned {}: {}",
+            status, body
+        ))),
+        StatusOutcome::Uncertain => Err(SendError::Uncertain(format!(
+            "Discord returned {}: {}",
+            status, body
+        ))),
+    }
+}
+
 /// 执行一次 Discord Webhook 请求（含封面图或纯文字）。
+/// 请求完整写出之前的错误都是 NotDelivered；之后的错误按 [`finish_response`] 分类。
+///
+/// Perform a single Discord webhook request (with cover image or text only).
+/// Errors before the request is fully written are NotDelivered; later errors are classified
+/// by [`finish_response`].
 fn send_once(
     webhook_url: &str,
     proxy: &str,
     bot_name: &str,
     content: &str,
     cover: Option<&PathBuf>,
-) -> Result<(), String> {
-    let (host, port, path) = parse_url(webhook_url)?;
+) -> Result<(), SendError> {
+    let (host, port, path) = parse_url(webhook_url).map_err(SendError::NotDelivered)?;
     let is_https = port == 443;
 
     if let Some(img_path) = cover {
-        let img_bytes =
-            fs::read(img_path).map_err(|e| format!("Failed to read cover image: {}", e))?;
+        let img_bytes = fs::read(img_path).map_err(|e| {
+            SendError::NotDelivered(format!("Failed to read cover image: {}", e))
+        })?;
         let img_name = img_path
             .file_name()
             .and_then(|n| n.to_str())
@@ -509,10 +580,10 @@ fn send_once(
         println!("PROGRESS:0/{}", PROGRESS_SCALE);
         let upload_start = Instant::now();
 
-        let tcp = tcp_connect(&host, port, proxy)?;
+        let tcp = tcp_connect(&host, port, proxy).map_err(SendError::NotDelivered)?;
 
         if is_https {
-            let mut tls = tls_wrap(tcp, &host)?;
+            let mut tls = tls_wrap(tcp, &host).map_err(SendError::NotDelivered)?;
             write_multipart_with_progress(
                 &mut tls,
                 http_header.as_bytes(),
@@ -520,7 +591,7 @@ fn send_once(
                 &img_bytes,
                 &post_file,
             )
-            .map_err(|e| format!("write failed: {}", e))?;
+            .map_err(|e| SendError::NotDelivered(format!("write failed: {}", e)))?;
             let elapsed = upload_start.elapsed();
             if elapsed.as_secs_f64() > 0.0 {
                 println!(
@@ -528,10 +599,7 @@ fn send_once(
                     format_speed(body_len as f64 / elapsed.as_secs_f64())
                 );
             }
-            let (status, body) = read_http_response(&mut tls)?;
-            if status != 200 && status != 204 {
-                return Err(format!("Discord returned {}: {}", status, body));
-            }
+            finish_response(&mut tls)?;
         } else {
             let mut tcp = tcp;
             write_multipart_with_progress(
@@ -541,7 +609,7 @@ fn send_once(
                 &img_bytes,
                 &post_file,
             )
-            .map_err(|e| format!("write failed: {}", e))?;
+            .map_err(|e| SendError::NotDelivered(format!("write failed: {}", e)))?;
             let elapsed = upload_start.elapsed();
             if elapsed.as_secs_f64() > 0.0 {
                 println!(
@@ -549,10 +617,7 @@ fn send_once(
                     format_speed(body_len as f64 / elapsed.as_secs_f64())
                 );
             }
-            let (status, body) = read_http_response(&mut tcp)?;
-            if status != 200 && status != 204 {
-                return Err(format!("Discord returned {}: {}", status, body));
-            }
+            finish_response(&mut tcp)?;
         }
     } else {
         // 无封面图：纯文字消息，用 ureq 发送即可
@@ -562,29 +627,25 @@ fn send_once(
             "POST {path} HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n",
             path = path, host = host, len = body_len
         );
-        let tcp = tcp_connect(&host, port, proxy)?;
+        let tcp = tcp_connect(&host, port, proxy).map_err(SendError::NotDelivered)?;
         if is_https {
-            let mut tls = tls_wrap(tcp, &host)?;
+            let mut tls = tls_wrap(tcp, &host).map_err(SendError::NotDelivered)?;
             tls.write_all(http_header.as_bytes())
-                .map_err(|e| format!("write: {}", e))?;
+                .map_err(|e| SendError::NotDelivered(format!("write: {}", e)))?;
             tls.write_all(payload.as_bytes())
-                .map_err(|e| format!("write: {}", e))?;
-            tls.flush().map_err(|e| format!("flush: {}", e))?;
-            let (status, body) = read_http_response(&mut tls)?;
-            if status != 200 && status != 204 {
-                return Err(format!("Discord returned {}: {}", status, body));
-            }
+                .map_err(|e| SendError::NotDelivered(format!("write: {}", e)))?;
+            tls.flush()
+                .map_err(|e| SendError::NotDelivered(format!("flush: {}", e)))?;
+            finish_response(&mut tls)?;
         } else {
             let mut tcp = tcp;
             tcp.write_all(http_header.as_bytes())
-                .map_err(|e| format!("write: {}", e))?;
+                .map_err(|e| SendError::NotDelivered(format!("write: {}", e)))?;
             tcp.write_all(payload.as_bytes())
-                .map_err(|e| format!("write: {}", e))?;
-            tcp.flush().map_err(|e| format!("flush: {}", e))?;
-            let (status, body) = read_http_response(&mut tcp)?;
-            if status != 200 && status != 204 {
-                return Err(format!("Discord returned {}: {}", status, body));
-            }
+                .map_err(|e| SendError::NotDelivered(format!("write: {}", e)))?;
+            tcp.flush()
+                .map_err(|e| SendError::NotDelivered(format!("flush: {}", e)))?;
+            finish_response(&mut tcp)?;
         }
     }
     Ok(())
@@ -674,7 +735,19 @@ fn run() -> Result<(), String> {
         );
         match result {
             Ok(()) => break,
-            Err(e) => {
+            // 请求已完整写出但结果未知：Webhook 无幂等键，重试可能重复发消息。
+            // 取舍：宁可少发一条（报错给用户），也不重复发送。
+            // Request fully written but outcome unknown: webhooks have no idempotency key, so a
+            // retry may post a duplicate. Trade-off: fail (and report) rather than risk a duplicate.
+            Err(SendError::Uncertain(msg)) => {
+                return Err(format!(
+                    "{} (delivery status unknown; not retrying to avoid a duplicate message)",
+                    msg
+                ));
+            }
+            // 请求肯定未被处理，可安全重试 / Request certainly not processed; safe to retry
+            Err(e @ SendError::NotDelivered(_)) => {
+                let e = e.message().to_string();
                 attempt += 1;
                 if attempt >= RETRY_DELAYS.len() as u32 {
                     return Err(e);
@@ -707,5 +780,33 @@ fn main() {
         let json = serde_json::json!({ "code": "error", "message": e, "outputs": [] });
         println!("{}", json);
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 2xx 视为已送达 / 2xx counts as delivered
+    #[test]
+    fn status_2xx_is_delivered() {
+        assert_eq!(status_outcome(200), StatusOutcome::Delivered);
+        assert_eq!(status_outcome(204), StatusOutcome::Delivered);
+    }
+
+    /// 4xx（含 429）视为明确拒绝，可安全重试 / 4xx (incl. 429) is a rejection, safe to retry
+    #[test]
+    fn status_4xx_is_rejected() {
+        assert_eq!(status_outcome(400), StatusOutcome::Rejected);
+        assert_eq!(status_outcome(404), StatusOutcome::Rejected);
+        assert_eq!(status_outcome(429), StatusOutcome::Rejected);
+    }
+
+    /// 5xx 与无法解析的状态码视为结果未知 / 5xx and unparseable status are uncertain
+    #[test]
+    fn status_5xx_and_unknown_is_uncertain() {
+        assert_eq!(status_outcome(500), StatusOutcome::Uncertain);
+        assert_eq!(status_outcome(502), StatusOutcome::Uncertain);
+        assert_eq!(status_outcome(0), StatusOutcome::Uncertain);
     }
 }

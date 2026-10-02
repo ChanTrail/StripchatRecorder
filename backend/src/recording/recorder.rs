@@ -4,16 +4,16 @@
 //! - 启动/停止录制（HLS 分片下载 + fMP4 转 TS，转码委托给 `recording::ffmpeg_util`）
 //! - 录制完成后自动触发后处理流水线
 //!
-//! ffmpeg/ffprobe 底层操作见 `recording::ffmpeg_util`；遗留分片合并与
-//! 空目录清理见 `recording::segment_merge`。
+//! ffmpeg/ffprobe 底层操作见 `recording::ffmpeg_util`；空目录清理见
+//! `recording::segment_merge`。
 //!
 //! Manages the lifecycle of all streamer recording sessions, including:
 //! - Starting/stopping recordings (HLS segment download + fMP4 to TS; transcoding is
 //!   delegated to `recording::ffmpeg_util`)
 //! - Automatically triggering the post-processing pipeline after recording completes
 //!
-//! Low-level ffmpeg/ffprobe operations live in `recording::ffmpeg_util`; leftover
-//! segment merging and empty-directory cleanup live in `recording::segment_merge`.
+//! Low-level ffmpeg/ffprobe operations live in `recording::ffmpeg_util`; empty-directory
+//! cleanup lives in `recording::segment_merge`.
 
 use crate::config::app_state::AppState;
 use crate::core::emitter::{Emitter, EmitterExt};
@@ -38,6 +38,23 @@ pub struct RecordingSession {
     pub started_at: chrono::DateTime<chrono::Local>,
     /// 停止录制的信号发送端 / Sender to signal recording stop
     stop_tx: mpsc::Sender<()>,
+}
+
+/// "录制结束/轮转 → 后处理接手"交接状态的 RAII 守卫：drop 时把目录从 waiting_merge_dirs 移除。
+/// 覆盖正常返回、流水线为空提前返回和 panic 三种情况，交接状态不会残留。
+///
+/// RAII guard for the "recording ended/rotated → post-processing takes over" handoff state:
+/// removes the directory from waiting_merge_dirs on drop. Covers normal return, the
+/// empty-pipeline early return and panics, so the handoff state can never leak.
+struct HandoffGuard {
+    manager: Arc<RecorderManager>,
+    dir: PathBuf,
+}
+
+impl Drop for HandoffGuard {
+    fn drop(&mut self) {
+        self.manager.waiting_merge_dirs.write().remove(&self.dir);
+    }
 }
 
 /// 录制管理器，管理所有主播的录制会话。
@@ -101,6 +118,13 @@ impl RecorderManager {
     /// submodules, e.g. startup scanning).
     pub fn app_state(&self) -> Arc<AppState> {
         Arc::clone(&self.state)
+    }
+
+    /// 判断指定目录是否处于"录制结束 → 后处理接手"的交接状态（在 waiting_merge_dirs 中）。
+    /// Check whether a directory is in the "recording ended → post-processing takes over"
+    /// handoff state (present in waiting_merge_dirs).
+    pub fn is_pending_handoff(&self, path: &std::path::Path) -> bool {
+        self.waiting_merge_dirs.read().contains(path)
     }
 
     /// 判断指定路径是否被某个活跃录制会话锁定（路径在会话目录下）。
@@ -174,7 +198,29 @@ impl RecorderManager {
             stop_tx,
         };
 
-        self.sessions.write().insert(username.to_string(), session);
+        // 在同一把写锁内复核“未在录制”与并发上限后再插入，防止同一主播被并发开录
+        // 出现两条录制循环（进而触发两次后处理）。开头的检查只是快速路径。
+        // 复核失败时不删除已创建的 session_dir：同一秒内的并发调用会得到同一路径，
+        // 删除会破坏胜出者的目录；遗留的空目录由 segment_merge::startup_remove_empty_dirs 清理。
+        //
+        // Re-check "not recording" and the concurrency cap under the same write lock before
+        // inserting, so concurrent starts for the same streamer can't spawn two recording
+        // loops (and thus two post-processing runs). The checks above are only a fast path.
+        // On failure the created session_dir is NOT removed: concurrent calls within the same
+        // second resolve to the same path, so deleting it would break the winner's directory;
+        // leftover empty directories are cleaned up by segment_merge::startup_remove_empty_dirs.
+        {
+            let mut sessions = self.sessions.write();
+            if sessions.contains_key(username) {
+                return Err(AppError::AlreadyRecording(username.to_string()));
+            }
+            if effective_max > 0 && sessions.len() >= effective_max {
+                return Err(AppError::Other(
+                    "Max concurrent recordings reached".to_string(),
+                ));
+            }
+            sessions.insert(username.to_string(), session);
+        }
         self.state.active_recording_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         // 录制开始时立即创建 meta，写入 recording 状态
@@ -232,6 +278,12 @@ impl RecorderManager {
                     .max(0) as u64
             });
 
+            // 先登记交接状态再移除会话，消除"会话已移除但后处理尚未 claim"的窗口，
+            // 避免维护扫描在此期间把该目录误判为陈旧并重复触发后处理。
+            // Register the handoff state before removing the session, closing the window where
+            // the session is gone but post-processing hasn't claimed yet — otherwise the
+            // maintenance scan could misjudge the directory as stale and re-trigger it.
+            manager.waiting_merge_dirs.write().insert(session_dir.clone());
             manager.sessions.write().remove(&username);
             manager.state.active_recording_count.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
 
@@ -248,7 +300,6 @@ impl RecorderManager {
             let username_clone = username.clone();
             let state_clone = Arc::clone(&manager.state);
             let emitter_clone = Arc::clone(&emitter);
-            let manager_clone = Arc::clone(&manager);
 
             emitter.emit(
                 "recording-stopped",
@@ -287,12 +338,8 @@ impl RecorderManager {
                 // session_dir acts as both pipeline initial input and meta placeholder path
                 crate::recording::meta::ensure_meta(&session_dir_clone, &started_at);
 
-                // 标记 session_dir 正在处理中（供前端进度显示）
-                // Mark session_dir as being processed (for frontend progress display)
-                manager_clone
-                    .waiting_merge_dirs
-                    .write()
-                    .insert(session_dir_clone.clone());
+                // session_dir 已在移除会话前登记到 waiting_merge_dirs（交接状态）
+                // session_dir was already registered in waiting_merge_dirs (handoff) before the session was removed
                 emitter_clone.emit(
                     "recording-pp-waiting",
                     &serde_json::json!({
@@ -311,14 +358,13 @@ impl RecorderManager {
                     &emitter_clone,
                     &state_clone,
                 );
-
-                manager_clone
-                    .waiting_merge_dirs
-                    .write()
-                    .remove(&session_dir_clone);
             })
             .await
             .ok();
+
+            // 无条件结束交接状态（覆盖流水线为空提前返回与 panic 的情况）
+            // Unconditionally end the handoff state (covers empty-pipeline early return and panics)
+            manager.waiting_merge_dirs.write().remove(&session_dir);
         });
 
         Ok(result_path)
@@ -361,6 +407,13 @@ impl RecorderManager {
                 n += 1;
             }
         };
+
+        // 在会话切换到新目录之前登记旧目录的交接状态（此时 session_dir 仍是旧目录），
+        // 避免维护扫描在后处理 claim 之前把旧目录误判为陈旧。
+        // Register the old directory's handoff state before the session switches to the new
+        // directory (session_dir is still the old one here), so the maintenance scan can't
+        // misjudge it as stale before post-processing claims it.
+        self.waiting_merge_dirs.write().insert(session_dir.clone());
 
         // 更新 sessions 表中的 dir_path，并记录开始时间
         let now = chrono::Local::now();
@@ -406,6 +459,11 @@ impl RecorderManager {
         let emitter_owned = Arc::clone(emitter);
 
         tokio::task::spawn_blocking(move || {
+            // 交接状态由守卫结束：正常返回、流水线为空提前返回与 panic 都会清理
+            // The handoff state is ended by the guard: cleaned up on normal return,
+            // empty-pipeline early return and panic alike
+            let _handoff = HandoffGuard { manager: Arc::clone(&manager), dir: old_dir.clone() };
+
             let user_pipeline = manager.state.get_pipeline();
             if !user_pipeline.nodes.iter().any(|n| n.enabled) {
                 return;
@@ -424,10 +482,8 @@ impl RecorderManager {
 
             crate::recording::meta::ensure_meta(&old_dir, &started_at);
 
-            manager
-                .waiting_merge_dirs
-                .write()
-                .insert(old_dir.clone());
+            // old_dir 已在切换会话目录前登记到 waiting_merge_dirs（交接状态）
+            // old_dir was already registered in waiting_merge_dirs (handoff) before the session dir switched
             emitter_owned.emit(
                 "recording-pp-waiting",
                 &serde_json::json!({
@@ -444,11 +500,6 @@ impl RecorderManager {
                 &emitter_owned,
                 &manager.state,
             );
-
-            manager
-                .waiting_merge_dirs
-                .write()
-                .remove(&old_dir);
         });
 
         tracing::info!("{}", crate::tl!("recorder.started", username = username, dir = session_dir.display())
@@ -459,14 +510,27 @@ impl RecorderManager {
     /// 手动停止录制（标记为手动停止，防止自动重录）。
     /// Manually stop recording (marks as manually stopped to prevent auto-restart).
     pub async fn stop_recording(self: &Arc<Self>, username: &str) -> Result<()> {
-        let session = self
-            .sessions
-            .read()
-            .get(username)
-            .cloned()
-            .ok_or_else(|| AppError::NotRecording(username.to_string()))?;
-        self.manually_stopping.write().insert(username.to_string());
-        let _ = session.stop_tx.send(()).await;
+        // 在 sessions 读锁内插入 manually_stopping：录制任务结束时先在 sessions 写锁内移除会话，
+        // 之后才读取并清除 manually_stopping，因此标记只会在会话仍存在时写入，并必然被该会话的
+        // 结束流程消费（不会残留到下一次录制）。锁顺序为 sessions → manually_stopping，其他地方
+        // 没有反向嵌套。parking_lot 守卫是 !Send，不能跨 await 持有，所以先克隆 stop_tx 再 send。
+        //
+        // Insert into manually_stopping while holding the sessions read lock: when the recording
+        // task ends it first removes the session under the sessions write lock and only then
+        // reads and clears manually_stopping, so the flag is only written while the session
+        // still exists and is guaranteed to be consumed by that session's shutdown (it can't
+        // leak into the next recording). Lock order is sessions → manually_stopping, never
+        // nested the other way. parking_lot guards are !Send and can't be held across await,
+        // so clone stop_tx first and send afterwards.
+        let stop_tx = {
+            let sessions = self.sessions.read();
+            let session = sessions
+                .get(username)
+                .ok_or_else(|| AppError::NotRecording(username.to_string()))?;
+            self.manually_stopping.write().insert(username.to_string());
+            session.stop_tx.clone()
+        };
+        let _ = stop_tx.send(()).await;
         Ok(())
     }
 

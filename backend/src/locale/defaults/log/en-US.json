@@ -1,6 +1,9 @@
 {
   "recorder": {
     "started": "Started recording {username} → {dir}",
+    "deleteCancelTimeout": "Delete recording: timed out after {secs}s waiting for post-processing of {path} to stop; deletion was not performed",
+    "deleteWaitOtherTimeout": "Delete recording: timed out after {secs}s waiting for another deletion of {path} to finish; deletion was not performed",
+    "deleteAlreadyRemoved": "Delete recording: files and meta of {path} no longer exist (likely removed by another deletion request); treating as deleted",
     "finished": "Finished recording {username} → {dir}",
     "stopSignal": "Stop signal received → {username}",
     "apiRebuilt": "Recording {username}: API client rebuilt due to settings change",
@@ -69,10 +72,17 @@
     "migrationMoved": "Meta migration: moved {from} -> {to}",
     "migrationMoveFailed": "Meta migration: failed to move {path}: {error}",
     "migrationDone": "Meta migration: moved {count} legacy flat meta file(s) into per-streamer subdirectories",
+    "migrationStemMoved": "Meta migration: renamed legacy meta with truncated name {from} -> {to}",
+    "migrationStemTargetExists": "Meta migration: target {to} for {path} already exists, keeping the original file",
+    "migrationStemMoveFailed": "Meta migration: failed to rename {path}: {error}",
+    "migrationStemDone": "Meta migration: fixed {count} legacy meta file(s) with truncated names",
+    "maintenanceAlreadyRunning": "Output directory maintenance: previous run still in progress, skipping this run",
     "cleanupDeleteFailed": "Meta cleanup: failed to delete {name}: {error}",
     "cleanupDeleted": "Meta cleanup: deleted orphaned meta {name}",
     "cleanupDone": "Meta cleanup: deleted {count} orphaned meta file(s)",
     "scanSkipEmpty": "Meta scan: {count} video(s) need post-processing but pipeline is empty, skipping",
+    "scanSkipOwnedVideo": "Meta scan: video {path} is already managed by another meta record, skipping",
+    "scanSkipFinishedBeforeTrigger": "Meta scan: {path} already finished post-processing or no longer exists before trigger, skipping",
     "scanPpPending": "Meta scan: {count} path(s) need post-processing (re-)triggered",
     "scanCreatedVideo": "Meta scan: created pp_waiting meta for video {path}",
     "scanCorruptVideo": "Meta scan: corrupt meta for video {path} — recreating as pp_waiting",
@@ -169,7 +179,10 @@
     "discoveryDescribeFailed": "Failed to describe module {path}: {error}",
     "builtinUnpackImageNotFound": "unpack: image path not found (skipping port 1): {path}",
     "ppQueueAdjusted": "pp_queue: permits={permits} (max={max}, running={running}, cpu={cpu}%, mem={mem}%, mem_avail={avail}MB)",
-    "concurrencySet": "post-processing concurrency set to {n}"
+    "concurrencySet": "post-processing concurrency set to {n}",
+    "duplicateTriggerSkipped": "Post-processing: a task for recording {key} is already queued or running, skipping duplicate trigger → {path}",
+    "triggerSkippedRemoval": "Post-processing: recording {key} is being deleted, skipping trigger → {path}",
+    "claimWaitReservationTimeout": "Post-processing: timed out waiting for the scan reservation on recording {key} to be released, skipping this trigger → {path}"
   },
   "ffmpegUtil": {
     "concurrencyInitialized": "FFmpeg concurrency initialized: permits={n}",

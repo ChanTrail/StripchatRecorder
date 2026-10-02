@@ -10,9 +10,10 @@
 //! paths needing post-processing (re-)triggered. Does not implement meta file I/O
 //! primitives (see `super::store`) or scheduling/cleanup logic (see `super::maintenance`).
 
-use super::model::{META_VERSION, VideoMeta, meta_path_for, parse_timestamp_from_stem};
+use super::model::{META_VERSION, VideoMeta, meta_path_for, parse_timestamp_from_stem, recording_stem};
 use super::store::{read_meta, write_meta};
-use std::path::Path;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 
 /// meta 完整性检查：验证必须字段是否有效，同时尝试修复可以推断的缺失字段。
 ///
@@ -43,7 +44,9 @@ fn repair_meta(meta: &VideoMeta, path: &Path) -> Option<VideoMeta> {
     // started_at 为空时从文件名或文件修改时间推断
     // Infer started_at from filename stem or file modification time when empty
     if m.started_at.trim().is_empty() {
-        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        // 与 meta 路径规则一致的 stem（含 '.' 用户名的 session_dir 不被截断）
+        // Stem consistent with the meta path rule (session_dirs of dotted usernames aren't truncated)
+        let stem = recording_stem(path).unwrap_or("");
         let inferred = parse_timestamp_from_stem(stem).unwrap_or_else(|| {
             std::fs::metadata(path)
                 .ok()
@@ -147,13 +150,66 @@ pub fn ensure_meta_files(
 ) -> Vec<std::path::PathBuf> {
     let mut pp_pending: Vec<std::path::PathBuf> = Vec::new();
 
+    // 收集"已归属其他 meta"的视频路径：某个 meta 的 video_path 推导出的 meta 路径
+    // 不是该 meta 自身时（如 split_by_streamer=false 时合并文件落在扁平目录），
+    // 该视频已由那份 meta 管理，扫描不应再为它新建 meta 或触发后处理。
+    //
+    // Collect video paths "owned by another meta": when the meta path derived from a meta's
+    // video_path isn't that meta file itself (e.g. merged file in a flat dir when
+    // split_by_streamer=false), the video is already managed by that meta and the scan must
+    // not create a new meta for it or trigger post-processing.
+    let mut owned_elsewhere: HashSet<PathBuf> = HashSet::new();
+    for meta_file in super::model::list_all_meta_paths() {
+        let Ok(content) = std::fs::read_to_string(&meta_file) else {
+            continue;
+        };
+        let Ok(meta) = serde_json::from_str::<VideoMeta>(&content) else {
+            continue;
+        };
+        if let Some(vp) = meta.video_path.as_deref() {
+            let vp = PathBuf::from(vp);
+            if meta_path_for(&vp).as_deref() != Some(meta_file.as_path()) {
+                owned_elsewhere.insert(vp);
+            }
+        }
+    }
+
     if output_dir.exists() {
-        scan_and_ensure_meta(output_dir, &mut pp_pending, state, recorder, retry_pp_error);
+        scan_and_ensure_meta(output_dir, &mut pp_pending, state, recorder, retry_pp_error, &owned_elsewhere);
     }
     for dir in extra_dirs {
         if dir.exists() && *dir != output_dir {
-            scan_and_ensure_meta(dir, &mut pp_pending, state, recorder, retry_pp_error);
+            scan_and_ensure_meta(dir, &mut pp_pending, state, recorder, retry_pp_error, &owned_elsewhere);
         }
+    }
+
+    // 按录制身份去重：同一录制（session_dir 与合并文件共用一个 meta）只保留一条，
+    // 优先保留 meta.video_path 与自身相同的那条，否则保留第一条。
+    // Deduplicate by recording identity: keep one entry per recording (session_dir and merged
+    // file share one meta), preferring the one whose meta.video_path equals itself, else the first.
+    {
+        let mut chosen: Vec<(String, PathBuf)> = Vec::new();
+        for p in pp_pending.drain(..) {
+            let key = crate::postprocess::queue::recording_key(&p);
+            let matches_meta = || {
+                read_meta(&p)
+                    .and_then(|m| m.video_path)
+                    .is_some_and(|vp| Path::new(&vp) == p.as_path())
+            };
+            match chosen.iter().position(|(k, _)| *k == key) {
+                Some(idx) => {
+                    let existing = &chosen[idx].1;
+                    let existing_matches = read_meta(existing)
+                        .and_then(|m| m.video_path)
+                        .is_some_and(|vp| Path::new(&vp) == existing.as_path());
+                    if !existing_matches && matches_meta() {
+                        chosen[idx].1 = p;
+                    }
+                }
+                None => chosen.push((key, p)),
+            }
+        }
+        pp_pending = chosen.into_iter().map(|(_, p)| p).collect();
     }
 
     if !pp_pending.is_empty() {
@@ -172,6 +228,7 @@ fn scan_and_ensure_meta(
     state: &crate::config::app_state::AppState,
     recorder: &crate::recording::recorder::RecorderManager,
     retry_pp_error: bool,
+    owned_elsewhere: &HashSet<PathBuf>,
 ) {
     // 判断某路径当前状态是否"真实活跃"（不应被本次扫描触碰或重新触发）。
     //
@@ -206,12 +263,30 @@ fn scan_and_ensure_meta(
     //   pp_running we also fall back to checking meta.video_path (the authoritative path
     //   used by the active post-processing task) — the status is genuinely active if either
     //   path is tracked.
+    //
+    // 现在的权威判断在条目入口处：扫描在读写每个条目的 meta 前用录制身份
+    // （`resolve_meta_path`，即 `recording_key`）调用 `pp_queue.try_reserve`，已被 claim
+    // （排队/执行中）的录制占位失败而直接跳过；session_dir 与合并文件共用同一 meta，
+    // 因此任一路径都能命中。调用本闭包时该条目的占位已成功，说明此刻没有 claim，
+    // 所以这里不再查询 `is_recording_active`（否则会被自己的占位命中而误判为活跃）。
+    // "recording" 还需把录制结束 → 后处理接手的交接状态（`is_pending_handoff`）视为活跃。
+    // 下方基于 is_tracked 的三条启发式仅作兜底保留。
+    //
+    // The authoritative check now happens at each entry: before reading/writing an entry's
+    // meta the scan calls `pp_queue.try_reserve` with the recording identity
+    // (`resolve_meta_path`, i.e. `recording_key`); a claimed (queued/running) recording fails
+    // the reservation and is skipped. A session_dir and its merged file share one meta, so
+    // either path hits. When this closure runs the entry's reservation has succeeded, meaning
+    // there is no claim right now, so `is_recording_active` is no longer queried here (it would
+    // match our own reservation and misreport the entry as active). For "recording", the
+    // recording-ended → post-processing handoff state (`is_pending_handoff`) also counts as
+    // active. The three is_tracked-based heuristics below are kept only as a fallback.
     let is_genuinely_active =
         |path: &Path, status: &str, meta_video_path: Option<&str>| match status {
-            "recording" => recorder.is_file_locked(path),
+            "recording" => recorder.is_file_locked(path) || recorder.is_pending_handoff(path),
             "pp_waiting" | "pp_running" => {
-                // 先查当前扫描路径，找不到再用 meta.video_path 兜底
-                // Check the scanned path first; fall back to meta.video_path if not found
+                // 兜底：先查当前扫描路径，找不到再用 meta.video_path
+                // Fallback: check the scanned path first, then meta.video_path
                 if state.pp_queue.is_tracked(&path.to_string_lossy()) {
                     return true;
                 }
@@ -232,7 +307,7 @@ fn scan_and_ensure_meta(
                 // Without this check, scanning a .mkv would be misclassified as stale and
                 // trigger a duplicate post-processing run.
                 if path.extension().is_some()
-                    && let (Some(parent), Some(stem)) = (path.parent(), path.file_stem())
+                    && let (Some(parent), Some(stem)) = (path.parent(), recording_stem(path))
                 {
                     let session_dir = parent.join(stem);
                     if state.pp_queue.is_tracked(&session_dir.to_string_lossy()) {
@@ -267,11 +342,49 @@ fn scan_and_ensure_meta(
             ) {
                 continue;
             }
-            let meta_path = match meta_path_for(&path) {
-                Some(p) => p,
-                None => continue,
+            // 实时解析录制身份（归属 meta 路径），与 recording_key(&path) 一致（A4）
+            // Resolve the recording identity (owning meta path) live; equals recording_key(&path) (A4)
+            let Some(meta_path) = super::model::resolve_meta_path(&path) else {
+                continue;
             };
+            let key = meta_path.to_string_lossy().to_string();
+            // 读写 meta 前占位：已被后处理 claim（排队或执行中）、已有占位或正在删除 → 跳过；
+            // 占位持有到本分支结束，关闭"检查 claim → write_meta"之间的窗口（A3）
+            // Reserve before touching the meta: skip if claimed by post-processing (queued/running),
+            // already reserved, or being removed; the reservation is held until the end of this
+            // branch, closing the "check claim → write_meta" window (A3)
+            let Some(_reservation) = state.pp_queue.try_reserve(&key) else {
+                continue;
+            };
+            // 占位后复查：文件可能已被删除或移动 / Re-check after reserving: file may be gone
+            if !path.exists() {
+                continue;
+            }
             if !meta_path.exists() {
+                // 归属 meta 已经由 resolve_meta_path 实时反查（扁平目录合并文件的 meta 存在时
+                // 不会进入此分支，A4）；下面的 owned_elsewhere 快照只作附加保护。
+                // 视频已由其他 meta 的 video_path 引用（如扁平输出目录下的合并文件）→ 跳过
+                // 同 stem 的录制正在后处理（ts_merge 正写入扁平目录、video_path 尚未切换）→ 同样跳过
+                // （is_stem_active 只统计 Claimed，不会被本扫描自己的占位命中）
+                //
+                // The owning meta has already been looked up live via resolve_meta_path (a flat-dir
+                // merged file whose meta exists never reaches this branch, A4); the owned_elsewhere
+                // snapshot below is only an extra safeguard.
+                // Video already referenced by another meta's video_path (e.g. merged file in
+                // a flat output dir) → skip
+                // A same-stem recording is being post-processed (ts_merge writing into a flat dir,
+                // video_path not switched yet) → skip as well
+                // (is_stem_active only counts Claimed entries, so this scan's own reservation
+                // doesn't match)
+                if owned_elsewhere.contains(&path)
+                    || path.file_stem().is_some_and(|s| state.pp_queue.is_stem_active(s))
+                {
+                    tracing::debug!(
+                        "{}",
+                        crate::tl!("meta.scanSkipOwnedVideo", path = path.display())
+                    );
+                    continue;
+                }
                 // meta 缺失：创建 pp_waiting 状态，稍后触发后处理
                 // Meta missing: create pp_waiting status, trigger post-processing later
                 let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
@@ -454,14 +567,26 @@ fn scan_and_ensure_meta(
             // Skip the entire branch if the session_dir is locked by a live recording
             // session on this process — don't inspect or rebuild its meta at all, avoiding
             // a race with the recording loop's own meta writes.
-            if recorder.is_file_locked(&path) {
+            // 处于录制结束 → 后处理接手的交接状态时同样跳过。
+            // Also skip while in the recording-ended → post-processing handoff state.
+            if recorder.is_file_locked(&path) || recorder.is_pending_handoff(&path) {
                 continue;
             }
 
-            let meta_path = match meta_path_for(&path) {
-                Some(p) => p,
-                None => continue,
+            // 实时解析录制身份并占位，持有到本分支结束（同视频文件分支，A3/A4）
+            // Resolve the recording identity live and reserve it until the end of this branch
+            // (same as the video file branch, A3/A4)
+            let Some(meta_path) = super::model::resolve_meta_path(&path) else {
+                continue;
             };
+            let key = meta_path.to_string_lossy().to_string();
+            let Some(_reservation) = state.pp_queue.try_reserve(&key) else {
+                continue;
+            };
+            // 占位后复查：目录可能已被合并后删除 / Re-check after reserving: dir may be gone after merge
+            if !path.exists() {
+                continue;
+            }
             if !meta_path.exists() {
                 // meta 缺失：创建 pp_waiting 状态，加入待后处理列表。
                 // ts_merge 会自行判断输入是目录（此处）还是文件并相应处理。
@@ -640,7 +765,7 @@ fn scan_and_ensure_meta(
         }
 
         // ── 普通子目录，递归扫描 / Regular subdirectory, recurse ──────────────
-        scan_and_ensure_meta(&path, pp_pending, state, recorder, retry_pp_error);
+        scan_and_ensure_meta(&path, pp_pending, state, recorder, retry_pp_error, owned_elsewhere);
     }
 }
 

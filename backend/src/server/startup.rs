@@ -93,18 +93,23 @@ pub fn migrate_flat_meta_files(app_state: &Arc<AppState>, emitter: &Arc<dyn Emit
             Some(args),
         );
     }
+    // 修正旧 stem 规则截断文件名的 meta（含 '.' 用户名，B16），只记日志不发通知；
+    // 必须在首次扫描前执行
+    // Fix meta files whose names were truncated by the old stem rule (usernames with '.',
+    // B16); logs only, no notification; must run before the first scan
+    crate::recording::meta::migrate_truncated_stem_meta_files();
 }
 
 /// 在 `run_server()` 中统一执行所有启动时一次性任务。
 ///
-/// 注意：输出目录维护（合并遗留分片、重建 meta、触发遗漏后处理）不在此处执行，
+/// 注意：输出目录维护（重建 meta、触发遗漏后处理、清理空目录）不在此处执行，
 /// 而是交给 `scheduler::start_output_dir_maintenance`——它首次立即执行一遍，
 /// 之后每 5 分钟重复，因此启动检查和周期性维护共用完全相同的逻辑，无需在此重复。
 ///
 /// Run all one-shot startup tasks from `run_server()`.
 ///
-/// Note: output-directory maintenance (merging leftover segments, rebuilding meta,
-/// triggering missed post-processing) is intentionally NOT run here. It's handled by
+/// Note: output-directory maintenance (rebuilding meta, triggering missed
+/// post-processing, removing empty dirs) is intentionally NOT run here. It's handled by
 /// `scheduler::start_output_dir_maintenance`, whose first immediate run covers the
 /// startup check — so the startup pass and periodic maintenance share identical logic
 /// without duplicating it here.

@@ -212,6 +212,10 @@ async fn setup_app(app_handle: tauri::AppHandle) {
                 Some(args),
             );
         }
+        // 修正旧 stem 规则截断文件名的 meta（含 '.' 用户名，B16），只记日志；须在首次扫描前执行
+        // Fix meta files truncated by the old stem rule (usernames with '.', B16); logs only;
+        // must run before the first scan
+        stripchat_recorder_lib::recording::meta::migrate_truncated_stem_meta_files();
     }
 
     // 校验并推送自定义 locale 文件警告 / Validate and push custom locale warnings
@@ -264,8 +268,8 @@ async fn setup_app(app_handle: tauri::AppHandle) {
     // Offline preview URL periodic refresh (once 30 s after launch, then daily at midnight)
     start_preview_url_refresh(Arc::clone(&app_state));
 
-    // 输出目录维护调度器：扫描/修复 meta，触发遗漏后处理，合并遗留 TS 分片
-    // Output directory maintenance: scan/repair meta, trigger missed pp, merge leftover segments
+    // 输出目录维护调度器：扫描/修复 meta，触发遗漏后处理（含未合并的 session_dir），清理空目录
+    // Output directory maintenance: scan/repair meta, trigger missed pp (incl. unmerged session_dirs), remove empty dirs
     {
         let app_state_m = Arc::clone(&app_state);
         let emitter_m = Arc::clone(&emitter);

@@ -23,8 +23,7 @@ use std::time::{Duration, Instant};
 
 use grammers_client::Client;
 use grammers_client::client::{ClientConfiguration, AutoSleep};
-use grammers_client::media::{InputMedia, Uploaded};
-use grammers_client::message::InputMessage;
+use grammers_client::media::Uploaded;
 use grammers_client::sender::{ConnectionParams, SenderPool};
 use grammers_client::tl;
 use grammers_session::Session;
@@ -344,6 +343,86 @@ fn split_video(input: &Path, max_bytes: u64) -> Result<Vec<PathBuf>, String> {
 
     final_segments.sort();
     Ok(final_segments)
+}
+
+/// 生成 `n` 个非零的 64 位 random_id，用于 messages.Send* 请求。
+///
+/// 每个进程使用随机密钥的 `RandomState`，再混入系统时间纳秒、序号和进程 ID，
+/// 保证同一进程内互不相同、不同进程间极难碰撞。结果为 0 时改成 1（服务端对 0 返回 RANDOM_ID_EMPTY）。
+///
+/// Generate `n` non-zero 64-bit random_ids for messages.Send* requests.
+///
+/// Uses a per-process randomly keyed `RandomState`, mixed with system-time nanos, the index
+/// and the process ID, so ids are distinct within a process and collide across processes
+/// with negligible probability. A zero result becomes 1 (the server rejects 0 with
+/// RANDOM_ID_EMPTY).
+fn generate_send_ids(n: usize) -> Vec<i64> {
+    use std::collections::hash_map::RandomState;
+    use std::hash::{BuildHasher, Hasher};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let state = RandomState::new();
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
+    let pid = std::process::id();
+    (0..n)
+        .map(|i| {
+            let mut h = state.build_hasher();
+            h.write_u128(nanos);
+            h.write_usize(i);
+            h.write_u32(pid);
+            let id = h.finish() as i64;
+            if id == 0 { 1 } else { id }
+        })
+        .collect()
+}
+
+/// 一次模块运行内固定不变的发送 random_id 集合。
+///
+/// Telegram 按 random_id 对发送请求去重：同一 random_id 重发不会产生第二条消息，
+/// 而是返回 RANDOM_ID_DUPLICATE。本结构在 run() 中只创建一次，内层发送重试、
+/// FILE_PART_MISSING 重传后的重发以及外层 MAX_OUTER 整体重跑都复用同一组 id，
+/// 让"服务端已收到但客户端报错"后的重试对服务端幂等。
+///
+/// Send random_ids that stay fixed for one module run.
+///
+/// Telegram deduplicates send requests by random_id: re-sending with the same random_id does
+/// not create a second message and returns RANDOM_ID_DUPLICATE instead. This struct is created
+/// once in run(); inner send retries, re-sends after a FILE_PART_MISSING re-upload, and outer
+/// MAX_OUTER reruns all reuse the same ids, so retrying after "server received it but the
+/// client saw an error" is idempotent on the server side.
+struct SendIds {
+    /// 相册条目 id，按条目位置分配（封面在前，视频分片在后）
+    /// Album item ids, assigned by item position (cover first, then video parts)
+    album: std::sync::Mutex<Vec<i64>>,
+    /// 单条消息（仅封面图或纯文字）的 id / id for a single message (cover-only or text-only)
+    single: i64,
+}
+
+impl SendIds {
+    /// 创建新的 id 集合；相册 id 按需生成 / Create a new id set; album ids are generated lazily
+    fn new() -> Self {
+        Self { album: std::sync::Mutex::new(Vec::new()), single: generate_send_ids(1)[0] }
+    }
+
+    /// 返回前 `n` 个相册条目 id；已有 id 不足时追加生成。
+    /// 同一次运行内对同一位置的条目始终返回相同的 id。
+    ///
+    /// Return the first `n` album item ids, generating more when not enough exist yet.
+    /// Within one run, the same position always yields the same id.
+    fn album_ids(&self, n: usize) -> Vec<i64> {
+        let mut ids = self.album.lock().unwrap_or_else(|e| e.into_inner());
+        if ids.len() < n {
+            let extra = generate_send_ids(n - ids.len());
+            ids.extend(extra);
+        }
+        ids[..n].to_vec()
+    }
+}
+
+/// 服务端返回 RANDOM_ID_DUPLICATE 表示该 random_id 的消息此前已发送成功。
+/// RANDOM_ID_DUPLICATE from the server means a message with this random_id was already sent.
+fn is_already_delivered(e: &grammers_mtsender::InvocationError) -> bool {
+    e.is("RANDOM_ID_DUPLICATE")
 }
 
 /// 获取 Telegram 会话文件路径（存储在系统配置目录下）。
@@ -775,6 +854,20 @@ async fn upload_with_progress(
 /// persist across the entire retry loop, preventing the progress bar from resetting to 0 on
 /// each reconnect retry. The caller resets `upload_bytes_done` to 0 at the start of each
 /// outer attempt.
+///
+/// 幂等发送：三处发送都直接调用原始 TL 请求（SendMultiMedia/SendMedia/SendMessage），
+/// random_id 取自调用方传入的 `send_ids`（整个模块运行只创建一次）。服务端已收到但
+/// 客户端报错时，重试用同一 random_id 由服务端去重；返回 RANDOM_ID_DUPLICATE 视为已送达。
+/// 服务端去重记录的保留时长官方文档未写明，因此这是尽力而为的保护。分片上传和
+/// UploadMedia 不产生消息，其重试逻辑不受影响。
+///
+/// Idempotent sending: all three send paths invoke the raw TL requests
+/// (SendMultiMedia/SendMedia/SendMessage) with random_ids taken from the caller's `send_ids`
+/// (created once per module run). If the server received a request but the client saw an
+/// error, the retry reuses the same random_id and the server deduplicates it;
+/// RANDOM_ID_DUPLICATE is treated as delivered. How long the server keeps random_ids is not
+/// documented, so this is best-effort. Chunk uploads and UploadMedia create no messages, so
+/// their retry logic is unchanged.
 #[allow(clippy::too_many_arguments)]
 async fn upload_and_send(
     api_id: i32, api_hash: &str, bot_token: &str, proxy: &str,
@@ -785,9 +878,14 @@ async fn upload_and_send(
     video_parts: &[PathBuf],
     done: Arc<AtomicUsize>,
     upload_total: usize,
+    send_ids: &SendIds,
 ) -> Result<(), String> {
     let (base_caption_text, base_caption_entities) =
         build_caption(model_name, timestamp, duration_str, file_name, file_size_str, None);
+    // 原始 TL 请求的 entities 字段：为空时传 None（与 grammers 内部行为一致）
+    // entities field for raw TL requests: None when empty (matches grammers' internal behavior)
+    let caption_entities: Option<Vec<tl::enums::MessageEntity>> =
+        if base_caption_entities.is_empty() { None } else { Some(base_caption_entities) };
     let session = Arc::new(
         SqliteSession::open(&session_path(api_id)).await
             .map_err(|e| format!("open session failed: {}", e))?,
@@ -1073,23 +1171,37 @@ async fn upload_and_send(
         let mut committed_parts = do_upload_and_commit(Arc::clone(&done)).await?;
         for tmp in &converted_parts { let _ = fs::remove_file(tmp); }
 
-        let total_parts = committed_parts.len();
-
-        // 辅助函数：从固化的 Media 重建 InputMedia 列表（用于发送重试）
-        // Helper: rebuild InputMedia list from committed Media (for send retry)
+        // 辅助函数：从固化的 Media 重建 InputSingleMedia 列表（用于发送重试）。
+        // 每个条目的 random_id 按位置取自 send_ids，重试与重传后都保持不变。
+        // Helper: rebuild the InputSingleMedia list from committed Media (for send retry).
+        // Each item's random_id comes from send_ids by position and stays the same across
+        // retries and re-uploads.
         let build_items = |cover: &Option<grammers_client::media::Media>,
-                           parts: &Vec<CommittedPart>| -> Vec<InputMedia> {
-            let mut items: Vec<InputMedia> = Vec::new();
-            if let Some(c) = cover {
-                items.push(InputMedia::new().copy_media(c));
+                           parts: &Vec<CommittedPart>|
+         -> Result<Vec<tl::enums::InputSingleMedia>, String> {
+            let medias: Vec<&grammers_client::media::Media> =
+                cover.iter().chain(parts.iter().map(|p| &p.media)).collect();
+            let n_items = medias.len();
+            let ids = send_ids.album_ids(n_items);
+            let mut items = Vec::with_capacity(n_items);
+            for (idx, media) in medias.into_iter().enumerate() {
+                let raw = media.to_raw_input_media()
+                    .ok_or_else(|| "committed media cannot be re-sent".to_string())?;
+                // 说明文字放在最后一个条目上 / Caption goes on the last item
+                let is_last = idx + 1 == n_items;
+                let (message, entities) = if is_last {
+                    (base_caption_text.clone(), caption_entities.clone())
+                } else {
+                    (String::new(), None)
+                };
+                items.push(tl::types::InputSingleMedia {
+                    media: raw,
+                    random_id: ids[idx],
+                    message,
+                    entities,
+                }.into());
             }
-            for (idx, part) in parts.iter().enumerate() {
-                let mut item = InputMedia::new().copy_media(&part.media);                if idx == total_parts - 1 {
-                    item = item.fmt_entities(base_caption_entities.clone()).caption(base_caption_text.clone());
-                }
-                items.push(item);
-            }
-            items
+            Ok(items)
         };
 
         // 每批最多 10 条发送相册。固化后的 InputMedia 不会有 FILE_PART_MISSING，
@@ -1103,7 +1215,7 @@ async fn upload_and_send(
 
         let mut reupload_count = 0u32;
         loop {
-            let n_batches = build_items(&committed_cover, &committed_parts).len().div_ceil(MAX_ALBUM);
+            let n_batches = build_items(&committed_cover, &committed_parts)?.len().div_ceil(MAX_ALBUM);
             let mut need_reupload = false;
             let mut send_err = String::new();
 
@@ -1111,10 +1223,34 @@ async fn upload_and_send(
                 let start = batch_idx * MAX_ALBUM;
                 let mut send_attempt = 0u32;
                 loop {
-                    let batch: Vec<InputMedia> = build_items(&committed_cover, &committed_parts)
+                    let batch: Vec<tl::enums::InputSingleMedia> = build_items(&committed_cover, &committed_parts)?
                         .into_iter().skip(start).take(MAX_ALBUM).collect();
-                    match client.send_album(peer, batch).await {
+                    // 同一批次每次重试都使用相同的 random_id，服务端据此去重
+                    // Every retry of a batch uses the same random_ids, so the server deduplicates
+                    let result = client.invoke(&tl::functions::messages::SendMultiMedia {
+                        silent: false,
+                        background: false,
+                        clear_draft: false,
+                        peer: (&peer).into(),
+                        reply_to: None,
+                        schedule_date: None,
+                        multi_media: batch,
+                        send_as: None,
+                        noforwards: false,
+                        update_stickersets_order: false,
+                        invert_media: false,
+                        quick_reply_shortcut: None,
+                        effect: None,
+                        allow_paid_floodskip: false,
+                        allow_paid_stars: None,
+                    }).await;
+                    match result {
                         Ok(_) => break,
+                        Err(e) if is_already_delivered(&e) => {
+                            eprintln!("album batch {} was already delivered (RANDOM_ID_DUPLICATE); treating as sent",
+                                batch_idx + 1);
+                            break;
+                        }
                         Err(e) => {
                             let msg = format!("send_album (batch {}) failed: {}", batch_idx + 1, e);
                             if msg.contains("FILE_PART_MISSING") {
@@ -1152,12 +1288,44 @@ async fn upload_and_send(
         const SEND_RETRY_DELAY: Duration = Duration::from_secs(30);
         let mut send_attempt = 0u32;
         loop {
-            let msg = InputMessage::new()
-                .photo(uploaded.clone())
-                .fmt_entities(base_caption_entities.clone())
-                .text(base_caption_text.clone());
-            match client.send_message(peer, msg).await {
+            // 固定 random_id（send_ids.single），重试对服务端幂等
+            // Fixed random_id (send_ids.single) keeps retries idempotent on the server
+            let result = client.invoke(&tl::functions::messages::SendMedia {
+                silent: false,
+                background: false,
+                clear_draft: false,
+                peer: (&peer).into(),
+                reply_to: None,
+                media: tl::types::InputMediaUploadedPhoto {
+                    spoiler: false,
+                    file: uploaded.raw.clone(),
+                    stickers: None,
+                    ttl_seconds: None,
+                    live_photo: false,
+                    video: None,
+                }.into(),
+                message: base_caption_text.clone(),
+                random_id: send_ids.single,
+                reply_markup: None,
+                entities: caption_entities.clone(),
+                schedule_date: None,
+                schedule_repeat_period: None,
+                send_as: None,
+                noforwards: false,
+                update_stickersets_order: false,
+                invert_media: false,
+                quick_reply_shortcut: None,
+                effect: None,
+                allow_paid_floodskip: false,
+                allow_paid_stars: None,
+                suggested_post: None,
+            }).await;
+            match result {
                 Ok(_) => break,
+                Err(e) if is_already_delivered(&e) => {
+                    eprintln!("photo message was already delivered (RANDOM_ID_DUPLICATE); treating as sent");
+                    break;
+                }
                 Err(e) => {
                     send_attempt += 1;
                     let err = format!("send_message (photo) failed: {}", e);
@@ -1175,11 +1343,40 @@ async fn upload_and_send(
         const SEND_RETRY_DELAY: Duration = Duration::from_secs(30);
         let mut send_attempt = 0u32;
         loop {
-            let msg = InputMessage::new()
-                .fmt_entities(base_caption_entities.clone())
-                .text(base_caption_text.clone());
-            match client.send_message(peer, msg).await {
+            // 固定 random_id（send_ids.single），重试对服务端幂等；
+            // no_webpage: true 与原 InputMessage 默认 link_preview=false 等价。
+            // Fixed random_id (send_ids.single) keeps retries idempotent on the server;
+            // no_webpage: true matches the previous InputMessage default link_preview=false.
+            let result = client.invoke(&tl::functions::messages::SendMessage {
+                no_webpage: true,
+                silent: false,
+                background: false,
+                clear_draft: false,
+                peer: (&peer).into(),
+                reply_to: None,
+                message: base_caption_text.clone(),
+                random_id: send_ids.single,
+                reply_markup: None,
+                entities: caption_entities.clone(),
+                schedule_date: None,
+                schedule_repeat_period: None,
+                send_as: None,
+                noforwards: false,
+                update_stickersets_order: false,
+                invert_media: false,
+                quick_reply_shortcut: None,
+                effect: None,
+                allow_paid_floodskip: false,
+                allow_paid_stars: None,
+                suggested_post: None,
+                rich_message: None,
+            }).await;
+            match result {
                 Ok(_) => break,
+                Err(e) if is_already_delivered(&e) => {
+                    eprintln!("text message was already delivered (RANDOM_ID_DUPLICATE); treating as sent");
+                    break;
+                }
                 Err(e) => {
                     send_attempt += 1;
                     let err = format!("send_message (text) failed: {}", e);
@@ -1297,6 +1494,13 @@ fn run() -> Result<(), String> {
     // Shared uploaded bytes counter, persists across the outer retry loop
     let done = Arc::new(AtomicUsize::new(0));
 
+    // 发送 random_id 在整个模块运行内只生成一次，外层每次重试都复用，
+    // 避免"服务端已收到但客户端报错"后整体重跑时重复发消息（详见 upload_and_send 文档）。
+    // Send random_ids are generated once per module run and reused by every outer retry,
+    // so a full rerun after "server received it but the client saw an error" does not post
+    // duplicates (see upload_and_send docs).
+    let send_ids = SendIds::new();
+
     // 构建 Tokio 运行时并执行异步上传，最多重试 3 次
     // Build Tokio runtime and execute async upload with up to 3 retries
     let upload_result = tokio::runtime::Builder::new_multi_thread()
@@ -1315,7 +1519,7 @@ fn run() -> Result<(), String> {
                     api_id, &api_hash, &bot_token, &proxy, chat_id, &username,
                     &model_name, &ts_str, &dur_str, &name_str, &size_str,
                     &input, cover.as_deref(), send_video, &video_parts,
-                    Arc::clone(&done), upload_total,
+                    Arc::clone(&done), upload_total, &send_ids,
                 ).await;
                 match result {
                     Ok(()) => break Ok(()),
@@ -1438,5 +1642,37 @@ fn main() {
         let json = serde_json::json!({ "code": "error", "message": e, "outputs": [] });
         println!("{}", json);
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 生成的 id 全部非零且互不相同 / Generated ids are all non-zero and distinct
+    #[test]
+    fn generated_ids_are_nonzero_and_unique() {
+        let ids = generate_send_ids(64);
+        assert_eq!(ids.len(), 64);
+        assert!(ids.iter().all(|&id| id != 0));
+        let unique: std::collections::HashSet<i64> = ids.iter().copied().collect();
+        assert_eq!(unique.len(), ids.len());
+    }
+
+    /// 扩展相册 id 时保留已有位置的 id / Growing album ids keeps existing positions stable
+    #[test]
+    fn album_ids_prefix_is_stable_when_growing() {
+        let s = SendIds::new();
+        let first = s.album_ids(3);
+        let grown = s.album_ids(5);
+        assert_eq!(grown.len(), 5);
+        assert_eq!(&grown[..3], &first[..]);
+    }
+
+    /// 重复请求同样数量返回同一组 id / Repeated requests return the same ids
+    #[test]
+    fn album_ids_are_repeatable() {
+        let s = SendIds::new();
+        assert_eq!(s.album_ids(3), s.album_ids(3));
     }
 }

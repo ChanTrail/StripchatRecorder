@@ -195,11 +195,12 @@ pub async fn run_server(port: u16) {
     let monitor = StatusMonitor::new(Arc::clone(&app_state), Arc::clone(&recorder));
 
     // 执行所有启动时一次性初始化任务（locale 初始化、ffmpeg 检查、FS 监控）。
-    // 输出目录维护（合并遗留分片、重建 meta 等）由下方的定时任务首次立即执行覆盖，
+    // 输出目录维护（重建 meta、触发遗漏后处理、清理空目录等）由下方的定时任务首次执行覆盖，
     // 不在此处单独重复。
     //
     // Run all one-shot startup tasks (locale init, ffmpeg check, FS watchers).
-    // Output-directory maintenance (merging leftover segments, rebuilding meta, etc.) is
+    // Output-directory maintenance (rebuilding meta, triggering missed post-processing,
+    // removing empty dirs, etc.) is
     // covered by the scheduled task's immediate first run below, not duplicated here.
     crate::server::startup::run_all(Arc::clone(&app_state), Arc::clone(&emitter));
 

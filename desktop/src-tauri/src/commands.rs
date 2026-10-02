@@ -390,14 +390,11 @@ pub async fn delete_recording(
     path: String,
     state: State<'_, DesktopState>,
 ) -> CmdResult<serde_json::Value> {
-    // 先请求取消正在进行的后处理 / Request cancellation of any running pp task first
-    state.app_state.pp_queue.cancel(&path);
-
     let recorder = Arc::clone(&state.recorder);
     let app_state = Arc::clone(&state.app_state);
     let path_clone = path.clone();
 
-    tokio::task::spawn_blocking(move || {
+    let outcome = tokio::task::spawn_blocking(move || {
         stripchat_recorder_lib::recording::service::delete_recording_inner(
             &path_clone,
             &recorder,
@@ -408,7 +405,13 @@ pub async fn delete_recording(
     .map_err(|e| e.to_string())?
     .map_err(map_err)?;
 
-    state.emitter.emit("recording-deleted", &serde_json::json!({ "path": path }));
+    // 与 Server 路由一致：只有本次请求实际删除时才广播，已被其他请求删除时不重复广播；
+    // 两种结果都返回成功
+    // Same as the Server route: broadcast only when this request actually deleted it, not
+    // again when another request already did; both outcomes return success
+    if outcome == stripchat_recorder_lib::recording::service::DeleteOutcome::Deleted {
+        state.emitter.emit("recording-deleted", &serde_json::json!({ "path": path }));
+    }
     Ok(serde_json::json!({ "ok": true }))
 }
 
@@ -424,7 +427,7 @@ pub async fn run_postprocess_cmd(
         return Err("后处理流水线为空".to_string());
     }
     let video_path = std::path::PathBuf::from(&path);
-    let initial_path = video_path.clone();
+    let initial_path = stripchat_recorder_lib::postprocess::service::infer_initial_path(&video_path);
     let emitter = Arc::clone(&state.emitter);
     let app_state = Arc::clone(&state.app_state);
     tokio::task::spawn_blocking(move || {
@@ -450,7 +453,7 @@ pub async fn run_postprocess_batch(
     }
     for path in paths {
         let video_path = std::path::PathBuf::from(&path);
-        let initial_path = video_path.clone();
+        let initial_path = stripchat_recorder_lib::postprocess::service::infer_initial_path(&video_path);
         let emitter = Arc::clone(&state.emitter);
         let app_state = Arc::clone(&state.app_state);
         let pipeline = pipeline.clone();

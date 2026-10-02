@@ -44,41 +44,44 @@ pub async fn stream_handler(
     AxumState(s): AxumState<RelayState>,
     Path(modelname): Path<String>,
 ) -> Response {
-    // 若没有活跃会话，自动启动 worker / Auto-start worker if no active session
-    if !s.relay_manager.has_session(&modelname) {
-        let (stop_tx, ts_tx) = start_streamer(
+    // 在单次写锁内完成"已存在则订阅，否则创建会话并订阅"，并发请求只有一个会拿到
+    // new_worker，因此每个会话只会启动一个 worker。
+    // Check-and-create plus subscribe happen within a single write lock; among concurrent
+    // requests only one receives new_worker, so exactly one worker is started per session.
+    let sub = s.relay_manager.subscribe_or_create(&modelname);
+    if let Some(worker) = sub.new_worker {
+        start_streamer(
             modelname.clone(),
+            sub.session_id,
             Arc::clone(&s.app_state),
             Arc::clone(&s.relay_manager),
+            worker,
         );
-        s.relay_manager.create_session(&modelname, stop_tx, ts_tx);
     }
-
-    let (rx, prebuf) = match s.relay_manager.subscribe_with_prebuffer(&modelname) {
-        Some(pair) => pair,
-        None => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to subscribe to stream")
-                .into_response();
-        }
-    };
+    let rx = sub.rx;
+    let prebuf = sub.prebuffer;
 
     let relay_manager = Arc::clone(&s.relay_manager);
     let modelname_clone = modelname.clone();
 
     // RAII guard：无论 stream 正常结束还是客户端强制断开，都能保证 unsubscribe 被调用。
+    // 携带 session_id，旧会话的连接断开不会扣减新会话的计数。
     // RAII guard: ensures unsubscribe is called whether the stream ends normally or the client disconnects abruptly.
+    // Carries session_id so a connection of an old session never decrements a newer session's count.
     struct UnsubscribeGuard {
         relay_manager: Arc<RelayManager>,
         username: String,
+        session_id: u64,
     }
     impl Drop for UnsubscribeGuard {
         fn drop(&mut self) {
-            self.relay_manager.unsubscribe(&self.username);
+            self.relay_manager.unsubscribe(&self.username, self.session_id);
         }
     }
     let _guard = UnsubscribeGuard {
         relay_manager: Arc::clone(&relay_manager),
         username: modelname_clone.clone(),
+        session_id: sub.session_id,
     };
 
     // 连接断开时减少计数 / Decrement connection count on disconnect

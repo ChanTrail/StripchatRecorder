@@ -64,17 +64,202 @@ pub fn username_from_path(video_path: &Path) -> String {
         .to_string()
 }
 
-/// 根据视频文件路径（或 session_dir）计算对应的元数据文件路径。
-/// 按主播分子目录存储：`meta_dir/{username}/{stem}.json`，username 从 video_path
-/// 推断（见 [`username_from_path`]）。
+/// 判断一个后缀是否像文件扩展名：长度 1..=5 且全部为 ASCII 字母数字。
+/// Check whether a suffix looks like a file extension: 1..=5 ASCII alphanumeric chars.
+fn looks_like_file_extension(ext: &str) -> bool {
+    (1..=5).contains(&ext.len()) && ext.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
+/// 计算录制路径（视频文件或 session_dir）的 stem，用作 meta 文件名。
 ///
-/// Compute the metadata file path for a given video file path or session_dir.
+/// 与 `Path::file_stem()` 的区别：只有最后一个 `.` 之后的部分像扩展名
+/// （见 [`looks_like_file_extension`]）且 `.` 之前非空时才去掉它，否则返回完整文件名。
+/// session_dir 名总以 `_YYYYMMDD_HHMMSS[_n]` 结尾，因此含 `.` 的用户名
+/// （如 `a.b_20240101_120000`）不会被截断成 `a`，与其合并后的
+/// `a.b_20240101_120000.mp4` 得到同一 stem（B16）。不含 `.` 的名字以及视频文件的结果
+/// 与旧的 `file_stem()` 完全相同。
+///
+/// Compute the stem of a recording path (video file or session_dir), used as the meta
+/// file name.
+///
+/// Unlike `Path::file_stem()`, the part after the last `.` is only stripped when it looks
+/// like an extension (see [`looks_like_file_extension`]) and the part before it is
+/// non-empty; otherwise the full file name is returned. Session_dir names always end with
+/// `_YYYYMMDD_HHMMSS[_n]`, so a username containing `.` (e.g. `a.b_20240101_120000`) is no
+/// longer truncated to `a`, and yields the same stem as its merged
+/// `a.b_20240101_120000.mp4` (B16). Names without `.` and video files produce exactly the
+/// same result as the old `file_stem()`.
+pub fn recording_stem(path: &Path) -> Option<&str> {
+    let name = path.file_name()?.to_str()?;
+    if let Some((stem, ext)) = name.rsplit_once('.')
+        && !stem.is_empty()
+        && looks_like_file_extension(ext)
+    {
+        return Some(stem);
+    }
+    Some(name)
+}
+
+/// 从录制器生成的 stem（`{user}_{YYYYMMDD}_{HHMMSS}[_{n}]`）中解析主播名。
+/// 末尾的轮转序号 `_{n}`（全数字且长度不为 6）会先被去掉；格式不符或主播名为空时返回 `None`。
+///
+/// Parse the streamer name from a recorder-generated stem
+/// (`{user}_{YYYYMMDD}_{HHMMSS}[_{n}]`). A trailing rotation suffix `_{n}` (all digits,
+/// length != 6) is stripped first; returns `None` if the format doesn't match or the
+/// username is empty.
+pub fn username_from_stem(stem: &str) -> Option<&str> {
+    // 定长全数字段 / Fixed-length all-digit segment
+    fn is_digits(s: &str, len: usize) -> bool {
+        s.len() == len && s.bytes().all(|b| b.is_ascii_digit())
+    }
+    // 剥离 `_{8 位日期}_{6 位时间}`，返回前面的部分 / Strip `_{8-digit date}_{6-digit time}`, return the prefix
+    fn strip_timestamp(s: &str) -> Option<&str> {
+        let (rest, time) = s.rsplit_once('_')?;
+        if !is_digits(time, 6) {
+            return None;
+        }
+        let (user, date) = rest.rsplit_once('_')?;
+        if !is_digits(date, 8) {
+            return None;
+        }
+        Some(user)
+    }
+
+    let mut base = stem;
+    // 轮转后缀：全数字、长度不为 6，且去掉后仍以时间戳结尾
+    // Rotation suffix: all digits, length != 6, and the remainder still ends with a timestamp
+    if let Some((rest, last)) = stem.rsplit_once('_')
+        && !last.is_empty()
+        && last.len() != 6
+        && last.bytes().all(|b| b.is_ascii_digit())
+        && strip_timestamp(rest).is_some()
+    {
+        base = rest;
+    }
+    strip_timestamp(base).filter(|u| !u.is_empty())
+}
+
+/// 在指定 meta 根目录下计算录制路径的派生 meta 路径：
+/// `meta_root/{username_from_path}/{recording_stem}.json`。
+///
+/// Compute the derived meta path of a recording path under the given meta root:
+/// `meta_root/{username_from_path}/{recording_stem}.json`.
+pub fn meta_path_in(meta_root: &Path, path: &Path) -> Option<PathBuf> {
+    let stem = recording_stem(path)?;
+    Some(
+        meta_root
+            .join(username_from_path(path))
+            .join(format!("{}.json", stem)),
+    )
+}
+
+/// 根据视频文件路径（或 session_dir）计算派生的元数据文件路径。
+/// 按主播分子目录存储：`meta_dir/{username}/{stem}.json`，username 从 video_path
+/// 推断（见 [`username_from_path`]），stem 由 [`recording_stem`] 计算（含 `.` 的用户名
+/// 不会被截断）。读写 meta 时应使用 [`resolve_meta_path`]，它在派生 meta 缺失时还会查找
+/// 归属 meta。
+///
+/// Compute the derived metadata file path for a given video file path or session_dir.
 /// Stored in a per-streamer subdirectory: `meta_dir/{username}/{stem}.json`, with
-/// username inferred from video_path (see [`username_from_path`]).
+/// username inferred from video_path (see [`username_from_path`]) and the stem computed
+/// by [`recording_stem`] (usernames containing `.` are not truncated). Meta reads/writes
+/// should use [`resolve_meta_path`], which also looks up the owning meta when the derived
+/// one is missing.
 pub fn meta_path_for(video_path: &Path) -> Option<PathBuf> {
-    let stem = video_path.file_stem()?.to_str()?;
-    let username = username_from_path(video_path);
-    Some(meta_dir_for(&username).join(format!("{}.json", stem)))
+    meta_path_in(&meta_dir(), video_path)
+}
+
+/// 在指定 meta 根目录下解析录制路径的实际 meta 文件（录制身份）。
+///
+/// 1. 派生 meta（[`meta_path_in`]）存在时直接返回它（常见情况，无额外 IO）；
+/// 2. 否则按 stem 查找 `video_path` 恰好等于该路径的归属 meta：stem 是录制器格式时只查
+///    `meta_root/{user}/{stem}.json`（录制器生成的 meta 必在该目录下），否则遍历 meta 根下
+///    一层子目录；
+/// 3. 都找不到时返回派生路径（供新建 meta 使用）。
+///
+/// 只有派生 meta 缺失时才有额外 IO。用于 split_by_streamer=false 时合并文件落在扁平目录、
+/// 其 meta 仍在 `meta/{user}/` 下的归属解析，使手动、批量、取消、删除与重跑都解析到同一身份
+/// （A1/A4）。
+///
+/// Resolve the actual meta file (recording identity) of a recording path under the given
+/// meta root.
+///
+/// 1. If the derived meta ([`meta_path_in`]) exists, return it (common case, no extra IO);
+/// 2. otherwise look for the owning meta by stem whose `video_path` equals this path
+///    exactly: for recorder-format stems only `meta_root/{user}/{stem}.json` is checked
+///    (recorder-generated meta always lives there), otherwise each first-level
+///    subdirectory of the meta root is checked;
+/// 3. if nothing is found, return the derived path (used to create a new meta).
+///
+/// Extra IO only happens when the derived meta is missing. Used to resolve ownership when
+/// split_by_streamer=false puts the merged file in a flat directory while its meta stays
+/// under `meta/{user}/`, so manual, batch, cancel, delete and re-runs all resolve to the
+/// same identity (A1/A4).
+pub fn resolve_meta_path_in(meta_root: &Path, path: &Path) -> Option<PathBuf> {
+    let derived = meta_path_in(meta_root, path)?;
+    if derived.is_file() {
+        return Some(derived);
+    }
+    let stem = recording_stem(path)?;
+    let file = format!("{stem}.json");
+    // 候选 meta 的 video_path 恰好指向该路径时才算归属
+    // A candidate only owns the path when its video_path points exactly at it
+    let owns = |cand: &Path| -> bool {
+        cand != derived
+            && cand.is_file()
+            && std::fs::read_to_string(cand)
+                .ok()
+                .and_then(|c| serde_json::from_str::<VideoMeta>(&c).ok())
+                .is_some_and(|m| m.video_path.is_some_and(|vp| Path::new(&vp) == path))
+    };
+    if let Some(user) = username_from_stem(stem) {
+        let cand = meta_root.join(user).join(&file);
+        if owns(&cand) {
+            return Some(cand);
+        }
+        // 录制器 stem 的归属 meta 必在 meta/{user}/ 下，快路径即可定论
+        // A recorder stem's owning meta always lives under meta/{user}/; the fast path is conclusive
+        return Some(derived);
+    }
+    if let Ok(entries) = std::fs::read_dir(meta_root) {
+        for entry in entries.flatten() {
+            let dir = entry.path();
+            if !dir.is_dir() {
+                continue;
+            }
+            let cand = dir.join(&file);
+            if owns(&cand) {
+                return Some(cand);
+            }
+        }
+    }
+    Some(derived)
+}
+
+/// 解析录制路径的实际 meta 文件（= [`resolve_meta_path_in`] 作用于 [`meta_dir`]）。
+/// Resolve the actual meta file of a recording path (= [`resolve_meta_path_in`] on [`meta_dir`]).
+pub fn resolve_meta_path(path: &Path) -> Option<PathBuf> {
+    resolve_meta_path_in(&meta_dir(), path)
+}
+
+/// 判断 meta 文件名是否是旧 stem 规则（`file_stem()`）截断的结果，是则返回新规则下的
+/// 同目录目标路径；不需要迁移时返回 `None`。纯函数，不做 IO。
+///
+/// Check whether a meta file name is the result of truncation by the old stem rule
+/// (`file_stem()`); if so, return the target path under the new rule in the same
+/// directory, otherwise `None`. Pure function, no IO.
+pub fn legacy_truncated_meta_target(meta_file: &Path, video_path: &Path) -> Option<PathBuf> {
+    let meta_stem = meta_file.file_stem()?.to_str()?;
+    let full = recording_stem(video_path)?;
+    if full == meta_stem {
+        return None;
+    }
+    // 旧规则：对新 stem 再取一次 file_stem / Old rule: file_stem applied to the new stem
+    let truncated = Path::new(full).file_stem()?.to_str()?;
+    if truncated != meta_stem {
+        return None;
+    }
+    Some(meta_file.with_file_name(format!("{full}.json")))
 }
 
 /// 递归收集 meta 根目录下所有 `.json` 元数据文件的完整路径。
@@ -97,8 +282,14 @@ pub fn meta_path_for(video_path: &Path) -> Option<PathBuf> {
 /// list, post-processing task history, startup scan, orphan cleanup), avoiding each
 /// call site reimplementing subdirectory traversal.
 pub fn list_all_meta_paths() -> Vec<PathBuf> {
+    list_all_meta_paths_in(&meta_dir())
+}
+
+/// 在指定 meta 根目录下收集所有 `.json` 元数据文件（规则同 [`list_all_meta_paths`]）。
+/// Collect all `.json` metadata files under the given meta root (same rules as [`list_all_meta_paths`]).
+pub fn list_all_meta_paths_in(root: &Path) -> Vec<PathBuf> {
     let mut result = Vec::new();
-    let Ok(entries) = std::fs::read_dir(meta_dir()) else {
+    let Ok(entries) = std::fs::read_dir(root) else {
         return result;
     };
     for entry in entries.flatten() {
@@ -354,4 +545,150 @@ pub struct VideoMeta {
     /// Frontend should read this field for real-time progress instead of relying on SSE progress events.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub pp_progress: Option<PpNodeProgress>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 写一份只含必填字段与 video_path 的 meta / Write a meta with required fields plus video_path
+    fn write_test_meta(file: &Path, video_path: &str) {
+        std::fs::create_dir_all(file.parent().expect("parent")).expect("mkdir");
+        let json = serde_json::json!({
+            "status": "finish",
+            "started_at": "",
+            "size_bytes": 0,
+            "video_path": video_path,
+        });
+        std::fs::write(file, json.to_string()).expect("write meta");
+    }
+
+    /// recording_stem 只去掉像扩展名的后缀，session_dir 名不会被截断。
+    /// recording_stem only strips extension-like suffixes; session_dir names are never truncated.
+    #[test]
+    fn recording_stem_rules() {
+        let s = |p: &str| recording_stem(Path::new(p)).map(str::to_string);
+        assert_eq!(s("alice_20240101_120000").as_deref(), Some("alice_20240101_120000"));
+        assert_eq!(s("a.b_20240101_120000").as_deref(), Some("a.b_20240101_120000"));
+        assert_eq!(s("a.b_20240101_120000.mp4").as_deref(), Some("a.b_20240101_120000"));
+        assert_eq!(s("x.MP4").as_deref(), Some("x"));
+        assert_eq!(s(".hidden").as_deref(), Some(".hidden"));
+        assert_eq!(s("a.tar.gz").as_deref(), Some("a.tar"));
+    }
+
+    /// username_from_stem 解析录制器 stem（含轮转后缀），其他格式返回 None。
+    /// username_from_stem parses recorder stems (including rotation suffixes); other formats yield None.
+    #[test]
+    fn username_from_stem_rules() {
+        assert_eq!(username_from_stem("alice_20240101_120000"), Some("alice"));
+        assert_eq!(username_from_stem("alice_20240101_120000_2"), Some("alice"));
+        assert_eq!(username_from_stem("a_b_20240101_120000"), Some("a_b"));
+        assert_eq!(username_from_stem("a.b_20240101_120000"), Some("a.b"));
+        assert_eq!(username_from_stem("video"), None);
+        assert_eq!(username_from_stem("_20240101_120000"), None);
+    }
+
+    /// 含 '.' 用户名的 session_dir 与合并后的 .mp4 得到同一 meta 路径。
+    /// A session_dir with a '.' username and its merged .mp4 map to the same meta path.
+    #[test]
+    fn dotted_username_session_and_merged_share_meta_path() {
+        let root = Path::new("M:/meta");
+        let a = meta_path_in(root, Path::new("X:/ts/a.b/a.b_20240101_120000"));
+        let b = meta_path_in(root, Path::new("X:/rec/a.b/a.b_20240101_120000.mp4"));
+        assert!(a.is_some());
+        assert_eq!(a, b);
+        assert_eq!(a, Some(root.join("a.b").join("a.b_20240101_120000.json")));
+    }
+
+    /// 普通用户名的 session_dir 与 .mp4 结果与旧规则（file_stem）一致。
+    /// Plain usernames give the same result as the old (file_stem) rule for session_dir and .mp4.
+    #[test]
+    fn plain_username_matches_legacy_rule() {
+        let root = Path::new("M:/meta");
+        for p in ["X:/ts/alice/alice_20240101_120000", "X:/rec/alice/alice_20240101_120000.mp4"] {
+            let path = Path::new(p);
+            let legacy = root
+                .join(username_from_path(path))
+                .join(format!("{}.json", path.file_stem().unwrap().to_str().unwrap()));
+            assert_eq!(meta_path_in(root, path), Some(legacy));
+        }
+    }
+
+    /// 派生 meta 存在时直接返回派生路径。
+    /// When the derived meta exists, the derived path is returned.
+    #[test]
+    fn resolve_prefers_existing_derived() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let path = Path::new("X:/rec/alice/alice_20240101_120000.mp4");
+        let derived = meta_path_in(root, path).expect("derived");
+        write_test_meta(&derived, "X:/somewhere/else.mp4");
+        assert_eq!(resolve_meta_path_in(root, path), Some(derived));
+    }
+
+    /// 扁平目录合并文件解析到 video_path 指向它的归属 meta；video_path 不同则回退派生路径。
+    /// A flat-dir merged file resolves to the owning meta whose video_path points at it;
+    /// a different video_path falls back to the derived path.
+    #[test]
+    fn resolve_flat_file_to_owning_meta() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let flat = "X:/custom/alice_20240101_120000.mp4";
+        let owner = root.join("alice").join("alice_20240101_120000.json");
+        write_test_meta(&owner, flat);
+        assert_eq!(resolve_meta_path_in(root, Path::new(flat)), Some(owner.clone()));
+
+        write_test_meta(&owner, "X:/rec/alice/alice_20240101_120000.mp4");
+        let derived = meta_path_in(root, Path::new(flat)).expect("derived");
+        assert_ne!(derived, owner);
+        assert_eq!(resolve_meta_path_in(root, Path::new(flat)), Some(derived));
+    }
+
+    /// 非录制器 stem 通过遍历子目录找到归属 meta。
+    /// A non-recorder stem finds its owning meta by walking subdirectories.
+    #[test]
+    fn resolve_non_recorder_stem_walks_subdirs() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let flat = "X:/custom/myvideo.mp4";
+        let owner = root.join("someone").join("myvideo.json");
+        write_test_meta(&owner, flat);
+        assert_eq!(resolve_meta_path_in(root, Path::new(flat)), Some(owner));
+    }
+
+    /// legacy_truncated_meta_target 只对旧规则截断的文件名给出目标。
+    /// legacy_truncated_meta_target only yields a target for names truncated by the old rule.
+    #[test]
+    fn legacy_truncated_target_cases() {
+        let root = Path::new("M:/meta");
+        let truncated = root.join("a.b").join("a.json");
+        let target = root.join("a.b").join("a.b_20240101_120000.json");
+        // session_dir 与 .mp4 video_path / session_dir and .mp4 video_path
+        assert_eq!(
+            legacy_truncated_meta_target(&truncated, Path::new("X:/ts/a.b/a.b_20240101_120000")),
+            Some(target.clone())
+        );
+        assert_eq!(
+            legacy_truncated_meta_target(&truncated, Path::new("X:/rec/a.b/a.b_20240101_120000.mp4")),
+            Some(target)
+        );
+        // 扁平归属 meta 与普通名 / Flat owning meta and plain names
+        let alice = root.join("alice").join("alice_20240101_120000.json");
+        assert_eq!(
+            legacy_truncated_meta_target(&alice, Path::new("X:/custom/alice_20240101_120000.mp4")),
+            None
+        );
+        assert_eq!(
+            legacy_truncated_meta_target(&alice, Path::new("X:/ts/alice/alice_20240101_120000")),
+            None
+        );
+        // 文件名不是截断结果 / File name is not a truncation result
+        assert_eq!(
+            legacy_truncated_meta_target(
+                &root.join("a.b").join("other.json"),
+                Path::new("X:/ts/a.b/a.b_20240101_120000")
+            ),
+            None
+        );
+    }
 }

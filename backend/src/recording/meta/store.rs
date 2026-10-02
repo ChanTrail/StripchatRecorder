@@ -9,15 +9,24 @@
 //! structures (see `super::model`) or scan/rebuild logic (see `super::scan`).
 
 use super::model::{
-    META_VERSION, PpExecResult, PpExecutionEntry, PpNodeProgress, VideoMeta, meta_path_for,
-    parse_timestamp_from_stem,
+    META_VERSION, PpExecResult, PpExecutionEntry, PpNodeProgress, VideoMeta,
+    parse_timestamp_from_stem, recording_stem, resolve_meta_path,
 };
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// meta 原子写入使用的临时文件序号（与进程 ID 组合保证文件名唯一）。
+/// Sequence number for meta atomic-write temp files (combined with the PID for unique names).
+static META_TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// 读取视频文件对应的元数据，若文件不存在或解析失败则返回 `None`。
+/// 本模块的读/写/删除都通过 [`resolve_meta_path`] 定位 meta（派生 meta 缺失时查找归属 meta）。
+///
 /// Read the metadata for a video file; returns `None` if missing or parse fails.
+/// Reads/writes/deletes in this module all locate meta via [`resolve_meta_path`]
+/// (falling back to the owning meta when the derived one is missing).
 pub fn read_meta(video_path: &Path) -> Option<VideoMeta> {
-    let meta_path = meta_path_for(video_path)?;
+    let meta_path = resolve_meta_path(video_path)?;
     let content = std::fs::read_to_string(&meta_path).ok()?;
     serde_json::from_str(&content).ok()
 }
@@ -29,7 +38,7 @@ pub fn read_meta(video_path: &Path) -> Option<VideoMeta> {
 /// Automatically sets `meta_version` to the current version constant before writing,
 /// and ensures the streamer subdirectory exists.
 pub fn write_meta(video_path: &Path, meta: &VideoMeta) {
-    let Some(meta_path) = meta_path_for(video_path) else {
+    let Some(meta_path) = resolve_meta_path(video_path) else {
         return;
     };
     // 确保 meta 目录存在 / Ensure meta directory exists
@@ -48,7 +57,44 @@ pub fn write_meta(video_path: &Path, meta: &VideoMeta) {
     }
     match serde_json::to_string_pretty(&meta) {
         Ok(json) => {
-            if let Err(e) = std::fs::write(&meta_path, json) {
+            // 先写同目录的唯一临时文件再 rename 原子替换，避免并发读者（扫描、列表）
+            // 读到被截断的半截 JSON 而误判为损坏 meta 并重建。
+            // rename 或写临时文件失败时回退为直接写入，并清理临时文件。
+            //
+            // Write to a unique temp file in the same directory, then rename to atomically
+            // replace, so concurrent readers (scan, listing) never see truncated JSON and
+            // misjudge the meta as corrupted. Falls back to a direct write (and removes the
+            // temp file) if writing the temp file or the rename fails.
+            let tmp = meta_path.with_extension(format!(
+                "json.{}.{}.tmp",
+                std::process::id(),
+                META_TMP_SEQ.fetch_add(1, Ordering::Relaxed)
+            ));
+            // 回退的直接写入：主播子目录可能在开头的 create_dir_all 之后被并发的空目录清理
+            // 删掉（导致写临时文件失败），因此写入前再建一次目录（D2 兜底）
+            // Fallback direct write: the streamer subdirectory may have been removed by a
+            // concurrent empty-dir cleanup after the create_dir_all above (making the temp-file
+            // write fail), so recreate it before writing (D2 safety net)
+            let write_direct = || {
+                if let Some(parent) = meta_path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                std::fs::write(&meta_path, &json)
+            };
+            let result = match std::fs::write(&tmp, &json) {
+                Ok(()) => match std::fs::rename(&tmp, &meta_path) {
+                    Ok(()) => Ok(()),
+                    Err(_) => {
+                        let _ = std::fs::remove_file(&tmp);
+                        write_direct()
+                    }
+                },
+                Err(_) => {
+                    let _ = std::fs::remove_file(&tmp);
+                    write_direct()
+                }
+            };
+            if let Err(e) = result {
                 tracing::warn!("{}", crate::tl!("meta.writeMetaFailed", path = meta_path.display(), error = e));
             }
         }
@@ -61,7 +107,7 @@ pub fn write_meta(video_path: &Path, meta: &VideoMeta) {
 /// 删除视频文件对应的元数据文件（若存在）。
 /// Delete the metadata file for a video file (if it exists).
 pub fn delete_meta(video_path: &Path) {
-    if let Some(meta_path) = meta_path_for(video_path)
+    if let Some(meta_path) = resolve_meta_path(video_path)
         && meta_path.exists()
     {
         let _ = std::fs::remove_file(&meta_path);
@@ -78,7 +124,8 @@ pub fn set_status(video_path: &Path, status: &str) {
         Some(m) => m,
         None => {
             let size_bytes = std::fs::metadata(video_path).map(|m| m.len()).unwrap_or(0);
-            let stem = video_path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            // 与 meta 路径规则一致的 stem / Stem consistent with the meta path rule
+            let stem = recording_stem(video_path).unwrap_or("");
             let started_at = parse_timestamp_from_stem(stem).unwrap_or_else(|| {
                 std::fs::metadata(video_path)
                     .ok()
@@ -130,7 +177,8 @@ pub fn set_pp_done(video_path: &Path, status: &str, pp_execution: Vec<PpExecutio
         Some(m) => m,
         None => {
             let size_bytes = std::fs::metadata(video_path).map(|m| m.len()).unwrap_or(0);
-            let stem = video_path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            // 与 meta 路径规则一致的 stem / Stem consistent with the meta path rule
+            let stem = recording_stem(video_path).unwrap_or("");
             let started_at = parse_timestamp_from_stem(stem).unwrap_or_else(|| {
                 std::fs::metadata(video_path)
                     .ok()
@@ -227,7 +275,7 @@ pub fn pp_execution_finish(
 /// Does not overwrite if the meta file already exists; otherwise creates an initial meta
 /// (used as a safety net for leftover segments on startup).
 pub fn ensure_meta(video_path: &Path, started_at: &str) {
-    if let Some(meta_path) = meta_path_for(video_path)
+    if let Some(meta_path) = resolve_meta_path(video_path)
         && meta_path.exists()
     {
         return;
