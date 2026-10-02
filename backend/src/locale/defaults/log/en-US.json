@@ -154,7 +154,12 @@
     "localeFileWarning": "Custom locale file validation warnings: {payload}",
     "settingsCreateFailed": "Failed to create default settings file {path}: {error}",
     "configInvalidBackedUp": "Config file {path} could not be read or parsed ({error}); backed up to {backup}, using defaults for this run",
-    "configInvalidBackupFailed": "Config file {path} could not be read or parsed ({error}) and backing it up failed ({backup_error}); using defaults, the file will be overwritten on the next save"
+    "configInvalidBackupFailed": "Config file {path} could not be read or parsed ({error}) and backing it up failed ({backup_error}); using defaults, the file will be overwritten on the next save",
+    "envOverrideApplied": "Wrote environment variables to {path}: {values}",
+    "envOverrideWriteFailed": "Failed to write environment variable overrides to {path}: {error}",
+    "envOverrideSkippedInvalid": "Config file {path} could not be parsed ({error}); LANGUAGE / PORT environment variables not applied this run",
+    "envLanguageUnknown": "Environment variable LANGUAGE={value} is not an available locale code (e.g. zh-CN, en-US); ignored",
+    "envPortInvalid": "Environment variable PORT={value} is not a valid port number; ignored"
   },
   "sse": {
     "broadcastLagged": "SSE broadcast lagged, {count} events dropped"

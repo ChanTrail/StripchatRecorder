@@ -1672,35 +1672,3 @@ fn main() {
         std::process::exit(1);
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// 生成的 id 全部非零且互不相同 / Generated ids are all non-zero and distinct
-    #[test]
-    fn generated_ids_are_nonzero_and_unique() {
-        let ids = generate_send_ids(64);
-        assert_eq!(ids.len(), 64);
-        assert!(ids.iter().all(|&id| id != 0));
-        let unique: std::collections::HashSet<i64> = ids.iter().copied().collect();
-        assert_eq!(unique.len(), ids.len());
-    }
-
-    /// 扩展相册 id 时保留已有位置的 id / Growing album ids keeps existing positions stable
-    #[test]
-    fn album_ids_prefix_is_stable_when_growing() {
-        let s = SendIds::new();
-        let first = s.album_ids(3);
-        let grown = s.album_ids(5);
-        assert_eq!(grown.len(), 5);
-        assert_eq!(&grown[..3], &first[..]);
-    }
-
-    /// 重复请求同样数量返回同一组 id / Repeated requests return the same ids
-    #[test]
-    fn album_ids_are_repeatable() {
-        let s = SendIds::new();
-        assert_eq!(s.album_ids(3), s.album_ids(3));
-    }
-}

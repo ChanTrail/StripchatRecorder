@@ -10,12 +10,19 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # ── 主程序构建（多平台）/ Server build (multi-platform) ──────────────────────
-  build-server:
+  # ── 主程序构建（linux-x86_64）/ Server build (linux-x86_64) ──────────────────
+  # 单独成为一个 job：needs 只能等待整个 job（matrix 的所有平台），拆出来后 docker job
+  # 只需等这个平台构建成功即可开始，不必等其他平台。仍用单项 matrix，构建步骤通过 YAML
+  # 锚点（&build-server-steps）与下方其他平台共用同一份，matrix.* 引用保持一致。
+  #
+  # A separate job: `needs` can only wait for a whole job (every matrix platform), so splitting
+  # this out lets the docker job start as soon as this platform succeeds, without waiting for
+  # the others. It still uses a single-entry matrix so the build steps can be shared with the
+  # other platforms below via a YAML anchor (&build-server-steps) with identical matrix.* refs.
+  build-server-linux-x86_64:
     name: Build server (${{ matrix.platform }})
     runs-on: ${{ matrix.os }}
     strategy:
-      fail-fast: false
       matrix:
         include:
           - platform: linux-x86_64
@@ -23,22 +30,7 @@ jobs:
             artifact-name: StripchatRecorder-server-linux-x86_64
             archive-name: StripchatRecorder-server-linux-x86_64.zip
 
-          - platform: linux-arm64
-            os: ubuntu-22.04-arm
-            artifact-name: StripchatRecorder-server-linux-arm64
-            archive-name: StripchatRecorder-server-linux-arm64.zip
-
-          - platform: windows-x86_64
-            os: windows-latest
-            artifact-name: StripchatRecorder-server-windows-x86_64
-            archive-name: StripchatRecorder-server-windows-x86_64.zip
-
-          - platform: macos-arm64
-            os: macos-latest
-            artifact-name: StripchatRecorder-server-macos-arm64
-            archive-name: StripchatRecorder-server-macos-arm64.zip
-
-    steps:
+    steps: &build-server-steps
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -126,6 +118,33 @@ jobs:
           name: ${{ matrix.artifact-name }}
           path: ${{ env.archive }}
           retention-days: 7
+
+  # ── 主程序构建（其他平台）/ Server build (other platforms) ────────────────────
+  # 步骤与 build-server-linux-x86_64 完全相同（YAML 锚点引用）。
+  # Steps are identical to build-server-linux-x86_64 (YAML anchor reference).
+  build-server-others:
+    name: Build server (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-arm64
+            os: ubuntu-22.04-arm
+            artifact-name: StripchatRecorder-server-linux-arm64
+            archive-name: StripchatRecorder-server-linux-arm64.zip
+
+          - platform: windows-x86_64
+            os: windows-latest
+            artifact-name: StripchatRecorder-server-windows-x86_64
+            archive-name: StripchatRecorder-server-windows-x86_64.zip
+
+          - platform: macos-arm64
+            os: macos-latest
+            artifact-name: StripchatRecorder-server-macos-arm64
+            archive-name: StripchatRecorder-server-macos-arm64.zip
+
+    steps: *build-server-steps
 
   # ── 桌面端构建（多平台）/ Desktop build (multi-platform) ────────────────────
   build-desktop:
@@ -330,7 +349,7 @@ jobs:
   # ── 创建 GitHub Release / Create GitHub Release ──────────────────────────────
   release:
     name: Create Release
-    needs: [build-server, build-desktop]
+    needs: [build-server-linux-x86_64, build-server-others, build-desktop]
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -433,15 +452,18 @@ jobs:
             artifacts/latest.json
 
   # ── Docker 镜像构建与推送 / Docker image build and push ──────────────────────
-  # Docker 镜像在 CI 中从源码独立构建（复用 Dockerfile），不依赖 build-server 产物，
-  # 因此可与 release job 完全并行。
-  # The Docker image is built from source in CI (reusing the Dockerfile) and does not
-  # depend on build-server artifacts, so it runs fully in parallel with the release job.
+  # Docker 镜像在 CI 中从源码独立构建（复用 Dockerfile），不使用 build-server 产物。
+  # 前置条件只有 Server linux-x86_64 构建成功（镜像只构建 linux/amd64，用它确认代码可在
+  # 该平台编译通过），不等待 Server 其他平台和桌面端，与 release job 并行。
+  # The Docker image is built from source in CI (reusing the Dockerfile) and does not use
+  # build-server artifacts. Its only prerequisite is a successful Server linux-x86_64 build (the
+  # image is linux/amd64 only, so that build confirms the code compiles for it); it doesn't wait
+  # for the other Server platforms or desktop, and runs in parallel with the release job.
   # beta tag 时仅推送 "beta" 标签；稳定版同时推送 semver 版本号、major.minor 和 latest。
   # For beta tags only the "beta" tag is pushed; stable releases also get semver, major.minor, and latest.
   docker:
     name: Build and push Docker image
-    needs: [build-server]
+    needs: [build-server-linux-x86_64]
     runs-on: ubuntu-22.04
     permissions:
       contents: read

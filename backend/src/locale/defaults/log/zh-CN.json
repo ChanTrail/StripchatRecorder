@@ -154,7 +154,12 @@
     "localeFileWarning": "自定义 locale 文件校验警告：{payload}",
     "settingsCreateFailed": "创建默认配置文件 {path} 失败：{error}",
     "configInvalidBackedUp": "配置文件 {path} 无法读取或解析（{error}），已备份为 {backup}，本次改用默认值",
-    "configInvalidBackupFailed": "配置文件 {path} 无法读取或解析（{error}），备份失败（{backup_error}），本次改用默认值，下次保存时原文件会被覆盖"
+    "configInvalidBackupFailed": "配置文件 {path} 无法读取或解析（{error}），备份失败（{backup_error}），本次改用默认值，下次保存时原文件会被覆盖",
+    "envOverrideApplied": "已将环境变量写入 {path}：{values}",
+    "envOverrideWriteFailed": "写入环境变量覆盖到 {path} 失败：{error}",
+    "envOverrideSkippedInvalid": "配置文件 {path} 无法解析（{error}），本次不应用环境变量 LANGUAGE / PORT",
+    "envLanguageUnknown": "环境变量 LANGUAGE={value} 不是可用的语言代码（如 zh-CN、en-US），已忽略",
+    "envPortInvalid": "环境变量 PORT={value} 不是有效的端口号，已忽略"
   },
   "sse": {
     "broadcastLagged": "SSE 广播队列溢出，丢失 {count} 条事件"

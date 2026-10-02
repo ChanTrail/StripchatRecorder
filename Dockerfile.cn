@@ -78,16 +78,8 @@ RUN printf '%s\n' \
     '' \
     'cp -an /app/stripchat-recorder/modules.default/. /app/stripchat-recorder/modules/' \
     '' \
-    '# Override language from LANGUAGE env var if set (e.g. LANGUAGE=en-US)' \
-    'if [ -n "${LANGUAGE:-}" ]; then' \
-    '    sed -i "s/\"language\": \"[^\"]*\"/\"language\": \"${LANGUAGE}\"/" /app/stripchat-recorder/config/settings.json' \
-    'fi' \
-    '' \
-    '# Override server port from PORT env var if set (e.g. PORT=8080)' \
-    'if [ -n "${PORT:-}" ]; then' \
-    '    sed -i "s/\"server_port\": [0-9]*/\"server_port\": ${PORT}/" /app/stripchat-recorder/config/settings.json' \
-    'fi' \
-    '' \
+    '# LANGUAGE / PORT env vars are applied to config/settings.json by the program itself' \
+    '# at startup (it also creates the file on first run)' \
     'exec /app/stripchat-recorder/stripchat-recorder "$@"' \
     > /entrypoint.sh && chmod +x /entrypoint.sh
 

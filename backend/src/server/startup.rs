@@ -7,6 +7,8 @@
 //! 1. （仅 Desktop）设置数据根目录覆盖
 //! 2. [`init_logging_and_locale`]：预加载日志翻译 → 初始化日志 → 初始化 locale 目录
 //!    （在 `AppState::new` 之前，让之后所有日志都有译文）
+//!    （仅 Server，Docker 内）[`apply_docker_env_overrides`]：把环境变量 LANGUAGE / PORT 写入
+//!    settings.json
 //! 3. `AppState::new`：创建配置/meta/输出目录、首次运行写入 settings.json、初始化并发上限
 //! 4. 构造 RecorderManager、Emitter、StatusMonitor（Desktop 随即注册托管状态）
 //! 5. [`run_all`]：清空 tmp → meta 迁移 → ffmpeg 检查 → 自定义语言文件校验 → 文件系统监控
@@ -20,6 +22,8 @@
 //! 1. (Desktop only) set the data root override
 //! 2. [`init_logging_and_locale`]: preload log translations → initialize logging → initialize
 //!    locale dirs (before `AppState::new`, so every later log line is translated)
+//!    (Server only, inside Docker) [`apply_docker_env_overrides`]: write the LANGUAGE / PORT env
+//!    vars into settings.json
 //! 3. `AppState::new`: create config/meta/output dirs, write settings.json on first run,
 //!    initialize concurrency limits
 //! 4. construct RecorderManager, Emitter, StatusMonitor (Desktop then registers managed state)
@@ -143,6 +147,66 @@ pub fn migrate_flat_meta_files(app_state: &Arc<AppState>, emitter: &Arc<dyn Emit
     // Fix meta files whose names were truncated by the old stem rule (usernames with '.',
     // B16); logs only, no notification; must run before the first scan
     crate::recording::meta::migrate_truncated_stem_meta_files();
+}
+
+/// 应用 Docker 环境变量 `LANGUAGE` / `PORT` 对 settings.json 的覆盖（仅 Server，且只在
+/// Docker 容器内生效）。在 [`init_logging_and_locale`] 之后、`AppState::new` 之前调用：
+/// 日志已就绪，语言列表可用于校验；`AppState::new` 读到的就是覆盖后的设置。
+///
+/// 取代原来 entrypoint 里的 `sed`（首次运行时 settings.json 还不存在，sed 报错退出导致程序
+/// 根本不启动）。只在 Docker 内读取：宿主机上的 `LANGUAGE` 是 gettext 的语言列表（如
+/// `zh_CN:zh`），不是本程序的语言代码。`LANGUAGE` 必须是可用语言之一，否则忽略并警告；
+/// `PORT` 必须是 1–65535 的端口号。实际监听端口仍按 命令行参数 > `PORT` > 配置文件 解析
+/// （见 `lib::run`），这里只是把它同步写入配置文件。语言改变时重新加载日志翻译。
+///
+/// Apply the Docker `LANGUAGE` / `PORT` env var overrides to settings.json (Server only, and
+/// only inside a Docker container). Called after [`init_logging_and_locale`] and before
+/// `AppState::new`: logging is ready, the locale list can be used for validation, and
+/// `AppState::new` reads the overridden settings.
+///
+/// Replaces the former `sed` in the entrypoint (on first run settings.json didn't exist yet, sed
+/// failed and the program never started). Only read inside Docker: a host's `LANGUAGE` is a
+/// gettext language list (e.g. `zh_CN:zh`), not this program's locale code. `LANGUAGE` must be one
+/// of the available locales, otherwise it's ignored with a warning; `PORT` must be a port number
+/// in 1–65535. The actual listen port is still resolved as CLI arg > `PORT` > config file (see
+/// `lib::run`); this only persists it into the config file. Log translations are reloaded when
+/// the language changes.
+pub fn apply_docker_env_overrides() {
+    if !crate::update::is_docker() {
+        return;
+    }
+    let env_value = |name: &str| {
+        std::env::var(name)
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    };
+
+    let language = env_value("LANGUAGE").filter(|lang| {
+        let known = crate::locale::manager::list_available_locales()
+            .iter()
+            .any(|l| l.code == *lang);
+        if !known {
+            tracing::warn!("{}", crate::tl!("startup.envLanguageUnknown", value = lang));
+        }
+        known
+    });
+    let port = env_value("PORT").and_then(|v| match v.parse::<u16>() {
+        Ok(p) if p > 0 => Some(p),
+        _ => {
+            tracing::warn!("{}", crate::tl!("startup.envPortInvalid", value = v));
+            None
+        }
+    });
+    if language.is_none() && port.is_none() {
+        return;
+    }
+
+    if AppState::apply_settings_overrides(language.as_deref(), port)
+        && let Some(lang) = &language
+    {
+        crate::locale::manager::load_log_translations(lang);
+    }
 }
 
 /// 统一执行所有启动时一次性任务，Server 与 Desktop 都调用本函数（在

@@ -190,6 +190,12 @@ pub async fn run_server(port: u16) {
     // line is translated
     crate::server::startup::init_logging_and_locale();
 
+    // Docker 环境变量 LANGUAGE / PORT 覆盖写入 settings.json（首次运行时同时创建该文件），
+    // 必须在 AppState::new 之前，让它读到覆盖后的设置
+    // Apply the Docker LANGUAGE / PORT env overrides to settings.json (creating it on first run);
+    // must happen before AppState::new so it reads the overridden settings
+    crate::server::startup::apply_docker_env_overrides();
+
     let app_state = AppState::new().expect("Failed to initialize app state");
     let recorder = RecorderManager::new(Arc::clone(&app_state));
     let (tx, _) = broadcast::channel::<Event>(4096);

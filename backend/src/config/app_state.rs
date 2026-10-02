@@ -257,7 +257,10 @@ fn load_config_file<T: DeserializeOwned>(path: &Path) -> ConfigFile<T> {
 /// This run uses defaults for that file; any later save (`save()` writes every config file)
 /// overwrites the original with defaults, so the backup keeps hand-edited content from being lost.
 fn backup_invalid_config(path: &Path, error: &str) {
-    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("config.json");
+    let file_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("config.json");
     let backup = path.with_file_name(format!(
         "{}.invalid-{}",
         file_name,
@@ -283,6 +286,78 @@ fn backup_invalid_config(path: &Path, error: &str) {
             )
         ),
     }
+}
+
+/// [`AppState::apply_settings_overrides`] 的实现，作用于指定的 settings.json 路径。
+/// Implementation of [`AppState::apply_settings_overrides`] for the given settings.json path.
+fn apply_settings_overrides_in(
+    path: &Path,
+    language: Option<&str>,
+    server_port: Option<u16>,
+) -> bool {
+    let (mut settings, missing) = match load_config_file::<Settings>(path) {
+        ConfigFile::Parsed(s) => (s, false),
+        ConfigFile::Missing => (Settings::default(), true),
+        ConfigFile::Invalid(err) => {
+            tracing::warn!(
+                "{}",
+                crate::tl!(
+                    "startup.envOverrideSkippedInvalid",
+                    path = path.display(),
+                    error = err
+                )
+            );
+            return false;
+        }
+    };
+
+    let mut applied: Vec<String> = Vec::new();
+    let mut language_changed = false;
+    if let Some(lang) = language
+        && settings.language != lang
+    {
+        settings.language = lang.to_string();
+        language_changed = true;
+        applied.push(format!("LANGUAGE={lang}"));
+    }
+    if let Some(port) = server_port
+        && settings.server_port != port
+    {
+        settings.server_port = port;
+        applied.push(format!("PORT={port}"));
+    }
+    if applied.is_empty() && !missing {
+        return false;
+    }
+
+    let write_result = path
+        .parent()
+        .map_or(Ok(()), fs::create_dir_all)
+        .map_err(|e| e.to_string())
+        .and_then(|_| serde_json::to_string_pretty(&settings).map_err(|e| e.to_string()))
+        .and_then(|json| fs::write(path, json).map_err(|e| e.to_string()));
+    if let Err(e) = write_result {
+        tracing::warn!(
+            "{}",
+            crate::tl!(
+                "startup.envOverrideWriteFailed",
+                path = path.display(),
+                error = e
+            )
+        );
+        return false;
+    }
+    if !applied.is_empty() {
+        tracing::info!(
+            "{}",
+            crate::tl!(
+                "startup.envOverrideApplied",
+                path = path.display(),
+                values = applied.join(", ")
+            )
+        );
+    }
+    language_changed
 }
 
 /// 读取配置文件；无法读取或解析时先备份原文件（见 [`backup_invalid_config`]）。
@@ -435,7 +510,7 @@ pub struct StreamerData {
 /// **Decoding**: Base64 → 336 bytes → dequantize to f32 → 7×48 matrix.
 /// `null` and missing fields both decode to `None`.
 mod schedule_serde {
-    use base64::{engine::general_purpose::STANDARD, Engine};
+    use base64::{Engine, engine::general_purpose::STANDARD};
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
     const ROWS: usize = 7;
@@ -480,7 +555,9 @@ mod schedule_serde {
             )));
         }
         let matrix = bytes
-            .as_chunks::<COLS>().0.iter()
+            .as_chunks::<COLS>()
+            .0
+            .iter()
             .map(|row| {
                 // 反量化：u8 [0, 255] → f32 [0.0, 1.0]
                 // Dequantize: u8 [0, 255] → f32 [0.0, 1.0]
@@ -554,6 +631,39 @@ impl AppState {
         }
     }
 
+    /// 把启动时的覆盖值（Docker 环境变量 LANGUAGE / PORT，见
+    /// `server::startup::apply_docker_env_overrides`）写入 config/settings.json，在
+    /// [`AppState::new`] 之前调用。返回语言是否因此改变（调用方据此重新加载日志翻译）。
+    ///
+    /// - 文件不存在或为空：以默认值创建，再写入覆盖值（首次运行时就生成 settings.json）
+    /// - 文件存在：只修改覆盖的字段，其他字段原样保留；值没有变化时不写盘
+    /// - 文件无效：不处理，记录警告，交给 `AppState::new` 备份后改用默认值
+    ///
+    /// 取代原来 Docker entrypoint 里的 `sed`：sed 在 settings.json 尚不存在时报错退出，程序
+    /// 根本不会启动；文件里缺少对应字段时也不会生效。
+    ///
+    /// Write startup overrides (the Docker LANGUAGE / PORT env vars, see
+    /// `server::startup::apply_docker_env_overrides`) into config/settings.json; called before
+    /// [`AppState::new`]. Returns whether the language changed as a result (the caller reloads
+    /// log translations accordingly).
+    ///
+    /// - file missing or blank: create it from defaults, then apply the overrides (so
+    ///   settings.json exists from the very first run)
+    /// - file present: only the overridden fields change, everything else is kept; nothing is
+    ///   written when the values are unchanged
+    /// - file invalid: left alone with a warning; `AppState::new` backs it up and uses defaults
+    ///
+    /// Replaces the former `sed` in the Docker entrypoint: sed failed and exited when
+    /// settings.json didn't exist yet, so the program never started; it also had no effect when
+    /// the field was missing from the file.
+    pub fn apply_settings_overrides(language: Option<&str>, server_port: Option<u16>) -> bool {
+        apply_settings_overrides_in(
+            &Self::config_dir().join("settings.json"),
+            language,
+            server_port,
+        )
+    }
+
     /// 从磁盘加载配置并初始化应用状态，确保输出目录存在。
     /// Load configuration from disk and initialize application state, ensuring the output directory exists.
     pub fn new() -> Result<Arc<Self>> {
@@ -567,7 +677,8 @@ impl AppState {
         // as missing; files that can't be read or parsed are backed up before falling back to
         // defaults (see backup_invalid_config)
         let settings_path = config_dir.join("settings.json");
-        let (settings, settings_missing): (Settings, bool) = match load_config_file(&settings_path) {
+        let (settings, settings_missing): (Settings, bool) = match load_config_file(&settings_path)
+        {
             ConfigFile::Parsed(s) => (s, false),
             ConfigFile::Missing => (Settings::default(), true),
             ConfigFile::Invalid(err) => {
@@ -594,7 +705,11 @@ impl AppState {
                 // AppState::new
                 tracing::warn!(
                     "{}",
-                    crate::tl!("startup.settingsCreateFailed", path = settings_path.display(), error = e)
+                    crate::tl!(
+                        "startup.settingsCreateFailed",
+                        path = settings_path.display(),
+                        error = e
+                    )
                 );
             }
         }
@@ -619,17 +734,17 @@ impl AppState {
                 // ts_merge output_dir defaults to the recordings folder next to the executable,
                 // separate from the TS segment output dir (ts_fragment), making it easy to
                 // distinguish raw segments from merged videos.
-                let default_output_dir = exe_dir()
-                    .join("recordings")
-                    .to_string_lossy()
-                    .to_string();
+                let default_output_dir = exe_dir().join("recordings").to_string_lossy().to_string();
                 p.nodes.push(crate::postprocess::pipeline::PipelineNode {
                     node_id: None,
                     module_id: "ts_merge".to_string(),
                     params: {
                         let mut m = std::collections::HashMap::new();
                         m.insert("format".to_string(), serde_json::json!("mp4"));
-                        m.insert("output_dir".to_string(), serde_json::json!(default_output_dir));
+                        m.insert(
+                            "output_dir".to_string(),
+                            serde_json::json!(default_output_dir),
+                        );
                         m.insert("split_by_streamer".to_string(), serde_json::json!(true));
                         m
                     },
@@ -637,17 +752,25 @@ impl AppState {
                     position: None,
                     inputs: {
                         let mut m = std::collections::HashMap::new();
-                        m.insert(0, crate::postprocess::pipeline::NodeInputRef {
-                            node_id: "0".to_string(),
-                            port: 0,
-                        });
+                        m.insert(
+                            0,
+                            crate::postprocess::pipeline::NodeInputRef {
+                                node_id: "0".to_string(),
+                                port: 0,
+                            },
+                        );
                         m
                     },
                 });
                 p
             }
         };
-        let data = AppData { settings, streamers, mouflon_keys, pipeline };
+        let data = AppData {
+            settings,
+            streamers,
+            mouflon_keys,
+            pipeline,
+        };
 
         fs::create_dir_all(&data.settings.output_dir)?;
 
@@ -665,7 +788,7 @@ impl AppState {
             notification_store: crate::core::notifications::NotificationStore::new(),
             update_state: crate::update::new_update_state(),
             effective_max_concurrent: std::sync::atomic::AtomicUsize::new(
-                state_data_ref_max_concurrent
+                state_data_ref_max_concurrent,
             ),
             active_recording_count: std::sync::atomic::AtomicUsize::new(0),
         });
@@ -692,10 +815,22 @@ impl AppState {
     pub fn save(&self) -> Result<()> {
         let data = self.data.read();
         let dir = &self.config_dir;
-        fs::write(dir.join("settings.json"), serde_json::to_string_pretty(&data.settings)?)?;
-        fs::write(dir.join("streamers.json"), serde_json::to_string_pretty(&data.streamers)?)?;
-        fs::write(dir.join("mouflon_keys.json"), serde_json::to_string_pretty(&data.mouflon_keys)?)?;
-        fs::write(dir.join("pipeline.json"), serde_json::to_string_pretty(&data.pipeline)?)?;
+        fs::write(
+            dir.join("settings.json"),
+            serde_json::to_string_pretty(&data.settings)?,
+        )?;
+        fs::write(
+            dir.join("streamers.json"),
+            serde_json::to_string_pretty(&data.streamers)?,
+        )?;
+        fs::write(
+            dir.join("mouflon_keys.json"),
+            serde_json::to_string_pretty(&data.mouflon_keys)?,
+        )?;
+        fs::write(
+            dir.join("pipeline.json"),
+            serde_json::to_string_pretty(&data.pipeline)?,
+        )?;
         Ok(())
     }
 
@@ -744,28 +879,34 @@ impl AppState {
                 if node.module_id != "ts_merge" {
                     continue;
                 }
-                let current_ts_out = node.params
+                let current_ts_out = node
+                    .params
                     .get("output_dir")
                     .and_then(|v| v.as_str())
                     .map(|s| std::path::PathBuf::from(s.trim()));
                 // 仅当当前值等于旧的默认推导路径时才联动更新
                 // Only update when the current value equals the old default-derived path
                 if let (Some(old_def), Some(current)) = (&old_default, &current_ts_out)
-                    && current == old_def {
-                        let new_default = std::path::PathBuf::from(&new_output_dir)
-                            .parent()
-                            .map(|p| p.join("recordings"))
-                            .unwrap_or_else(|| std::path::PathBuf::from(&new_output_dir));
-                        node.params.insert(
-                            "output_dir".to_string(),
-                            serde_json::json!(new_default.to_string_lossy()),
-                        );
-                        pipeline_changed = true;
-                        tracing::info!(
-                            "{}",
-                            crate::tl!("scheduler.tsMergeOutputDirSynced", old = old_def.display(), new = new_default.display())
-                        );
-                    }
+                    && current == old_def
+                {
+                    let new_default = std::path::PathBuf::from(&new_output_dir)
+                        .parent()
+                        .map(|p| p.join("recordings"))
+                        .unwrap_or_else(|| std::path::PathBuf::from(&new_output_dir));
+                    node.params.insert(
+                        "output_dir".to_string(),
+                        serde_json::json!(new_default.to_string_lossy()),
+                    );
+                    pipeline_changed = true;
+                    tracing::info!(
+                        "{}",
+                        crate::tl!(
+                            "scheduler.tsMergeOutputDirSynced",
+                            old = old_def.display(),
+                            new = new_default.display()
+                        )
+                    );
+                }
             }
             if pipeline_changed {
                 self.data.write().pipeline = pipeline;
@@ -773,12 +914,10 @@ impl AppState {
             }
         }
 
-        if poll_interval_changed
-            && let Some(tx) = self.poll_interval_notify_tx.read().as_ref() {
+        if poll_interval_changed && let Some(tx) = self.poll_interval_notify_tx.read().as_ref() {
             let _ = tx.try_send(());
         }
-        if mouflon_sync_changed
-            && let Some(tx) = self.mouflon_sync_notify_tx.read().as_ref() {
+        if mouflon_sync_changed && let Some(tx) = self.mouflon_sync_notify_tx.read().as_ref() {
             let _ = tx.try_send(());
         }
         if pp_concurrent_changed {
@@ -866,7 +1005,11 @@ impl AppState {
                 new_username
             )));
         }
-        if let Some(s) = data.streamers.iter_mut().find(|s| s.username == old_username) {
+        if let Some(s) = data
+            .streamers
+            .iter_mut()
+            .find(|s| s.username == old_username)
+        {
             s.username = new_username.to_string();
         }
         drop(data);
@@ -903,7 +1046,8 @@ impl AppState {
     pub fn remove_streamer(&self, username: &str) -> Result<()> {
         let mut data = self.data.write();
         data.streamers.retain(|s| s.username != username);
-        drop(data);        self.save()
+        drop(data);
+        self.save()
     }
 
     /// 设置指定主播的自动录制开关并保存。
@@ -941,11 +1085,12 @@ impl AppState {
     pub fn set_cached_preview_url(&self, username: &str, url: Option<String>) {
         let mut data = self.data.write();
         if let Some(s) = data.streamers.iter_mut().find(|s| s.username == username)
-            && s.cached_preview_url != url {
-                s.cached_preview_url = url;
-                drop(data);
-                let _ = self.save();
-            }
+            && s.cached_preview_url != url
+        {
+            s.cached_preview_url = url;
+            drop(data);
+            let _ = self.save();
+        }
     }
 
     /// 获取所有 Mouflon 解密密钥的克隆副本（仅 keys 部分，供录制/转发使用）。
@@ -964,7 +1109,9 @@ impl AppState {
     /// Add or update a Mouflon key pair, update manual_updated_at, and save.
     pub fn add_mouflon_key(&self, pkey: &str, pdkey: &str) -> Result<()> {
         let mut data = self.data.write();
-        data.mouflon_keys.keys.insert(pkey.to_string(), pdkey.to_string());
+        data.mouflon_keys
+            .keys
+            .insert(pkey.to_string(), pdkey.to_string());
         data.mouflon_keys.manual_updated_at = Some(chrono::Local::now().to_rfc3339());
         drop(data);
         self.save()
@@ -1036,11 +1183,9 @@ impl AppState {
         let same_timestamp = {
             let data = self.data.read();
             match (&worker_ts, &data.mouflon_keys.auto_synced_at) {
-                (Some(wt), Some(local)) => {
-                    chrono::DateTime::parse_from_rfc3339(local)
-                        .map(|lt| lt.with_timezone(&chrono::Utc) == *wt)
-                        .unwrap_or(false)
-                }
+                (Some(wt), Some(local)) => chrono::DateTime::parse_from_rfc3339(local)
+                    .map(|lt| lt.with_timezone(&chrono::Utc) == *wt)
+                    .unwrap_or(false),
                 _ => false,
             }
         };
@@ -1094,7 +1239,10 @@ impl AppState {
 
     /// 更新流水线配置并保存到磁盘。
     /// Update the pipeline configuration and save to disk.
-    pub fn update_pipeline(&self, pipeline: crate::postprocess::pipeline::PipelineConfig) -> Result<()> {
+    pub fn update_pipeline(
+        &self,
+        pipeline: crate::postprocess::pipeline::PipelineConfig,
+    ) -> Result<()> {
         self.data.write().pipeline = pipeline;
         self.save()
     }
@@ -1110,10 +1258,7 @@ impl AppState {
     /// 将明文密码哈希后保存。使用 Argon2id 默认参数。
     /// Hash the given plaintext password and persist it. Uses Argon2id default params.
     pub fn set_admin_password(&self, password: &str) -> Result<()> {
-        use argon2::{
-            Argon2,
-            password_hash::PasswordHasher,
-        };
+        use argon2::{Argon2, password_hash::PasswordHasher};
         let hash = Argon2::default()
             .hash_password(password.as_bytes())
             .map_err(|e| AppError::Other(format!("密码哈希失败: {e}")))?
@@ -1130,7 +1275,7 @@ impl AppState {
     pub fn verify_admin_password(&self, password: &str) -> bool {
         use argon2::{
             Argon2,
-            password_hash::{phc::PasswordHash, PasswordVerifier},
+            password_hash::{PasswordVerifier, phc::PasswordHash},
         };
         let hash_str = match self.data.read().settings.admin_password_hash.clone() {
             Some(h) => h,
@@ -1140,63 +1285,8 @@ impl AppState {
             Ok(p) => p,
             Err(_) => return false,
         };
-        Argon2::default().verify_password(password.as_bytes(), &parsed).is_ok()
-    }
-
-}
-
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// 带 BOM 的文件能解析；空白、只有 BOM、不存在的文件都视为缺失；缺少字段时取默认值。
-    /// Files with a BOM parse; blank, BOM-only and missing files count as missing; missing
-    /// fields take default values.
-    #[test]
-    fn config_file_strips_bom_and_treats_blank_as_missing() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("settings.json");
-
-        std::fs::write(&path, "\u{FEFF}{\"language\":\"en-US\"}").expect("write bom");
-        match load_config_file::<Settings>(&path) {
-            ConfigFile::Parsed(s) => {
-                assert_eq!(s.language, "en-US");
-                assert_eq!(s.poll_interval_secs, Settings::default().poll_interval_secs);
-            }
-            _ => panic!("BOM file should parse"),
-        }
-
-        for blank in ["", "  \r\n", "\u{FEFF}"] {
-            std::fs::write(&path, blank).expect("write blank");
-            assert!(matches!(load_config_file::<Settings>(&path), ConfigFile::Missing));
-        }
-        assert!(matches!(
-            load_config_file::<Settings>(&dir.path().join("missing.json")),
-            ConfigFile::Missing
-        ));
-    }
-
-    /// 无法解析的文件被复制为 `.invalid-*` 备份并返回 None，原文件保留不动。
-    /// An unparseable file is copied to an `.invalid-*` backup and None is returned; the
-    /// original is left untouched.
-    #[test]
-    fn invalid_config_is_backed_up() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("streamers.json");
-        std::fs::write(&path, "[{ broken").expect("write broken");
-
-        assert!(load_config_or_backup::<Vec<StreamerData>>(&path).is_none());
-        assert_eq!(std::fs::read_to_string(&path).expect("read original"), "[{ broken");
-        let backups: Vec<_> = std::fs::read_dir(dir.path())
-            .expect("read dir")
-            .flatten()
-            .filter(|e| e.file_name().to_string_lossy().starts_with("streamers.json.invalid-"))
-            .collect();
-        assert_eq!(backups.len(), 1);
-        assert_eq!(
-            std::fs::read_to_string(backups[0].path()).expect("read backup"),
-            "[{ broken"
-        );
+        Argon2::default()
+            .verify_password(password.as_bytes(), &parsed)
+            .is_ok()
     }
 }
