@@ -51,15 +51,15 @@ function fail(msg) {
 
 // ── 版本校验 / Version validation ────────────────────────────────────────────
 
-// 允许 X.Y.Z 或 X.Y.Z_beta，例如 0.4.0、0.4.0_beta
-// Accepts X.Y.Z or X.Y.Z_beta, e.g. 0.4.0, 0.4.0_beta
-const SEM_VER = /^\d+\.\d+\.\d+(_beta)?$/;
+// 允许 X.Y.Z 或 X.Y.Z-beta，例如 0.4.0、0.4.0-beta
+// Accepts X.Y.Z or X.Y.Z-beta, e.g. 0.4.0, 0.4.0-beta
+const SEM_VER = /^\d+\.\d+\.\d+(-beta)?$/;
 
 function validateVersion(v) {
 	if (!SEM_VER.test(v)) {
-		fail(`"${v}" 不是合法的版本号（需符合 X.Y.Z 或 X.Y.Z_beta 格式）。`);
+		fail(`"${v}" 不是合法的版本号（需符合 X.Y.Z 或 X.Y.Z-beta 格式）。`);
 		fail(
-			`"${v}" is not a valid version string (must match X.Y.Z or X.Y.Z_beta).`,
+			`"${v}" is not a valid version string (must match X.Y.Z or X.Y.Z-beta).`,
 		);
 		process.exit(1);
 	}
