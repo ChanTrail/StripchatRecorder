@@ -376,7 +376,7 @@
     },
     "apiProxy": {
       "label": "API Proxy (for accessing stripchat.com, leave empty to disable)",
-      "placeholder": "socks5://127.0.0.1:10808",
+      "placeholder": "127.0.0.1:10808",
       "hint": "Press Enter or click elsewhere to confirm after change"
     },
     "scMirror": {
@@ -386,22 +386,22 @@
     },
     "cdnProxy": {
       "label": "CDN Proxy (for downloading HLS segments, leave empty to disable)",
-      "placeholder": "socks5://127.0.0.1:10808",
+      "placeholder": "127.0.0.1:10808",
       "hint": "Press Enter or click elsewhere to confirm after change"
     },
     "communityProxy": {
       "label": "Community Proxy (for downloading community module files, leave empty to disable)",
-      "placeholder": "socks5://127.0.0.1:10808",
+      "placeholder": "127.0.0.1:10808",
       "hint": "Press Enter or click elsewhere to confirm after change"
     },
     "communityMirror": {
       "label": "Community Mirror (prefix for GitHub URLs, leave empty to disable)",
-      "placeholder": "https://ghproxy.com",
+      "placeholder": "ghproxy.com",
       "hint": "When both community proxy and mirror are set, the proxy will be used to access the mirror"
     },
     "cgfProxy": {
       "label": "camgirlfinder Proxy (for accessing camgirlfinder.net, leave empty to disable)",
-      "placeholder": "socks5://127.0.0.1:10808",
+      "placeholder": "127.0.0.1:10808",
       "hint": "The Streamer Finder page (face/name search) is a pure frontend feature that accesses camgirlfinder.net directly from the browser — this proxy is not used for it. This setting is only used by the backend to fetch each streamer's historical online schedule in the background, enabling adaptive poll intervals to reduce bandwidth. Press Enter or click elsewhere to confirm after change"
     },
     "mouflonKeysDesc": "Stripchat encrypts HLS segment filenames (Mouflon system). Before recording, you need to fill in the corresponding pkey → pdkey key pairs here. Keys can be obtained from community sources.",

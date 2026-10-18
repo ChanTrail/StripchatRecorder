@@ -15,6 +15,7 @@
 //! - 标准输出 `STATUS:{speed}`: 上传速度上报 / Upload speed reporting
 
 use std::fs;
+use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -22,9 +23,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use grammers_client::Client;
-use grammers_client::client::{ClientConfiguration, AutoSleep};
+use grammers_client::client::ClientConfiguration;
 use grammers_client::media::Uploaded;
-use grammers_client::sender::{ConnectionParams, SenderPool};
+use grammers_client::sender::{AutoSleep, ConnectionParams, SenderPool};
 use grammers_client::tl;
 use grammers_session::Session;
 use grammers_session::storages::SqliteSession;
@@ -895,8 +896,17 @@ async fn upload_and_send(
             .map_err(|e| format!("open session failed: {}", e))?,
     );
 
+    // 配置激进的 retry policy：I/O 错误视为 5 秒 flood，flood wait 阈值提高到 5 分钟，
+    // 每个请求最多自动重试 1 次（与 grammers 0.10 的 AutoSleep 行为一致）
+    // Aggressive retry policy: treat I/O errors as 5s flood, raise flood-wait threshold to 5 min,
+    // auto-retry each request at most once (matches grammers 0.10 AutoSleep behavior)
     let conn_params = ConnectionParams {
         proxy_url: if proxy.is_empty() { None } else { Some(proxy.to_string()) },
+        retry_policy: Box::new(AutoSleep {
+            tries: NonZeroU32::MIN,
+            threshold: Duration::from_secs(300),
+            io_errors_as_flood_of: Some(Duration::from_secs(5)),
+        }),
         ..Default::default()
     };
 
@@ -910,13 +920,7 @@ async fn upload_and_send(
     // exit; it has no need to listen for updates long-term.
     drop(pool.updates);
     tokio::spawn(async move { runner.run().await });
-    // 配置激进的 retry policy：I/O 错误视为 5 秒 flood，flood wait 阈值提高到 5 分钟
-    // Aggressive retry policy: treat I/O errors as 5s flood, raise flood-wait threshold to 5 min
     let client = Client::with_configuration(pool.handle, ClientConfiguration {
-        retry_policy: Box::new(AutoSleep {
-            threshold: Duration::from_secs(300),
-            io_errors_as_flood_of: Some(Duration::from_secs(5)),
-        }),
         auto_cache_peers: true,
     });
 

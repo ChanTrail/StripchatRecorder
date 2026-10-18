@@ -23,6 +23,7 @@
 	import { Input } from "@/components/ui/input";
 	import { Label } from "@/components/ui/label";
 	import { Switch } from "@/components/ui/switch";
+	import SchemeUrlInput from "@/components/SchemeUrlInput.vue";
 	import {
 		NumberField,
 		NumberFieldContent,
@@ -515,13 +516,12 @@
 
 				<div class="flex flex-col gap-1.5">
 					<Label>{{ t("settings.apiProxy.label") }}</Label>
-					<Input
-						:model-value="form.api_proxy_url ?? ''"
+					<SchemeUrlInput
+						kind="proxy"
+						:model-value="form.api_proxy_url"
 						:placeholder="t('settings.apiProxy.placeholder')"
-						autocomplete="url"
-						@update:model-value="form.api_proxy_url = ($event as string) || null"
-						@keyup.enter="saveProxy('api_proxy_url')"
-						@blur="saveProxy('api_proxy_url')"
+						@update:model-value="form.api_proxy_url = $event"
+						@commit="saveProxy('api_proxy_url')"
 					/>
 					<p class="text-xs text-muted-foreground">{{ t("settings.apiProxy.hint") }}</p>
 				</div>
@@ -534,10 +534,10 @@
 							class="w-28 shrink-0"
 							@update:model-value="(v) => v && (form.sc_mirror_scheme = String(v))"
 						>
-							<SelectTrigger class="w-28"><SelectValue /></SelectTrigger>
+							<SelectTrigger class="w-28 shrink-0"><SelectValue /></SelectTrigger>
 							<SelectContent>
-								<SelectItem value="https">https://</SelectItem>
-								<SelectItem value="http">http://</SelectItem>
+								<SelectItem value="https">https</SelectItem>
+								<SelectItem value="http">http</SelectItem>
 							</SelectContent>
 						</Select>
 						<Input
@@ -555,51 +555,47 @@
 
 				<div class="flex flex-col gap-1.5">
 					<Label>{{ t("settings.cdnProxy.label") }}</Label>
-					<Input
-						:model-value="form.cdn_proxy_url ?? ''"
+					<SchemeUrlInput
+						kind="proxy"
+						:model-value="form.cdn_proxy_url"
 						:placeholder="t('settings.cdnProxy.placeholder')"
-						autocomplete="url"
-						@update:model-value="form.cdn_proxy_url = ($event as string) || null"
-						@keyup.enter="saveProxy('cdn_proxy_url')"
-						@blur="saveProxy('cdn_proxy_url')"
+						@update:model-value="form.cdn_proxy_url = $event"
+						@commit="saveProxy('cdn_proxy_url')"
 					/>
 					<p class="text-xs text-muted-foreground">{{ t("settings.cdnProxy.hint") }}</p>
 				</div>
 
 				<div class="flex flex-col gap-1.5">
 					<Label>{{ t("settings.communityProxy.label") }}</Label>
-					<Input
-						:model-value="form.community_proxy_url ?? ''"
+					<SchemeUrlInput
+						kind="proxy"
+						:model-value="form.community_proxy_url"
 						:placeholder="t('settings.communityProxy.placeholder')"
-						autocomplete="url"
-						@update:model-value="form.community_proxy_url = ($event as string) || null"
-						@keyup.enter="saveProxy('community_proxy_url')"
-						@blur="saveProxy('community_proxy_url')"
+						@update:model-value="form.community_proxy_url = $event"
+						@commit="saveProxy('community_proxy_url')"
 					/>
 					<p class="text-xs text-muted-foreground">{{ t("settings.communityProxy.hint") }}</p>
 				</div>
 
 				<div class="flex flex-col gap-1.5">
 					<Label>{{ t("settings.communityMirror.label") }}</Label>
-					<Input
-						:model-value="form.community_mirror_url ?? ''"
+					<SchemeUrlInput
+						kind="mirror"
+						:model-value="form.community_mirror_url"
 						:placeholder="t('settings.communityMirror.placeholder')"
-						autocomplete="url"
-						@update:model-value="form.community_mirror_url = ($event as string) || null"
-						@keyup.enter="saveProxy('community_mirror_url')"
-						@blur="saveProxy('community_mirror_url')"
+						@update:model-value="form.community_mirror_url = $event"
+						@commit="saveProxy('community_mirror_url')"
 					/>
 					<p class="text-xs text-muted-foreground">{{ t("settings.communityMirror.hint") }}</p>
 				</div>
 				<div class="flex flex-col gap-1.5">
 					<Label>{{ t("settings.cgfProxy.label") }}</Label>
-					<Input
-						:model-value="form.cgf_proxy_url ?? ''"
+					<SchemeUrlInput
+						kind="proxy"
+						:model-value="form.cgf_proxy_url"
 						:placeholder="t('settings.cgfProxy.placeholder')"
-						autocomplete="url"
-						@update:model-value="form.cgf_proxy_url = ($event as string) || null"
-						@keyup.enter="saveProxy('cgf_proxy_url')"
-						@blur="saveProxy('cgf_proxy_url')"
+						@update:model-value="form.cgf_proxy_url = $event"
+						@commit="saveProxy('cgf_proxy_url')"
 					/>
 					<p class="text-xs text-muted-foreground">{{ t("settings.cgfProxy.hint") }}</p>
 				</div>

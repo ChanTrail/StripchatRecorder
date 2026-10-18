@@ -22,6 +22,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "@/components/ui/select";
+import SchemeUrlInput from "@/components/SchemeUrlInput.vue";
 import { loadLocaleFromServer } from "@/i18n";
 import { useModuleLocaleStore } from "@/stores/moduleLocale";
 import { useLocalesStore } from "@/stores/locales";
@@ -46,12 +54,18 @@ const stepTransition = ref("step-forward");
 // ── 表单字段 / Form fields ───────────────────────────────────────────────────
 const language = ref("zh-CN");
 const outputDir = ref("");
-const apiProxy = ref("");
+// 代理 / 社区加速站为完整 URL（scheme://地址），由 SchemeUrlInput 拆分协议与地址；
+// Stripchat 镜像站的协议单独存储（sc_mirror_scheme），与设置页一致
+// Proxies / community mirror hold a full URL (scheme://address), split into scheme and address
+// by SchemeUrlInput; the Stripchat mirror stores its scheme separately (sc_mirror_scheme),
+// same as the settings page
+const apiProxy = ref<string | null>(null);
 const scMirror = ref("");
-const cdnProxy = ref("");
-const communityProxy = ref("");
-const communityMirror = ref("");
-const cgfProxy = ref("");
+const scMirrorScheme = ref("https");
+const cdnProxy = ref<string | null>(null);
+const communityProxy = ref<string | null>(null);
+const communityMirror = ref<string | null>(null);
+const cgfProxy = ref<string | null>(null);
 
 /** 可用语言列表（从共享 store 读取，由 App.vue 统一维护）
  * Available locales (from shared store, maintained by App.vue) */
@@ -71,12 +85,13 @@ onMounted(async () => {
 	language.value = s.language || "zh-CN";
 	locale.value = language.value;
 	outputDir.value = s.output_dir || "";
-	apiProxy.value = s.api_proxy_url || "";
+	apiProxy.value = s.api_proxy_url || null;
 	scMirror.value = s.sc_mirror_url || "";
-	cdnProxy.value = s.cdn_proxy_url || "";
-	communityProxy.value = s.community_proxy_url || "";
-	communityMirror.value = s.community_mirror_url || "";
-	cgfProxy.value = s.cgf_proxy_url || "";
+	scMirrorScheme.value = s.sc_mirror_scheme || "https";
+	cdnProxy.value = s.cdn_proxy_url || null;
+	communityProxy.value = s.community_proxy_url || null;
+	communityMirror.value = s.community_mirror_url || null;
+	cgfProxy.value = s.cgf_proxy_url || null;
 });
 
 // ── 目录浏览器 / Directory browser ───────────────────────────────────────────
@@ -139,12 +154,13 @@ async function finish() {
 			...store.settings,
 			language: language.value,
 			output_dir: outputDir.value.trim(),
-			api_proxy_url: apiProxy.value.trim() || null,
+			api_proxy_url: apiProxy.value,
 			sc_mirror_url: scMirror.value.trim() || null,
-			cdn_proxy_url: cdnProxy.value.trim() || null,
-			community_proxy_url: communityProxy.value.trim() || null,
-			community_mirror_url: communityMirror.value.trim() || null,
-			cgf_proxy_url: cgfProxy.value.trim() || null,
+			sc_mirror_scheme: scMirrorScheme.value,
+			cdn_proxy_url: cdnProxy.value,
+			community_proxy_url: communityProxy.value,
+			community_mirror_url: communityMirror.value,
+			cgf_proxy_url: cgfProxy.value,
 			setup_done: true,
 		});
 		await router.replace("/");
@@ -263,28 +279,40 @@ async function finish() {
 							<div class="flex flex-col gap-4">
 								<div class="flex flex-col gap-1.5">
 									<Label>{{ t("settings.apiProxy.label") }}</Label>
-									<Input v-model="apiProxy" :placeholder="t('settings.apiProxy.placeholder')" autocomplete="off" />
+									<SchemeUrlInput v-model="apiProxy" kind="proxy" :placeholder="t('settings.apiProxy.placeholder')" />
 								</div>
 								<div class="flex flex-col gap-1.5">
 									<Label>{{ t("settings.scMirror.label") }}</Label>
-									<Input v-model="scMirror" :placeholder="t('settings.scMirror.placeholder')" autocomplete="off" />
+									<div class="flex items-center gap-1.5">
+										<Select
+											:model-value="scMirrorScheme"
+											@update:model-value="(v) => v && (scMirrorScheme = String(v))"
+										>
+											<SelectTrigger class="w-28 shrink-0"><SelectValue /></SelectTrigger>
+											<SelectContent>
+												<SelectItem value="https">https</SelectItem>
+												<SelectItem value="http">http</SelectItem>
+											</SelectContent>
+										</Select>
+										<Input v-model="scMirror" :placeholder="t('settings.scMirror.placeholder')" autocomplete="off" class="flex-1" />
+									</div>
 								</div>
 								<div class="flex flex-col gap-1.5">
 									<Label>{{ t("settings.cdnProxy.label") }}</Label>
-									<Input v-model="cdnProxy" :placeholder="t('settings.cdnProxy.placeholder')" autocomplete="off" />
+									<SchemeUrlInput v-model="cdnProxy" kind="proxy" :placeholder="t('settings.cdnProxy.placeholder')" />
 								</div>
 								<div class="flex flex-col gap-1.5">
 									<Label>{{ t("settings.communityProxy.label") }}</Label>
-									<Input v-model="communityProxy" :placeholder="t('settings.communityProxy.placeholder')" autocomplete="off" />
+									<SchemeUrlInput v-model="communityProxy" kind="proxy" :placeholder="t('settings.communityProxy.placeholder')" />
 								</div>
 								<div class="flex flex-col gap-1.5">
 									<Label>{{ t("settings.communityMirror.label") }}</Label>
-									<Input v-model="communityMirror" :placeholder="t('settings.communityMirror.placeholder')" autocomplete="off" />
+									<SchemeUrlInput v-model="communityMirror" kind="mirror" :placeholder="t('settings.communityMirror.placeholder')" />
 									<p class="text-xs text-muted-foreground">{{ t("settings.communityMirror.hint") }}</p>
 								</div>
 								<div class="flex flex-col gap-1.5">
 									<Label>{{ t("settings.cgfProxy.label") }}</Label>
-									<Input v-model="cgfProxy" :placeholder="t('settings.cgfProxy.placeholder')" autocomplete="off" />
+									<SchemeUrlInput v-model="cgfProxy" kind="proxy" :placeholder="t('settings.cgfProxy.placeholder')" />
 									<p class="text-xs text-muted-foreground">{{ t("settings.cgfProxy.hint") }}</p>
 								</div>
 							</div>
