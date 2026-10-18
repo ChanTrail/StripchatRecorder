@@ -56,13 +56,41 @@ fn build_client(proxy_url: Option<&str>) -> Result<Client> {
     Ok(builder.build()?)
 }
 
+/// API 客户端 HTTP/2 PING 的发送间隔（连接空闲时也发送）。
+/// Interval between HTTP/2 PINGs on API client connections (also sent while idle).
+const API_H2_PING_INTERVAL: std::time::Duration = std::time::Duration::from_secs(20);
+/// 等待 HTTP/2 PING 回应的超时，超时即关闭该连接。
+/// Timeout waiting for an HTTP/2 PING ack; the connection is closed when it expires.
+const API_H2_PING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// 构建用于 API 请求的 HTTP 客户端（支持代理，HTTP/2，附加请求优先级头）。
+///
+/// 状态轮询跨轮复用这个客户端，HTTP/2 连接会在两轮之间空闲着；如果对端或中间网络悄悄断掉了
+/// 空闲连接，下一轮同时进行的请求（共用这一条连接）会一起失败在它上面。因此开启：
+/// - TCP keepalive（15 秒，与 CDN 客户端一致）
+/// - HTTP/2 PING：每 [`API_H2_PING_INTERVAL`] 发送一次（空闲时也发），
+///   [`API_H2_PING_TIMEOUT`] 内没有回应就关闭连接，连接池随之丢弃它，下一轮直接新建连接。
+///   经代理时 PING 走端到端隧道，能发现对端已失效的连接。
+///
 /// Build an HTTP client for API requests (supports proxy, HTTP/2, request priority header).
+///
+/// Status polling reuses this client across rounds, so its HTTP/2 connection sits idle between
+/// rounds; if the peer or something in between silently drops the idle connection, the next
+/// round's concurrent requests (which share that one connection) all fail on it. So this enables:
+/// - TCP keepalive (15 s, same as the CDN client)
+/// - HTTP/2 PING every [`API_H2_PING_INTERVAL`] (also while idle); without an ack within
+///   [`API_H2_PING_TIMEOUT`] the connection is closed and dropped from the pool, so the next round
+///   opens a new one. Through a proxy the PING travels end to end inside the tunnel, so it detects
+///   connections the far end has dropped.
 fn build_api_client(proxy_url: Option<&str>) -> Result<Client> {
     let mut builder = Client::builder()
         .user_agent(USER_AGENT)
         .timeout(std::time::Duration::from_secs(30))
+        .tcp_keepalive(std::time::Duration::from_secs(15))
         .http2_prior_knowledge()
+        .http2_keep_alive_interval(API_H2_PING_INTERVAL)
+        .http2_keep_alive_timeout(API_H2_PING_TIMEOUT)
+        .http2_keep_alive_while_idle(true)
         // Priority: u=0, i — 最高用户可见优先级，非增量，降低 CDN/WAF 对非浏览器请求的
         // 识别率，减少 403 响应概率。
         // Priority: u=0, i — highest user-visible urgency, non-incremental; reduces CDN/WAF
