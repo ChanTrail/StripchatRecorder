@@ -473,7 +473,9 @@ impl StatusMonitor {
                             attempt = attempt,
                             max = POLL_NETWORK_RETRY_DELAYS.len(),
                             secs = delay.as_secs(),
-                            error = e
+                            // 带上底层原因（连接被拒/TLS 握手/DNS/连接被关闭等）
+                            // Include the underlying cause (refused/TLS handshake/DNS/closed, …)
+                            error = e.detailed()
                         )
                     );
                     tokio::time::sleep(delay).await;
@@ -731,7 +733,8 @@ impl StatusMonitor {
                 return None;
             }
             Err(e) => {
-                tracing::error!("{}", crate::tl!("monitor.pollFailed", username = username, error = e));
+                // 带上底层原因，便于判断失败类型 / Include the underlying cause to tell failure types apart
+                tracing::error!("{}", crate::tl!("monitor.pollFailed", username = username, error = e.detailed()));
                 // 网络/API 错误时仍以 base_secs 重试，不拉长间隔
                 // On network/API error, retry at base_secs — don't extend the interval
                 let next = std::time::Instant::now()

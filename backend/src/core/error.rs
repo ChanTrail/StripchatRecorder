@@ -57,7 +57,52 @@ impl fmt::Display for AppError {
     }
 }
 
-impl std::error::Error for AppError {}
+impl std::error::Error for AppError {
+    /// 暴露内层错误，供 [`error_chain`] 逐层取出底层原因。
+    /// Expose the inner error so [`error_chain`] can walk down to the underlying causes.
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io(e) => Some(e),
+            Self::Reqwest(e) => Some(e),
+            Self::Json(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl AppError {
+    /// 错误信息加上全部底层原因（见 [`error_chain`]）。网络错误的 Display 只有外层的
+    /// "error sending request for url (...)"，看不出是连接被拒、TLS 握手失败、DNS 失败还是
+    /// 连接被关闭，排查时用这个方法输出完整原因。
+    ///
+    /// The error message plus every underlying cause (see [`error_chain`]). A network error's
+    /// Display only shows the outer "error sending request for url (...)", hiding whether the
+    /// connection was refused, the TLS handshake failed, DNS failed or the connection was closed;
+    /// use this when the full cause is needed for troubleshooting.
+    pub fn detailed(&self) -> String {
+        error_chain(self)
+    }
+}
+
+/// 把错误及其 `source()` 链上的全部底层原因拼成一行，以 ": " 分隔；与已输出内容重复的层级
+/// 跳过（如 `AppError::Reqwest` 外层已经包含 reqwest 错误本身的信息）。
+///
+/// Join an error and every underlying cause in its `source()` chain into one line, separated by
+/// ": "; levels whose message is already included are skipped (e.g. the outer
+/// `AppError::Reqwest` message already contains the reqwest error's own text).
+pub fn error_chain(err: &(dyn std::error::Error + 'static)) -> String {
+    let mut out = err.to_string();
+    let mut cause = err.source();
+    while let Some(e) = cause {
+        let msg = e.to_string();
+        if !msg.is_empty() && !out.contains(&msg) {
+            out.push_str(": ");
+            out.push_str(&msg);
+        }
+        cause = e.source();
+    }
+    out
+}
 
 impl From<std::io::Error> for AppError {
     fn from(e: std::io::Error) -> Self {
