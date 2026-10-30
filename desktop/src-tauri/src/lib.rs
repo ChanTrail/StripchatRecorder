@@ -244,7 +244,7 @@ async fn setup_app(app_handle: tauri::AppHandle) {
         let output_dir = std::path::PathBuf::from(app_state.get_settings().output_dir.clone());
         let merge_format = app_state.get_settings().merge_format.clone();
         tokio::spawn(async move {
-            schedule_meta_version_check(output_dir, merge_format, 3600).await;
+            schedule_meta_version_check(output_dir, merge_format, 300).await;
         });
     }
 

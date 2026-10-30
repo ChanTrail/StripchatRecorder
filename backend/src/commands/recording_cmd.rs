@@ -160,7 +160,7 @@ fn collect_from_meta(
                         started_at: meta.started_at,
                         is_recording: false,
                         record_duration_secs: None,
-                        video_duration_secs: None,
+                        video_duration_secs: meta.video_duration_secs,
                         status: Some(meta.status),
                         pp_results: meta.pp_results,
                         module_outputs: meta.module_outputs,
