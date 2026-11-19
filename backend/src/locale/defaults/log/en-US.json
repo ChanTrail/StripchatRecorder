@@ -52,7 +52,8 @@
     "liveIdle": "Relay live [{username}]: idle, stopping",
     "livePollFailed": "Relay live [{username}]: poll failed ({cur}/{max}): {error}",
     "liveSegmentFailed": "Relay: failed to download segment {seq} for {username}: {error}",
-    "liveTailNotPublished": "Relay: last playlist segment {seq} for {username} is not published yet (404), leaving it for the next round to download in order"
+    "liveTailNotPublished": "Relay: last playlist segment {seq} for {username} is not published yet (404), leaving it for the next round to download in order",
+    "openInPlayer": "Opened relay stream in player {player}: {url}"
   },
   "monitor": {
     "apiClientFailed": "Failed to create API client: {error}",

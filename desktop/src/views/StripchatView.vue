@@ -15,7 +15,7 @@
  */
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { Check, Eye, EyeOff, Loader2, Plus, Users } from "@lucide/vue";
+import { Check, Eye, EyeOff, Loader2, Play, Plus, Users, Vibrate } from "@lucide/vue";
 import { call } from "@/lib/api";
 import { toast } from "@/composables/useNotify";
 import { useStreamersStore } from "@/stores/streamers";
@@ -45,6 +45,7 @@ interface ScModel {
 	is_vr: boolean;
 	is_mobile: boolean;
 	is_non_nude: boolean;
+	has_toy: boolean;
 	preview: string | null;
 	avatar: string | null;
 	gender_group: string;
@@ -279,6 +280,36 @@ async function addToRecord(username: string) {
 	}
 }
 
+// ─── 系统播放器播放转发流 / Play relay stream in the system player ──────────
+
+/** 正在唤起播放器的卡片（防连点重复唤起）/ Cards currently launching a player (prevents double-click duplicates) */
+const playingSet = ref<Set<string>>(new Set());
+
+/** 点卡片：启动本地 /stream 转发监听并用系统播放器打开该主播的转发流 /
+ * Card click: lazily start the local /stream listener and open the streamer's
+ * relay stream in the system player */
+async function playRelay(m: ScModel) {
+	if (playingSet.value.has(m.username)) return;
+	playingSet.value.add(m.username);
+	try {
+		await call<{ url: string; player: string }>("open_relay_stream", {
+			username: m.username,
+		});
+	} catch (e) {
+		const msg = e instanceof Error ? e.message : String(e);
+		// 未找到播放器时给安装提示，其余错误原样透出 /
+		// show an install hint when no player was found; surface other errors as-is
+		toast(
+			msg === "no_player"
+				? t("stripchat.noPlayer")
+				: t("stripchat.playFailed", { message: msg }),
+			"error",
+		);
+	} finally {
+		playingSet.value.delete(m.username);
+	}
+}
+
 // ─── 无限滚动 / Infinite scroll ─────────────────────────────────────────────
 
 onMounted(() => {
@@ -433,7 +464,9 @@ onUnmounted(() => observer?.disconnect());
 			<div
 				v-for="m in models"
 				:key="`${m.model_id}-${m.username}`"
-				class="group relative overflow-hidden rounded-lg border bg-card transition-shadow hover:shadow-md"
+				class="group relative cursor-pointer overflow-hidden rounded-lg border bg-card transition-shadow hover:shadow-md"
+				:title="t('stripchat.play')"
+				@click="playRelay(m)"
 			>
 				<!-- 预览图：contextmenu 仅在模糊时拦截（防止保存被模糊的原图），
 					未模糊时保留正常菜单 / Preview image: context menu is suppressed
@@ -465,6 +498,22 @@ onUnmounted(() => observer?.disconnect());
 
 
 
+					<!-- 播放浮层：悬停浮现的中央播放键；pointer-events-none 不拦截
+						点击（整卡可点），唤起期间转圈 / Play overlay: a center play
+						button fading in on hover; pointer-events-none keeps the whole
+						card clickable, spinner shows while the player is launching -->
+					<div
+						class="pointer-events-none absolute inset-0 z-10 flex items-center justify-center opacity-0 transition-opacity group-hover:opacity-100"
+					>
+						<span class="flex size-12 items-center justify-center rounded-full bg-black/60 text-white">
+							<Loader2
+								v-if="playingSet.has(m.username)"
+								class="size-6 animate-spin"
+							/>
+							<Play v-else class="size-6 fill-current" />
+						</span>
+					</div>
+
 					<!-- 隐私模式眼睛按钮：模糊适用时常驻，点击在模糊/清晰之间切换；
 						位于添加按钮左侧（右下角已被占用）/
 					     Privacy eye button: pinned while privacy mode applies; click
@@ -494,6 +543,11 @@ onUnmounted(() => observer?.disconnect());
 
 					<!-- 右上：徽标 / Top-right: badges -->
 					<div class="absolute right-2 top-2 flex gap-1">
+						<span
+							v-if="m.has_toy"
+							class="flex items-center gap-0.5 rounded bg-pink-600/90 px-1.5 py-0.5 text-[10px] font-semibold text-white"
+							:title="t('stripchat.toy')"
+						><Vibrate class="h-3 w-3" />TOY</span>
 						<span
 							v-if="m.is_new"
 							class="rounded bg-emerald-600/90 px-1.5 py-0.5 text-[10px] font-semibold text-white"

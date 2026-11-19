@@ -641,10 +641,10 @@ The project ships the following official modules:
 | Module ID         | Input Type       | Output Type       | Description                                                                                     |
 | ----------------- | ---------------- | ----------------- | ----------------------------------------------------------------------------------------------- |
 | `ts_merge`        | `ts_session_dir` | `video_file`      | Merges a TS segment directory into a single video file; **the first node in an official pipeline** |
-| `filter_short`    | `any_file`       | `any_file`        | Requests the host to delete videos shorter than a threshold; supports `dry_run` preview mode    |
+| `filter_short`    | `video_file`     | `video_file`      | Deletes videos shorter than a threshold and terminates the pipeline; supports `dry_run` preview mode |
 | `contact_sheet`   | `video_file`     | `media_bundle`    | Extracts frames at an interval and tiles them into a preview image; outputs a media_bundle       |
-| `notify_discord`  | `any_file`       | `any_file`        | Sends recording info and cover image to Discord via Webhook; supports HTTP/SOCKS5 proxy          |
-| `notify_telegram` | `any_file`       | `any_file`        | Sends recording info, cover image, and video to Telegram via MTProto; auto-splits files >2 GB   |
+| `notify_discord`  | `media_bundle`   | `media_bundle`    | Sends recording info and cover image to Discord via Webhook; supports HTTP/SOCKS5 proxy          |
+| `notify_telegram` | `media_bundle`   | `media_bundle`    | Sends recording info, cover image, and video to Telegram via MTProto; auto-splits files >2 GB   |
 | `cleanup`         | `any_file`       | — (terminates)    | Cleans up recording-related files: optionally deletes video/preview/meta, and tmp cache files   |
 
 > **Built-in DAG nodes** (not executables; handled directly by the backend):
@@ -689,15 +689,15 @@ The project ships the following official modules:
 
 ### notify_telegram parameters
 
-| Parameter    | Type    | Default | Description                                                    |
-| ------------ | ------- | ------- | -------------------------------------------------------------- |
-| `api_id`     | string  | `""`    | Telegram API ID from my.telegram.org (required)                |
-| `api_hash`   | string  | `""`    | Telegram API Hash (required)                                   |
-| `bot_token`  | string  | `""`    | Bot Token from @BotFather (required)                           |
-| `chat_id`    | string  | `""`    | Chat ID; supergroup format: `-100xxxxxxxxxx` (required)        |
-| `username`   | string  | `""`    | Group username, required for supergroups (without `@`)         |
-| `proxy`      | string  | `""`    | Proxy address; supports `http://` and `socks5://`              |
-| `send_video` | boolean | `true`  | Also send the video file                                       |
+| Parameter    | Type    | Default | Description                                                                                          |
+| ------------ | ------- | ------- | ---------------------------------------------------------------------------------------------------- |
+| `api_id`     | string  | `""`    | Telegram API ID from my.telegram.org (required)                                                      |
+| `api_hash`   | string  | `""`    | Telegram API Hash (required)                                                                         |
+| `bot_token`  | string  | `""`    | Bot Token from @BotFather (required)                                                                 |
+| `chat_id`    | string  | `""`    | Chat ID, used for private groups/channels (supergroup format: `-100xxxxxxxxxx`)                     |
+| `username`   | string  | `""`    | Public group/channel username (without `@`); at least one of `username`/`chat_id` is required — `username` wins when both are set |
+| `proxy`      | string  | `""`    | Proxy address; supports `http://` and `socks5://`                                                    |
+| `send_video` | boolean | `true`  | Also send the video file                                                                             |
 
 ### cleanup parameters
 

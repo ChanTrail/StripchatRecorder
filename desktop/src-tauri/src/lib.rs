@@ -125,6 +125,8 @@ pub fn run() {
             commands::apply_update_cmd,
             // SC 官方分类浏览列表（StripChat 页）/ Official SC category list (StripChat page)
             commands::list_sc_models,
+            // 转发流：系统播放器打开 / Relay stream: open in the system player
+            commands::open_relay_stream,
             // FFmpeg
             commands::get_ffmpeg_status,
             commands::get_ffmpeg_locations,
@@ -192,6 +194,8 @@ async fn setup_app(app_handle: tauri::AppHandle) {
         monitor: Arc::clone(&monitor),
         emitter: Arc::clone(&emitter),
         pending_update: parking_lot::RwLock::new(None),
+        relay_manager: stripchat_recorder_lib::relay::state::RelayManager::new(),
+        relay_port: tokio::sync::OnceCell::new(),
     });
 
     // 启动时一次性任务（与 Server 共用）：清空 tmp → meta 迁移 → ffmpeg 检查

@@ -799,6 +799,10 @@
     "end": "No more results",
     "empty": "No streamers in this category",
     "error": "Failed to load: {message}",
+    "toy": "Interactive toy",
+    "play": "Play the relay stream in the system player",
+    "playFailed": "Failed to launch the player: {message}",
+    "noPlayer": "No usable player found — install VLC, mpv or PotPlayer",
     "status": {
       "public": "Public",
       "private": "Private",

@@ -354,7 +354,7 @@ async fn run_update_round(app_state: &Arc<AppState>, emitter: &Arc<dyn Emitter>)
 
 /// FFmpeg 更新检查（要求 ffmpeg 已可用，由调用方保证）：`ffmpeg_auto_update`
 /// 关闭、首选项为系统 PATH、平台不支持下载或 tools 副本无标记（非本程序
-/// 安装，如 Docker 镜像内置/用户手动放置）时直接返回；否则拉远端
+/// 安装，如用户手动放置）时直接返回；否则拉远端
 /// `.sha256` 与标记比对，不同则等空闲后执行更新。更新失败推送
 /// `ffmpegUpdateFailed` 警告通知并保留旧版；检查本身失败只记 debug 日志。
 /// 启动（ffmpeg 已可用分支）与周期循环共用此检查。
@@ -362,7 +362,7 @@ async fn run_update_round(app_state: &Arc<AppState>, emitter: &Arc<dyn Emitter>)
 /// FFmpeg update check (caller guarantees ffmpeg is usable): returns early
 /// when `ffmpeg_auto_update` is off, the preference is the system PATH, the
 /// platform can't download, or the tools copy has no marker (not installed by
-/// us — e.g. baked into the Docker image or placed manually). Otherwise
+/// us — e.g. placed manually). Otherwise
 /// fetches the remote `.sha256`, compares with the marker, and on difference
 /// waits for idle and updates. A failed update pushes the
 /// `ffmpegUpdateFailed` warning notification and keeps the old version;

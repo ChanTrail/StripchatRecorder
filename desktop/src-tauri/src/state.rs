@@ -30,4 +30,14 @@ pub struct DesktopState {
     /// 最近一次 check_for_updates_cmd 检查到的可用更新（用于后续安装）。
     /// The latest available update found by check_for_updates_cmd (used for installation).
     pub pending_update: RwLock<Option<tauri_plugin_updater::Update>>,
+    /// 转发会话管理器：桌面端"系统播放器打开转发流"的 worker 宿主——
+    /// 本地 /stream 监听按需拉起 worker（与 Server 侧同一份实现）。
+    /// Relay session manager: hosts the workers behind the desktop "open
+    /// relay stream in system player" flow — the local /stream listener
+    /// spawns workers on demand (same implementation as the Server side).
+    pub relay_manager: Arc<stripchat_recorder_lib::relay::state::RelayManager>,
+    /// 本地转发监听端口（懒绑定）：首个 open_relay_stream 调用时在
+    /// 127.0.0.1:0 上启动 / Bound lazily on the first open_relay_stream
+    /// call — the local relay listener binds to 127.0.0.1:0
+    pub relay_port: tokio::sync::OnceCell<u16>,
 }

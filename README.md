@@ -6,6 +6,7 @@
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](https://www.gnu.org/licenses/old-licenses/gpl-3.0.html)
 [![Docker Image](https://img.shields.io/docker/pulls/chantrail/stripchat-recorder)](https://hub.docker.com/r/chantrail/stripchat-recorder)
+[![GHCR](https://img.shields.io/badge/ghcr.io-chantrail%2Fstripchat--recorder-blue)](https://github.com/ChanTrail/StripchatRecorder/pkgs/container/stripchat-recorder)
 
 ---
 
@@ -20,9 +21,12 @@
   - 从结果卡片直接一键添加到录制列表
   - 对任意主播发起相似人脸搜索
 - **改名跟踪**：添加主播时通过用户 ID API 获取并持久化 Stripchat 内部 ID；后续轮询直接用 ID 查询状态，可在主播改名时自动检测并更新记录，无需手动重新添加
+- **StripChat 浏览页**：按 Stripchat 官方分类（女生/情侣/男生/跨性别）浏览在线直播，支持特征与语言标签筛选、排序与无限滚动，从卡片一键添加主播到追踪列表；卡片徽标提示互动玩具（TOY）等特性；桌面端点击卡片还会自动拉起本地播放器（VLC/mpv/PotPlayer/IINA 等）直接播放该主播的转发流；列表与快照请求走独立的代理与镜像站设置
+- **隐私模式**：一键模糊预览图避免走光，三档可选（关闭 / 仅直播画面 / 全部图片），主播列表页与 StripChat 浏览页各自独立开关，单张图片可单独解除模糊
 - **转发流（HLS Relay）**：无需录制即可将主播直播流转发给播放器，访问 `/stream/{modelname}` 自动启动，支持多客户端同时连接
-- 支持分离式网络代理：可分别配置 Stripchat API 代理与 CDN 分片代理
-- 支持配置 Stripchat 镜像站（将请求中的 `stripchat.com` 替换为镜像域名）
+- 支持分离式网络代理：可分别配置 Stripchat API 代理、CDN 分片代理、浏览页代理与 camgirlfinder 代理
+- 支持配置 Stripchat 镜像站（将请求中的 `stripchat.com` 替换为镜像域名，可选 http/https 协议），浏览页镜像站可独立配置
+- **ECH（加密 ClientHello）**：可选开启，StripChat API 请求的 TLS ClientHello 经借用 ECH 配置加密以隐藏真实 SNI，可能改善 API 返回 403 的情况；不可路由或解析失败时自动回退普通连接，CDN 分片仅在直连全部失败后的兜底竞速中带 ECH 腿
 - **Mouflon HLS 解密**：支持管理 `pkey → pdkey` 密钥对和 `pkey → keystream` 密钥流，用于解密 Stripchat 加密的 HLS 分片文件名；支持配置同步 URL 自动拉取最新密钥
 - **可视化后处理流水线**：DAG 节点编辑器，支持分叉与合并，内置模块：
   - **ts_merge** — 将 TS 分片目录合并为单一视频文件（流水线首节点）
@@ -33,6 +37,9 @@
   - **cleanup** — 后处理完成后清理录制相关文件及临时缓存
 - **社区模块市场**：在 Web UI 中浏览、安装、更新社区贡献的后处理模块，支持配置下载代理和加速镜像
 - **关于页面 / 自动更新**：检查 GitHub Releases 新版本；非 Docker 环境支持一键下载并自动替换程序文件；Docker 环境提示手动更新镜像；更新日志以 Markdown 格式渲染展示
+- **服务状态页**：持续探测各依赖服务（StripChat API、StripChat 浏览页、camgirlfinder、GitHub、各 CDN 域）的连通性与延时，ECG 式滚动曲线展示；探测走与生产相同的通道（代理 / ECH / 镜像按当前设置生效），直连与 ECH 双腿并列对比，提供商徽标按响应头自动识别
+- **资源占用页**：按进程树（主程序 / 模块 / ffmpeg / 其他，含模块唤起的子进程）实时统计 CPU、内存、PID、磁盘读写速率与 GPU 利用率及显存（Windows PDH / Linux fdinfo 采样），附系统网络收发卡与 CPU/内存/磁盘/网络/GPU 趋势图
+- **应用内通知面板**：主播改名与失效提醒、FFmpeg 安装/更新里程碑、版本更新提醒等事件入库展示
 - 录制文件页磁盘空间监控，剩余空间不足 5 GB 时高亮提示
 - 双运行模式：可作为 Tauri 桌面应用或无头服务器通过浏览器访问
 - 基于 SSE 的实时 UI 更新，支持多客户端同步
@@ -49,6 +56,7 @@
 services:
   stripchat-recorder:
     image: chantrail/stripchat-recorder:latest
+    # image: ghcr.io/chantrail/stripchat-recorder:latest  # GHCR 镜像，与 Docker Hub 同步发布，可按网络环境选用
     container_name: stripchat-recorder
     restart: unless-stopped
     environment:
@@ -70,9 +78,9 @@ services:
 docker compose up -d
 ```
 
-启动后在浏览器中打开 `http://localhost:3030`。首次访问时会进入设置向导，引导你完成语言选择、录制目录设置、网络代理配置和管理员密码设置。
+启动后在浏览器中打开 `http://localhost:3030`。首次访问时会进入设置向导，引导你完成语言选择、录制目录设置、网络代理配置、FFmpeg 来源检查和管理员密码设置。
 
-Docker 镜像默认以 Server 模式运行（端口 3030），配置写入挂载的 `config/settings.json`。镜像为多架构构建（`linux/amd64`、`linux/arm64`），x86 与 ARM64 主机均可直接拉取运行。
+Docker 镜像默认以 Server 模式运行（端口 3030），配置写入挂载的 `config/settings.json`。镜像为多架构构建（`linux/amd64`、`linux/arm64`），x86 与 ARM64 主机均可直接拉取运行。同一 tag 同时发布到 **Docker Hub**（`chantrail/stripchat-recorder`）与 **GHCR**（`ghcr.io/chantrail/stripchat-recorder`），内容一致，可按网络环境任选其一。
 
 ### docker run
 
@@ -91,6 +99,7 @@ docker run -d \
   -v ./data/meta:/app/stripchat-recorder/meta \
   -v ./data/config:/app/stripchat-recorder/config \
   chantrail/stripchat-recorder:latest
+# 使用 GHCR：将镜像名替换为 ghcr.io/chantrail/stripchat-recorder:latest
 ```
 
 ---
@@ -102,13 +111,14 @@ docker run -d \
 | 设置项                       | 说明                                                                                                          |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------- |
 | TS 流输出目录                | 录制产生的 TS 分片存放路径                                                                                    |
-| 最大并发录制数               | 同时录制的最大主播数，`0` 表示不限制                                                                          |
-| 后处理最大并发数             | 同时运行的后处理任务数；`0` 表示自动（= CPU 逻辑核心数 × 2）；手动设置时上限同为 CPU 逻辑核心数 × 2，可主动设置低于自动值以限制并发 |
-| 轮询间隔（秒）               | 检查主播是否上线的间隔，范围 10–300                                                                           |
+| 后处理最大并发数             | 同时运行的后处理任务数；`0` 表示自动（= CPU 逻辑核心数）；手动设置时上限同为 CPU 逻辑核心数，可主动设置低于自动值以压低天花板。实际并发会随系统负载自动下调，上限只是天花板 |
+| 轮询间隔（秒）               | 检查主播是否上线的基础间隔，范围 10–300；有历史在线规律数据的主播在低活跃时段会自适应拉长（上限 200 秒）以节省流量 |
 | 首选录制分辨率               | 目标录制画质（0 = 原始/最高画质），可设置画质不可用时的回退方向                                               |
+| 首选视频编码                 | 获取播放列表时附带 `preferredVideoCodec` 参数（H.264 / H.265 / AV1，默认由服务器决定）；H.265 / AV1 体积更小，但需播放器与后处理工具支持 |
 | 录制文件时长（秒）           | 每个分片文件的最长时长，`0` 表示不限制；可用于按时段切割长播录制                                             |
-| 上线自动录制                 | 新添加的主播是否默认开启自动录制                                                                              |
 | 后处理临时目录最大占用（GB） | 后处理模块运行时产生的临时文件上限，超出后自动删除最旧的文件；`0` 表示不限制，默认 50 GB                      |
+| FFmpeg 首选项                | 选择使用系统 PATH 中的 FFmpeg 还是程序目录 `tools` 文件夹中的 FFmpeg；未设置时启动后弹出选择向导 |
+| 空闲时自动更新 FFmpeg        | 定期检查并自动更新 `tools` 文件夹中由程序下载的 FFmpeg（无录制和后处理任务时执行），默认开启     |
 | 检查 beta 版本更新           | 是否同时检查预发布（beta）版本；beta 版本构建自动强制开启                                                  |
 
 ### 网络代理与镜像站
@@ -118,10 +128,14 @@ docker run -d \
 Stripchat 镜像站项目：<https://github.com/ChanTrail/StripchatMirror>
 
 1. **API 代理**：用于访问 Stripchat API；若同时填写镜像站，则通过该代理访问镜像站。
-2. **CDN 代理**：用于下载直播分片流，可与 API 代理分开设置。
-3. **Stripchat 镜像站**：用于替换请求中的 `stripchat.com` 域名。
-4. **社区模块代理**：用于下载社区模块文件，可独立配置。
-5. **社区模块加速镜像**：在 GitHub 地址前加前缀（如 `https://ghproxy.com`），加速模块下载。
+2. **Stripchat 镜像站**：用于替换请求中的 `stripchat.com` 域名，协议可选 http/https。
+3. **浏览页代理**：StripChat 浏览页列表/快照请求专用，与 API 代理相互独立，不影响录制与状态轮询。
+4. **浏览页镜像站**：StripChat 浏览页专用镜像站，与上方镜像站相互独立；同时填写浏览页代理时经该代理访问。
+5. **CDN 代理**：用于下载直播分片流，可与 API 代理分开设置。
+6. **社区模块代理**：用于下载社区模块文件，可独立配置。
+7. **社区模块加速镜像**：在 GitHub 地址前加前缀（如 `https://ghproxy.com`），加速模块下载；同时填写社区代理时经该代理访问加速站。
+8. **camgirlfinder 代理**：后端获取主播历史在线规律（schedule）时使用；主播查找页的人脸/名字搜索为纯前端功能，不经此代理。
+9. **ECH（加密 ClientHello）**：开启后 StripChat API 请求的 TLS ClientHello 被加密以隐藏真实 SNI，可能改善 API 返回 403 的情况；不可路由或解析失败时自动回退普通连接。CDN 分片流量直取优先，仅在全部直连失败后的兜底竞速中带 ECH 腿。默认关闭。
 
 ### 管理员认证
 
@@ -172,7 +186,7 @@ http://localhost:3030/stream/{modelname}
 
 ### Desktop 端模块安装路径
 
-Desktop 端安装包（NSIS/MSI、AppImage、deb/rpm、dmg）不把模块放在程序安装目录下。请将下载的 `modules-{platform}.zip` 解压到每用户数据目录的 `modules` 子目录：
+Desktop 端安装包（NSIS、AppImage、deb、dmg）不把模块放在程序安装目录下。请将下载的 `modules-{platform}.zip` 解压到每用户数据目录的 `modules` 子目录：
 
 | 平台    | 路径                                                                              |
 | ------- | --------------------------------------------------------------------------------- |
@@ -190,8 +204,9 @@ Desktop 端安装包（NSIS/MSI、AppImage、deb/rpm、dmg）不把模块放在�
 
 - **查找顺序**：启动时先检查 `tools` 文件夹（Server 为程序目录下；Desktop 为与 `modules` 相同的每用户数据目录下），再在系统 PATH 中查找。`tools` 中的副本优先于 PATH。
 - **自动下载**：两处都找不到时，自动从 [FFmpeg-Builds-Full](https://github.com/ChanTrail/FFmpeg-Builds-Full) 下载预编译静态构建（约 130–210 MB，Windows 为 7z 固实压缩包，Linux/macOS 为 tar.xz）到 `tools` 文件夹，下载进度以 toast 提示（支持 Windows x86_64/ARM64、Linux x86_64/ARM64、macOS ARM64）。
-- **空闲自动更新**：下载的副本会在没有录制和后处理任务运行时自动更新到最新版本（设置项「空闲时自动更新 FFmpeg」，默认开启）。PATH 中的 FFmpeg，以及手动放入 `tools`、没有 `ffmpeg-build.json` 标记文件的 FFmpeg 都不会被替换。
-- **Docker 镜像**已内置 ffmpeg，无需任何额外操作。
+- **FFmpeg 首选项**：尚未选择来源时（如旧版本升级后 `ffmpeg_preference` 为空），启动后会弹出选择向导，列出各位置检测结果供指定使用系统 PATH 还是 `tools` 文件夹中的 FFmpeg，也可在设置页随时修改；选择 PATH 来源时自动更新功能停用。
+- **空闲自动更新**：下载的副本会在没有录制和后处理任务运行时自动更新到最新版本（设置项「空闲时自动更新 FFmpeg」，默认开启；程序启动即检查一次）。PATH 中的 FFmpeg，以及手动放入 `tools`、没有 `ffmpeg-build.json` 标记文件的 FFmpeg 都不会被替换。检测到新版、开始安装、完成/失败等里程碑会写入应用内通知面板。
+- **Docker 镜像**已内置 FFmpeg-Builds-Full 自编译静态构建（位于 `tools/` 并带 `ffmpeg-build.json` 安装标记，容器内同样参与空闲自动更新；不占用容器 PATH），无需任何额外操作。
 
 ---
 
@@ -206,7 +221,8 @@ Desktop 端安装包（NSIS/MSI、AppImage、deb/rpm、dmg）不把模块放在�
 1. 选择界面语言
 2. 设置录制输出目录
 3. 配置网络代理（可选）
-4. 设置管理员密码
+4. FFmpeg 检查（选择来源位置；`tools` 缺失时可就地触发下载，进度内联显示）
+5. 设置管理员密码
 
 配置完成后写入 `config/settings.json`，下次启动直接读取，不再弹出配置向导。
 

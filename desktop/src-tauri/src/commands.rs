@@ -251,6 +251,45 @@ pub async fn list_sc_models(
     .map_err(map_err)
 }
 
+/// 用系统媒体播放器打开指定主播的转发流：懒启动 `127.0.0.1:0` 上仅含
+/// `/{modelname}` 的转发监听（`relay_port` OnceCell 缓存端口），再按平台
+/// 探测并拉起本地播放器（mpv/VLC/PotPlayer/IINA 等）。播放器连上
+/// `/stream/{username}` 时按 `stream_handler` 既有逻辑按需拉起 worker。
+/// 未找到可用播放器时返回 `no_player` 标记，由前端给出本地化提示。
+///
+/// Open the streamer's relay stream in the system media player: lazily
+/// starts the `127.0.0.1:0` listener carrying only `/{modelname}` (the port
+/// is cached in `relay_port`), then probes for and launches a local player
+/// per platform (mpv/VLC/PotPlayer/IINA etc.). The player's own connection
+/// to `/stream/{username}` spawns the worker via `stream_handler`'s
+/// existing on-demand logic. Returns the `no_player` marker when no usable
+/// player is found so the frontend can show a localized hint.
+///
+/// ## 参数 / Parameters
+/// - `username`：主播用户名 / streamer username
+#[tauri::command]
+pub async fn open_relay_stream(
+    username: String,
+    state: State<'_, DesktopState>,
+) -> CmdResult<serde_json::Value> {
+    let relay_state = stripchat_recorder_lib::relay::handler::RelayState {
+        app_state: Arc::clone(&state.app_state),
+        relay_manager: Arc::clone(&state.relay_manager),
+    };
+    let port = *state
+        .relay_port
+        .get_or_try_init(|| async {
+            stripchat_recorder_lib::relay::start_stream_listener(relay_state)
+                .await
+                .map_err(|e| e.to_string())
+        })
+        .await?;
+    let url = format!("http://127.0.0.1:{port}/stream/{username}");
+    let player = stripchat_recorder_lib::relay::player::open_in_media_player(&url)
+        .map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({ "url": url, "player": player }))
+}
+
 // ─── Settings ─────────────────────────────────────────────────────────────────
 
 #[tauri::command]

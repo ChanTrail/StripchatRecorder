@@ -15,7 +15,7 @@
  */
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { Check, Eye, EyeOff, Loader2, Plus, Users } from "@lucide/vue";
+import { Check, Eye, EyeOff, Loader2, Plus, Users, Vibrate } from "@lucide/vue";
 import { call } from "@/lib/api";
 import { toast } from "@/composables/useNotify";
 import { useStreamersStore } from "@/stores/streamers";
@@ -45,6 +45,7 @@ interface ScModel {
 	is_vr: boolean;
 	is_mobile: boolean;
 	is_non_nude: boolean;
+	has_toy: boolean;
 	preview: string | null;
 	avatar: string | null;
 	gender_group: string;
@@ -494,6 +495,11 @@ onUnmounted(() => observer?.disconnect());
 
 					<!-- 右上：徽标 / Top-right: badges -->
 					<div class="absolute right-2 top-2 flex gap-1">
+						<span
+							v-if="m.has_toy"
+							class="flex items-center gap-0.5 rounded bg-pink-600/90 px-1.5 py-0.5 text-[10px] font-semibold text-white"
+							:title="t('stripchat.toy')"
+						><Vibrate class="h-3 w-3" />TOY</span>
 						<span
 							v-if="m.is_new"
 							class="rounded bg-emerald-600/90 px-1.5 py-0.5 text-[10px] font-semibold text-white"

@@ -13,6 +13,7 @@ Translations are loaded from **JSON files on disk** rather than being compiled i
 ```
 <exe_dir>/
 └── locale/
+    ├── .builtin-state.json         # Managed state for built-in files (content fingerprints, maintained by the program)
     ├── app/                        # Main application translations
     │   ├── zh-CN.json              # Simplified Chinese (default)
     │   └── en-US.json              # English
@@ -40,9 +41,11 @@ Translations are loaded from **JSON files on disk** rather than being compiled i
             └── en-US.json
 ```
 
-> **Note:** Files are created automatically on first run. If a file already exists it is **never overwritten**, so your customizations are preserved across restarts and updates.
+> **Note:** Files are created automatically on first run. **Built-in locale files** (`app/`, `log/`, `modules/<builtin_id>/`) are fingerprint-versioned: the program records a content fingerprint of every file it writes in `locale/.builtin-state.json` — a built-in file you have **not** modified is refreshed automatically when an upgrade ships new default text; a file you **have** modified is recognized as customized (fingerprint mismatch → marked `"custom"`) and is **never overwritten**. Files you create yourself (third-party module folders, custom locale codes) are unmanaged and likewise never overwritten.
 >
-> Exception: if a built-in locale file (`app/`, `log/`, `modules/<builtin_id>/`) exists but fails JSON validation, the program automatically rebuilds it with default content. Custom locale files (third-party modules or custom locale codes) only log a warning on validation failure and are not rebuilt.
+> Exception: if a built-in locale file exists but fails JSON validation, the program backs it up first (`xxx.json.bak`, timestamped when the name is taken) and then rebuilds it with default content. Custom locale files only log a warning on validation failure and are not rebuilt.
+>
+> On the first run of this mechanism after upgrading from an older version: existing files without a fingerprint record are claimed when identical to the default; when they differ it is impossible to tell "stale default" from "user customization", so the file is backed up to `.bak` and refreshed to the new default — recover any manual edits from the backup.
 
 ---
 
@@ -130,17 +133,21 @@ The `__builtin__` module locale file uses a **per-node nested structure**, unlik
 | `addStreamer`    | Add streamer dialog                                           |
 | `recordings`     | Recordings page                                               |
 | `postprocess`    | Post-processing pipeline page                                 |
-| `relay`          | Relay streams page                                            |
 | `finder`         | Streamer finder page                                          |
+| `statusPage`     | Service status page                                           |
+| `usagePage`      | Resource usage page                                           |
 | `settings`       | Settings page                                                 |
 | `usePostprocess` | Post-processing task status messages                          |
+| `relay`          | Relay streams page                                            |
 | `setup`          | First-launch setup wizard                                     |
 | `login`          | Login page (password input, initial password setup)           |
 | `notifications`  | In-app notification panel                                     |
+| `dirBrowser`     | Directory picker dialog                                       |
+| `streamers`      | Streamer event messages (rename notifications, API errors…)  |
+| `stripchat`      | StripChat browse page                                         |
 | `community`      | Community module marketplace page                             |
 | `about`          | About page (version info, update check)                       |
-| `streamers`      | Streamer event messages (rename notifications, API errors…)  |
-| `dirBrowser`     | Directory picker dialog                                       |
+| `ffmpeg`         | FFmpeg download progress and preference wizard                |
 
 Interpolation variables use the `{variableName}` format. Always keep placeholders as-is when translating:
 

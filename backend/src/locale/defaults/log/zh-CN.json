@@ -52,7 +52,8 @@
     "liveIdle": "Relay 直播 [{username}]：空闲，停止",
     "livePollFailed": "Relay 直播 [{username}]：轮询失败（{cur}/{max}）：{error}",
     "liveSegmentFailed": "Relay：主播 {username} 的分片 {seq} 下载失败：{error}",
-    "liveTailNotPublished": "Relay：主播 {username} 清单最后一条分片 {seq} 尚未发布（404），留待下一轮按序下载"
+    "liveTailNotPublished": "Relay：主播 {username} 清单最后一条分片 {seq} 尚未发布（404），留待下一轮按序下载",
+    "openInPlayer": "用播放器 {player} 打开转发流：{url}"
   },
   "monitor": {
     "apiClientFailed": "创建 API 客户端失败：{error}",

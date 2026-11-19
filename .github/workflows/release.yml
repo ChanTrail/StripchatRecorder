@@ -524,9 +524,11 @@ jobs:
           if [ -n "$PREV" ]; then CHANGELOG="**Full Changelog**: https://github.com/${REPO}/compare/${PREV}...${TAG}"; else CHANGELOG=""; fi
 
           {
-            echo "# StripchatRecorder ${TAG} 构建 / Build"
-            echo
-            echo "直播录制工具 StripchatRecorder \`${TAG}\` 版本构建：桌面端、服务端包、后处理模块与多架构 Docker 镜像。"
+            # 不写 H1 标题——release name（StripchatRecorder {TAG} 构建 /
+            # Build）即页面标题，body 内再写一遍会重复 / No H1 here —
+            # the release name (… 构建 / Build) is already the page title;
+            # repeating it inside the body would duplicate it
+            echo "StripchatRecorder \`${TAG}\` 版本构建：桌面端、服务端包、后处理模块与多架构 Docker 镜像。"
             echo "<br>StripchatRecorder \`${TAG}\` build — desktop app, server bundles, post-process modules and multi-arch Docker images."
             echo
             echo "| 产物 Artifact | windows-x86_64 | windows-arm64 | linux-x86_64 | linux-arm64 | macos-arm64 |"

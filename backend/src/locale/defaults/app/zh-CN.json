@@ -799,6 +799,10 @@
     "end": "已到底部",
     "empty": "该分类暂无主播",
     "error": "加载失败：{message}",
+    "toy": "互动玩具",
+    "play": "用系统播放器播放转发流",
+    "playFailed": "唤起播放器失败：{message}",
+    "noPlayer": "未找到可用的播放器，请安装 VLC、mpv 或 PotPlayer",
     "status": {
       "public": "公开秀",
       "private": "私密秀",

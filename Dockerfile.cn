@@ -1,7 +1,7 @@
 FROM debian:latest AS builder
 
 LABEL maintainer="chantrail@chantrail.com" \
-      version="0.4.9-beta" \
+      version="0.4.10-beta" \
       description="Stripchat Recorder Docker builder"
 
 RUN sed -i 's/deb.debian.org/mirrors.ustc.edu.cn/g' /etc/apt/sources.list.d/debian.sources
@@ -97,7 +97,7 @@ RUN set -eux; \
 FROM debian:latest
 
 LABEL maintainer="chantrail@chantrail.com" \
-      version="0.4.9-beta" \
+      version="0.4.10-beta" \
       description="Stripchat Recorder"
 
 RUN sed -i 's/deb.debian.org/mirrors.ustc.edu.cn/g' /etc/apt/sources.list.d/debian.sources

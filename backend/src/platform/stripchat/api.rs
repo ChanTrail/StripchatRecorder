@@ -431,6 +431,10 @@ impl StripchatApi {
                             "is_vr": m["isVr"],
                             "is_mobile": m["isMobile"],
                             "is_non_nude": m["isNonNude"],
+                            // 互动玩具：上游 isLovense / isKiiroo 任一即视为有玩具
+                            // Interactive toy: upstream isLovense or isKiiroo both count
+                            "has_toy": m["isLovense"].as_bool().unwrap_or(false)
+                                || m["isKiiroo"].as_bool().unwrap_or(false),
                             "preview": preview,
                             "avatar": m["avatarUrl"],
                             "gender_group": m["genderGroup"],

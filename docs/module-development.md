@@ -640,10 +640,10 @@ Desktop 端的模块安装到每用户数据目录的 `modules` 子目录：
 | 模块 ID           | 输入类型         | 输出类型          | 说明                                                                              |
 | ----------------- | ---------------- | ----------------- | --------------------------------------------------------------------------------- |
 | `ts_merge`        | `ts_session_dir` | `video_file`      | 将 TS 分片目录合并为单一视频文件，**官方流水线的首节点**，其他模块应置于其后     |
-| `filter_short`    | `any_file`       | `any_file`        | 请求主程序删除时长低于阈值的视频，支持 `dry_run` 预览模式                        |
+| `filter_short`    | `video_file`     | `video_file`      | 删除时长低于阈值的视频并使流水线在此终止，支持 `dry_run` 预览模式                |
 | `contact_sheet`   | `video_file`     | `media_bundle`    | 按指定间隔截帧，拼合成带时间戳预览图，输出 media_bundle（视频路径 + 图片路径）    |
-| `notify_discord`  | `any_file`       | `any_file`        | 将录制信息和封面图通过 Webhook 发送到 Discord，支持 HTTP/SOCKS5 代理              |
-| `notify_telegram` | `any_file`       | `any_file`        | 通过 MTProto 向 Telegram 发送录制信息、封面图和视频，支持 >2GB 文件自动分割      |
+| `notify_discord`  | `media_bundle`   | `media_bundle`    | 将录制信息和封面图通过 Webhook 发送到 Discord，支持 HTTP/SOCKS5 代理              |
+| `notify_telegram` | `media_bundle`   | `media_bundle`    | 通过 MTProto 向 Telegram 发送录制信息、封面图和视频，支持 >2GB 文件自动分割      |
 | `cleanup`         | `any_file`       | —（流水线终止）   | 清理本次录制相关文件：可选删除视频/预览图/meta 记录，以及其他模块产生的临时缓存  |
 
 > **内置 DAG 节点**（不是可执行文件，由后端直接处理）：
@@ -688,15 +688,15 @@ Desktop 端的模块安装到每用户数据目录的 `modules` 子目录：
 
 ### notify_telegram 参数
 
-| 参数         | 类型    | 默认值  | 说明                                              |
-| ------------ | ------- | ------- | ------------------------------------------------- |
-| `api_id`     | string  | `""`    | Telegram API ID（从 my.telegram.org 获取，必填）  |
-| `api_hash`   | string  | `""`    | Telegram API Hash（必填）                         |
-| `bot_token`  | string  | `""`    | Bot Token（从 @BotFather 获取，必填）             |
-| `chat_id`    | string  | `""`    | Chat ID，超级群组格式为 `-100xxxxxxxxxx`（必填）  |
-| `username`   | string  | `""`    | 群组 Username，超级群组必填（不含 `@`）           |
-| `proxy`      | string  | `""`    | 代理地址，支持 `http://`、`socks5://`             |
-| `send_video` | boolean | `true`  | 是否同时发送视频文件                              |
+| 参数         | 类型    | 默认值  | 说明                                                                              |
+| ------------ | ------- | ------- | --------------------------------------------------------------------------------- |
+| `api_id`     | string  | `""`    | Telegram API ID（从 my.telegram.org 获取，必填）                                  |
+| `api_hash`   | string  | `""`    | Telegram API Hash（必填）                                                         |
+| `bot_token`  | string  | `""`    | Bot Token（从 @BotFather 获取，必填）                                             |
+| `chat_id`    | string  | `""`    | Chat ID，私密群组/频道填写（超级群组格式为 `-100xxxxxxxxxx`）                     |
+| `username`   | string  | `""`    | 公开群组/频道 Username（不含 `@`）；`username` 与 `chat_id` 至少填一个，都填时优先 `username` |
+| `proxy`      | string  | `""`    | 代理地址，支持 `http://`、`socks5://`                                             |
+| `send_video` | boolean | `true`  | 是否同时发送视频文件                                                              |
 
 ### cleanup 参数
 

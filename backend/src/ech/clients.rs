@@ -145,6 +145,24 @@ fn borrowed_slot() -> &'static Mutex<BorrowSlot> {
     SLOT.get_or_init(|| Mutex::new(BorrowSlot::Empty))
 }
 
+/// 进程级按主机驱逐计数：403/连接错误每驱逐一次 +1，`resolve_slow` 重建
+/// 时把钉接地址左旋该计数——同列表同序重建只会让新连接落回刚才失败
+/// 的那条边缘（403 原样复发），轮换后首选另一条任播 IP，才是真正的
+/// 边缘重掷。跨实例共享（与 `borrowed_slot` 同理）：relay worker、监控
+/// 等各自持有独立条目缓存，但任一处驱逐后，其它实例下次重建也换边。
+/// Process-global per-host eviction counter: +1 per 403/connect-error
+/// eviction; `resolve_slow` left-rotates the pinned addrs by this count on
+/// rebuild — rebuilding with the same addr order lands the fresh conn on
+/// the same failing edge (the 403 recurs), while rotation prefers another
+/// anycast IP, a real edge re-roll. Shared across instances (like
+/// `borrowed_slot`): relay workers, the monitor etc. keep separate entry
+/// caches, but a strike recorded anywhere rotates everyone's next rebuild.
+fn edge_strikes() -> &'static Mutex<HashMap<String, usize>> {
+    static MAP: std::sync::OnceLock<Mutex<HashMap<String, usize>>> =
+        std::sync::OnceLock::new();
+    MAP.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
 /// 进程级「借用刷新在飞」标志：多个 EchClients 实例/并发 client_for
 /// 同时发现借用过期时只允许一个后台刷新 / Process-global "borrowed
 /// refresh in flight" flag — only one background refresh may run even
@@ -355,6 +373,19 @@ impl EchClients {
             addrs: borrowed.addrs.clone(),
             tls,
         };
+        // 驱逐后重建：按打击计数轮换钉接地址顺序，新连接与探活都首选另
+        // 一条任播 IP——否则同序重连只会落回刚才 403/失败的那条边缘。
+        // 借用刷新后地址表变了也无妨，取模轮换只是换个起点。
+        // Post-eviction rebuild: rotate the pinned addr order by the strike
+        // count so both the probe and the fresh conn prefer another anycast
+        // IP — same-order reconnects would land right back on the edge that
+        // just 403'd/failed. A changed addr list after a borrow refresh is
+        // harmless: the modulo rotation simply picks a different start.
+        let strikes = *edge_strikes().lock().await.get(host).unwrap_or(&0);
+        let addr_count = target.addrs.len();
+        if strikes > 0 && addr_count > 1 {
+            target.addrs.rotate_left(strikes % addr_count);
+        }
         // 最多两轮：ECH 被拒且服务端附了 retry_configs（密钥轮换）时，就地
         // 换密钥重建客户端再探一次 / Up to two rounds: when ECH is rejected
         // with server retry_configs (key rotation), swap keys in place,
@@ -587,6 +618,10 @@ impl EchClients {
         let mut map = self.map.lock().await;
         if matches!(map.get(&host), Some(e) if e.client.is_some()) {
             map.remove(&host);
+            // 记一次打击：重建时轮换钉接地址，别落回同一条边缘 /
+            // record a strike so the rebuild rotates pinned addrs off the
+            // same edge
+            *edge_strikes().lock().await.entry(host).or_default() += 1;
         }
     }
 
@@ -620,17 +655,20 @@ impl EchClients {
     /// show the block is keyed on the CF edge node the connection landed
     /// on — conns from the same egress land on different edges with
     /// different hit rates, and an ECH long-lived conn on a bad edge
-    /// keeps 403ing until rebuilt. So the entry is evicted: the next
-    /// client_for re-probes and opens a fresh connection (a new edge
-    /// lottery) instead of demoting to the plain path (which blocks even
-    /// more). Only acts when the host actually holds an ECH client; 403s
-    /// on the plain path change nothing.
+    /// keeps 403ing until rebuilt. So the entry is evicted plus a strike
+    /// recorded: the next client_for rebuild rotates the pinned addr order
+    /// so the fresh conn prefers another anycast IP (a real edge re-roll —
+    /// same-order rebuilds just landed back on the same 403ing edge),
+    /// rather than demoting to the plain path (which blocks even more).
+    /// Only acts when the host actually holds an ECH client; 403s on the
+    /// plain path change nothing.
     pub async fn note_forbidden(&self, host: &str) -> bool {
         let host = host.to_ascii_lowercase();
         let mut map = self.map.lock().await;
         if matches!(map.get(&host), Some(e) if e.client.is_some()) {
             tracing::warn!("{}", crate::tl!("ech.forbiddenOverEch", host = host));
             map.remove(&host);
+            *edge_strikes().lock().await.entry(host).or_default() += 1;
             true
         } else {
             false
