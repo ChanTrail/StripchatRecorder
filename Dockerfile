@@ -1,7 +1,7 @@
 FROM debian:latest AS builder
 
 LABEL maintainer="chantrail@chantrail.com" \
-      version="0.4.10-beta" \
+      version="0.4.11-beta" \
       description="Stripchat Recorder Docker builder"
 
 RUN apt-get update && apt-get install -y \
@@ -88,7 +88,7 @@ RUN set -eux; \
 FROM debian:latest
 
 LABEL maintainer="chantrail@chantrail.com" \
-      version="0.4.10-beta" \
+      version="0.4.11-beta" \
       description="Stripchat Recorder"
 
 RUN apt-get update && apt-get install -y \

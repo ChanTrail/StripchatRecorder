@@ -210,6 +210,19 @@ fn run() -> Result<serde_json::Value, String> {
         .spawn()
         .map_err(|e| format!("Failed to spawn ffmpeg: {}", e))?;
 
+    // 并发排干 stderr：既防 ffmpeg 写满管道阻塞，又能在失败时把尾部日志
+    // 附进错误消息（以往只报 "exited with ..."，ffmpeg 自身输出全丢）
+    // Drain stderr concurrently: prevents ffmpeg blocking on a full pipe and
+    // lets the error message carry its log tail (previously only "exited
+    // with ..." was reported, discarding everything ffmpeg itself printed)
+    let stderr_drain = child.stderr.take().map(|mut stderr| {
+        std::thread::spawn(move || {
+            let mut buf = String::new();
+            let _ = stderr.read_to_string(&mut buf);
+            buf
+        })
+    });
+
     // 读取 ffmpeg -progress 输出行，按 total_size 估算进度
     // Read ffmpeg -progress output lines, estimate progress from total_size
     {
@@ -236,7 +249,18 @@ fn run() -> Result<serde_json::Value, String> {
     let status = child.wait().map_err(|e| format!("ffmpeg wait failed: {}", e))?;
 
     if !status.success() {
-        return Err(format!("ffmpeg exited with {}", status));
+        // 取 stderr 尾部几行进错误消息，定位崩溃/拒绝原因
+        // Append the last few stderr lines to the error for root-cause hints
+        let stderr_text = stderr_drain
+            .and_then(|h| h.join().ok())
+            .unwrap_or_default();
+        let tail: Vec<&str> = stderr_text.trim().lines().rev().take(6).collect();
+        let tail = tail.into_iter().rev().collect::<Vec<_>>().join(" | ");
+        return Err(if tail.is_empty() {
+            format!("ffmpeg exited with {}", status)
+        } else {
+            format!("ffmpeg exited with {}: {}", status, tail)
+        });
     }
 
     // 验证输出文件存在 / Verify output file exists

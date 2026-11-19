@@ -186,7 +186,7 @@ http://localhost:3030/stream/{modelname}
 
 ### Desktop 端模块安装路径
 
-Desktop 端安装包（NSIS、AppImage、deb、dmg）不把模块放在程序安装目录下。请将下载的 `modules-{platform}.zip` 解压到每用户数据目录的 `modules` 子目录：
+Desktop 端安装包（NSIS、deb、dmg）不把模块放在程序安装目录下。请将下载的 `modules-{platform}.zip` 解压到每用户数据目录的 `modules` 子目录：
 
 | 平台    | 路径                                                                              |
 | ------- | --------------------------------------------------------------------------------- |
@@ -196,13 +196,15 @@ Desktop 端安装包（NSIS、AppImage、deb、dmg）不把模块放在程序安
 
 目录不存在时可手动创建；应用启动后会自动监控该目录，新增/删除模块无需重启。
 
+**便携版（Windows `*-portable.zip`、Linux AppImage）**：数据目录跟随程序本体——`config/`、`modules/`、`tools/` 等都在可执行文件（Windows 为 exe 同目录、AppImage 为 .AppImage 文件所在目录）旁边，模块直接放进旁边的 `modules/` 即可。Windows 便携 zip 已内含模块。首次运行时若旧安装版的每用户数据目录里已有 `config/`、`locale/`、`modules/`，会自动迁移过来（仅当便携目录中对应目录不存在）。
+
 ---
 
 ## FFmpeg 自动管理
 
 程序依赖 ffmpeg 与 ffprobe，按以下顺序自动管理，通常无需手动安装：
 
-- **查找顺序**：启动时先检查 `tools` 文件夹（Server 为程序目录下；Desktop 为与 `modules` 相同的每用户数据目录下），再在系统 PATH 中查找。`tools` 中的副本优先于 PATH。
+- **查找顺序**：启动时先检查 `tools` 文件夹（Server 为程序目录下；Desktop 为与 `modules` 相同的数据根目录下——安装版是每用户数据目录，便携版/AppImage 是程序本体所在目录），再在系统 PATH 中查找。`tools` 中的副本优先于 PATH。
 - **自动下载**：两处都找不到时，自动从 [FFmpeg-Builds-Full](https://github.com/ChanTrail/FFmpeg-Builds-Full) 下载预编译静态构建（约 130–210 MB，Windows 为 7z 固实压缩包，Linux/macOS 为 tar.xz）到 `tools` 文件夹，下载进度以 toast 提示（支持 Windows x86_64/ARM64、Linux x86_64/ARM64、macOS ARM64）。
 - **FFmpeg 首选项**：尚未选择来源时（如旧版本升级后 `ffmpeg_preference` 为空），启动后会弹出选择向导，列出各位置检测结果供指定使用系统 PATH 还是 `tools` 文件夹中的 FFmpeg，也可在设置页随时修改；选择 PATH 来源时自动更新功能停用。
 - **空闲自动更新**：下载的副本会在没有录制和后处理任务运行时自动更新到最新版本（设置项「空闲时自动更新 FFmpeg」，默认开启；程序启动即检查一次）。PATH 中的 FFmpeg，以及手动放入 `tools`、没有 `ffmpeg-build.json` 标记文件的 FFmpeg 都不会被替换。检测到新版、开始安装、完成/失败等里程碑会写入应用内通知面板。

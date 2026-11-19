@@ -58,6 +58,8 @@ export interface Settings {
 	community_terms_accepted: boolean;
 	/** 首次启动向导是否已完成 / Whether the first-launch setup wizard has been completed */
 	setup_done: boolean;
+	/** 用户显式选择"无密码"模式（true = 免登录直接进首页；设置密码后后端自动复位 false）/ Whether the user explicitly opted into no-password mode (true = enter without login; auto-reset to false by the backend once a password is set) */
+	admin_password_disabled: boolean;
 	/** 后处理最大并发数（0 = 自动 = CPU 逻辑核心数 × 2；≥1 = 固定，上限 CPU × 2）/ Max concurrent post-processing tasks (0 = auto = logical CPU count × 2; ≥1 = fixed, capped at CPU × 2) */
 	max_pp_concurrent: number;
 	/** 是否检查预发布（beta/rc）版本更新 / Whether to check for pre-release (beta/rc) updates */
@@ -110,6 +112,7 @@ export const useSettingsStore = defineStore("settings", () => {
 		community_mirror_url: null,
 		community_terms_accepted: false,
 		setup_done: false,
+		admin_password_disabled: false,
 		max_pp_concurrent: 0,
 		check_prerelease: false,
 		ffmpeg_auto_update: true,

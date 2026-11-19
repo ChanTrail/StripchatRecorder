@@ -425,15 +425,43 @@ impl AppState {
     }
 
     /// 将明文密码哈希后保存。使用 Argon2id 默认参数。
-    /// Hash the given plaintext password and persist it. Uses Argon2id default params.
+    /// 设置密码即退出无密码模式（`admin_password_disabled` 复位）。
+    ///
+    /// Hash the given plaintext password and persist it. Uses Argon2id default
+    /// params. Setting a password also exits no-password mode
+    /// (`admin_password_disabled` resets to false).
     pub fn set_admin_password(&self, password: &str) -> Result<()> {
         use argon2::{Argon2, password_hash::PasswordHasher};
         let hash = Argon2::default()
             .hash_password(password.as_bytes())
             .map_err(|e| AppError::Other(format!("密码哈希失败: {e}")))?
             .to_string();
-        self.data.write().settings.admin_password_hash = Some(hash);
+        let mut data = self.data.write();
+        data.settings.admin_password_hash = Some(hash);
+        data.settings.admin_password_disabled = false;
+        drop(data);
         self.save()
+    }
+
+    /// 清除管理员密码并标记无密码模式（`admin_password_disabled = true`）——
+    /// 之后鉴权中间件整体放行，前端路由直接进首页而非登录页。
+    ///
+    /// Clear the admin password and flag no-password mode
+    /// (`admin_password_disabled = true`) — the auth middleware then passes
+    /// every request and the frontend router goes straight to home instead
+    /// of the login page.
+    pub fn clear_admin_password(&self) -> Result<()> {
+        let mut data = self.data.write();
+        data.settings.admin_password_hash = None;
+        data.settings.admin_password_disabled = true;
+        drop(data);
+        self.save()
+    }
+
+    /// 返回用户是否显式选择了无密码模式。
+    /// Returns whether the user explicitly opted into no-password mode.
+    pub fn admin_password_disabled(&self) -> bool {
+        self.data.read().settings.admin_password_disabled
     }
 
     /// 验证明文密码是否与存储的哈希匹配。

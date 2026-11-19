@@ -74,11 +74,53 @@ const DESKTOP_MODULES_OUT = path.join(DESKTOP_BUILD_OUT, "modules");
 buildModules("release", DESKTOP_MODULES_OUT, null, platform);
 
 // ── Step 4: Tauri 构建 / Tauri build ─────────────────────────────────────────
-step(4, TOTAL, "Building desktop (tauri build) → build_tmp/desktop/target/");
-run("npx tauri build", {
-  cwd: DESKTOP,
-  env: { ...process.env, CARGO_TARGET_DIR: DESKTOP_TARGET },
-});
+// TAURI_BUILD_VARIANTS：分号分隔的多组 tauri build 参数，每组触发一次
+// `npx tauri build <args>`；字面量 "default" 表示无参默认构建。缺省只构建一次
+// （原行为）。用于同平台产出不同变体，例如 Windows 安装包 + 便携版：
+//   "--bundles nsis;--no-bundle -- --features portable"
+// Linux 则借它让 AppImage 单独走 portable feature（deb 保持安装版）：
+//   "--bundles deb;--bundles appimage -- --features portable"
+//
+// TAURI_BUILD_VARIANTS: semicolon-separated sets of `tauri build` args, each
+// triggering one `npx tauri build <args>`; the literal "default" means a plain
+// no-arg build. Defaults to a single build (the old behavior). Lets one
+// platform emit multiple variants, e.g. Windows installer + portable:
+//   "--bundles nsis;--no-bundle -- --features portable"
+// On Linux this builds the AppImage alone with the portable feature while deb
+// stays an installed build:
+//   "--bundles deb;--bundles appimage -- --features portable"
+const variants = (process.env.TAURI_BUILD_VARIANTS || "default")
+  .split(";")
+  .map((s) => s.trim())
+  .filter(Boolean);
+step(4, TOTAL, `Building desktop (tauri build ×${variants.length}) → build_tmp/desktop/target/`);
+for (const variant of variants) {
+  const args = variant === "default" ? "" : ` ${variant}`;
+  console.log(`  → npx tauri build${args || " (default)"}`);
+  run(`npx tauri build${args}`, {
+    cwd: DESKTOP,
+    env: { ...process.env, CARGO_TARGET_DIR: DESKTOP_TARGET },
+  });
+
+  // --no-bundle 变体构建后立即收集裸二进制到 build/desktop/portable/
+  // （在循环内按参数判断，与变体顺序无关；cleanup 删 build_tmp 之前完成）。
+  // DESKTOP_COLLECT_NO_BUNDLE=1 时启用。二进制名 = Cargo 包名。
+  //
+  // Right after a --no-bundle variant, collect the bare binary into
+  // build/desktop/portable/ (detected from the args inside the loop, so variant
+  // order doesn't matter; still before cleanup removes build_tmp). Enabled by
+  // DESKTOP_COLLECT_NO_BUNDLE=1. Binary name = the Cargo package name.
+  if (args.includes("--no-bundle") && process.env.DESKTOP_COLLECT_NO_BUNDLE === "1") {
+    const cargoToml = fs.readFileSync(path.join(DESKTOP, "src-tauri", "Cargo.toml"), "utf8");
+    const pkgName = (cargoToml.match(/^\s*name\s*=\s*"([^"]+)"/m) || [])[1];
+    const binName = `${pkgName}${process.platform === "win32" ? ".exe" : ""}`;
+    const binSrc = path.join(DESKTOP_TARGET, "release", binName);
+    const portableOut = path.join(DESKTOP_BUILD_OUT, "portable");
+    fs.mkdirSync(portableOut, { recursive: true });
+    fs.copyFileSync(binSrc, path.join(portableOut, binName));
+    console.log(`  ✓ build/desktop/portable/${binName}`);
+  }
+}
 
 // ── Step 5: 收集 bundle 产物 / Collect bundle artifacts ──────────────────────
 step(5, TOTAL, "Collecting bundle artifacts → build/desktop/");

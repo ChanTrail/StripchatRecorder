@@ -626,6 +626,7 @@
     "passwordStrengthHint": "至少 6 位 · 包含字母 · 包含数字 · 包含特殊字符（如 !#$%）",
     "wrongPassword": "密码错误，请重试",
     "statusFetchFailed": "无法连接到服务器，请刷新重试",
+    "continueWithoutPassword": "不设置密码，直接进入（仅限可信环境）",
     "changePassword": {
       "title": "修改密码",
       "oldLabel": "当前密码",
@@ -636,6 +637,19 @@
       "submitting": "修改中…",
       "success": "密码已修改，请重新登录",
       "wrongOld": "当前密码错误"
+    },
+    "removePassword": {
+      "submit": "移除密码",
+      "submitting": "移除中…",
+      "success": "已移除密码，此后访问免登录",
+      "dialogTitle": "移除管理员密码",
+      "dialogDesc": "移除后无需登录即可访问管理界面，请确认当前环境可信。输入当前密码以确认操作。"
+    },
+    "setPassword": {
+      "noPasswordHint": "当前处于无密码模式，任何人都能访问管理界面。设置密码后将恢复登录保护。",
+      "newLabel": "新密码",
+      "submit": "设置密码",
+      "submitting": "设置中…"
     }
   },
   "setup": {
@@ -669,7 +683,8 @@
       "title": "设置管理员密码",
       "desc": "设置一个访问管理界面的密码（至少 6 位），之后每次访问都需要输入此密码",
       "placeholder": "请输入密码（至少 6 位）",
-      "hint": "此密码用于保护管理界面，请妥善记录"
+      "hint": "此密码用于保护管理界面，请妥善记录",
+      "noPassword": "不设置密码，免登录直接使用（仅限可信环境）"
     }
   },
   "notifications": {

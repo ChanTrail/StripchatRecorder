@@ -21,6 +21,8 @@ use serde::{Deserialize, Serialize};
 pub struct AuthStatusResponse {
     pub password_set: bool,
     pub logged_in: bool,
+    /// 用户是否显式选择了无密码模式 / Whether the user opted into no-password mode
+    pub password_disabled: bool,
 }
 
 #[derive(Serialize)]
@@ -66,6 +68,7 @@ pub async fn auth_status(
     Ok(Json(AuthStatusResponse {
         password_set: s.app_state.has_admin_password(),
         logged_in,
+        password_disabled: s.app_state.admin_password_disabled(),
     }))
 }
 
@@ -239,4 +242,66 @@ pub async fn change_password(
     Ok(Json(
         serde_json::json!({ "ok": true, "relogin_required": true }),
     ))
+}
+
+/// POST /api/auth/remove-password
+/// 移除管理员密码进入无密码模式：需携带有效 token 并验证当前密码（防止越权
+/// 解除鉴权），随后清除全部 session 并标记 `admin_password_disabled`——
+/// 中间件恢复放行、前端直进首页。
+///
+/// Remove the admin password and enter no-password mode: requires a valid
+/// token plus the current password (prevents unauthenticated removal of
+/// auth), then clears all sessions and flags `admin_password_disabled` —
+/// the middleware passes every request and the frontend goes straight home.
+pub async fn remove_password(
+    AxumState(s): AxumState<ServerState>,
+    req: Request<Body>,
+) -> ApiResult<serde_json::Value> {
+    // 与 change_password 同级的二次确认：token 有效且 IP 未变 /
+    // same second check as change_password: token valid and IP unchanged
+    let ip = extract_ip(&req);
+    let token_str = req
+        .headers()
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .ok_or_else(|| ApiError("缺少 Token / Missing token".into()))?
+        .to_string();
+
+    match s.token_store.verify(&token_str, ip) {
+        VerifyResult::Ok => {}
+        VerifyResult::IpMismatch => {
+            return Err(ApiError(
+                "IP 与登录时不一致，请重新登录 / IP mismatch, please re-login".into(),
+            ));
+        }
+        _ => return Err(ApiError("Token 无效 / Invalid token".into())),
+    }
+
+    let body_bytes = axum::body::to_bytes(req.into_body(), 1024 * 16)
+        .await
+        .map_err(|e| ApiError(e.to_string()))?;
+    let body: PasswordBody =
+        serde_json::from_slice(&body_bytes).map_err(|e| ApiError(e.to_string()))?;
+
+    // 验证当前密码 / Verify current password
+    let app_state = std::sync::Arc::clone(&s.app_state);
+    let pwd = body.password.clone();
+    let ok = tokio::task::spawn_blocking(move || app_state.verify_admin_password(&pwd))
+        .await
+        .unwrap_or(false);
+    if !ok {
+        return Err(ApiError("密码错误 / Wrong password".into()));
+    }
+
+    // 清除密码并标记无密码模式 / Clear password and flag no-password mode
+    s.app_state
+        .clear_admin_password()
+        .map_err(ApiError::from)?;
+    s.token_store.mark_password_unconfigured();
+
+    // 所有 session 作废——此后无需登录 / All sessions void — no login needed anymore
+    s.token_store.clear();
+
+    Ok(Json(serde_json::json!({ "ok": true })))
 }

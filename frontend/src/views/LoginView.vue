@@ -13,6 +13,7 @@ import { useRouter, useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { useAuthStore } from "@/stores/auth";
 import { useNotificationsStore } from "@/stores/notifications";
+import { useSettingsStore } from "@/stores/settings";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -22,6 +23,7 @@ const route = useRoute();
 const { t } = useI18n();
 const auth = useAuthStore();
 const notificationsStore = useNotificationsStore();
+const settingsStore = useSettingsStore();
 
 /** null = 正在加载 / null = loading */
 const passwordSet = ref<boolean | null>(null);
@@ -72,6 +74,38 @@ async function submit() {
 		loading.value = false;
 	}
 }
+
+/**
+ * 不设置密码，直接进入：settings 标记 admin_password_disabled 后跳首页；
+ * 无密码时鉴权中间件整体放行，此后访问不再被路由守卫拦到登录页。
+ *
+ * Continue without a password: flags admin_password_disabled in settings
+ * then goes home; with no password the auth middleware passes everything,
+ * and the router guard no longer bounces to /login.
+ */
+async function continueWithoutPassword() {
+	error.value = "";
+	loading.value = true;
+	try {
+		await settingsStore.fetchSettings();
+		await settingsStore.saveSettings({
+			...settingsStore.settings,
+			admin_password_disabled: true,
+		});
+		// 同步 store 与本页状态（store 上 ref 已解包，直接赋值）/
+		// Sync store and local state (store refs are unwrapped — assign directly)
+		passwordSet.value = false;
+		auth.passwordSet = false;
+		auth.passwordDisabled = true;
+		const redirect = route.query.redirect;
+		const target = typeof redirect === "string" && redirect.startsWith("/") ? redirect : "/";
+		await router.replace(target);
+	} catch (e: unknown) {
+		error.value = String(e);
+	} finally {
+		loading.value = false;
+	}
+}
 </script>
 
 <template>
@@ -118,6 +152,18 @@ async function submit() {
 
 				<Button type="submit" :disabled="loading" class="w-full">
 					{{ loading ? t("common.loading") : isInit ? t("login.initButton") : t("login.loginButton") }}
+				</Button>
+				<!-- 初次设密可跳过：进入无密码模式（标记 admin_password_disabled）/
+					First-time setup can be skipped: enter no-password mode (flags admin_password_disabled) -->
+				<Button
+					v-if="isInit"
+					type="button"
+					variant="ghost"
+					:disabled="loading"
+					class="w-full"
+					@click="continueWithoutPassword"
+				>
+					{{ t("login.continueWithoutPassword") }}
 				</Button>
 			</form>
 

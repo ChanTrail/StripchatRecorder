@@ -212,6 +212,12 @@ impl TokenStore {
         self.0.write().password_configured = true;
     }
 
+    /// 标记密码已清除：中间件恢复"无密码放行"态。
+    /// Mark the password as cleared: middleware returns to the pass-through state.
+    pub fn mark_password_unconfigured(&self) {
+        self.0.write().password_configured = false;
+    }
+
     pub fn has_password(&self) -> bool {
         self.0.read().password_configured
     }
@@ -342,7 +348,9 @@ pub async fn auth_middleware(
     if !setup_done() {
         return next.run(req).await;
     }
-    if (path.starts_with("/api/auth/") && path != "/api/auth/change-password")
+    if (path.starts_with("/api/auth/")
+        && path != "/api/auth/change-password"
+        && path != "/api/auth/remove-password")
         || path == "/api/events"
     {
         return next.run(req).await;

@@ -89,6 +89,9 @@ const scBrowseProxy = ref<string | null>(null);
 const scBrowseMirror = ref<string | null>(null);
 const echEnabled = ref(false);
 const adminPassword = ref("");
+/** 无密码模式：勾选后跳过密码设置与登录，settings 标记 admin_password_disabled /
+ * No-password mode: when checked, skips password setup and login; settings flag admin_password_disabled */
+const noPassword = ref(false);
 
 // ── FFmpeg 检查 / FFmpeg check ───────────────────────────────────────────────
 /** 单个位置的探测结果（与后端 `FfmpegLocationProbe` 一致）/ Probe result for one location (matches backend `FfmpegLocationProbe`) */
@@ -487,7 +490,7 @@ const canNext = computed(() => {
 		if (ffmpegCheckFailed.value && !ffmpegLocations.value) return true;
 		return ffmpegSelected.value !== "" && ffmpegSelectedComplete.value;
 	}
-	if (step.value === 5) return adminPassword.value.trim().length >= 6;
+	if (step.value === 5) return noPassword.value || adminPassword.value.trim().length >= 6;
 	return true;
 });
 
@@ -525,7 +528,8 @@ async function finish() {
 		return;
 	}
 	const pwd = adminPassword.value.trim();
-	if (pwd.length < 6 || !/[a-zA-Z]/.test(pwd) || !/[0-9]/.test(pwd) || !/[^a-zA-Z0-9]/.test(pwd)) {
+	// 无密码模式下跳过密码强度校验 / Skip strength validation in no-password mode
+	if (!noPassword.value && (pwd.length < 6 || !/[a-zA-Z]/.test(pwd) || !/[0-9]/.test(pwd) || !/[^a-zA-Z0-9]/.test(pwd))) {
 		error.value = t("login.passwordStrength");
 		return;
 	}
@@ -559,18 +563,27 @@ async function finish() {
 					ffmpeg_preference: ffmpegSelected.value === "" ? null : Number(ffmpegSelected.value),
 					ffmpeg_auto_update: ffmpegSelected.value === "1",
 					setup_done: true,
+					// 无密码模式旗标；勾选密码时后端 set_admin_password 也会自行复位 /
+					// no-password flag; backend's set_admin_password resets it anyway when a password is set
+					admin_password_disabled: noPassword.value,
 				});
 			} catch (e) {
 				saveErr = e;
 			}
 		});
 		if (saveErr) throw saveErr;
-		// 2. 设置管理员密码
-		// 2. Set admin password
-		await authStore.initPassword(pwd);
-		// 3. 登录，获取 token
-		// 3. Login to obtain token
-		await authStore.login(pwd);
+		// 2. 设置管理员密码（无密码模式跳过密码设置与登录）/
+		// 2. Set admin password (skipped entirely in no-password mode)
+		if (!noPassword.value) {
+			await authStore.initPassword(pwd);
+			// 3. 登录，获取 token / 3. Login to obtain token
+			await authStore.login(pwd);
+		} else {
+			// 无密码模式：同步 store 状态，避免路由守卫再查一轮 /
+			// no-password mode: sync store state so the router guard doesn't re-check
+			authStore.passwordSet = false;
+			authStore.passwordDisabled = true;
+		}
 		await router.replace("/");
 	} catch (e: unknown) {
 		error.value = String(e);
@@ -991,9 +1004,18 @@ async function finish() {
 									type="password"
 									autocomplete="new-password"
 									:placeholder="t('setup.step5.placeholder')"
+									:disabled="noPassword"
 									autofocus
 								/>
 								<p class="text-xs text-muted-foreground">{{ t("login.passwordStrengthHint") }}</p>
+							</div>
+							<!-- 无密码模式：免登录直接使用（局域网/可信环境）/
+								No-password mode: use without login (LAN/trusted environments) -->
+							<div class="flex items-center gap-2">
+								<Switch id="no-password" v-model="noPassword" />
+								<Label for="no-password" class="cursor-pointer text-sm font-normal">
+									{{ t("setup.step5.noPassword") }}
+								</Label>
 							</div>
 						</template>
 

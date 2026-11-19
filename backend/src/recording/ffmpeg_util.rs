@@ -40,7 +40,12 @@ pub(crate) async fn convert_to_ts(fmp4_data: Vec<u8>, ts_path: &PathBuf) -> Resu
     // Mark ffmpeg in use so auto-update won't swap the binary mid-transcode
     let _ffmpeg_guard = crate::ffmpeg::in_use();
     let mut child = tokio::process::Command::new(crate::ffmpeg::ffmpeg_program())
-        .args(["-y", "-i", "pipe:0", "-c", "copy", "-f", "mpegts"])
+        // -hide_banner -v warning：stderr 只留警告/错误，去掉版本横幅与 Input #0
+        // 探测信息——失败日志不再被整版 banner/config 淹没。
+        // -hide_banner -v warning keeps stderr to warnings/errors only —
+        // drops the version banner and the Input #0 probe dump so failure
+        // logs aren't drowned in pages of banner/config noise.
+        .args(["-hide_banner", "-v", "warning", "-y", "-i", "pipe:0", "-c", "copy", "-f", "mpegts"])
         .arg(ts_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
@@ -76,12 +81,15 @@ pub(crate) async fn convert_to_ts(fmp4_data: Vec<u8>, ts_path: &PathBuf) -> Resu
         .map_err(|e| AppError::Other(format!("ffmpeg wait: {}", e)))?;
 
     if !output.status.success() {
-        // 优先展示 ffmpeg 自身的错误信息，方便排查数据问题
-        // Prefer ffmpeg's own error message for diagnosing data issues
+        // 优先展示 ffmpeg 自身的错误信息，方便排查数据问题；只取末尾几行——
+        // 真正的错误总在尾部，前面的警告流（异常时间戳等）可能刷满整屏
+        // Prefer ffmpeg's own message for diagnosing data issues; keep only
+        // the tail lines — the real error is always at the end while the
+        // earlier warning stream (bad timestamps etc.) can fill the screen
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stderr = stderr.trim();
         let detail = if !stderr.is_empty() {
-            stderr.to_string()
+            stderr_tail(stderr)
         } else if let Some(e) = write_err {
             format!("stdin write: {}", e)
         } else {
@@ -97,6 +105,33 @@ pub(crate) async fn convert_to_ts(fmp4_data: Vec<u8>, ts_path: &PathBuf) -> Resu
     }
 
     Ok(())
+}
+
+/// 失败日志保留的 stderr 末尾行数。ffmpeg 的有效错误信息总在尾部；
+/// 行数过少可能丢失"多条错误"中的上文，取 12 行兼顾。
+/// Number of trailing stderr lines kept in failure logs. ffmpeg's real
+/// error is always at the tail; too few lines can drop context when
+/// several errors are reported — 12 lines is a reasonable middle ground.
+const STDERR_TAIL_LINES: usize = 12;
+
+/// 截取 stderr 末尾 [`STDERR_TAIL_LINES`] 行；被截断时以 `…` 前缀标记，
+/// 便于区分"完整输出"与"截尾输出"。
+///
+/// Keep the last [`STDERR_TAIL_LINES`] lines of `text`; when truncated,
+/// a leading `…` marks it so logs distinguish full output from a tail cut.
+fn stderr_tail(text: &str) -> String {
+    let count = text.lines().count();
+    if count <= STDERR_TAIL_LINES {
+        return text.to_string();
+    }
+    // 跳过前 count - N 行，取剩余后缀 / Skip the first count - N lines and keep the suffix
+    let skip = count - STDERR_TAIL_LINES;
+    let start = text
+        .match_indices('\n')
+        .nth(skip - 1)
+        .map(|(i, _)| i + 1)
+        .unwrap_or(0);
+    format!("…\n{}", &text[start..])
 }
 
 /// 串行化 playlist.m3u8 的所有写入：普通追加与重试乱序插入共用一把锁，
@@ -150,10 +185,21 @@ fn seq_from_ts_name(name: &str) -> Option<u32> {
 ///
 /// All concurrent segment jobs write the playlist via this function, sharing
 /// [`M3U8_LOCK`] so reads and writes never interleave.
+///
+/// `duration_secs` 为该分片的真实 `#EXTINF` 时长（来自上游清单）；
+/// 历史上曾写死 `#EXTINF:0`——每段声明时长都为 0，播放器/探测工具
+/// 拿不到真实时长，消费端做时长/时间轴运算时也更容易踩除零路径。
+///
+/// `duration_secs` is the segment's true `#EXTINF` duration (from the upstream
+/// playlist); historically this was hardcoded `#EXTINF:0` — every segment
+/// declared zero length, so players/probers saw no real duration and
+/// duration/timeline math in consumers was one step closer to
+/// divide-by-zero paths.
 pub(crate) fn insert_to_m3u8_sorted(
     session_dir: &std::path::Path,
     ts_path: &std::path::Path,
     seq: u32,
+    duration_secs: f64,
 ) {
     let _guard = m3u8_lock();
     let m3u8_path = session_dir.join("playlist.m3u8");
@@ -167,7 +213,7 @@ pub(crate) fn insert_to_m3u8_sorted(
         return;
     }
 
-    let entry = format!("#EXTINF:0,\n{}\n", filename);
+    let entry = format!("#EXTINF:{:.3},\n{}\n", duration_secs.max(0.0), filename);
 
     // 尚无清单（首个分片即由重试写回的边界）：写头部 + 条目
     // No playlist yet (edge: the very first segment lands via retry): header + entry

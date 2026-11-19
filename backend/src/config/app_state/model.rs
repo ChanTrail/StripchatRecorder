@@ -150,6 +150,16 @@ pub struct Settings {
     /// Argon2 hash of the admin password (PHC string format). None = password not yet set (first run).
     #[serde(default)]
     pub admin_password_hash: Option<String>,
+    /// 用户显式选择"无密码"模式（true = 免登录直接进首页）。用于区分
+    /// "尚未设置密码（老版本升级，应引导设密）"与"用户主动选择无密码"；
+    /// 设置密码时自动清回 false。
+    /// Whether the user explicitly opted into no-password mode (true =
+    /// enter the app without login). Distinguishes "password not yet set
+    /// (legacy upgrade — should prompt to set one)" from "user deliberately
+    /// chose no password"; automatically reset to false when a password
+    /// is set.
+    #[serde(default)]
+    pub admin_password_disabled: bool,
     /// 后处理最大并发数（0 = 自动 = CPU 逻辑核心数；≥1 = 固定并发数，上限 CPU 逻辑核心数）。
     /// Max concurrent post-processing tasks (0 = auto = logical CPU count; ≥1 = fixed, capped at logical CPU count).
     #[serde(default)]
@@ -263,6 +273,7 @@ impl Default for Settings {
             community_terms_accepted: false,
             setup_done: false,
             admin_password_hash: None,
+            admin_password_disabled: false,
             max_pp_concurrent: 0,
             check_prerelease: false,
             cgf_proxy_url: None,

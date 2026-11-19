@@ -616,13 +616,15 @@ After copying, the module will appear in the Web UI under Post-processing Pipeli
 
 ### Desktop Module Install Path
 
-Desktop modules go into the per-user data directory's `modules` subdirectory:
+For installed Desktop builds (NSIS, deb, dmg), modules go into the per-user data directory's `modules` subdirectory:
 
 | Platform | Path                                                                              |
 | -------- | --------------------------------------------------------------------------------- |
 | Windows  | `%APPDATA%\com.chantrail.stripchat-recorder\modules\`                             |
 | macOS    | `~/Library/Application Support/com.chantrail.stripchat-recorder/modules/`         |
 | Linux    | `~/.local/share/com.chantrail.stripchat-recorder/modules/` (or `$XDG_DATA_HOME`) |
+
+For portable builds (Windows `*-portable.zip`, Linux AppImage), modules go into the `modules/` directory next to the program itself (next to the exe on Windows, next to the `.AppImage` file on Linux).
 
 ---
 

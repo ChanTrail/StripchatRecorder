@@ -1112,6 +1112,7 @@ async fn segment_job(
                 ts_path.parent().unwrap_or(&ts_path),
                 &ts_path,
                 job.seq,
+                job.duration_secs,
             );
             SegReport::Written {
                 dir: job.session_dir,

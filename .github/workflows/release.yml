@@ -159,18 +159,32 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # variants：见 scripts/release.desktop.js——分号分隔的 tauri build 参数组。
+          # Linux 的 AppImage 单独带 portable feature（deb 仍为安装版）；
+          # Windows 在 NSIS 之外追加 --no-bundle 便携版并收集裸 exe。
+          #
+          # variants: see scripts/release.desktop.js — semicolon-separated
+          # `tauri build` arg sets. On Linux the AppImage alone gets the portable
+          # feature (deb stays an installed build); on Windows a --no-bundle
+          # portable build is added after NSIS and the bare exe is collected.
           - platform: linux-x86_64
             os: ubuntu-22.04
             artifact-name: StripchatRecorder-desktop-linux-x86_64
+            variants: "--bundles deb;--bundles appimage -- --features portable"
           - platform: linux-arm64
             os: ubuntu-22.04-arm
             artifact-name: StripchatRecorder-desktop-linux-arm64
+            variants: "--bundles deb;--bundles appimage -- --features portable"
           - platform: windows-x86_64
             os: windows-latest
             artifact-name: StripchatRecorder-desktop-windows-x86_64
+            variants: "--bundles nsis;--no-bundle -- --features portable"
+            collect-no-bundle: "1"
           - platform: windows-arm64
             os: windows-11-arm
             artifact-name: StripchatRecorder-desktop-windows-arm64
+            variants: "--bundles nsis;--no-bundle -- --features portable"
+            collect-no-bundle: "1"
           - platform: macos-arm64
             os: macos-latest
             artifact-name: StripchatRecorder-desktop-macos-arm64
@@ -232,6 +246,8 @@ jobs:
           CARGO_TARGET_DIR: build_tmp/desktop/target
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAURI_BUILD_VARIANTS: ${{ matrix.variants }}
+          DESKTOP_COLLECT_NO_BUNDLE: ${{ matrix.collect-no-bundle }}
 
       # ── 打包模块 / Pack modules ──
       - name: Pack modules (Linux/macOS)
@@ -315,6 +331,26 @@ jobs:
             Rename-Item $_.FullName "${BASE}.exe.sig"
           }
 
+      # ── 便携版打包（Windows）：--no-bundle 裸 exe + modules/ → {BASE}-portable.zip ──
+      #    zip 内含同名目录，解压即用：config/、modules/、tools/ 等都落在 exe 旁边 /
+      #    Portable zip (Windows): --no-bundle bare exe + modules/ → {BASE}-portable.zip.
+      #    The zip wraps a same-named folder ready to run — config/, modules/,
+      #    tools/ all live next to the exe.
+      - name: Pack portable zip (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $TAG  = ($env:GITHUB_REF_NAME -replace '^v', '')
+          $BASE = "StripchatRecorder-desktop-${{ matrix.platform }}-${TAG}"
+          $STAGE = "build\desktop\${BASE}-portable"
+          New-Item -ItemType Directory -Force "$STAGE\modules" | Out-Null
+          Copy-Item build\desktop\portable\*.exe $STAGE\
+          if (Test-Path build\desktop\modules) {
+            Copy-Item build\desktop\modules\* "$STAGE\modules\"
+          }
+          Compress-Archive -Path $STAGE -DestinationPath "build\desktop\${BASE}-portable.zip"
+          Remove-Item -Recurse -Force $STAGE, build\desktop\portable
+
       # ── 上传 Linux 产物 / Upload Linux artifacts ──
       - name: Upload Linux installers
         if: startsWith(matrix.os, 'ubuntu')
@@ -351,6 +387,7 @@ jobs:
           path: |
             build/desktop/nsis/*.exe
             build/desktop/nsis/*.exe.sig
+            build/desktop/*-portable.zip
             build/desktop/modules-${{ matrix.platform }}.zip
           retention-days: 7
 
@@ -501,6 +538,9 @@ jobs:
           DESK_LIN_A64=$(cell 'StripchatRecorder-desktop-linux-arm64-*.AppImage' 'StripchatRecorder-desktop-linux-arm64-*.deb')
           DESK_MAC_A64=$(cell 'StripchatRecorder-desktop-macos-arm64-*.dmg' 'StripchatRecorder-desktop-macos-arm64-*.app.tar.gz')
 
+          PORT_WIN_X64=$(cell 'StripchatRecorder-desktop-windows-x86_64-*-portable.zip')
+          PORT_WIN_A64=$(cell 'StripchatRecorder-desktop-windows-arm64-*-portable.zip')
+
           SRV_WIN_X64=$(cell 'StripchatRecorder-server-windows-x86_64-*.zip')
           SRV_WIN_A64=$(cell 'StripchatRecorder-server-windows-arm64-*.zip')
           SRV_LIN_X64=$(cell 'StripchatRecorder-server-linux-x86_64-*.zip')
@@ -534,8 +574,12 @@ jobs:
             echo "| 产物 Artifact | windows-x86_64 | windows-arm64 | linux-x86_64 | linux-arm64 | macos-arm64 |"
             echo "|---|---|---|---|---|---|"
             echo "| **桌面端 Desktop** | ${DESK_WIN_X64} | ${DESK_WIN_A64} | ${DESK_LIN_X64} | ${DESK_LIN_A64} | ${DESK_MAC_A64} |"
+            echo "| **便携版 Portable** | ${PORT_WIN_X64} | ${PORT_WIN_A64} | — | — | — |"
             echo "| **服务端 Server** | ${SRV_WIN_X64} | ${SRV_WIN_A64} | ${SRV_LIN_X64} | ${SRV_LIN_A64} | ${SRV_MAC_A64} |"
             echo "| **后处理模块 Modules** | ${MOD_WIN_X64} | ${MOD_WIN_A64} | ${MOD_LIN_X64} | ${MOD_LIN_A64} | ${MOD_MAC_A64} |"
+            echo
+            echo "便携版 zip 解压即用（已含模块），配置/模块/工具目录在 exe 旁边；Linux 的 AppImage 同为便携形态（数据目录在 .AppImage 文件旁边），deb 仍为安装版。"
+            echo "<br>The portable zip is ready to run after extraction (modules included); config/modules/tools live next to the exe. The Linux AppImage is portable too (data dir next to the .AppImage file), while deb remains an installed build."
             echo
             echo "桌面安装包均附同名 \`.sig\` 签名文件（Tauri 自动更新校验用）；\`latest.json\` 为 updater manifest。Docker 镜像：\`chantrail/stripchat-recorder:${DOCKER_TAGS}\`、\`ghcr.io/chantrail/stripchat-recorder:${DOCKER_TAGS}\`（多架构 manifest）。"
             echo "<br>Every desktop installer ships a same-named \`.sig\` signature (for Tauri auto-update); \`latest.json\` is the updater manifest. Docker images: \`chantrail/stripchat-recorder:${DOCKER_TAGS}\`, \`ghcr.io/chantrail/stripchat-recorder:${DOCKER_TAGS}\` (multi-arch manifest)."

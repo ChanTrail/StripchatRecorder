@@ -15,7 +15,7 @@ use crate::relay::handler::{RelayState, relay_sessions, stop_relay_handler, stre
 use crate::relay::state::RelayManager;
 use crate::server::auth::TokenStore;
 use crate::server::routes::{
-    auth::{auth_status, change_password, init_password, login, logout, renew},
+    auth::{auth_status, change_password, init_password, login, logout, remove_password, renew},
     ffmpeg::{download_ffmpeg, get_ffmpeg_locations, get_ffmpeg_status},
     fs::{create_dir_handler, get_disk_space_handler, list_dir_handler, list_drives_handler},
     locale::{get_locale_handler, list_locales_handler},
@@ -156,6 +156,7 @@ pub fn build_router(state: ServerState) -> Router {
         .route("/api/recordings/module-outputs", post(get_module_outputs))
         .route("/api/files", get(serve_output_file))
         .route("/api/auth/change-password", post(change_password))
+        .route("/api/auth/remove-password", post(remove_password))
         .route("/api/events", get(sse_handler))
         // 社区模块 / Community modules
         .route("/api/community-modules/tasks", get(get_install_tasks))

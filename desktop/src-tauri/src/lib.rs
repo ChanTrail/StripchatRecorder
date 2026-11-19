@@ -144,25 +144,33 @@ pub fn run() {
 /// 在 Tokio runtime 上下文中执行的应用初始化逻辑。
 /// Application initialization logic executed within the Tokio runtime context.
 async fn setup_app(app_handle: tauri::AppHandle) {
-    // 数据根目录覆盖：改用 Tauri 的 app_data_dir()（操作系统标准的每用户数据目录），
-    // 替代默认的"可执行文件同目录"约定。Desktop 端以系统安装包（NSIS/MSI、AppImage、
-    // deb/rpm、dmg）分发，可执行文件所在目录可能只读（AppImage 的 FUSE 挂载点，每次
-    // 启动路径还会变化）、无写权限（如 `/usr/bin`），或修改会破坏代码签名（macOS
-    // `.app`），详见 `set_exe_dir_override` 文档。必须在下面任何调用 `exe_dir()`
-    // 的代码（`AppState::log_dir`、`AppState::new` 等）之前完成；解析失败时静默回退
-    // 到旧的 exe-relative 行为，不阻断启动。
-    //
-    // Data root directory override: use Tauri's app_data_dir() (the OS-standard
-    // per-user data directory) instead of the default "next to the executable"
-    // convention. See `set_exe_dir_override` docs for why. Must run before any code
-    // below that calls `exe_dir()`. Falls back silently to the old exe-relative
-    // behavior if resolution fails, so startup isn't blocked.
-    match app_handle.path().app_data_dir() {
-        Ok(dir) => stripchat_recorder_lib::config::app_state::set_exe_dir_override(dir),
-        Err(e) => eprintln!(
-            "Failed to resolve app data dir, falling back to exe-relative paths: {}",
-            e
-        ),
+    // 数据根目录定位，必须在下面任何调用 `exe_dir()` 的代码
+    // （`AppState::log_dir`、`AppState::new` 等）之前完成。
+    // Resolve the data root directory; must run before any code below that
+    // calls `exe_dir()` (`AppState::log_dir`, `AppState::new`, etc.).
+    #[cfg(feature = "portable")]
+    setup_portable_data_root(&app_handle);
+    #[cfg(not(feature = "portable"))]
+    {
+        // 安装版：改用 Tauri 的 app_data_dir()（操作系统标准的每用户数据目录），
+        // 替代默认的"可执行文件同目录"约定。Desktop 端以系统安装包（NSIS/MSI、
+        // AppImage、deb/rpm、dmg）分发，可执行文件所在目录可能只读（AppImage 的
+        // FUSE 挂载点，每次启动路径还会变化）、无写权限（如 `/usr/bin`），或修改
+        // 会破坏代码签名（macOS `.app`），详见 `set_exe_dir_override` 文档。
+        // 解析失败时静默回退到旧的 exe-relative 行为，不阻断启动。
+        //
+        // Installed build: use Tauri's app_data_dir() (the OS-standard per-user
+        // data directory) instead of the default "next to the executable"
+        // convention. See `set_exe_dir_override` docs for why. Falls back
+        // silently to the old exe-relative behavior if resolution fails, so
+        // startup isn't blocked.
+        match app_handle.path().app_data_dir() {
+            Ok(dir) => stripchat_recorder_lib::config::app_state::set_exe_dir_override(dir),
+            Err(e) => eprintln!(
+                "Failed to resolve app data dir, falling back to exe-relative paths: {}",
+                e
+            ),
+        }
     }
 
     // 以下启动顺序与 Server（run_server）一致，详见 server::startup 模块文档
@@ -220,4 +228,91 @@ async fn setup_app(app_handle: tauri::AppHandle) {
         let _ = window.show();
         let _ = window.set_focus();
     }
+}
+
+/// 便携版的数据根目录定位（`portable` feature，配合 `tauri build --no-bundle` /
+/// `--bundles appimage` 产出的分发形态使用）。
+///
+/// - AppImage：`current_exe()` 指向的是 FUSE 挂载点内的解包路径——只读且每次
+///   启动都会变化，必须用 `$APPIMAGE`（AppImage runtime 注入的环境变量，指向
+///   `.AppImage` 文件自身）定位其所在目录作为数据根目录。
+/// - 其他形态（Windows `--no-bundle` 裸 exe、手动解压运行的二进制）：不设覆盖，
+///   `exe_dir()` 默认值已经是可执行文件所在目录。
+///
+/// 确定数据根目录后做一次"安装版 → 便携版"的用户数据迁移：便携目录下还没有
+/// `config/`、`locale/`、`modules/` 而旧的每用户数据目录里有，就复制过来——
+/// 否则从安装版/旧 AppImage 换到便携版的用户会以为自己丢了全部配置。
+/// 各目录仅当目标不存在时复制（已存在的便携配置优先），失败只打 stderr 不阻断启动；
+/// `tools/` 不迁移（FFmpeg 可自动重新下载），`recordings/` 等输出目录由用户配置
+/// 指定，与数据根目录解耦，同样不涉及。
+///
+/// Data-root resolution for portable builds (the `portable` feature, used by the
+/// `--no-bundle` / `--bundles appimage` distribution artifacts).
+///
+/// - AppImage: `current_exe()` points inside the FUSE mount — read-only and a
+///   different path on every launch, so the data root is resolved from
+///   `$APPIMAGE` (injected by the AppImage runtime; the `.AppImage` file itself).
+/// - Other shapes (Windows `--no-bundle` exe, a manually extracted binary): no
+///   override needed — the default `exe_dir()` is already the exe's directory.
+///
+/// Once the root is known, a one-shot "installed → portable" migration runs: any
+/// of `config/`, `locale/`, `modules/` that is missing under the portable root
+/// but present in the old per-user data dir gets copied over — otherwise users
+/// switching from an installed build / older AppImage would appear to lose all
+/// settings. Each directory is only copied when the target does not exist
+/// (existing portable data wins); failures log to stderr without blocking
+/// startup. `tools/` is not migrated (FFmpeg re-downloads automatically), and
+/// `recordings/` etc. are user-configured output paths independent of the data
+/// root, so they are unaffected.
+#[cfg(feature = "portable")]
+fn setup_portable_data_root(app_handle: &tauri::AppHandle) {
+    use std::path::PathBuf;
+
+    // AppImage 运行时注入 $APPIMAGE；普通裸二进制走 exe_dir() 默认路径。
+    // $APPIMAGE is injected by the AppImage runtime; plain binaries fall back
+    // to the default exe_dir() resolution.
+    let portable_root: PathBuf = std::env::var_os("APPIMAGE")
+        .map(PathBuf::from)
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .unwrap_or_else(stripchat_recorder_lib::config::app_state::exe_dir);
+    if portable_root != stripchat_recorder_lib::config::app_state::exe_dir() {
+        stripchat_recorder_lib::config::app_state::set_exe_dir_override(portable_root.clone());
+    }
+
+    // 安装版遗留数据的迁移源 / Migration source: the old per-user data dir
+    let Ok(old_root) = app_handle.path().app_data_dir() else {
+        return;
+    };
+    for name in ["config", "locale", "modules"] {
+        let dst = portable_root.join(name);
+        let src = old_root.join(name);
+        if !dst.exists() && src.is_dir()
+            && let Err(e) = copy_dir_recursive(&src, &dst)
+        {
+            eprintln!(
+                "Failed to migrate {name} to portable dir ({} -> {}): {e}",
+                src.display(),
+                dst.display()
+            );
+        }
+    }
+}
+
+/// 递归复制目录（便携版迁移辅助）：目标目录按需创建，逐文件复制，保留层级。
+/// Recursive directory copy (portable migration helper): creates the target as
+/// needed and copies files one by one, preserving the hierarchy.
+#[cfg(feature = "portable")]
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        let (s, d) = (entry.path(), dst.join(entry.file_name()));
+        if ty.is_dir() {
+            copy_dir_recursive(&s, &d)?;
+        } else if ty.is_file() {
+            std::fs::copy(&s, &d)?;
+        }
+    }
+    Ok(())
 }

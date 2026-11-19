@@ -1,6 +1,6 @@
 [package]
 name = "stripchat-recorder-desktop"
-version = "0.4.10-beta"
+version = "0.4.11-beta"
 description = "Stripchat Stream Recorder (Desktop)"
 authors = ["ChanTrail"]
 edition = "2024"
@@ -8,6 +8,18 @@ edition = "2024"
 [lib]
 name = "stripchat_recorder_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+# 便携版特性：tauri build -- --features portable（Windows 配 --no-bundle、
+# Linux 配 --bundles appimage）产出的构建把数据根目录（config/、modules/、
+# tools/ 等）定位到程序本体所在目录而非系统每用户数据目录。
+#
+# Portable feature: builds produced via `tauri build -- --features portable`
+# (`--no-bundle` on Windows, `--bundles appimage` on Linux) resolve the data
+# root (config/, modules/, tools/ etc.) next to the executable instead of the
+# OS per-user data directory.
+[features]
+default = []
+portable = []
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

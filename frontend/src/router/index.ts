@@ -73,8 +73,12 @@ router.beforeEach(async (to) => {
 			headers: token ? { Authorization: `Bearer ${token}` } : {},
 		});
 		if (statusRes.ok) {
-			const status = await statusRes.json() as { password_set: boolean; logged_in: boolean };
+			const status = await statusRes.json() as { password_set: boolean; logged_in: boolean; password_disabled?: boolean };
 			if (!status.password_set) {
+				// 无密码模式：用户显式关闭了密码，直接放行——无 token 也放行 /
+				// No-password mode: user deliberately disabled the password —
+				// pass through even without a token
+				if (status.password_disabled) return true;
 				// 老版本升级：setup 完成但密码未设置，去登录页设置密码（不带 redirect，这是初次设置）
 				return "/login";
 			}

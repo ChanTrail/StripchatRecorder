@@ -186,7 +186,7 @@ Custom modules placed in the `modules` volume directory are discovered automatic
 
 ### Desktop Module Install Path
 
-The Desktop installer packages (NSIS, AppImage, deb, dmg) do not place modules inside the app's install directory. Extract the downloaded `modules-{platform}.zip` into the per-user data directory's `modules` subdirectory:
+The Desktop installer packages (NSIS, deb, dmg) do not place modules inside the app's install directory. Extract the downloaded `modules-{platform}.zip` into the per-user data directory's `modules` subdirectory:
 
 | Platform | Path                                                                              |
 | -------- | --------------------------------------------------------------------------------- |
@@ -196,13 +196,15 @@ The Desktop installer packages (NSIS, AppImage, deb, dmg) do not place modules i
 
 You can create the directory manually if it doesn't exist yet. The app watches this directory at runtime, so adding or removing modules doesn't require a restart.
 
+**Portable builds** (Windows `*-portable.zip`, Linux AppImage): the data directory travels with the program — `config/`, `modules/`, `tools/` etc. live next to the executable (next to the exe on Windows, next to the `.AppImage` file on Linux), so modules just go into the adjacent `modules/`. The Windows portable zip already bundles the modules. On first launch, `config/`, `locale/` and `modules/` are migrated from the old per-user data dir of an installed build when the portable-side counterpart doesn't exist yet.
+
 ---
 
 ## FFmpeg Management
 
 The program depends on ffmpeg and ffprobe, managed automatically — manual installation is usually unnecessary:
 
-- **Lookup order**: on startup the program first checks the `tools` folder (Server: next to the program; Desktop: inside the same per-user data directory as `modules`), then the system PATH. The `tools` copy takes priority over PATH.
+- **Lookup order**: on startup the program first checks the `tools` folder (Server: next to the program; Desktop: under the same data root as `modules` — the per-user data dir for installed builds, the program's own directory for portable/AppImage), then the system PATH. The `tools` copy takes priority over PATH.
 - **Auto-download**: if neither location has them, a prebuilt static build (~130–210 MB; 7z solid archive on Windows, tar.xz on Linux/macOS) is downloaded from [FFmpeg-Builds-Full](https://github.com/ChanTrail/FFmpeg-Builds-Full) into `tools`, with progress shown as a toast (supported: Windows x86_64/ARM64, Linux x86_64/ARM64, macOS ARM64).
 - **FFmpeg preference**: while no source has been chosen (`ffmpeg_preference` unset, e.g. after upgrading from an older version), a selection wizard pops up at launch showing detection results for each location so you can pick the system PATH or the `tools` copy — it can also be changed anytime in Settings; auto-update is disabled while the PATH source is selected.
 - **Idle auto-update**: the downloaded copy is kept up to date automatically while no recording or post-processing task is running (Settings → "Auto-update FFmpeg when idle", on by default; a check also runs at program start). An ffmpeg from PATH, or one placed in `tools` manually without the `ffmpeg-build.json` marker, is never replaced. Milestones (new version detected → install started → done/failed) are recorded to the in-app notification panel.

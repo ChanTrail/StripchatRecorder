@@ -55,6 +55,14 @@
 		SelectValue,
 	} from "@/components/ui/select";
 	import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+	import {
+		Dialog,
+		DialogContent,
+		DialogHeader,
+		DialogTitle,
+		DialogDescription,
+		DialogFooter,
+	} from "@/components/ui/dialog";
 	import { useDirectoryBrowser } from "@/composables/useDirectoryBrowser";
 	import { FolderOpen, Eye, EyeOff, Check, Loader2 } from "@lucide/vue";
 
@@ -138,6 +146,9 @@
 		ffmpeg_preference: null,
 		cgf_proxy_url: null,
 		ech_enabled: false,
+		// 无密码模式旗标（保存时原样回传，不在本表单中直接修改）/
+		// no-password flag (round-tripped on save; not edited in this form)
+		admin_password_disabled: false,
 	});
 
 	// 保存各代理字段的原始值，用于检测是否有实际变更
@@ -704,9 +715,20 @@
 	});
 
 	// ── 修改密码 / Change password ──────────────────────────────────────────
-	const changePwdForm = reactive({ oldPwd: "", newPwd: "" });
+	const changePwdForm = reactive({ oldPwd: "", newPwd: "", setPwd: "" });
 	const changePwdError = ref("");
 	const changePwdLoading = ref(false);
+	/** 移除密码进行中 / Removing password in flight */
+	const removePwdLoading = ref(false);
+	/** 初始设置密码进行中 / Initial password setup in flight */
+	const setPwdLoading = ref(false);
+
+	onMounted(() => {
+		// 同步密码设置状态，决定安全区显示改密/移除 还是 初始设密表单 /
+		// sync password state so the security section shows either
+		// change/remove or the initial set-password form
+		authStore.fetchStatus().catch(() => {});
+	});
 
 	async function submitChangePassword() {
 		changePwdError.value = "";
@@ -737,6 +759,73 @@
 				: msg;
 		} finally {
 			changePwdLoading.value = false;
+		}
+	}
+
+	// ── 移除密码（进入无密码模式）/ Remove password (enter no-password mode) ──
+	/** 移除确认弹窗开关 / Removal confirmation dialog open state */
+	const removePwdOpen = ref(false);
+	/** 弹窗内独立的当前密码输入（不复用改密表单，避免误填新密码框）/
+	 * Dedicated current-password input inside the dialog (not shared with the
+	 * change-password form so users don't type into the wrong field) */
+	const removePwdInput = ref("");
+	/** 弹窗内错误提示 / Error shown inside the dialog */
+	const removePwdError = ref("");
+
+	/** 打开移除确认弹窗（重置输入与错误）/ Open the removal dialog (reset input and error) */
+	function openRemovePwdDialog() {
+		removePwdInput.value = "";
+		removePwdError.value = "";
+		removePwdOpen.value = true;
+	}
+
+	/** 弹窗确认移除：验证当前密码 → 清密码并进入无密码模式 /
+	 * Dialog confirm: verify current password → clear it and enter no-password mode */
+	async function confirmRemovePassword() {
+		removePwdError.value = "";
+		if (!removePwdInput.value) {
+			removePwdError.value = t("login.passwordRequired");
+			return;
+		}
+		removePwdLoading.value = true;
+		try {
+			await authStore.removePassword(removePwdInput.value);
+			removePwdOpen.value = false;
+			changePwdForm.oldPwd = "";
+			changePwdForm.newPwd = "";
+			toast(t("login.removePassword.success"), "success");
+		} catch (e: unknown) {
+			const msg = String(e);
+			removePwdError.value = msg.includes("密码错误") || msg.includes("Wrong password")
+				? t("login.changePassword.wrongOld")
+				: msg;
+		} finally {
+			removePwdLoading.value = false;
+		}
+	}
+
+	// ── 初始设置密码（无密码模式下）/ Set initial password (in no-password mode) ──
+	async function submitSetPassword() {
+		changePwdError.value = "";
+		const pwd = changePwdForm.setPwd.trim();
+		if (!pwd) {
+			changePwdError.value = t("login.passwordRequired");
+			return;
+		}
+		if (pwd.length < 6 || !/[a-zA-Z]/.test(pwd) || !/[0-9]/.test(pwd) || !/[^a-zA-Z0-9]/.test(pwd)) {
+			changePwdError.value = t("login.passwordStrength");
+			return;
+		}
+		setPwdLoading.value = true;
+		try {
+			await authStore.initPassword(pwd);
+			await authStore.login(pwd);
+			changePwdForm.setPwd = "";
+			toast(t("login.changePassword.success"), "success");
+		} catch (e: unknown) {
+			changePwdError.value = String(e);
+		} finally {
+			setPwdLoading.value = false;
 		}
 	}
 </script>
@@ -1417,7 +1506,9 @@
 					{{ t("settings.sections.security") }}
 				</h2>
 				<p class="text-xs text-muted-foreground">{{ t("login.passwordStrengthHint") }}</p>
-				<form class="flex flex-col gap-3.5" @submit.prevent="submitChangePassword">
+				<!-- 已设密码：修改 + 移除（无密码模式）/
+					Password set: change + remove (no-password mode) -->
+				<form v-if="authStore.passwordSet !== false" class="flex flex-col gap-3.5" @submit.prevent="submitChangePassword">
 					<input type="text" name="username" value="admin" autocomplete="username" class="sr-only" aria-hidden="true" tabindex="-1" />
 					<div :class="isMobile ? 'flex flex-col gap-1.5' : 'flex items-center justify-between gap-6'">
 						<Label class="min-w-0 flex-1">{{ t("login.changePassword.oldLabel") }}</Label>
@@ -1440,14 +1531,83 @@
 						/>
 					</div>
 					<p v-if="changePwdError" class="text-xs text-destructive">{{ changePwdError }}</p>
-					<div :class="isMobile ? 'flex' : 'flex justify-end'">
+					<div :class="isMobile ? 'flex flex-col gap-2 sm:flex-row sm:justify-end' : 'flex justify-end gap-3'">
+						<!-- 移除密码=进入无密码模式（免登录），弹窗内输当前密码确认 /
+							Removing the password enters no-password mode (no login) — the dialog asks for the current password -->
+						<Button
+							type="button"
+							variant="outline"
+							class="text-destructive hover:text-destructive"
+							@click="openRemovePwdDialog"
+						>
+							{{ t("login.removePassword.submit") }}
+						</Button>
 						<Button type="submit" variant="outline" :disabled="changePwdLoading">
 							{{ changePwdLoading ? t("login.changePassword.submitting") : t("login.changePassword.submit") }}
+						</Button>
+					</div>
+				</form>
+				<!-- 无密码模式：初始设置密码（找回鉴权）/
+					No-password mode: initial set-password form (re-enable auth) -->
+				<form v-else class="flex flex-col gap-3.5" @submit.prevent="submitSetPassword">
+					<p class="text-xs text-muted-foreground">{{ t("login.setPassword.noPasswordHint") }}</p>
+					<input type="text" name="username" value="admin" autocomplete="username" class="sr-only" aria-hidden="true" tabindex="-1" />
+					<div :class="isMobile ? 'flex flex-col gap-1.5' : 'flex items-center justify-between gap-6'">
+						<Label class="min-w-0 flex-1">{{ t("login.setPassword.newLabel") }}</Label>
+						<Input
+							v-model="changePwdForm.setPwd"
+							type="password"
+							autocomplete="new-password"
+							:class="isMobile ? 'w-full' : 'w-96 shrink-0'"
+							:placeholder="t('login.changePassword.newPlaceholder')"
+						/>
+					</div>
+					<p v-if="changePwdError" class="text-xs text-destructive">{{ changePwdError }}</p>
+					<div :class="isMobile ? 'flex' : 'flex justify-end'">
+						<Button type="submit" variant="outline" :disabled="setPwdLoading">
+							{{ setPwdLoading ? t("login.setPassword.submitting") : t("login.setPassword.submit") }}
 						</Button>
 					</div>
 				</form>
 			</section>
 		</section>
 		</div><!-- /scroll body -->
+
+		<!-- 移除密码确认弹窗：输当前密码二次确认，防止越权解除鉴权 /
+			Remove-password confirmation dialog: re-enter the current password
+			to prevent unauthorized removal of auth -->
+		<Dialog v-model:open="removePwdOpen">
+			<DialogContent class="max-w-sm">
+				<DialogHeader>
+					<DialogTitle class="text-base">{{ t("login.removePassword.dialogTitle") }}</DialogTitle>
+					<DialogDescription class="text-sm">
+						{{ t("login.removePassword.dialogDesc") }}
+					</DialogDescription>
+				</DialogHeader>
+				<form class="flex flex-col gap-3" @submit.prevent="confirmRemovePassword">
+					<input type="text" name="username" value="admin" autocomplete="username" class="sr-only" aria-hidden="true" tabindex="-1" />
+					<div class="flex flex-col gap-1.5">
+						<Label for="remove-pwd-confirm">{{ t("login.changePassword.oldLabel") }}</Label>
+						<Input
+							id="remove-pwd-confirm"
+							v-model="removePwdInput"
+							type="password"
+							autocomplete="current-password"
+							:placeholder="t('login.changePassword.oldPlaceholder')"
+							autofocus
+						/>
+					</div>
+					<p class="min-h-5 text-xs text-destructive">{{ removePwdError }}</p>
+					<DialogFooter class="gap-2">
+						<Button type="button" variant="outline" :disabled="removePwdLoading" @click="removePwdOpen = false">
+							{{ t("common.cancel") }}
+						</Button>
+						<Button type="submit" variant="destructive" :disabled="removePwdLoading">
+							{{ removePwdLoading ? t("login.removePassword.submitting") : t("login.removePassword.submit") }}
+						</Button>
+					</DialogFooter>
+				</form>
+			</DialogContent>
+		</Dialog>
 	</div>
 </template>

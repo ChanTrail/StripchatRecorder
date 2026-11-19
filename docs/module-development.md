@@ -615,13 +615,15 @@ chmod +x ./data/modules/copy_to_dir-linux-x86_64-0.1.0
 
 ### Desktop 模块安装路径
 
-Desktop 端的模块安装到每用户数据目录的 `modules` 子目录：
+Desktop 安装版（NSIS、deb、dmg）的模块安装到每用户数据目录的 `modules` 子目录：
 
 | 平台    | 路径                                                                              |
 | ------- | --------------------------------------------------------------------------------- |
 | Windows | `%APPDATA%\com.chantrail.stripchat-recorder\modules\`                             |
 | macOS   | `~/Library/Application Support/com.chantrail.stripchat-recorder/modules/`         |
 | Linux   | `~/.local/share/com.chantrail.stripchat-recorder/modules/`（或 `$XDG_DATA_HOME`）|
+
+便携版（Windows `*-portable.zip`、Linux AppImage）的模块放在程序本体旁边的 `modules/`（Windows 为 exe 同目录、AppImage 为 .AppImage 文件所在目录）。
 
 ---
 

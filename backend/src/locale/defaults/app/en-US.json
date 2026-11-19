@@ -626,6 +626,7 @@
     "passwordStrengthHint": "At least 6 chars · Contains letters · Contains numbers · Contains special chars (e.g. !#$%)",
     "wrongPassword": "Incorrect password, please try again",
     "statusFetchFailed": "Cannot connect to server, please refresh and retry",
+    "continueWithoutPassword": "Continue without a password (trusted environments only)",
     "changePassword": {
       "title": "Change Password",
       "oldLabel": "Current Password",
@@ -636,6 +637,19 @@
       "submitting": "Changing…",
       "success": "Password changed, please log in again",
       "wrongOld": "Current password is incorrect"
+    },
+    "removePassword": {
+      "submit": "Remove Password",
+      "submitting": "Removing…",
+      "success": "Password removed — no login required anymore",
+      "dialogTitle": "Remove Admin Password",
+      "dialogDesc": "After removal, anyone can access the admin UI without logging in — make sure this environment is trusted. Enter your current password to confirm."
+    },
+    "setPassword": {
+      "noPasswordHint": "No-password mode is active — anyone can access the admin UI. Setting a password restores login protection.",
+      "newLabel": "New Password",
+      "submit": "Set Password",
+      "submitting": "Setting…"
     }
   },
   "setup": {
@@ -669,7 +683,8 @@
       "title": "Set Admin Password",
       "desc": "Set a password to access the admin interface (at least 6 characters). You will need it every time you log in.",
       "placeholder": "Enter password (at least 6 chars)",
-      "hint": "This password protects the admin interface; please keep it safe."
+      "hint": "This password protects the admin interface; please keep it safe.",
+      "noPassword": "Skip password — use without login (trusted environments only)"
     }
   },
   "notifications": {
