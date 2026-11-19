@@ -67,6 +67,13 @@ enum Resolve {
     /// 沿 PATH 查找可执行文件 / Look the executable up on PATH
     OnPath(&'static str),
     /// 固定安装路径存在即可 / A fixed install path that only needs to exist
+    ///
+    /// 仅 Windows 候选使用（按 ProgramFiles 拼安装路径）；其他平台构造
+    /// 不出来，故变体随平台裁剪以免触发 dead_code /
+    /// Only used by Windows candidates (install dirs under ProgramFiles);
+    /// other platforms never construct it, so the variant is cfg-gated to
+    /// keep dead_code quiet
+    #[cfg(target_os = "windows")]
     AtPath(PathBuf),
     /// macOS `.app` 包：存在 `/Applications/{name}.app` 即以 `open -a` 唤起 /
     /// macOS `.app` bundle: when `/Applications/{name}.app` exists, launch via `open -a`
@@ -89,6 +96,7 @@ impl Candidate {
     fn resolve(&self) -> Option<(PathBuf, Vec<String>)> {
         match &self.how {
             Resolve::OnPath(exe) => find_on_path(exe).map(|p| (p, Vec::new())),
+            #[cfg(target_os = "windows")]
             Resolve::AtPath(p) => p.is_file().then(|| (p.clone(), Vec::new())),
             #[cfg(target_os = "macos")]
             Resolve::MacApp(app) => PathBuf::from(format!("/Applications/{app}.app"))
