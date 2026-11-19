@@ -29,5 +29,6 @@ build_tmp/
 SCAPI Test/
 modules/test_suffix/
 
-StripchatRecorderCommunity/*
-.agents/*
+StripchatRecorderCommunity/
+.agents/
+test/

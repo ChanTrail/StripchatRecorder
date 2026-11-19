@@ -130,7 +130,7 @@ fn resize_cover_for_telegram(img: &Path) -> Result<Option<PathBuf>, String> {
     let q_values: &[&str] = if !size_ok { &["5", "10", "15", "20", "25", "31"] } else { &["2"] };
     let mut success = false;
     for &q in q_values {
-        let status = Command::new("ffmpeg")
+        let status = Command::new(pp_utils::ffmpeg_program())
             .args(["-y", "-i"]).arg(img)
             .args(["-vf", &format!("scale={}:{}", tw, th), "-q:v", q])
             .arg(&out_path)
@@ -175,7 +175,7 @@ fn extract_video_thumbnail(input: &Path) -> Result<PathBuf, String> {
         return Ok(thumb_path);
     }
 
-    let status = Command::new("ffmpeg")
+    let status = Command::new(pp_utils::ffmpeg_program())
         .args(["-y", "-i"])
         .arg(input)
         .args(["-frames:v", "1", "-q:v", "2"])
@@ -202,7 +202,7 @@ fn extract_video_thumbnail(input: &Path) -> Result<PathBuf, String> {
 ///
 /// Get the average bitrate of a video via ffprobe (bps), returns None on failure.
 fn probe_bitrate(input: &Path) -> Option<u64> {
-    let out = Command::new("ffprobe")
+    let out = Command::new(pp_utils::ffprobe_program())
         .args(["-v", "error", "-show_entries", "format=bit_rate",
                "-of", "default=noprint_wrappers=1:nokey=1"])
         .arg(input)
@@ -239,7 +239,7 @@ fn split_one(input: &Path, max_bytes: u64, dir: &Path, stem: &str, ext: &str, of
     fs::create_dir_all(&tmp_dir_path).map_err(|e| format!("mkdir failed: {}", e))?;
     let tmp_pattern = tmp_dir_path.join(format!("seg%03d.{}", ext));
 
-    let status = Command::new("ffmpeg")
+    let status = Command::new(pp_utils::ffmpeg_program())
         .args(["-y", "-i"]).arg(input)
         .args(["-c", "copy", "-f", "segment",
                "-segment_time", &seg_duration.to_string(),
@@ -949,7 +949,7 @@ async fn upload_and_send(
             // 已存在且非空则直接复用，跳过 ffmpeg
             // Reuse existing non-empty file without calling ffmpeg
             if !tmp.exists() || fs::metadata(&tmp).map(|m| m.len()).unwrap_or(0) == 0 {
-                let status = Command::new("ffmpeg")
+                let status = Command::new(pp_utils::ffmpeg_program())
                     .args(["-y", "-i"]).arg(img).arg(&tmp)
                     .stdout(Stdio::null()).stderr(Stdio::null())
                     .status().map_err(|e| format!("ffmpeg not found: {}", e))?;
@@ -986,14 +986,14 @@ async fn upload_and_send(
                 // Reuse existing non-empty file without calling ffmpeg
                 if !tmp.exists() || fs::metadata(&tmp).map(|m| m.len()).unwrap_or(0) == 0 {
                     // 先尝试无损重封装 / Try lossless remux first
-                    let remux_ok = Command::new("ffmpeg")
+                    let remux_ok = Command::new(pp_utils::ffmpeg_program())
                         .args(["-y", "-i"]).arg(part)
                         .args(["-c", "copy", "-movflags", "+faststart"]).arg(&tmp)
                         .stdout(Stdio::null()).stderr(Stdio::null())
                         .status().map_err(|e| format!("ffmpeg not found: {}", e))?.success();
                     if !remux_ok {
                         // 重封装失败则转码为 H.264 + AAC / Fall back to H.264 + AAC transcoding
-                        let ok = Command::new("ffmpeg")
+                        let ok = Command::new(pp_utils::ffmpeg_program())
                             .args(["-y", "-i"]).arg(part)
                             .args(["-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
                                    "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart"]).arg(&tmp)

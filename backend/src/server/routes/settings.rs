@@ -23,12 +23,9 @@ pub async fn get_settings(
 pub struct SystemInfo {
     /// 逻辑 CPU 核心数 / Logical CPU core count
     pub cpu_count: usize,
-    /// 后处理并发数的输入上限（= cpu × 2，与后端 resolve_concurrency 的 cap 一致）
-    /// Input cap for post-processing concurrency (= cpu × 2, matching backend resolve_concurrency cap)
+    /// 后处理并发数的输入上限（= 逻辑核数，与后端 resolve_concurrency 的 cap 一致）
+    /// Input cap for post-processing concurrency (= logical core count, matching backend resolve_concurrency cap)
     pub max_pp_concurrent_cap: usize,
-    /// 录制并发数的输入上限（= cpu × 2，0 = 不限制时不受限）
-    /// Input cap for recording concurrency (= cpu × 2, not applied when 0 = unlimited)
-    pub max_concurrent_cap: usize,
 }
 
 /// 返回只读系统信息（CPU 核心数及各并发数的输入上限）。
@@ -37,13 +34,13 @@ pub async fn get_system_info() -> ApiResult<SystemInfo> {
     let cpu_count = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1);
-    // 上限与后端 resolve_concurrency 的 cap 保持一致：cpu * 2
-    // Matches the cap in backend resolve_concurrency: cpu * 2
-    let cap = (cpu_count * 2).max(1);
+    // 后处理上限与 resolve_concurrency 一致：等于逻辑核数（实测解码型 pp 在 ~12 并发
+    // 已使 32 核机器饱和，核数×1 即合理上限）；录制不设限故无 cap 字段
+    // pp cap matches resolve_concurrency: logical core count (measured: decode-type
+    // pp saturates a 32-core box at ~12); recordings are uncapped → no cap field
     Ok(Json(SystemInfo {
         cpu_count,
-        max_pp_concurrent_cap: cap,
-        max_concurrent_cap: cap,
+        max_pp_concurrent_cap: cpu_count.max(1),
     }))
 }
 
@@ -73,10 +70,15 @@ pub async fn list_mouflon_keys(
     ))
 }
 
+/// 添加密钥的请求体：`pdkey` 与 `keystream`（十六进制）至少给一个。
+/// Request body for adding a key: at least one of `pdkey` and `keystream` (hex) is required.
 #[derive(Deserialize)]
 pub struct MouflonKeyBody {
     pub pkey: String,
-    pub pdkey: String,
+    #[serde(default)]
+    pub pdkey: Option<String>,
+    #[serde(default)]
+    pub keystream: Option<String>,
 }
 
 pub async fn add_mouflon_key(
@@ -84,10 +86,12 @@ pub async fn add_mouflon_key(
     Json(body): Json<MouflonKeyBody>,
 ) -> ApiResult<serde_json::Value> {
     s.app_state
-        .add_mouflon_key(&body.pkey, &body.pdkey)
+        .add_mouflon_key(&body.pkey, body.pdkey.as_deref(), body.keystream.as_deref())
         .map_err(ApiError::from)?;
-    s.emitter
-        .emit("mouflon-keys-updated", &s.app_state.get_mouflon_keys_store());
+    s.emitter.emit(
+        "mouflon-keys-updated",
+        &s.app_state.get_mouflon_keys_store(),
+    );
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -98,8 +102,10 @@ pub async fn remove_mouflon_key(
     s.app_state
         .remove_mouflon_key(&pkey)
         .map_err(ApiError::from)?;
-    s.emitter
-        .emit("mouflon-keys-updated", &s.app_state.get_mouflon_keys_store());
+    s.emitter.emit(
+        "mouflon-keys-updated",
+        &s.app_state.get_mouflon_keys_store(),
+    );
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -124,8 +130,10 @@ pub async fn sync_mouflon_keys(
         .map_err(ApiError::from)?;
 
     if updated {
-        s.emitter
-            .emit("mouflon-keys-updated", &s.app_state.get_mouflon_keys_store());
+        s.emitter.emit(
+            "mouflon-keys-updated",
+            &s.app_state.get_mouflon_keys_store(),
+        );
     }
 
     Ok(Json(serde_json::json!({ "updated": updated })))

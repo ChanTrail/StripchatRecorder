@@ -16,19 +16,70 @@
 //! Parsing of the playlist text itself (including Mouflon encryption handling) is
 //! delegated to `recording::hls`; this module is responsible only for network
 //! requests and CDN racing.
+//!
+//! # 子模块 / Submodules
+//! - [`net`]：HTTP 客户端构建与 URL/错误工具 / HTTP client construction and URL/error utilities
+//! - [`api`]：API 请求通道与 cam/user-ids/浏览列表端点 / API plumbing and cam/user-ids/browse endpoints
+//! - [`stream`]：直播状态查询与播放列表获取 / live-status queries and playlist retrieval
+//! - [`cdn`]：CDN 直取 + 多 TLD/ECH 兜底竞速下载 / CDN direct fetch + multi-TLD/ECH fallback racing
 
-use crate::core::error::{AppError, Result};
-use reqwest::{Client, Response};
-use std::collections::HashMap;
+use crate::core::error::Result;
+use crate::recording::hls::MouflonKeys;
+use net::{build_api_client, build_client};
+use reqwest::Client;
 use std::sync::Arc;
+use std::time::Duration;
 
-/// 模拟浏览器的 User-Agent / Browser-mimicking User-Agent
-const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36";
+mod api;
+mod cdn;
+pub(crate) mod net;
+mod stream;
+
 /// 请求 Referer 头 / Request Referer header
 const REFERER: &str = "https://stripchat.com/";
 
+/// Stripchat 错误响应固定的 title / The fixed title of Stripchat error responses
+const API_ERROR_TITLE: &str = "An error occurred";
+
+/// /broadcasts 接口（v1 与 v2）表示"主播已不存在"的 description 取值（title 恒为
+/// [`API_ERROR_TITLE`]）：
+/// - `Entity "Model" not found`：主播不存在（可能改名，上层会据此走改名/失效流程）
+/// - `model already deleted`：主播账号已被删除
+///   The description values meaning "the streamer no longer exists" on the /broadcasts
+///   endpoints (v1 + v2; title is always [`API_ERROR_TITLE`]):
+/// - `Entity "Model" not found`: the streamer does not exist (may have been renamed)
+/// - `model already deleted`: the streamer's account has been deleted
+const BROADCAST_GONE_DESCRIPTIONS: &[&str] =
+    &["Entity \"Model\" not found", "model already deleted"];
+
+/// 判断非 2xx 响应体是否为调用方已知的"主播不存在/已删除"错误：必须是 JSON、title
+/// 精确等于 [`API_ERROR_TITLE`]，且 description 不区分大小写地匹配 `accepted_descriptions`
+/// 之一（Stripchat 用户名不区分大小写，错误体中回显的用户名大小写可能与请求的不同）。
+/// 其余一律返回 false，让调用方当作网络/API 错误，避免 429/5xx 等被误判为主播失效。
+/// Whether a non-2xx response body is one of the caller's known "streamer not found /
+/// deleted" errors: must be JSON, title exactly [`API_ERROR_TITLE`], and description
+/// matching one of `accepted_descriptions` case-insensitively (Stripchat usernames are
+/// case-insensitive, so the username echoed in `User {username} not found` may differ
+/// in case from the one requested). Anything else returns false so callers treat it as
+/// a network/API error and 429/5xx etc. are never misclassified as a dead streamer.
+fn is_api_error_body(bytes: &[u8], accepted_descriptions: &[&str]) -> bool {
+    let Ok(json) = serde_json::from_slice::<serde_json::Value>(bytes) else {
+        return false;
+    };
+    if json["title"].as_str() != Some(API_ERROR_TITLE) {
+        return false;
+    }
+    let Some(description) = json["description"].as_str() else {
+        return false;
+    };
+    let description = description.to_lowercase();
+    accepted_descriptions
+        .iter()
+        .any(|a| a.to_lowercase() == description)
+}
+
 /// 支持的 CDN 顶级域名列表（用于多 CDN 竞速）/ Supported CDN TLDs (for multi-CDN racing)
-const CDN_TLDS: &[&str] = &[
+pub(crate) const CDN_TLDS: &[&str] = &[
     "doppiocdn.com",
     "doppiocdn.media",
     "doppiocdn.net",
@@ -36,79 +87,25 @@ const CDN_TLDS: &[&str] = &[
     "doppiocdn.live",
 ];
 
-/// 构建用于 CDN 分片下载的 HTTP 客户端（支持代理，启用 TCP keepalive）。
-/// Build an HTTP client for CDN segment downloads (supports proxy, enables TCP keepalive).
-fn build_client(proxy_url: Option<&str>) -> Result<Client> {
-    let mut builder = Client::builder()
-        .user_agent(USER_AGENT)
-        .timeout(std::time::Duration::from_secs(30))
-        .tcp_keepalive(std::time::Duration::from_secs(15))
-        .connection_verbose(false);
+/// 可选的首选视频编码，同时是 master playlist 的 `preferredVideoCodec` 参数取值（大小写即请求中的写法）。
+/// Selectable preferred video codecs; also the values of the master playlist's `preferredVideoCodec`
+/// parameter (the casing here is what goes into the request).
+pub const VIDEO_CODECS: &[&str] = &["h264", "H265", "AV1"];
 
-    if let Some(proxy) = proxy_url
-        && !proxy.is_empty() {
-        builder = builder
-            .proxy(reqwest::Proxy::all(proxy).map_err(|e| AppError::Other(e.to_string()))?);
-    } else {
-        builder = builder.no_proxy();
-    }
-
-    Ok(builder.build()?)
-}
-
-/// API 客户端 HTTP/2 PING 的发送间隔（连接空闲时也发送）。
-/// Interval between HTTP/2 PINGs on API client connections (also sent while idle).
-const API_H2_PING_INTERVAL: std::time::Duration = std::time::Duration::from_secs(20);
-/// 等待 HTTP/2 PING 回应的超时，超时即关闭该连接。
-/// Timeout waiting for an HTTP/2 PING ack; the connection is closed when it expires.
-const API_H2_PING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-
-/// 构建用于 API 请求的 HTTP 客户端（支持代理，HTTP/2，附加请求优先级头）。
+/// 把设置里的编码名规范化为 [`VIDEO_CODECS`] 中的取值（不区分大小写，忽略首尾空白）。
+/// 空串或不认识的值返回 `None`（即不带 `preferredVideoCodec` 参数），因此设置文件里的任意
+/// 字符串都不会被拼进请求 URL。
 ///
-/// 状态轮询跨轮复用这个客户端，HTTP/2 连接会在两轮之间空闲着；如果对端或中间网络悄悄断掉了
-/// 空闲连接，下一轮同时进行的请求（共用这一条连接）会一起失败在它上面。因此开启：
-/// - TCP keepalive（15 秒，与 CDN 客户端一致）
-/// - HTTP/2 PING：每 [`API_H2_PING_INTERVAL`] 发送一次（空闲时也发），
-///   [`API_H2_PING_TIMEOUT`] 内没有回应就关闭连接，连接池随之丢弃它，下一轮直接新建连接。
-///   经代理时 PING 走端到端隧道，能发现对端已失效的连接。
-///
-/// Build an HTTP client for API requests (supports proxy, HTTP/2, request priority header).
-///
-/// Status polling reuses this client across rounds, so its HTTP/2 connection sits idle between
-/// rounds; if the peer or something in between silently drops the idle connection, the next
-/// round's concurrent requests (which share that one connection) all fail on it. So this enables:
-/// - TCP keepalive (15 s, same as the CDN client)
-/// - HTTP/2 PING every [`API_H2_PING_INTERVAL`] (also while idle); without an ack within
-///   [`API_H2_PING_TIMEOUT`] the connection is closed and dropped from the pool, so the next round
-///   opens a new one. Through a proxy the PING travels end to end inside the tunnel, so it detects
-///   connections the far end has dropped.
-fn build_api_client(proxy_url: Option<&str>) -> Result<Client> {
-    let mut builder = Client::builder()
-        .user_agent(USER_AGENT)
-        .timeout(std::time::Duration::from_secs(30))
-        .tcp_keepalive(std::time::Duration::from_secs(15))
-        .http2_prior_knowledge()
-        .http2_keep_alive_interval(API_H2_PING_INTERVAL)
-        .http2_keep_alive_timeout(API_H2_PING_TIMEOUT)
-        .http2_keep_alive_while_idle(true)
-        // Priority: u=0, i — 最高用户可见优先级，非增量，降低 CDN/WAF 对非浏览器请求的
-        // 识别率，减少 403 响应概率。
-        // Priority: u=0, i — highest user-visible urgency, non-incremental; reduces CDN/WAF
-        // fingerprinting of non-browser requests, lowering the chance of 403 responses.
-        .default_headers({
-            let mut headers = reqwest::header::HeaderMap::new();
-            headers.insert("Priority", reqwest::header::HeaderValue::from_static("u=0, i"));
-            headers
-        });
-
-    if let Some(proxy) = proxy_url
-        && !proxy.is_empty() {
-        builder = builder
-            .proxy(reqwest::Proxy::all(proxy).map_err(|e| AppError::Other(e.to_string()))?);
-        return Ok(builder.build()?);
-    }
-    builder = builder.no_proxy();
-    Ok(builder.build()?)
+/// Normalize a codec name from the settings to a value in [`VIDEO_CODECS`] (case-insensitive,
+/// surrounding whitespace ignored). An empty or unknown value returns `None` (no
+/// `preferredVideoCodec` parameter), so an arbitrary string in the settings file is never
+/// spliced into the request URL.
+pub fn normalize_video_codec(codec: &str) -> Option<&'static str> {
+    let codec = codec.trim();
+    VIDEO_CODECS
+        .iter()
+        .copied()
+        .find(|c| c.eq_ignore_ascii_case(codec))
 }
 
 /// 主播直播状态信息 / Streamer live status information
@@ -150,19 +147,55 @@ pub struct StripchatApi {
     api_client: Client,
     /// CDN 分片下载客户端 / CDN segment download client
     cdn_client: Client,
+    /// ECH 客户端缓存（API 侧；None = 未启用 ECH）
+    /// ECH client cache (API side; None = ECH disabled)
+    api_ech: Option<crate::ech::EchClients>,
+    /// ECH 客户端缓存（CDN 侧；None = 未启用 ECH）——只作 `cdn_get` 兜底
+    /// 竞速的腿：原生直取优先以保留 CDN 地理调度，直取失败后的竞速里
+    /// 源 URL 与每个候选 URL 各挂一条 ECH 腿
+    /// ECH client cache (CDN side; None = ECH disabled) — only a leg in
+    /// `cdn_get`'s fallback race: the native try keeps the CDN's geo
+    /// steering, and once direct fails the race carries one ECH leg on the
+    /// source URL plus one per candidate
+    cdn_ech: Option<crate::ech::EchClients>,
     /// 可选的镜像站域名 / Optional mirror site domain
     sc_mirror: Option<String>,
     /// 镜像站协议（"https" 或 "http"）/ Mirror site scheme ("https" or "http")
     sc_mirror_scheme: String,
     /// 各 CDN 节点的首选 TLD 缓存（节点 ID -> TLD）/ Preferred TLD cache per CDN node (node ID -> TLD)
     preferred_tld_by_node: Arc<parking_lot::Mutex<std::collections::HashMap<String, String>>>,
-    /// Mouflon 解密密钥（pkey -> pdkey），用于 playlist URL 匹配 / Mouflon decryption keys (pkey -> pdkey) for playlist URL matching
-    mouflon_keys: HashMap<String, String>,
+    /// Mouflon 解密密钥（pdkey 与 keystream，按 pkey 索引），用于 playlist URL 匹配与分片 URL 解密
+    /// Mouflon decryption keys (pdkeys and keystreams, indexed by pkey) for playlist URL matching and segment URL decryption
+    mouflon_keys: MouflonKeys,
     /// 首选分辨率高度（0 = 原始/最高画质）/ Preferred resolution height (0 = original/highest quality)
     preferred_resolution: u32,
     /// 首选分辨率缺失时是否优先向上选择 / Whether to prefer a higher resolution when the target is unavailable
     prefers_higher_resolution: bool,
+    /// 首选视频编码（已规范化为 [`VIDEO_CODECS`] 之一；None = 不带 `preferredVideoCodec` 参数）
+    /// Preferred video codec (normalized to one of [`VIDEO_CODECS`]; None = omit the `preferredVideoCodec` parameter)
+    preferred_codec: Option<&'static str>,
 }
+
+/// 服务状态页探测结果：一次计时 GET 的关键回执。
+/// Status-page probe result: the key receipts of one timed GET.
+#[derive(Debug)]
+pub(crate) struct ProbeResult {
+    /// HTTP 状态码 / HTTP status code
+    pub status: u16,
+    /// 请求耗时（发出到拿到响应头）/ Request elapsed (send → response headers)
+    pub elapsed: Duration,
+    /// 实际请求的 URL（经镜像改写后的有效形态）/ Effective URL actually
+    /// requested (post mirror-rewrite)
+    pub url: String,
+    /// 响应头（提供商判定用，如 server/cf-ray/x-amz-cf-id）/ Response
+    /// headers (for provider detection, e.g. server/cf-ray/x-amz-cf-id)
+    pub headers: reqwest::header::HeaderMap,
+}
+
+/// 探测请求超时（远小于生产客户端的 30s——状态页要的是快速判定）/
+/// Probe request timeout (much shorter than the production client's 30s —
+/// the status page wants a quick verdict)
+const PROBE_TIMEOUT: Duration = Duration::from_secs(8);
 
 impl StripchatApi {
     /// 创建完整的 API 客户端（API + CDN，带 CDN TLD 缓存）。
@@ -173,20 +206,75 @@ impl StripchatApi {
         sc_mirror: Option<&str>,
         sc_mirror_scheme: Option<&str>,
         preferred_tld_by_node: Arc<parking_lot::Mutex<std::collections::HashMap<String, String>>>,
+        ech_enabled: bool,
     ) -> Result<Self> {
+        let api_client = build_api_client(api_proxy, None)?;
+        let cdn_client = build_client(cdn_proxy, None)?;
+        // ECH 客户端集合 API/CDN 各持一份（两者 base 客户端的代理/超时/H2
+        // 参数不同；借用配置由进程级槽位共享，不会重复借用）。策略不同：
+        // API 侧常态走 ECH；CDN 侧只在 cdn_get 的兜底竞速里作候选——分片
+        // 流量大且钉死 CF 任播 IP 会绕开 CDN 地理调度，原生直取必须优先，
+        // 仅当全部 TLD 直连失败（如 SNI 阻断）才经 ECH 通道重试源 URL。
+        // `base` 客户端同时充当回退与 DoH 传输（已携带对应代理）。
+        // One EchClients per side — API and CDN (their base clients differ
+        // in proxy/timeout/H2 settings; the borrowed config itself is shared
+        // through the process-global slot and never re-borrowed). Policies
+        // differ: the API side rides ECH permanently, while the CDN side
+        // only enters cdn_get's fallback race as a candidate — segment
+        // traffic is heavy and pinning CF anycast IPs would bypass the CDN's
+        // geo steering, so the native try stays first and ECH retries the
+        // source URL only after every direct TLD attempt failed (e.g. under
+        // SNI blocking). `base` doubles as fallback and DoH transport
+        // (already proxy-aware).
+        let (api_ech, cdn_ech) = if ech_enabled {
+            let api_proxy_owned = api_proxy.map(|s| s.to_string());
+            let cdn_proxy_owned = cdn_proxy.map(|s| s.to_string());
+            (
+                Some(crate::ech::EchClients::new(api_client.clone(), move |t| {
+                    build_api_client(api_proxy_owned.as_deref(), Some(t))
+                })),
+                Some(crate::ech::EchClients::new(cdn_client.clone(), move |t| {
+                    build_client(cdn_proxy_owned.as_deref(), Some(t))
+                })),
+            )
+        } else {
+            (None, None)
+        };
         Ok(Self {
-            api_client: build_api_client(api_proxy)?,
-            cdn_client: build_client(cdn_proxy)?,
+            api_client,
+            cdn_client,
+            api_ech,
+            cdn_ech,
             sc_mirror: sc_mirror.filter(|s| !s.is_empty()).map(|s| s.to_string()),
             sc_mirror_scheme: sc_mirror_scheme
                 .filter(|s| *s == "http" || *s == "https")
                 .unwrap_or("https")
                 .to_string(),
             preferred_tld_by_node,
-            mouflon_keys: HashMap::new(),
+            mouflon_keys: MouflonKeys::default(),
             preferred_resolution: 0,
             prefers_higher_resolution: false,
+            preferred_codec: None,
         })
+    }
+
+    /// 用 StripChat 浏览页专用网络设置构造 API 客户端：镜像/代理与主 API 设置
+    /// 相互独立——`sc_browse_*` 留空时直连 stripchat.com，不回退到全局值；
+    /// ECH 与镜像协议仍沿用全局开关。
+    ///
+    /// Build an API client from the StripChat browse page's dedicated network
+    /// settings: mirror/proxy are independent from the main API settings —
+    /// empty `sc_browse_*` values mean a direct connection to stripchat.com
+    /// (NOT a fallback to the global values); ECH and the mirror scheme still
+    /// follow the global settings.
+    pub fn new_for_browse(settings: &crate::config::app_state::Settings) -> Result<Self> {
+        Self::new_api_only(
+            settings.sc_browse_proxy_url.as_deref(),
+            None,
+            settings.sc_browse_mirror_url.as_deref(),
+            Some(settings.sc_mirror_scheme.as_str()),
+            settings.ech_enabled,
+        )
     }
 
     /// 创建仅用于 API 请求的客户端（不需要 CDN TLD 缓存，适用于验证用户名等场景）。
@@ -196,6 +284,7 @@ impl StripchatApi {
         cdn_proxy: Option<&str>,
         sc_mirror: Option<&str>,
         sc_mirror_scheme: Option<&str>,
+        ech_enabled: bool,
     ) -> Result<Self> {
         Self::new(
             api_proxy,
@@ -203,12 +292,13 @@ impl StripchatApi {
             sc_mirror,
             sc_mirror_scheme,
             Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
+            ech_enabled,
         )
     }
 
     /// 设置 Mouflon 解密密钥，返回 self 以支持链式调用。
     /// Set Mouflon decryption keys, returns self for method chaining.
-    pub fn with_mouflon_keys(mut self, keys: HashMap<String, String>) -> Self {
+    pub fn with_mouflon_keys(mut self, keys: MouflonKeys) -> Self {
         self.mouflon_keys = keys;
         self
     }
@@ -225,9 +315,18 @@ impl StripchatApi {
         self
     }
 
+    /// 设置首选视频编码（见 [`normalize_video_codec`]，空串或不认识的值表示不指定），
+    /// 返回 self 以支持链式调用。
+    /// Set the preferred video codec (see [`normalize_video_codec`]; an empty or unknown value
+    /// means unspecified), returning self for method chaining.
+    pub fn with_codec_selection(mut self, preferred_codec: &str) -> Self {
+        self.preferred_codec = normalize_video_codec(preferred_codec);
+        self
+    }
+
     /// 获取当前 Mouflon 解密密钥的引用。
     /// Get a reference to the current Mouflon decryption keys.
-    pub fn mouflon_keys(&self) -> &HashMap<String, String> {
+    pub fn mouflon_keys(&self) -> &MouflonKeys {
         &self.mouflon_keys
     }
 
@@ -239,6 +338,12 @@ impl StripchatApi {
     /// 返回是否优先选择更高分辨率。/ Return whether higher resolutions are preferred.
     pub fn prefers_higher_resolution(&self) -> bool {
         self.prefers_higher_resolution
+    }
+
+    /// 获取当前首选视频编码（规范化后的写法；未指定返回空串）。
+    /// Get the current preferred video codec (normalized spelling; empty string when unspecified).
+    pub fn preferred_codec(&self) -> &'static str {
+        self.preferred_codec.unwrap_or("")
     }
 
     /// 将 stripchat.com 域名替换为镜像站域名（若已配置），并替换协议。
@@ -288,778 +393,5 @@ impl StripchatApi {
         // REFERER ends with "/"; strip the leading "/" from path to avoid double slashes
         let path = path.trim_start_matches('/');
         format!("{}{}", base, path)
-    }
-
-    /// 解析 v1/broadcasts/{username} 响应，统一处理"用户不存在"判定。
-    ///
-    /// 主播不存在时，Stripchat 固定返回：
-    ///   `{"title":"An error occurred","description":"Entity \"Model\" not found"}`
-    /// 其他任何非 2xx（包括 404、429、5xx 等）均视为网络/API 错误，
-    /// 不会被误判为"用户不存在"。
-    ///
-    /// Parse the v1/broadcasts/{username} response, uniformly handling "user not
-    /// found" detection.
-    ///
-    /// When a streamer does not exist, Stripchat always returns exactly:
-    ///   `{"title":"An error occurred","description":"Entity \"Model\" not found"}`
-    /// Any other non-2xx response (404, 429, 5xx, etc.) is treated as a
-    /// network/API error and is NOT misclassified as "user not found".
-    async fn parse_broadcast_response(
-        resp: Response,
-        username: &str,
-    ) -> Result<serde_json::Value> {
-        let status = resp.status();
-        let bytes = resp.bytes().await?;
-
-        // 先检查 HTTP 状态：非 2xx 时，仅精确匹配已知的"用户不存在"body，
-        // 否则一律视为网络/API 错误。
-        // Check HTTP status first: for non-2xx, only the exact known "user not
-        // found" body maps to UserNotFound; everything else is a network/API error.
-        if !status.is_success() {
-            // 精确匹配唯一已知的"用户不存在"响应形状
-            // Exact match for the one known "user not found" response shape
-            if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&bytes) {
-                let title = json["title"].as_str().unwrap_or("");
-                let description = json["description"].as_str().unwrap_or("");
-                if title == "An error occurred"
-                    && description == "Entity \"Model\" not found"
-                {
-                    return Err(AppError::UserNotFound(format!(
-                        "Model {} not found",
-                        username
-                    )));
-                }
-            }
-            return Err(AppError::Other(format!(
-                "API return {} ({})",
-                status.as_u16(),
-                username
-            )));
-        }
-
-        // 2xx：正常解析 JSON
-        // 2xx: parse JSON normally
-        let json: serde_json::Value = match serde_json::from_slice(&bytes) {
-            Ok(v) => v,
-            Err(_) => {
-                return Err(AppError::Other(format!(
-                    "API return {} ({})",
-                    status.as_u16(),
-                    username
-                )));
-            }
-        };
-
-        Ok(json)
-    }
-
-    /// 从 CDN URL 中提取节点 ID（URL 主机名的第一段）。
-    /// Extract the node ID from a CDN URL (first segment of the hostname).
-    fn extract_node_id(url: &str) -> Option<&str> {
-        let without_scheme = url.strip_prefix("https://")?;
-        let host = without_scheme.split('/').next()?;
-        host.split('.').next()
-    }
-
-    /// 对 CDN URL 进行多 TLD 竞速请求，返回最先成功响应的结果。
-    /// 同时更新节点的首选 TLD 缓存，加速后续请求。
-    ///
-    /// Race a CDN URL across multiple TLDs and return the first successful response.
-    /// Also updates the preferred TLD cache for the node to speed up subsequent requests.
-    async fn cdn_get(&self, url: &str) -> Result<Response> {
-        let src_tld = match CDN_TLDS.iter().find(|&&tld| url.contains(tld)) {
-            Some(&tld) => tld,
-            None => {
-                return Ok(self
-                    .cdn_client
-                    .get(url)
-                    .header("Referer", self.referer_base())
-                    .send()
-                    .await?);
-            }
-        };
-
-        let node_id = Self::extract_node_id(url).unwrap_or("unknown").to_string();
-
-        let client = &self.cdn_client;
-        let mut tasks = tokio::task::JoinSet::new();
-
-        for &tld in CDN_TLDS {
-            let candidate = url.replace(src_tld, tld);
-            let client = client.clone();
-            let tld = tld.to_string();
-            let referer = self.referer_base();
-            tasks.spawn(async move {
-                let resp = client
-                    .get(&candidate)
-                    .header("Referer", referer)
-                    .send()
-                    .await;
-                (tld, resp)
-            });
-        }
-
-        let mut errors: Vec<(String, String)> = Vec::new();
-
-        while let Some(join_result) = tasks.join_next().await {
-            let (tld, result) = match join_result {
-                Ok(r) => r,
-                Err(_) => continue,
-            };
-            match result {
-                Ok(resp) if resp.status().is_success() => {
-                    tasks.abort_all();
-                    let preferred = self.preferred_tld_by_node.lock().get(&node_id).cloned();
-                    if preferred.as_deref() != Some(tld.as_str()) {
-                        tracing::debug!("{}", crate::tl!("stripchat.cdnTldChanged", node = node_id, from = preferred.as_deref().unwrap_or(src_tld), to = tld)
-                        );
-                        self.preferred_tld_by_node.lock().insert(node_id, tld);
-                    }
-                    return Ok(resp);
-                }
-                Ok(resp) => {
-                    errors.push((tld, format!("HTTP {}", resp.status())));
-                }
-                Err(e) => {
-                    errors.push((tld, e.to_string()));
-                }
-            }
-        }
-
-        for (tld, err) in &errors {
-            tracing::error!("{}", crate::tl!("stripchat.cdnTldFailed", tld = tld, error = err));
-        }
-        Err(AppError::Other(format!("All CDN TLDs failed → {}", url)))
-    }
-
-    /// 查询主播在 groupShow 状态时的具体秀类型，通过 v2/models/{model_id}/cam 接口获取。
-    /// 返回 show.mode，以及 ticket/perMinute 子类型（仅 groupShow mode 时有值）。
-    ///
-    /// Query the specific show type when a streamer is in groupShow status,
-    /// via the v2/models/{model_id}/cam endpoint.
-    /// Returns the show.mode and ticket/perMinute subtype (only present in groupShow mode).
-    async fn get_group_show_detail(&self, username: &str, model_id: i64) -> Option<String> {
-        let json = self.fetch_cam_json(username, model_id).await?;
-        let show = &json["cam"]["show"];
-        if show.is_null() || !show.is_object() {
-            return None;
-        }
-        let mode = show["mode"].as_str()?;
-        if mode == "groupShow" {
-            let subtype = show["details"]["groupShow"]["type"].as_str().unwrap_or("").to_string();
-            return Some(format!("groupShow:{}", subtype));
-        }
-        Some(mode.to_string())
-    }
-
-    /// 从 v2/models/{model_id}/cam 接口获取主播的离线预览图 URL（previewUrl），与在线状态无关。
-    /// 状态轮询用它每天为每个主播刷新 `cached_preview_url`；`get_stream_info` 在
-    /// `fetch_offline_preview=true` 且主播离线时也会调用。请求失败或没有该字段时返回 None。
-    ///
-    /// Fetch the offline preview image URL (previewUrl) from the v2/models/{model_id}/cam
-    /// endpoint, regardless of online status. Status polling uses it to refresh each streamer's
-    /// `cached_preview_url` daily; `get_stream_info` also calls it when
-    /// `fetch_offline_preview=true` and the streamer is offline. Returns None when the request
-    /// fails or the field is absent.
-    pub async fn get_cam_preview_url(&self, username: &str, model_id: i64) -> Option<String> {
-        let json = self.fetch_cam_json(username, model_id).await?;
-        json["user"]["user"]["previewUrl"]
-            .as_str()
-            .map(|s| s.to_string())
-    }
-
-    /// 请求 v2/models/{model_id}/cam 接口，返回解析后的 JSON。
-    /// 供 get_group_show_detail 和 get_cam_preview_url 共用，避免重复请求逻辑。
-    ///
-    /// 端点已由 Stripchat 从按用户名查询（v2/models/username/{username}/cam）改为
-    /// 按内部 ID 查询（v2/models/{model_id}/cam）——`username` 参数仅用于日志和
-    /// Referer 头，不再出现在请求路径中。
-    ///
-    /// Fetch and parse the v2/models/{model_id}/cam endpoint JSON.
-    /// Shared by get_group_show_detail and get_cam_preview_url to avoid duplicate request logic.
-    ///
-    /// Stripchat changed this endpoint from username-based lookup
-    /// (v2/models/username/{username}/cam) to internal-ID-based lookup
-    /// (v2/models/{model_id}/cam) — the `username` parameter is only used for logging
-    /// and the Referer header, no longer appearing in the request path.
-    async fn fetch_cam_json(&self, _username: &str, model_id: i64) -> Option<serde_json::Value> {
-        let path = format!("/api/front/v2/models/{}/cam", model_id);
-        let url = self.api_url(&format!("https://stripchat.com{}", path));
-        let resp = self
-            .api_client
-            .get(&url)
-            .header("Referer", self.referer_for_path(&path))
-            .send()
-            .await
-            .ok()?;
-        if !resp.status().is_success() {
-            return None;
-        }
-        resp.json().await.ok()
-    }
-
-    /// 通过缓存的 model_id 反查主播当前的真实用户名（用于改名检测）。
-    ///
-    /// 当 v1/broadcasts/{旧用户名} 查询不到该主播时，说明用户名可能已变更（Stripchat
-    /// 允许主播随时修改显示用户名，但内部 model_id 保持不变）。用之前缓存的
-    /// model_id 请求 v2/models/{model_id}/cam，若返回数据中的 `user.user.username`
-    /// 与旧用户名不同，即可确认是改名而非账号被删除/封禁，返回新用户名。
-    ///
-    /// Look up a streamer's current real username via a cached model_id (for rename
-    /// detection).
-    ///
-    /// When v1/broadcasts/{old_username} can't find the streamer, the username may have
-    /// changed (Stripchat lets streamers change their display username at any time,
-    /// but the internal model_id stays fixed). Using the previously cached model_id to
-    /// query v2/models/{model_id}/cam, if the returned `user.user.username` differs
-    /// from the old username, this confirms a rename (rather than the account being
-    /// deleted/banned) and returns the new username.
-    pub async fn lookup_username_by_model_id(&self, model_id: i64) -> Option<String> {
-        let url = self.api_url(&format!(
-            "https://stripchat.com/api/front/v2/models/{}/cam",
-            model_id
-        ));
-        let resp = self.api_client.get(&url).send().await.ok()?;
-        if !resp.status().is_success() {
-            return None;
-        }
-        let json: serde_json::Value = resp.json().await.ok()?;
-        json["user"]["user"]["username"]
-            .as_str()
-            .map(|s| s.to_string())
-    }
-
-    /// 通过 `/api/front/users/user-ids/{username}` 获取主播的内部 ID。
-    ///
-    /// 专用于添加主播时的用户名校验，返回值直接是数字 ID，
-    /// 避免从嵌套 JSON 中查找 `modelId` 字段。
-    ///
-    /// 主播不存在时 Stripchat 返回：
-    ///   `{"title":"An error occurred","description":"User {username} not found"}`
-    /// 其他非 2xx 均视为网络/API 错误。
-    ///
-    /// Fetch a streamer's internal ID via `/api/front/users/user-ids/{username}`.
-    ///
-    /// Intended for username validation on add; the response is a plain `{"id": N}`
-    /// with no nesting, so there's no need to dig for a `modelId` field.
-    ///
-    /// Stripchat returns the following when the streamer does not exist:
-    ///   `{"title":"An error occurred","description":"User {username} not found"}`
-    /// Any other non-2xx is treated as a network/API error.
-    async fn fetch_model_id_by_username(&self, username: &str) -> Result<i64> {
-        let path = format!("/api/front/users/user-ids/{}", username);
-        let url = self.api_url(&format!("https://stripchat.com{}", path));
-
-        let resp = self
-            .api_client
-            .get(&url)
-            .header("Referer", self.referer_for_path(&path))
-            .send()
-            .await?;
-
-        let status = resp.status();
-        let bytes = resp.bytes().await?;
-
-        if !status.is_success() {
-            // 精确匹配"用户不存在"响应：description 为 "User {username} not found"
-            // Exact match for "user not found": description is "User {username} not found"
-            if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&bytes) {
-                let title = json["title"].as_str().unwrap_or("");
-                let description = json["description"].as_str().unwrap_or("");
-                let expected_desc = format!("User {} not found", username);
-                if title == "An error occurred" && description == expected_desc {
-                    return Err(AppError::UserNotFound(format!(
-                        "User {} not found",
-                        username
-                    )));
-                }
-            }
-            return Err(AppError::Other(format!(
-                "API return {} ({})",
-                status.as_u16(),
-                username
-            )));
-        }
-
-        let json: serde_json::Value = serde_json::from_slice(&bytes).map_err(|_| {
-            AppError::Other(format!("API return {} ({})", status.as_u16(), username))
-        })?;
-
-        json["id"].as_i64().ok_or_else(|| {
-            AppError::Other(format!("missing id field in user-ids response ({})", username))
-        })
-    }
-
-    /// 验证主播用户名是否存在，仅发一次轻量请求，不解析直播状态。
-    /// 专用于添加主播时的用户名校验，成功时返回该主播的 model_id，
-    /// 供添加流程持久化，用于日后改名反查。
-    ///
-    /// Verify whether a streamer username exists with a single lightweight request,
-    /// without parsing any live status. Intended for username validation on add.
-    /// On success, returns the streamer's model_id for the add flow to persist,
-    /// enabling future rename lookups.
-    pub async fn verify_user_exists(&self, username: &str) -> Result<i64> {
-        self.fetch_model_id_by_username(username).await
-    }
-
-    /// 通过主播内部 ID 查询直播状态，使用 `/api/front/v2/broadcasts/{model_id}`。
-    ///
-    /// 响应结构与 v1/broadcasts/{username} 相同（`item` 对象），同时包含
-    /// `item.username` 字段——若该字段与调用方记录的 username 不一致，
-    /// 即可直接得知主播已改名，无需额外的 cam 接口反查。
-    ///
-    /// 主播不存在时，与 v1 相同，精确匹配
-    ///   `{"title":"An error occurred","description":"Entity \"Model\" not found"}`
-    /// 才返回 `UserNotFound`；其他非 2xx（429、5xx 等）视为网络/API 错误，
-    /// 不会误判为主播失效。
-    ///
-    /// Query live status by internal model ID via `/api/front/v2/broadcasts/{model_id}`.
-    ///
-    /// The response structure is identical to v1/broadcasts/{username} (an `item`
-    /// object), but also includes `item.username` — if that field differs from the
-    /// caller's recorded username, we know the streamer has been renamed directly,
-    /// with no extra cam-endpoint round-trip needed.
-    ///
-    /// When the streamer no longer exists, the v2 endpoint returns the same exact
-    /// error body as v1: `{"title":"An error occurred","description":"Entity \"Model\" not found"}`.
-    /// Only that precise body maps to `UserNotFound`; any other non-2xx (429, 5xx,
-    /// network issues, etc.) is treated as a transient error and does NOT mark the
-    /// streamer as dead.
-    async fn fetch_stream_info_by_model_id(
-        &self,
-        model_id: i64,
-        known_username: &str,
-        fetch_playlist: bool,
-        fetch_offline_preview: bool,
-    ) -> Result<StreamInfo> {
-        let path = format!("/api/front/v2/broadcasts/{}", model_id);
-        let url = self.api_url(&format!("https://stripchat.com{}", path));
-
-        let resp = self
-            .api_client
-            .get(&url)
-            .header("Referer", self.referer_for_path(&path))
-            .send()
-            .await?;
-
-        let status = resp.status();
-        let bytes = resp.bytes().await?;
-
-        if !status.is_success() {
-            // 与 v1 相同：仅精确匹配已知的"用户不存在"body 才返回 UserNotFound，
-            // 其他非 2xx（429、5xx、网络错误等）均视为网络/API 错误，不误判为失效。
-            // Same as v1: only the exact known "entity not found" body maps to
-            // UserNotFound; any other non-2xx (429, 5xx, network issues, etc.) is
-            // treated as a transient network/API error, not a dead-streamer signal.
-            if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&bytes) {
-                let title = json["title"].as_str().unwrap_or("");
-                let description = json["description"].as_str().unwrap_or("");
-                if title == "An error occurred"
-                    && description == "Entity \"Model\" not found"
-                {
-                    return Err(AppError::UserNotFound(format!(
-                        "Model {} not found (id={})",
-                        known_username, model_id
-                    )));
-                }
-            }
-            return Err(AppError::Other(format!(
-                "API return {} (id={})",
-                status.as_u16(),
-                model_id
-            )));
-        }
-
-        let json: serde_json::Value = serde_json::from_slice(&bytes).map_err(|_| {
-            AppError::Other(format!(
-                "API return {} (id={})",
-                status.as_u16(),
-                model_id
-            ))
-        })?;
-
-        let item = &json["item"];
-
-        // 检测改名：v2 响应中 item.username 是当前真实用户名
-        // Detect rename: item.username in the v2 response is the current real username
-        let current_username = item["username"].as_str().unwrap_or(known_username);
-        let renamed_to = if current_username.to_lowercase() != known_username.to_lowercase() {
-            tracing::info!(
-                "{}",
-                crate::tl!(
-                    "stripchat.streamerRenamed",
-                    username = known_username,
-                    newUsername = current_username,
-                    modelId = model_id
-                )
-            );
-            Some(current_username.to_string())
-        } else {
-            None
-        };
-
-        // 用当前实际用户名（可能已改名）进行后续解析，保持日志和缓存的一致性
-        // Use the current real username (possibly renamed) for subsequent parsing
-        let username = renamed_to.as_deref().unwrap_or(known_username);
-
-        let is_live = item["isLive"].as_bool().unwrap_or(false);
-        let status_text = item["status"].as_str().unwrap_or("unknown");
-
-        let status = if is_live && status_text == "groupShow" {
-            match self.get_group_show_detail(username, model_id).await {
-                Some(ref detail) if detail.starts_with("groupShow:") => {
-                    match detail.strip_prefix("groupShow:").unwrap_or("") {
-                        "ticket" => "票务秀".to_string(),
-                        "perMinute" => "计时秀".to_string(),
-                        _ => "群组秀".to_string(),
-                    }
-                }
-                Some(ref mode) => match mode.as_str() {
-                    "private" => "私密秀".to_string(),
-                    "p2pVoice" | "p2p" => "P2P".to_string(),
-                    "virtualPrivate" => "虚拟私密".to_string(),
-                    _ => "群组秀".to_string(),
-                },
-                None => "群组秀".to_string(),
-            }
-        } else {
-            match status_text {
-                "public" => "公开秀".to_string(),
-                "private" => "私密秀".to_string(),
-                "virtualPrivate" => "虚拟私密".to_string(),
-                "p2p" | "p2pVoice" => "P2P".to_string(),
-                "idle" => "等待".to_string(),
-                "off" => "离线".to_string(),
-                _ => status_text.to_string(),
-            }
-        };
-
-        let thumbnail_url = if is_live {
-            let snapshot_ts = item["snapshotTimestamp"]
-                .as_i64()
-                .or_else(|| {
-                    item["snapshotTimestamp"]
-                        .as_str()
-                        .and_then(|s| s.parse().ok())
-                })
-                .unwrap_or(0);
-            let stream_name = item["streamName"].as_str().unwrap_or("");
-            if snapshot_ts > 0 && !stream_name.is_empty() {
-                Some(format!(
-                    "https://img.doppiocdn.net/thumbs/{}/{}",
-                    snapshot_ts, stream_name
-                ))
-            } else {
-                item["previewUrl"].as_str().map(|s| s.to_string())
-            }
-        } else {
-            // 离线时：仅当 fetch_offline_preview=true 时才请求 cam 接口，否则直接返回 None，
-            // 由调用方使用缓存值（状态轮询通过 get_cam_preview_url 单独刷新离线预览图）。
-            // Offline: only call the cam endpoint when fetch_offline_preview=true; otherwise
-            // return None and the caller uses the cached value (status polling refreshes the
-            // offline preview separately via get_cam_preview_url).
-            if fetch_offline_preview {
-                self.get_cam_preview_url(username, model_id).await
-            } else {
-                None
-            }
-        };
-
-        let is_recordable = is_live && status_text == "public";
-
-        let playlist_url = if is_recordable && fetch_playlist {
-            self.get_playlist_url(username, model_id).await.ok()
-        } else {
-            None
-        };
-
-        Ok(StreamInfo {
-            is_online: is_live,
-            is_recordable,
-            status,
-            thumbnail_url,
-            playlist_url,
-            model_id: Some(model_id),
-            renamed_to,
-        })
-    }
-
-    /// 查询主播直播状态。
-    ///
-    /// - 若有 `known_model_id`（绝大多数情况），直接用 v2/broadcasts/{id} 查询：
-    ///   - 响应中 `item.username` 与记录不同时，直接得知改名，无需额外请求。
-    ///   - 非 2xx 视为主播不存在（`UserNotFound`），触发上层死亡标记流程。
-    /// - 无 `known_model_id`（仅兼容升级前未回填的旧数据）时，
-    ///   回退到 v1/broadcasts/{username} 查询；查询成功时返回的 `model_id`
-    ///   由调用方（`poll_streamer`）通过 `backfill_model_id` 回填，
-    ///   下次轮询即可走 v2 路径。
-    ///
-    /// Query a streamer's live status.
-    ///
-    /// - When `known_model_id` is present (the common case), queries via
-    ///   `v2/broadcasts/{id}` directly:
-    ///   - If `item.username` in the response differs from the recorded username,
-    ///     a rename is detected immediately with no extra round-trip.
-    ///   - Any non-2xx is treated as `UserNotFound`, triggering the dead-streamer
-    ///     marking flow upstream.
-    /// - When `known_model_id` is absent (only for pre-upgrade data that hasn't
-    ///   been backfilled), falls back to `v1/broadcasts/{username}`; the `model_id`
-    ///   returned on success is backfilled by the caller (`poll_streamer`) via
-    ///   `backfill_model_id`, so the v2 path is used from the next poll onward.
-    pub async fn get_stream_info(
-        &self,
-        username: &str,
-        fetch_playlist: bool,
-        known_model_id: Option<i64>,
-        fetch_offline_preview: bool,
-    ) -> Result<StreamInfo> {
-        if let Some(model_id) = known_model_id {
-            // 主路径：直接用 model_id 走 v2 接口
-            // Primary path: query v2 directly by model_id
-            self.fetch_stream_info_by_model_id(model_id, username, fetch_playlist, fetch_offline_preview)
-                .await
-        } else {
-            // 兼容路径：旧数据尚无 model_id，回退到 v1 by-username
-            // Compat path: old data with no model_id, fall back to v1 by-username
-            self.fetch_stream_info_by_username(username, fetch_playlist, fetch_offline_preview)
-                .await
-        }
-    }
-
-    /// `get_stream_info` 的兼容回退实现：按用户名查询 v1/broadcasts/{username}。
-    /// 仅用于升级前未回填 model_id 的旧数据，一旦成功查询后 `poll_streamer` 会
-    /// 立即通过 `backfill_model_id` 补全 model_id，下次轮询即走 v2 主路径。
-    ///
-    /// Compat fallback behind `get_stream_info`: queries `v1/broadcasts/{username}`.
-    /// Only used for pre-upgrade entries without a model_id. Once a successful query
-    /// returns, `poll_streamer` immediately backfills the model_id via
-    /// `backfill_model_id`, so the v2 primary path is used from the next poll onward.
-    async fn fetch_stream_info_by_username(
-        &self,
-        username: &str,
-        fetch_playlist: bool,
-        fetch_offline_preview: bool,
-    ) -> Result<StreamInfo> {
-        let path = format!("/api/front/v1/broadcasts/{}", username);
-        let url = self.api_url(&format!("https://stripchat.com{}", path));
-
-        let resp = self
-            .api_client
-            .get(&url)
-            .header("Referer", self.referer_for_path(&path))
-            .send()
-            .await?;
-
-        let json = Self::parse_broadcast_response(resp, username).await?;
-
-        let item = &json["item"];
-
-        let is_live = item["isLive"].as_bool().unwrap_or(false);
-        let status_text = item["status"].as_str().unwrap_or("unknown");
-        let model_id = item["modelId"].as_i64();
-
-        // groupShow 时，二次请求 cam 接口获取具体秀类型（ticket / perMinute / private / p2pVoice 等）
-        // For groupShow, make a secondary request to cam endpoint to get the specific show type
-        let status = if is_live && status_text == "groupShow" {
-            match model_id {
-                Some(mid) => match self.get_group_show_detail(username, mid).await {
-                    Some(ref detail) if detail.starts_with("groupShow:") => {
-                        match detail.strip_prefix("groupShow:").unwrap_or("") {
-                            "ticket" => "票务秀".to_string(),
-                            "perMinute" => "计时秀".to_string(),
-                            _ => "群组秀".to_string(),
-                        }
-                    }
-                    Some(ref mode) => match mode.as_str() {
-                        "private" => "私密秀".to_string(),
-                        "p2pVoice" | "p2p" => "P2P".to_string(),
-                        "virtualPrivate" => "虚拟私密".to_string(),
-                        _ => "群组秀".to_string(),
-                    },
-                    None => "群组秀".to_string(),
-                },
-                None => "群组秀".to_string(),
-            }
-        } else {
-            match status_text {
-                "public" => "公开秀".to_string(),
-                "private" => "私密秀".to_string(),
-                "virtualPrivate" => "虚拟私密".to_string(),
-                "p2p" | "p2pVoice" => "P2P".to_string(),
-                "idle" => "等待".to_string(),
-                "off" => "离线".to_string(),
-                _ => status_text.to_string(),
-            }
-        };
-
-        let thumbnail_url = if is_live {
-            let snapshot_ts = item["snapshotTimestamp"]
-                .as_i64()
-                .or_else(|| {
-                    item["snapshotTimestamp"]
-                        .as_str()
-                        .and_then(|s| s.parse().ok())
-                })
-                .unwrap_or(0);
-            let stream_name = item["streamName"].as_str().unwrap_or("");
-            if snapshot_ts > 0 && !stream_name.is_empty() {
-                Some(format!(
-                    "https://img.doppiocdn.net/thumbs/{}/{}",
-                    snapshot_ts, stream_name
-                ))
-            } else {
-                item["previewUrl"].as_str().map(|s| s.to_string())
-            }
-        } else {
-            // v1/broadcasts 离线数据不含 previewUrl，仅当 fetch_offline_preview=true 时才请求 cam 接口
-            // v1/broadcasts offline data has no previewUrl; only call cam endpoint when fetch_offline_preview=true
-            if fetch_offline_preview {
-                match model_id {
-                    Some(mid) => self.get_cam_preview_url(username, mid).await,
-                    None => None,
-                }
-            } else {
-                None
-            }
-        };
-
-        let is_recordable = is_live && status_text == "public";
-
-        let playlist_url = if is_recordable && fetch_playlist {
-            if let Some(mid) = model_id {
-                self.get_playlist_url(username, mid).await.ok()
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        Ok(StreamInfo {
-            is_online: is_live,
-            is_recordable,
-            status,
-            thumbnail_url,
-            playlist_url,
-            model_id,
-            renamed_to: None,
-        })
-    }
-
-    /// 对所有 CDN TLD 竞速请求 `_auto.m3u8` master playlist，返回最先成功的响应文本。
-    /// Race all CDN TLDs for the `_auto.m3u8` master playlist and return the first successful response text.
-    async fn fetch_auto_playlist(&self, model_id: i64) -> Result<String> {
-        let client = &self.cdn_client;
-        let mut tasks = tokio::task::JoinSet::new();
-
-        for &tld in CDN_TLDS {
-            // 使用固定路径模板：edge-hls.{tld}/hls/{model_id}/master/{model_id}_auto.m3u8
-            let url = format!(
-                "https://edge-hls.{}/hls/{}/master/{}_auto.m3u8",
-                tld, model_id, model_id
-            );
-            let client = client.clone();
-            let referer = self.referer_base();
-            tasks.spawn(async move {
-                let resp = client.get(&url).header("Referer", referer).send().await;
-                (tld, url, resp)
-            });
-        }
-
-        let mut errors: Vec<(String, String)> = Vec::new();
-
-        while let Some(join_result) = tasks.join_next().await {
-            let (tld, url, result) = match join_result {
-                Ok(r) => r,
-                Err(_) => continue,
-            };
-            match result {
-                Ok(resp) if resp.status().is_success() => {
-                    tasks.abort_all();
-                    tracing::debug!("{}", crate::tl!("stripchat.autoM3u8TldSuccess", tld = tld));
-                    return Ok(resp.text().await?);
-                }
-                Ok(resp) => {
-                    errors.push((url, format!("HTTP {}", resp.status())));
-                }
-                Err(e) => {
-                    errors.push((url, e.to_string()));
-                }
-            }
-        }
-
-        for (url, err) in &errors {
-            tracing::error!("{}", crate::tl!("stripchat.autoM3u8Failed", url = url, error = err));
-        }
-        Err(AppError::Other(format!(
-            "All CDN TLDs failed for model {} _auto.m3u8",
-            model_id
-        )))
-    }
-
-    /// 获取主播的 HLS 播放列表 URL。
-    /// 直接对所有 CDN TLD 竞速请求 `{model_id}_auto.m3u8`，按配置选择流。
-    /// 若 playlist 包含 Mouflon 加密参数，则按用户配置的 Mouflon Keys 顺序逐一比对，
-    /// 取第一个匹配的 pkey 对应的 psch 拼入 URL。
-    ///
-    /// Get the HLS playlist URL for a streamer.
-    /// Races all CDN TLDs for `{model_id}_auto.m3u8` and selects a stream using the configured resolution preference.
-    /// If the playlist contains Mouflon encryption parameters, iterates through the user-configured
-    /// Mouflon Keys in order and uses the first matching pkey's psch in the URL.
-    pub async fn get_playlist_url(&self, username: &str, model_id: i64) -> Result<String> {
-        let playlist_text = self.fetch_auto_playlist(model_id).await?;
-
-        let parsed = crate::recording::hls::parse_master_playlist(
-            &playlist_text,
-            self.preferred_resolution,
-            self.prefers_higher_resolution,
-        );
-
-        let (url, mouflon_pairs) =
-            parsed.ok_or_else(|| AppError::StreamOffline(username.to_string()))?;
-
-        // 若存在 Mouflon 加密参数，则遍历用户配置的 keys，取第一个匹配的
-        // If Mouflon encryption parameters exist, iterate user-configured keys and use the first match
-        let final_url = if mouflon_pairs.is_empty() {
-            url
-        } else {
-            // 按 mouflon_pairs 顺序遍历，找到第一个在用户 keys 中存在的 pkey
-            // Iterate mouflon_pairs in order, find the first pkey present in user keys
-            let matched = mouflon_pairs
-                .iter()
-                .find(|(_, pkey)| self.mouflon_keys.contains_key(pkey.as_str()));
-
-            match matched {
-                Some((psch, pkey)) => {
-                    let sep = if url.contains('?') { "&" } else { "?" };
-                    format!("{}{}psch={}&pkey={}", url, sep, psch, pkey)
-                }
-                None => {
-                    // 没有匹配的 key，回退到第一个 pair（无解密密钥）
-                    // No matching key found, fall back to the first pair (no decryption key)
-                    let (psch, pkey) = &mouflon_pairs[0];
-                    let sep = if url.contains('?') { "&" } else { "?" };
-                    format!("{}{}psch={}&pkey={}", url, sep, psch, pkey)
-                }
-            }
-        };
-
-        tracing::info!("{}", crate::tl!("stripchat.usingUrl", url = final_url));
-
-        Ok(final_url)
-    }
-
-    /// 下载 HLS 播放列表文本内容。
-    /// Download the HLS playlist text content.
-    pub async fn fetch_playlist(&self, playlist_url: &str) -> Result<String> {
-        let resp = self.cdn_get(playlist_url).await?;
-        Ok(resp.text().await?)
-    }
-
-    /// 下载单个 HLS 分片的字节数据。
-    /// Download the byte data of a single HLS segment.
-    pub async fn download_segment(&self, url: &str) -> Result<Vec<u8>> {
-        let resp = self.cdn_get(url).await?;
-        Ok(resp.bytes().await?.to_vec())
     }
 }

@@ -84,6 +84,7 @@ The Release workflow derives and writes all other fields automatically:
 | Identifier       | Platform                  |
 |------------------|---------------------------|
 | `windows-x86_64` | Windows 64-bit            |
+| `windows-aarch64`| Windows ARM64             |
 | `linux-x86_64`   | Linux x86_64              |
 | `linux-aarch64`  | Linux ARM64               |
 | `darwin-x86_64`  | macOS Intel               |

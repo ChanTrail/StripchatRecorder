@@ -10,7 +10,9 @@
 //! paths needing post-processing (re-)triggered. Does not implement meta file I/O
 //! primitives (see `super::store`) or scheduling/cleanup logic (see `super::maintenance`).
 
-use super::model::{META_VERSION, VideoMeta, meta_path_for, parse_timestamp_from_stem, recording_stem};
+use super::model::{
+    META_VERSION, VideoMeta, meta_path_for, parse_timestamp_from_stem, recording_stem,
+};
 use super::store::{read_meta, write_meta};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -175,11 +177,25 @@ pub fn ensure_meta_files(
     }
 
     if output_dir.exists() {
-        scan_and_ensure_meta(output_dir, &mut pp_pending, state, recorder, retry_pp_error, &owned_elsewhere);
+        scan_and_ensure_meta(
+            output_dir,
+            &mut pp_pending,
+            state,
+            recorder,
+            retry_pp_error,
+            &owned_elsewhere,
+        );
     }
     for dir in extra_dirs {
         if dir.exists() && *dir != output_dir {
-            scan_and_ensure_meta(dir, &mut pp_pending, state, recorder, retry_pp_error, &owned_elsewhere);
+            scan_and_ensure_meta(
+                dir,
+                &mut pp_pending,
+                state,
+                recorder,
+                retry_pp_error,
+                &owned_elsewhere,
+            );
         }
     }
 
@@ -377,7 +393,9 @@ fn scan_and_ensure_meta(
                 // (is_stem_active only counts Claimed entries, so this scan's own reservation
                 // doesn't match)
                 if owned_elsewhere.contains(&path)
-                    || path.file_stem().is_some_and(|s| state.pp_queue.is_stem_active(s))
+                    || path
+                        .file_stem()
+                        .is_some_and(|s| state.pp_queue.is_stem_active(s))
                 {
                     tracing::debug!(
                         "{}",
@@ -765,7 +783,14 @@ fn scan_and_ensure_meta(
         }
 
         // ── 普通子目录，递归扫描 / Regular subdirectory, recurse ──────────────
-        scan_and_ensure_meta(&path, pp_pending, state, recorder, retry_pp_error, owned_elsewhere);
+        scan_and_ensure_meta(
+            &path,
+            pp_pending,
+            state,
+            recorder,
+            retry_pp_error,
+            owned_elsewhere,
+        );
     }
 }
 

@@ -634,6 +634,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28dea519a9695b9977216879a3ebfddf92f1c08c05d984f8996aecd6ecdc811d"
 
 [[package]]
+name = "filetime"
+version = "0.2.29"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c287a33c7f0a620c38e641e7f60827713987b3c0f26e8ddc9462cc69cf75759"
+dependencies = [
+ "cfg-if",
+ "libc",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1221,6 +1231,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
 
 [[package]]
+name = "liblzma"
+version = "0.4.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa980ea6744074a5b5e0ac6b164aca94fc970121869b3e78ae12a2b0097dbea7"
+dependencies = [
+ "liblzma-sys",
+]
+
+[[package]]
+name = "liblzma-sys"
+version = "0.4.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7c7e3581f367a78d7b7e7ae948d023310556f0cfc13156c2e4e00e25616492b9"
+dependencies = [
+ "cc",
+ "libc",
+ "pkg-config",
+]
+
+[[package]]
 name = "libredox"
 version = "0.1.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1267,6 +1297,12 @@ name = "lru-slab"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4050469837a6ff301cd14c1f8f24f88549e6d548f24f64e2148eb0f72cebc51f"
+
+[[package]]
+name = "lzma-rust2"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef1d73c59a56771343712b22ea5615092c612c16ba291c0979e3105dfeec4890"
 
 [[package]]
 name = "matchers"
@@ -2069,6 +2105,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "sevenz-rust2"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5e465701779cbc6d0d10cf907f175035cfdd50b8d3cb628d7f1f435ef02972f"
+dependencies = [
+ "crc32fast",
+ "js-sys",
+ "lzma-rust2",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "sha1"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2247,7 +2295,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "stripchat-recorder"
-version = "0.4.8-beta"
+version = "0.4.9-beta"
 dependencies = [
  "argon2",
  "async-stream",
@@ -2259,6 +2307,7 @@ dependencies = [
  "duct",
  "futures-util",
  "libc",
+ "liblzma",
  "mime_guess",
  "notify",
  "parking_lot",
@@ -2266,13 +2315,19 @@ dependencies = [
  "regex",
  "reqwest",
  "rust-embed",
+ "rustls",
+ "rustls-pki-types",
+ "rustls-platform-verifier",
  "self_update",
  "serde",
  "serde_json",
+ "sevenz-rust2",
  "sha2 0.11.1",
  "sysinfo",
+ "tar",
  "tempfile",
  "tokio",
+ "tokio-rustls",
  "tokio-stream",
  "tower-http 0.7.1",
  "tracing",
@@ -2341,6 +2396,16 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-io-kit",
  "windows",
+]
+
+[[package]]
+name = "tar"
+version = "0.4.46"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f6221d9a6003c78398e3b239969f352578258df48c8eb051caadae0015bc840"
+dependencies = [
+ "filetime",
+ "libc",
 ]
 
 [[package]]

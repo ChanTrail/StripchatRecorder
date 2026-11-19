@@ -5,568 +5,31 @@
 //!
 //! Defines `Settings` (user configuration), `AppData` (persisted data), and `AppState` (runtime state).
 //! `AppState` protects shared data with `parking_lot::RwLock` and provides post-processing task state tracking.
+//!
+//! # 子模块 / Submodules
+//! - [`model`]：持久化数据模型（Settings/AppData/StreamerData/MouflonKeysStore）/ persisted data models
+//! - [`io`]：路径定位与配置文件容错读写 / path resolution and tolerant config-file IO
+//! - [`streamers`]：主播追踪记录增删改查 / streamer record CRUD
+//! - [`mouflon`]：Mouflon 密钥读写与 Worker 同步 / Mouflon key access and Worker sync
 
 use crate::core::error::{AppError, Result};
 use crate::postprocess::pipeline::PipelineConfig;
+use io::{
+    ConfigFile, apply_settings_overrides_in, backup_invalid_config, load_config_file,
+    load_config_or_backup,
+};
 use parking_lot::RwLock;
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
-/// Mouflon 密钥存储结构，持久化到 mouflon_keys.json。
-/// Mouflon key store, persisted to mouflon_keys.json.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct MouflonKeysStore {
-    /// pkey -> pdkey 密钥对 / pkey -> pdkey key pairs
-    #[serde(default)]
-    pub keys: HashMap<String, String>,
-    /// 数据源（Worker）的密钥更新时间（RFC 3339），同步时与 Worker 返回的 updated_at 比对，相同则跳过写入。
-    /// Key update timestamp from the data source (Worker, RFC 3339).
-    /// Compared against the Worker's `updated_at`; skip write if equal.
-    #[serde(default)]
-    pub auto_synced_at: Option<String>,
-    /// 最近一次手动添加/删除密钥的时间（RFC 3339）。
-    /// Timestamp of the last manual key add/remove (RFC 3339).
-    #[serde(default)]
-    pub manual_updated_at: Option<String>,
-}
+mod io;
+mod model;
+mod mouflon;
+mod streamers;
 
-/// 用户可配置的录制器设置 / User-configurable recorder settings
-///
-/// 容器级 `#[serde(default)]`：settings.json 缺少的字段取 `Settings::default()` 中的值，
-/// 因此 `{}` 或只写了部分字段的手动编辑文件也能正常读取，而不是整个文件解析失败。
-/// Container-level `#[serde(default)]`: fields missing from settings.json take their value from
-/// `Settings::default()`, so `{}` or a hand-edited file with only some fields still loads
-/// instead of failing to parse as a whole.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct Settings {
-    /// TS 分片流输出目录 / TS segment stream output directory
-    pub output_dir: String,
-    /// 主播状态轮询间隔（秒）/ Streamer status poll interval (seconds)
-    pub poll_interval_secs: u64,
-    /// 是否默认开启自动录制 / Whether auto-record is enabled by default
-    pub auto_record: bool,
-    /// Stripchat API 代理地址 / Stripchat API proxy URL
-    pub api_proxy_url: Option<String>,
-    /// CDN 分片下载代理地址 / CDN segment download proxy URL
-    pub cdn_proxy_url: Option<String>,
-    /// Stripchat 镜像站地址 / Stripchat mirror site URL
-    pub sc_mirror_url: Option<String>,
-    /// Stripchat 镜像站协议（"https" 或 "http"，默认 "https"）
-    /// Stripchat mirror site scheme ("https" or "http", default "https")
-    #[serde(default = "default_sc_mirror_scheme")]
-    pub sc_mirror_scheme: String,
-    /// 最大并发录制数（0 = 不限制）/ Max concurrent recordings (0 = unlimited)
-    pub max_concurrent: usize,
-    /// 每文件录制时长上限（秒，0 = 不限制）/ Per-file recording duration in seconds (0 = unlimited)
-    #[serde(default)]
-    pub max_recording_duration_secs: u64,
-    /// 首选录制分辨率高度（0 = 原始/最高画质）/ Preferred recording resolution height (0 = original/highest quality)
-    #[serde(default)]
-    pub preferred_resolution: u32,
-    /// 首选分辨率不可用时的回退方向（"lower" 或 "higher"）/ Fallback direction when preferred resolution is unavailable ("lower" or "higher")
-    #[serde(default = "default_resolution_preference")]
-    pub resolution_preference: String,
-    /// 后处理临时目录最大占用（GB，0 = 不限制，默认 50 GB）
-    /// Max size of the post-processing tmp directory in GB (0 = unlimited, default 50 GB)
-    #[serde(default = "default_max_tmp_dir_gb")]
-    pub max_tmp_dir_gb: f64,
-    /// 界面语言（"zh-CN" 或 "en-US"）/ UI language ("zh-CN" or "en-US")
-    #[serde(default = "default_language")]
-    pub language: String,
-    /// 监听端口 / Listen port
-    #[serde(default = "default_server_port")]
-    pub server_port: u16,
-    /// Mouflon Keys 同步 Worker URL（为空则不启用自动同步）
-    /// Mouflon Keys sync Worker URL (empty = auto-sync disabled)
-    #[serde(default = "default_mouflon_sync_url")]
-    pub mouflon_sync_url: Option<String>,
-    /// Mouflon Keys 同步 Worker 鉴权 Token（对应 Worker 的 AUTH_TOKEN 环境变量）
-    /// Mouflon Keys sync Worker auth token (corresponds to Worker's AUTH_TOKEN env var)
-    #[serde(default)]
-    pub mouflon_sync_token: Option<String>,
-    /// 社区模块代理地址（用于下载模块文件，留空不使用）
-    /// Community module proxy URL (for downloading module files, empty = disabled)
-    #[serde(default)]
-    pub community_proxy_url: Option<String>,
-    /// 社区模块镜像站地址（在 github.com URL 前加前缀，如 https://mirror.com/https://github.com/...）
-    /// Community module mirror URL (prepended to github.com URLs, e.g. https://mirror.com/https://github.com/...)
-    #[serde(default)]
-    pub community_mirror_url: Option<String>,
-    /// 用户是否已接受社区模块使用条款（false = 首次进入时显示警告弹窗）
-    /// Whether the user has accepted the community module terms (false = show warning dialog on first visit)
-    #[serde(default)]
-    pub community_terms_accepted: bool,
-    /// 首次启动向导是否已完成（false = 显示 Setup 页面）
-    /// Whether the first-launch setup wizard has been completed (false = show Setup page)
-    #[serde(default)]
-    pub setup_done: bool,
-    /// 管理员密码的 Argon2 哈希（PHC 格式）。None 表示尚未设置密码（初次使用）。
-    /// Argon2 hash of the admin password (PHC string format). None = password not yet set (first run).
-    #[serde(default)]
-    pub admin_password_hash: Option<String>,
-    /// 后处理最大并发数（0 = 自动 = CPU 逻辑核心数 × 2；≥1 = 固定并发数，上限 CPU × 2）。
-    /// Max concurrent post-processing tasks (0 = auto = logical CPU count × 2; ≥1 = fixed, capped at CPU × 2).
-    #[serde(default)]
-    pub max_pp_concurrent: usize,
-    /// 是否检查预发布（beta）版本更新（true = 同时检查 prerelease；beta 版本强制为 true）。
-    /// Whether to check for pre-release (beta) updates (true = include prereleases; forced true on beta builds).
-    #[serde(default)]
-    pub check_prerelease: bool,
-    /// camgirlfinder.net API 代理地址（用于拉取主播 schedule，留空不使用）。
-    /// Proxy URL for accessing camgirlfinder.net API (used when fetching streamer schedules, empty = disabled).
-    #[serde(default)]
-    pub cgf_proxy_url: Option<String>,
-}
-
-/// Mouflon 同步地址的默认值 / Default value for Mouflon sync URL
-fn default_mouflon_sync_url() -> Option<String> {
-    Some("https://mouflon.chantrail.com".to_string())
-}
-
-/// 分辨率回退方向的默认值 / Default resolution fallback direction
-fn default_resolution_preference() -> String {
-    "lower".to_string()
-}
-
-/// 镜像站协议的默认值 / Default value for mirror site scheme
-fn default_sc_mirror_scheme() -> String {
-    "https".to_string()
-}
-
-/// tmp 目录最大占用的默认值（50 GB）/ Default value for max tmp dir size (50 GB)
-fn default_max_tmp_dir_gb() -> f64 {
-    50.0
-}
-
-/// 语言的默认值 / Default value for language
-fn default_language() -> String {
-    "zh-CN".to_string()
-}
-
-/// Server 端口的默认值 / Default value for server port
-fn default_server_port() -> u16 {
-    3030
-}
-
-/// 运行时覆盖的数据根目录（仅 Desktop 端设置，见 [`set_exe_dir_override`]）。
-/// Runtime-overridden data root directory (only set by the Desktop build, see [`set_exe_dir_override`]).
-static EXE_DIR_OVERRIDE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-
-/// 设置数据根目录覆盖值，替代默认的"可执行文件同目录"约定。
-///
-/// 仅供 Desktop 端（`desktop-tauri`）在 `setup()` 阶段调用一次：Tauri 应用以系统安装包
-/// （NSIS/MSI、AppImage、deb/rpm、dmg）分发时，可执行文件所在目录既可能只读（如 AppImage
-/// 的 FUSE 挂载点，每次启动路径还会变化），也可能没有写权限（如 `/usr/bin`），或修改会
-/// 破坏代码签名（如 macOS `.app` bundle）。Desktop 端改用 Tauri 的 `app_data_dir()`
-/// （操作系统标准的每用户数据目录）作为覆盖值，Server 端不调用此函数，行为不变。
-///
-/// 必须在任何调用 [`exe_dir`]（或依赖它的 [`AppState::new`]、`log_dir`、`meta_dir` 等）的
-/// 代码之前调用，且只应调用一次；后续调用会静默忽略（[`OnceLock::set`] 的语义）。
-///
-/// Set the data root directory override, replacing the default "next to the executable"
-/// convention.
-///
-/// Only meant to be called once by the Desktop build (`desktop-tauri`) during `setup()`:
-/// when a Tauri app is distributed as a system installer package (NSIS/MSI, AppImage,
-/// deb/rpm, dmg), the executable's directory may be read-only (e.g. AppImage's FUSE mount
-/// point, which also changes path on every launch), lack write permission (e.g. `/usr/bin`),
-/// or modifying it may break code signing (e.g. macOS `.app` bundles). The Desktop build uses
-/// Tauri's `app_data_dir()` (the OS-standard per-user data directory) as the override value.
-/// The Server build never calls this, so its behavior is unchanged.
-///
-/// Must be called before any code that calls [`exe_dir`] (or things that depend on it, like
-/// [`AppState::new`], `log_dir`, `meta_dir`, etc.), and only once; subsequent calls are
-/// silently ignored (per [`OnceLock::set`] semantics).
-pub fn set_exe_dir_override(dir: PathBuf) {
-    let _ = EXE_DIR_OVERRIDE.set(dir);
-}
-
-/// 返回数据根目录：Desktop 端为 [`set_exe_dir_override`] 设置的每用户数据目录；
-/// Server 端（未设置覆盖值）为可执行文件所在目录，用于定位配置文件和模块目录。
-///
-/// Returns the data root directory: on Desktop, the per-user data directory set via
-/// [`set_exe_dir_override`]; on Server (no override set), the directory containing the
-/// executable — used to locate config files and module directories.
-pub fn exe_dir() -> PathBuf {
-    if let Some(dir) = EXE_DIR_OVERRIDE.get() {
-        return dir.clone();
-    }
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
-}
-
-/// 去掉字符串开头的 UTF-8 BOM（`U+FEFF`）。
-///
-/// Windows 记事本等编辑器保存 UTF-8 文件时可能在开头加 BOM，serde_json 会把它当成非法字符，
-/// 导致整个文件解析失败。读取用户可能手动编辑的 JSON（`config/`、`locale/`）前都先调用本函数。
-///
-/// Strip a leading UTF-8 BOM (`U+FEFF`) from a string.
-///
-/// Editors such as Windows Notepad may prepend a BOM when saving UTF-8, which serde_json treats
-/// as an invalid character, failing the whole file. Call this before parsing any JSON the user
-/// may edit by hand (`config/`, `locale/`).
-pub fn strip_utf8_bom(s: &str) -> &str {
-    s.strip_prefix('\u{FEFF}').unwrap_or(s)
-}
-
-/// 读取 `config/` 下 JSON 配置文件的结果 / Result of reading a JSON config file under `config/`
-enum ConfigFile<T> {
-    /// 文件不存在，或内容为空白（含只有 BOM）/ File missing, or blank (including BOM only)
-    Missing,
-    /// 解析成功 / Parsed successfully
-    Parsed(T),
-    /// 文件存在但无法读取（如不是 UTF-8 编码）或解析失败，附错误信息
-    /// File exists but can't be read (e.g. not UTF-8) or fails to parse, with the error
-    Invalid(String),
-}
-
-/// 读取并解析 JSON 配置文件：先去掉 UTF-8 BOM，空白文件视为不存在。
-/// Read and parse a JSON config file: the UTF-8 BOM is stripped first and a blank file counts
-/// as missing.
-fn load_config_file<T: DeserializeOwned>(path: &Path) -> ConfigFile<T> {
-    let content = match fs::read_to_string(path) {
-        Ok(c) => c,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return ConfigFile::Missing,
-        Err(e) => return ConfigFile::Invalid(e.to_string()),
-    };
-    let content = strip_utf8_bom(&content);
-    if content.trim().is_empty() {
-        return ConfigFile::Missing;
-    }
-    match serde_json::from_str(content) {
-        Ok(v) => ConfigFile::Parsed(v),
-        Err(e) => ConfigFile::Invalid(e.to_string()),
-    }
-}
-
-/// 配置文件无法读取或解析时：把原文件复制为 `{文件名}.invalid-{时间}` 备份并记录警告。
-///
-/// 本次启动对该文件改用默认值；之后任意一次保存（`save()` 会写全部配置文件）都会用默认值
-/// 覆盖原文件，备份保证手动编辑过的内容不会就此丢失。
-///
-/// When a config file can't be read or parsed: copy it to `{file name}.invalid-{time}` as a
-/// backup and log a warning.
-///
-/// This run uses defaults for that file; any later save (`save()` writes every config file)
-/// overwrites the original with defaults, so the backup keeps hand-edited content from being lost.
-fn backup_invalid_config(path: &Path, error: &str) {
-    let file_name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("config.json");
-    let backup = path.with_file_name(format!(
-        "{}.invalid-{}",
-        file_name,
-        chrono::Local::now().format("%Y%m%d_%H%M%S")
-    ));
-    match fs::copy(path, &backup) {
-        Ok(_) => tracing::warn!(
-            "{}",
-            crate::tl!(
-                "startup.configInvalidBackedUp",
-                path = path.display(),
-                error = error,
-                backup = backup.display()
-            )
-        ),
-        Err(e) => tracing::warn!(
-            "{}",
-            crate::tl!(
-                "startup.configInvalidBackupFailed",
-                path = path.display(),
-                error = error,
-                backup_error = e
-            )
-        ),
-    }
-}
-
-/// [`AppState::apply_settings_overrides`] 的实现，作用于指定的 settings.json 路径。
-/// Implementation of [`AppState::apply_settings_overrides`] for the given settings.json path.
-fn apply_settings_overrides_in(
-    path: &Path,
-    language: Option<&str>,
-    server_port: Option<u16>,
-) -> bool {
-    let (mut settings, missing) = match load_config_file::<Settings>(path) {
-        ConfigFile::Parsed(s) => (s, false),
-        ConfigFile::Missing => (Settings::default(), true),
-        ConfigFile::Invalid(err) => {
-            tracing::warn!(
-                "{}",
-                crate::tl!(
-                    "startup.envOverrideSkippedInvalid",
-                    path = path.display(),
-                    error = err
-                )
-            );
-            return false;
-        }
-    };
-
-    let mut applied: Vec<String> = Vec::new();
-    let mut language_changed = false;
-    if let Some(lang) = language
-        && settings.language != lang
-    {
-        settings.language = lang.to_string();
-        language_changed = true;
-        applied.push(format!("LANGUAGE={lang}"));
-    }
-    if let Some(port) = server_port
-        && settings.server_port != port
-    {
-        settings.server_port = port;
-        applied.push(format!("PORT={port}"));
-    }
-    if applied.is_empty() && !missing {
-        return false;
-    }
-
-    let write_result = path
-        .parent()
-        .map_or(Ok(()), fs::create_dir_all)
-        .map_err(|e| e.to_string())
-        .and_then(|_| serde_json::to_string_pretty(&settings).map_err(|e| e.to_string()))
-        .and_then(|json| fs::write(path, json).map_err(|e| e.to_string()));
-    if let Err(e) = write_result {
-        tracing::warn!(
-            "{}",
-            crate::tl!(
-                "startup.envOverrideWriteFailed",
-                path = path.display(),
-                error = e
-            )
-        );
-        return false;
-    }
-    if !applied.is_empty() {
-        tracing::info!(
-            "{}",
-            crate::tl!(
-                "startup.envOverrideApplied",
-                path = path.display(),
-                values = applied.join(", ")
-            )
-        );
-    }
-    language_changed
-}
-
-/// 读取配置文件；无法读取或解析时先备份原文件（见 [`backup_invalid_config`]）。
-/// 不存在、为空或无效时返回 `None`。
-/// Read a config file, backing it up first when it can't be read or parsed (see
-/// [`backup_invalid_config`]). Returns `None` when missing, blank or invalid.
-fn load_config_or_backup<T: DeserializeOwned>(path: &Path) -> Option<T> {
-    match load_config_file(path) {
-        ConfigFile::Parsed(v) => Some(v),
-        ConfigFile::Missing => None,
-        ConfigFile::Invalid(err) => {
-            backup_invalid_config(path, &err);
-            None
-        }
-    }
-}
-
-impl Default for Settings {
-    fn default() -> Self {
-        // 默认输出目录为可执行文件同目录下的 ts_fragment 文件夹（存放 TS 分片流）
-        // Default output directory is the ts_fragment folder next to the executable (for TS segment streams)
-        let output_dir = exe_dir().join("ts_fragment").to_string_lossy().to_string();
-
-        Self {
-            output_dir,
-            poll_interval_secs: 60,
-            auto_record: true,
-            api_proxy_url: None,
-            cdn_proxy_url: None,
-            sc_mirror_url: None,
-            sc_mirror_scheme: default_sc_mirror_scheme(),
-            max_concurrent: 0,
-            max_recording_duration_secs: 0,
-            preferred_resolution: 0,
-            resolution_preference: default_resolution_preference(),
-            max_tmp_dir_gb: default_max_tmp_dir_gb(),
-            language: default_language(),
-            server_port: default_server_port(),
-            mouflon_sync_url: default_mouflon_sync_url(),
-            mouflon_sync_token: None,
-            community_proxy_url: None,
-            community_mirror_url: None,
-            community_terms_accepted: false,
-            setup_done: false,
-            admin_password_hash: None,
-            max_pp_concurrent: 0,
-            check_prerelease: false,
-            cgf_proxy_url: None,
-        }
-    }
-}
-
-/// 持久化到 config/ 目录下各 JSON 文件的全部应用数据 / All application data persisted to JSON files under the config/ directory
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct AppData {
-    /// 用户配置 / User settings
-    pub settings: Settings,
-    /// 追踪的主播列表 / List of tracked streamers
-    pub streamers: Vec<StreamerData>,
-    /// Mouflon HLS 解密密钥存储（含密钥对和时间戳）/ Mouflon HLS decryption key store (keys + timestamps)
-    #[serde(default)]
-    pub mouflon_keys: MouflonKeysStore,
-    /// 后处理流水线配置 / Post-processing pipeline configuration
-    #[serde(default)]
-    pub pipeline: PipelineConfig,
-}
-
-/// 单个主播的持久化数据 / Persisted data for a single streamer
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StreamerData {
-    /// 主播用户名（小写）/ Streamer username (lowercase)
-    pub username: String,
-    /// 是否开启自动录制 / Whether auto-record is enabled
-    pub auto_record: bool,
-    /// 添加时间（RFC 3339 格式）/ Time added (RFC 3339 format)
-    pub added_at: String,
-    /// Stripchat 内部主播 ID（首次添加时从 v1/broadcasts/{username} 的 `modelId`
-    /// 字段获取并固定保存）。
-    ///
-    /// 用途：username 是可被主播修改的显示名，而 modelId 是稳定不变的内部标识。
-    /// 当 v1/broadcasts/{username} 查询不到（主播已改名，旧用户名不再解析）时，
-    /// 用这个缓存的 model_id 反查 v2/models/{model_id}/cam 接口获取主播当前
-    /// 的真实用户名，从而在不丢失追踪记录的情况下跟随改名更新。
-    ///
-    /// `Option` 是为了兼容升级前已存在、尚未回填 model_id 的旧数据；这类记录在
-    /// 下一次成功查询到该主播时会被自动回填（见 `StatusMonitor::poll_streamer`）。
-    ///
-    /// Stripchat's internal streamer ID (fetched from v1/broadcasts/{username}'s
-    /// `modelId` field on first add, and persisted permanently).
-    ///
-    /// Purpose: username is a display name the streamer can change, while modelId is a
-    /// stable, unchanging internal identifier. When v1/broadcasts/{username} can't find
-    /// the streamer (renamed, old username no longer resolves), this cached model_id is
-    /// used to query v2/models/{model_id}/cam to discover the streamer's current real
-    /// username, allowing the tracked record to follow the rename without being lost.
-    ///
-    /// `Option` accommodates pre-upgrade data that hasn't backfilled model_id yet; such
-    /// records get it backfilled automatically the next time the streamer is
-    /// successfully queried (see `StatusMonitor::poll_streamer`).
-    #[serde(default)]
-    pub model_id: Option<i64>,
-    /// 是否已确认失效（用户名和内部 ID 均无法找到）。
-    /// 失效后跳过轮询请求以节约带宽，前端展示通知提醒用户处理。
-    ///
-    /// Whether this streamer is confirmed dead (not found by username or model_id).
-    /// Dead streamers are skipped in polling to save bandwidth; a notification is shown
-    /// in the frontend for the user to take action.
-    #[serde(default)]
-    pub is_dead: bool,
-    /// 来自 camgirlfinder.net 的历史在线规律（7×48 float 矩阵，序列化为 base64 字符串）。
-    ///
-    /// **内存格式**：`Vec<Vec<f32>>`，外层长度 7（星期，0=周日），内层长度 48（30 分钟时段）。
-    /// **存储格式**：336 字节（每格量化为 u8，0–255 对应 0.0–1.0）经 Base64 编码后的字符串，
-    /// 比原始 JSON float 数组小约 3 倍（~448 字符 vs ~1.5 KB）。
-    ///
-    /// Historical online schedule from camgirlfinder.net (7×48 float matrix,
-    /// serialized as a base64-encoded string).
-    ///
-    /// **In-memory**: `Vec<Vec<f32>>`, outer length 7 (weekday, 0=Sunday),
-    /// inner length 48 (half-hour buckets).
-    /// **On-disk**: 336 bytes (each cell quantized to u8 in [0,255]) encoded as Base64
-    /// (~448 chars vs ~1.5 KB for raw JSON floats, ~3× smaller).
-    #[serde(default, with = "schedule_serde")]
-    pub schedule: Option<Vec<Vec<f32>>>,
-    /// 主播离线时的预览图 URL 缓存（来自 v2/models/{model_id}/cam 接口）。
-    /// 由状态轮询在每个主播每天（本地时间）第一次轮询成功时顺带更新，与在线状态无关
-    /// （失败时下一轮再试，每天最多 3 次）；离线轮询直接使用此缓存，避免每次轮询都向 cam
-    /// 接口发起 HTTP 请求。
-    ///
-    /// Cached offline preview image URL (from v2/models/{model_id}/cam endpoint).
-    /// Updated by status polling on each streamer's first successful poll of the (local) day,
-    /// regardless of online status (retried the next round on failure, at most 3 times a day);
-    /// offline polls use this cache directly, avoiding a cam endpoint HTTP request on every poll.
-    #[serde(default)]
-    pub cached_preview_url: Option<String>,
-}
-
-/// 自定义 serde 模块：将 `Option<Vec<Vec<f32>>>` 序列化为 Base64 字符串以节省空间。
-///
-/// **编码**：将 7×48 矩阵展平为 336 字节，每个 f32 值量化为 u8（0–255 对应 0.0–1.0），
-/// 然后 Base64 编码为约 448 字符的字符串，比原始 JSON float 数组小约 3 倍。
-///
-/// **解码**：Base64 字符串 → 336 字节 → 反量化为 f32 → 7×48 矩阵。
-/// `null` 和缺失字段均解码为 `None`（`#[serde(default)]` 处理缺失字段）。
-///
-/// Custom serde module: serializes `Option<Vec<Vec<f32>>>` as a Base64 string to save space.
-///
-/// **Encoding**: flatten 7×48 matrix to 336 bytes, quantize each f32 to u8 (0–255 → 0.0–1.0),
-/// then Base64-encode to ~448 chars — ~3× smaller than raw JSON float arrays.
-/// **Decoding**: Base64 → 336 bytes → dequantize to f32 → 7×48 matrix.
-/// `null` and missing fields both decode to `None`.
-mod schedule_serde {
-    use base64::{Engine, engine::general_purpose::STANDARD};
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    const ROWS: usize = 7;
-    const COLS: usize = 48;
-    const BYTES: usize = ROWS * COLS; // 336
-
-    pub fn serialize<S>(value: &Option<Vec<Vec<f32>>>, ser: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        match value {
-            None => ser.serialize_none(),
-            Some(matrix) => {
-                let mut buf = Vec::with_capacity(BYTES);
-                for row in matrix {
-                    for &v in row {
-                        // 量化：f32 [0.0, 1.0] → u8 [0, 255]
-                        // Quantize: f32 [0.0, 1.0] → u8 [0, 255]
-                        buf.push((v.clamp(0.0, 1.0) * 255.0).round() as u8);
-                    }
-                }
-                STANDARD.encode(&buf).serialize(ser)
-            }
-        }
-    }
-
-    pub fn deserialize<'de, D>(de: D) -> Result<Option<Vec<Vec<f32>>>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s: Option<String> = Option::deserialize(de)?;
-        let s = match s {
-            None => return Ok(None),
-            Some(s) => s,
-        };
-        let bytes = STANDARD.decode(&s).map_err(serde::de::Error::custom)?;
-        if bytes.len() != BYTES {
-            return Err(serde::de::Error::custom(format!(
-                "schedule base64 decoded to {} bytes, expected {}",
-                bytes.len(),
-                BYTES
-            )));
-        }
-        let matrix = bytes
-            .as_chunks::<COLS>()
-            .0
-            .iter()
-            .map(|row| {
-                // 反量化：u8 [0, 255] → f32 [0.0, 1.0]
-                // Dequantize: u8 [0, 255] → f32 [0.0, 1.0]
-                row.iter().map(|&b| b as f32 / 255.0).collect()
-            })
-            .collect();
-        Ok(Some(matrix))
-    }
-}
+pub use io::{exe_dir, set_exe_dir_override, strip_utf8_bom};
+pub use model::{AppData, MouflonKeysStore, Settings, StreamerData};
 
 /// 应用运行时全局状态，通过 `Arc<AppState>` 在各模块间共享。
 /// Global application runtime state, shared across modules via `Arc<AppState>`.
@@ -596,15 +59,15 @@ pub struct AppState {
     /// 更新下载/安装进度状态（通过 SSE 广播给前端）
     /// Update download/install progress state (broadcast to frontend via SSE)
     pub update_state: crate::update::UpdateStateStore,
+    /// FFmpeg 下载/安装进度状态（通过 SSE `ffmpeg-progress` 广播，状态接口供重连恢复）
+    /// FFmpeg download/install progress state (broadcast via SSE `ffmpeg-progress`;
+    /// the status endpoint lets reconnecting clients restore it)
+    pub ffmpeg_state: crate::ffmpeg::FfmpegStateStore,
     /// 负载自适应后的有效最大并发录制数（由后台负载监控实时更新）。
     /// 0 = 不限制（用户设置为不限制时保持不限制，不受负载约束）。
     ///
-    /// Effective max concurrent recordings after load-adaptive adjustment
-    /// (updated in real time by the background load monitor).
-    /// 0 = unlimited (when the user configured 0, it stays unlimited regardless of load).
-    pub effective_max_concurrent: std::sync::atomic::AtomicUsize,
-    /// 当前活跃录制会话数（由 RecorderManager 维护，供负载监控读取）。
-    /// Current active recording session count (maintained by RecorderManager, read by load monitor).
+    /// 当前活跃录制会话数（由 RecorderManager 维护，供 ffmpeg 二进制保护判断繁忙度）。
+    /// Current active recording session count (maintained by RecorderManager, read by the ffmpeg binary guard).
     pub active_recording_count: std::sync::atomic::AtomicUsize,
 }
 
@@ -774,10 +237,6 @@ impl AppState {
 
         fs::create_dir_all(&data.settings.output_dir)?;
 
-        // 记录初始最大并发录制数，用于初始化 effective_max_concurrent
-        // Capture initial max_concurrent for effective_max_concurrent initialization
-        let state_data_ref_max_concurrent = data.settings.max_concurrent;
-
         let state = Arc::new(Self {
             data: RwLock::new(data),
             config_dir,
@@ -787,19 +246,25 @@ impl AppState {
             mouflon_sync_notify_tx: RwLock::new(None),
             notification_store: crate::core::notifications::NotificationStore::new(),
             update_state: crate::update::new_update_state(),
-            effective_max_concurrent: std::sync::atomic::AtomicUsize::new(
-                state_data_ref_max_concurrent,
-            ),
+            ffmpeg_state: crate::ffmpeg::new_ffmpeg_state(),
             active_recording_count: std::sync::atomic::AtomicUsize::new(0),
         });
+
+        // 同步 FFmpeg 位置首选项镜像：ffmpeg 解析逻辑逐次读取它，
+        // 启动时播种 + update_settings 时更新即可保证"下一次调用立即生效"
+        // Seed the FFmpeg location preference mirror: resolution reads it per
+        // call — seeding here plus updating in update_settings guarantees a new
+        // choice takes effect on the very next invocation
+        crate::ffmpeg::set_preference(state.data.read().settings.ffmpeg_preference);
+        // 同步 setup_done 镜像：auth 中间件据此决定是否放行全部 API
+        // Seed the setup_done mirror: the auth middleware uses it to decide
+        // whether all API routes pass
+        crate::server::auth::set_setup_done(state.data.read().settings.setup_done);
 
         // 根据设置中的后处理并发数初始化信号量
         // Initialize the semaphore from the max_pp_concurrent setting
         let init_concurrency = state.data.read().settings.max_pp_concurrent;
         state.pp_queue.set_concurrency(init_concurrency);
-        // 同步初始化 FFmpeg 并发信号量
-        // Also initialize the FFmpeg concurrency semaphore to match
-        crate::recording::ffmpeg_util::set_ffmpeg_concurrency(init_concurrency);
 
         Ok(state)
     }
@@ -858,7 +323,16 @@ impl AppState {
         let output_dir_changed = old.output_dir != settings.output_dir;
         let new_output_dir = settings.output_dir.clone();
         let old_output_dir = old.output_dir.clone();
+        let new_ffmpeg_preference = settings.ffmpeg_preference;
+        let new_setup_done = settings.setup_done;
         self.data.write().settings = settings;
+        // 同步 FFmpeg 位置首选项镜像——下一次 ffmpeg 调用即用新选择
+        // Sync the FFmpeg preference mirror — the next ffmpeg call uses it
+        crate::ffmpeg::set_preference(new_ffmpeg_preference);
+        // 同步 setup_done 镜像——向导完成后立即恢复鉴权（以及反向重置时立即放行）
+        // Sync the setup_done mirror — auth resumes as soon as the wizard
+        // completes (and releases immediately when it is reset)
+        crate::server::auth::set_setup_done(new_setup_done);
         self.save()?;
 
         // 若 TS 分片输出目录发生变化，检查 ts_merge 节点的合并输出目录是否遵循
@@ -922,313 +396,8 @@ impl AppState {
         }
         if pp_concurrent_changed {
             self.pp_queue.set_concurrency(new_pp_concurrent);
-            // 同步更新 FFmpeg 并发上限，使 FFmpeg 信号量与后处理槽位数保持一致
-            // Sync FFmpeg concurrency cap to match the new post-processing slot count
-            crate::recording::ffmpeg_util::set_ffmpeg_concurrency(new_pp_concurrent);
         }
-        // 用户修改录制并发数时，重置 effective_max_concurrent 为新配置值，
-        // 下次负载采样时会再次动态调整。
-        // When user changes max_concurrent, reset effective_max_concurrent to the new config value;
-        // the next load sample will re-apply dynamic adjustment.
-        let new_max_concurrent = self.data.read().settings.max_concurrent;
-        self.effective_max_concurrent
-            .store(new_max_concurrent, std::sync::atomic::Ordering::Relaxed);
         Ok(())
-    }
-
-    /// 获取所有追踪主播的克隆列表。
-    /// Get a cloned list of all tracked streamers.
-    pub fn get_streamers(&self) -> Vec<StreamerData> {
-        self.data.read().streamers.clone()
-    }
-
-    /// 添加新主播到追踪列表（若已存在则返回错误）。
-    /// `model_id` 通常来自添加时对 v1/broadcasts/{username} 的查询结果（见
-    /// `streamer::add_streamer` 路由），用于日后改名反查；查询失败时传 `None`
-    /// 也不阻塞添加，仅是后续改名跟随会失效。
-    ///
-    /// Add a new streamer to the tracking list (returns error if already exists).
-    /// `model_id` typically comes from the v1/broadcasts/{username} lookup performed at
-    /// add time (see the `streamer::add_streamer` route), used later for rename lookups;
-    /// passing `None` when that lookup fails doesn't block adding the streamer, it just
-    /// means rename-following won't work for this entry.
-    pub fn add_streamer(&self, username: &str, model_id: Option<i64>) -> Result<()> {
-        let mut data = self.data.write();
-        if data.streamers.iter().any(|s| s.username == username) {
-            return Err(AppError::Other(format!("模特 {} 已存在", username)));
-        }
-        let auto_record = data.settings.auto_record;
-        data.streamers.push(StreamerData {
-            username: username.to_string(),
-            auto_record,
-            added_at: chrono::Local::now().to_rfc3339(),
-            model_id,
-            is_dead: false,
-            schedule: None,
-            cached_preview_url: None,
-        });
-        drop(data);
-        self.save()
-    }
-
-    /// 回填指定主播的 model_id（仅当当前为 `None` 时才写入，避免覆盖已有值）。
-    /// 用于升级前的旧数据在下一次成功查询时补齐 model_id。
-    ///
-    /// Backfill the model_id for a streamer (only writes when currently `None`, to
-    /// avoid overwriting an existing value). Used to backfill model_id for pre-upgrade
-    /// data on its next successful lookup.
-    pub fn backfill_model_id(&self, username: &str, model_id: i64) {
-        let mut data = self.data.write();
-        if let Some(s) = data.streamers.iter_mut().find(|s| s.username == username)
-            && s.model_id.is_none()
-        {
-            s.model_id = Some(model_id);
-            drop(data);
-            let _ = self.save();
-        }
-    }
-
-    /// 将主播记录从旧用户名重命名为新用户名（改名跟随），保留 model_id/auto_record/added_at
-    /// 不变。若新用户名已存在于列表中（如同时手动添加过），则放弃改名，保留原记录不变，
-    /// 避免产生两条指向同一 model_id 的重复记录。
-    ///
-    /// Rename a streamer record from the old username to the new one (rename-following),
-    /// preserving model_id/auto_record/added_at. If the new username already exists in
-    /// the list (e.g. manually added separately), the rename is abandoned and the
-    /// original record is left unchanged, avoiding two records pointing at the same
-    /// model_id.
-    pub fn rename_streamer(&self, old_username: &str, new_username: &str) -> Result<()> {
-        let mut data = self.data.write();
-        if data.streamers.iter().any(|s| s.username == new_username) {
-            return Err(AppError::Other(format!(
-                "无法改名：{} 已存在于追踪列表中",
-                new_username
-            )));
-        }
-        if let Some(s) = data
-            .streamers
-            .iter_mut()
-            .find(|s| s.username == old_username)
-        {
-            s.username = new_username.to_string();
-        }
-        drop(data);
-        self.save()
-    }
-
-    /// 将主播标记为已失效（is_dead = true）并保存。
-    /// Mark a streamer as dead (is_dead = true) and save.
-    pub fn mark_streamer_dead(&self, username: &str) {
-        let mut data = self.data.write();
-        if let Some(s) = data.streamers.iter_mut().find(|s| s.username == username)
-            && !s.is_dead
-        {
-            s.is_dead = true;
-            drop(data);
-            let _ = self.save();
-        }
-    }
-
-    /// 返回所有已标记为失效的主播用户名集合。
-    /// Returns the set of all usernames marked as dead.
-    pub fn get_dead_streamers(&self) -> std::collections::HashSet<String> {
-        self.data
-            .read()
-            .streamers
-            .iter()
-            .filter(|s| s.is_dead)
-            .map(|s| s.username.clone())
-            .collect()
-    }
-
-    /// 从追踪列表中移除主播并保存。
-    /// Remove a streamer from the tracking list and save.
-    pub fn remove_streamer(&self, username: &str) -> Result<()> {
-        let mut data = self.data.write();
-        data.streamers.retain(|s| s.username != username);
-        drop(data);
-        self.save()
-    }
-
-    /// 设置指定主播的自动录制开关并保存。
-    /// Set the auto-record toggle for a specific streamer and save.
-    pub fn set_auto_record(&self, username: &str, enabled: bool) -> Result<()> {
-        let mut data = self.data.write();
-        if let Some(s) = data.streamers.iter_mut().find(|s| s.username == username) {
-            s.auto_record = enabled;
-        }
-        drop(data);
-        self.save()
-    }
-
-    /// 保存从 camgirlfinder 获取的主播历史在线规律（7×48 矩阵）。
-    /// 仅当主播存在时写入；若已有 schedule 则覆盖更新（schedule 会随时间变化）。
-    ///
-    /// Persist the streamer's historical online schedule fetched from camgirlfinder
-    /// (7×48 matrix). Only writes when the streamer exists; overwrites any existing
-    /// schedule since it changes over time.
-    pub fn set_schedule(&self, username: &str, schedule: Vec<Vec<f32>>) {
-        let mut data = self.data.write();
-        if let Some(s) = data.streamers.iter_mut().find(|s| s.username == username) {
-            s.schedule = Some(schedule);
-            drop(data);
-            let _ = self.save();
-        }
-    }
-
-    /// 更新指定主播的离线预览图 URL 缓存（由状态轮询每天刷新时调用，与在线状态无关）。
-    /// 仅当值确实发生变化时才写盘，避免无意义的 I/O。
-    ///
-    /// Update the cached offline preview image URL for a streamer
-    /// (called by status polling's daily refresh, regardless of online status).
-    /// Only writes to disk when the value actually changes.
-    pub fn set_cached_preview_url(&self, username: &str, url: Option<String>) {
-        let mut data = self.data.write();
-        if let Some(s) = data.streamers.iter_mut().find(|s| s.username == username)
-            && s.cached_preview_url != url
-        {
-            s.cached_preview_url = url;
-            drop(data);
-            let _ = self.save();
-        }
-    }
-
-    /// 获取所有 Mouflon 解密密钥的克隆副本（仅 keys 部分，供录制/转发使用）。
-    /// Get a cloned copy of all Mouflon decryption keys (keys map only, for recording/relay use).
-    pub fn get_mouflon_keys(&self) -> HashMap<String, String> {
-        self.data.read().mouflon_keys.keys.clone()
-    }
-
-    /// 获取完整的 Mouflon 密钥存储（含时间戳），供前端展示。
-    /// Get the full Mouflon key store (including timestamps), for frontend display.
-    pub fn get_mouflon_keys_store(&self) -> MouflonKeysStore {
-        self.data.read().mouflon_keys.clone()
-    }
-
-    /// 添加或更新一个 Mouflon 密钥对，更新 manual_updated_at 并保存。
-    /// Add or update a Mouflon key pair, update manual_updated_at, and save.
-    pub fn add_mouflon_key(&self, pkey: &str, pdkey: &str) -> Result<()> {
-        let mut data = self.data.write();
-        data.mouflon_keys
-            .keys
-            .insert(pkey.to_string(), pdkey.to_string());
-        data.mouflon_keys.manual_updated_at = Some(chrono::Local::now().to_rfc3339());
-        drop(data);
-        self.save()
-    }
-
-    /// 删除指定 pkey 的 Mouflon 密钥，更新 manual_updated_at 并保存。
-    /// Remove the Mouflon key with the given pkey, update manual_updated_at, and save.
-    pub fn remove_mouflon_key(&self, pkey: &str) -> Result<()> {
-        let mut data = self.data.write();
-        data.mouflon_keys.keys.remove(pkey);
-        data.mouflon_keys.manual_updated_at = Some(chrono::Local::now().to_rfc3339());
-        drop(data);
-        self.save()
-    }
-
-    /// 从 Cloudflare Worker 同步 Mouflon 密钥。
-    /// 比对 Worker 返回的 updated_at 与本地 auto_synced_at：
-    ///   - 相同 → 跳过，返回 false（无需更新）
-    ///   - 不同 → 覆盖 keys、更新 auto_synced_at，返回 true（已更新）
-    ///
-    /// Sync Mouflon keys from the Cloudflare Worker.
-    /// Compares Worker's `updated_at` against local `auto_synced_at`:
-    ///   - Equal   → skip, return false (no update needed)
-    ///   - Different → overwrite keys, update auto_synced_at, return true (updated)
-    pub async fn sync_mouflon_keys_from_worker(
-        &self,
-        worker_url: &str,
-        auth_token: Option<&str>,
-    ) -> Result<bool> {
-        #[derive(Deserialize)]
-        struct WorkerResponse {
-            keys: HashMap<String, String>,
-            updated_at: String,
-        }
-
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(15))
-            .build()
-            .map_err(|e| AppError::Other(e.to_string()))?;
-
-        let mut req = client.get(worker_url);
-        if let Some(token) = auth_token {
-            req = req.header("Authorization", format!("Bearer {}", token));
-        }
-
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| AppError::Other(format!("Worker 请求失败: {}", e)))?;
-
-        if !resp.status().is_success() {
-            return Err(AppError::Other(format!(
-                "Worker 返回错误状态: {}",
-                resp.status()
-            )));
-        }
-
-        let body: WorkerResponse = resp
-            .json()
-            .await
-            .map_err(|e| AppError::Other(format!("Worker 响应解析失败: {}", e)))?;
-
-        // 比对 updated_at：解析为时间点后比较，避免格式差异导致误判
-        // Compare updated_at by parsing to a time point, avoiding false mismatches due to format differences
-        let worker_ts = chrono::DateTime::parse_from_rfc3339(&body.updated_at)
-            .map(|dt| dt.with_timezone(&chrono::Utc))
-            .ok();
-
-        let same_timestamp = {
-            let data = self.data.read();
-            match (&worker_ts, &data.mouflon_keys.auto_synced_at) {
-                (Some(wt), Some(local)) => chrono::DateTime::parse_from_rfc3339(local)
-                    .map(|lt| lt.with_timezone(&chrono::Utc) == *wt)
-                    .unwrap_or(false),
-                _ => false,
-            }
-        };
-
-        if same_timestamp {
-            // 时间戳相同，检查是否有本地缺失的 key / Same timestamp, check for locally missing keys
-            let missing: Vec<(String, String)> = {
-                let data = self.data.read();
-                body.keys
-                    .iter()
-                    .filter(|(pkey, _)| !data.mouflon_keys.keys.contains_key(pkey.as_str()))
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect()
-            };
-            if missing.is_empty() {
-                return Ok(false);
-            }
-            // 补充缺失的 key / Insert missing keys
-            let mut data = self.data.write();
-            for (pkey, pdkey) in missing {
-                data.mouflon_keys.keys.insert(pkey, pdkey);
-            }
-            drop(data);
-            self.save()?;
-            return Ok(true);
-        }
-
-        // 时间戳不同，插入本地不存在的键对，更新 auto_synced_at
-        // Different timestamp: insert missing key pairs, update auto_synced_at
-        {
-            // 将 Worker 返回的时间戳规范化为 chrono RFC 3339 格式，与 manual_updated_at 保持一致
-            // Normalize Worker timestamp to chrono RFC 3339 format, consistent with manual_updated_at
-            let normalized_at = chrono::DateTime::parse_from_rfc3339(&body.updated_at)
-                .map(|dt| dt.with_timezone(&chrono::Utc).to_rfc3339())
-                .unwrap_or(body.updated_at);
-            let mut data = self.data.write();
-            for (pkey, pdkey) in body.keys {
-                data.mouflon_keys.keys.entry(pkey).or_insert(pdkey);
-            }
-            data.mouflon_keys.auto_synced_at = Some(normalized_at);
-        }
-        self.save()?;
-        Ok(true)
     }
 
     /// 获取当前流水线配置的克隆副本。

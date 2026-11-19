@@ -8,7 +8,7 @@
 //! POST /api/auth/change-password — 修改密码（需已登录）
 
 use crate::server::{
-    auth::{extract_ip, validate_password_strength, VerifyResult},
+    auth::{VerifyResult, extract_ip, validate_password_strength},
     error::{ApiError, ApiResult},
     router::ServerState,
 };
@@ -58,7 +58,10 @@ pub async fn auth_status(
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
         .is_some_and(|token| {
-            matches!(s.token_store.verify(token, ip), crate::server::auth::VerifyResult::Ok)
+            matches!(
+                s.token_store.verify(token, ip),
+                crate::server::auth::VerifyResult::Ok
+            )
         });
     Ok(Json(AuthStatusResponse {
         password_set: s.app_state.has_admin_password(),
@@ -77,7 +80,9 @@ pub async fn init_password(
     }
     let password = body.password.trim().to_string();
     validate_password_strength(&password).map_err(|e| ApiError(e.to_string()))?;
-    s.app_state.set_admin_password(&password).map_err(ApiError::from)?;
+    s.app_state
+        .set_admin_password(&password)
+        .map_err(ApiError::from)?;
     s.token_store.mark_password_configured();
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -104,8 +109,8 @@ pub async fn login(
     let body_bytes = axum::body::to_bytes(req.into_body(), 1024 * 16)
         .await
         .map_err(|e| ApiError(e.to_string()))?;
-    let body: PasswordBody = serde_json::from_slice(&body_bytes)
-        .map_err(|e| ApiError(e.to_string()))?;
+    let body: PasswordBody =
+        serde_json::from_slice(&body_bytes).map_err(|e| ApiError(e.to_string()))?;
 
     let password = body.password.clone();
     let app_state = std::sync::Arc::clone(&s.app_state);
@@ -167,7 +172,9 @@ pub async fn renew(
     if s.token_store.renew(token, ip) {
         Ok(Json(serde_json::json!({ "ok": true })))
     } else {
-        Err(ApiError("Token 无效或已过期 / Token invalid or expired".into()))
+        Err(ApiError(
+            "Token 无效或已过期 / Token invalid or expired".into(),
+        ))
     }
 }
 
@@ -193,7 +200,9 @@ pub async fn change_password(
     match s.token_store.verify(&token_str, ip) {
         VerifyResult::Ok => {}
         VerifyResult::IpMismatch => {
-            return Err(ApiError("IP 与登录时不一致，请重新登录 / IP mismatch, please re-login".into()));
+            return Err(ApiError(
+                "IP 与登录时不一致，请重新登录 / IP mismatch, please re-login".into(),
+            ));
         }
         _ => return Err(ApiError("Token 无效 / Invalid token".into())),
     }
@@ -201,8 +210,8 @@ pub async fn change_password(
     let body_bytes = axum::body::to_bytes(req.into_body(), 1024 * 16)
         .await
         .map_err(|e| ApiError(e.to_string()))?;
-    let body: ChangePasswordBody = serde_json::from_slice(&body_bytes)
-        .map_err(|e| ApiError(e.to_string()))?;
+    let body: ChangePasswordBody =
+        serde_json::from_slice(&body_bytes).map_err(|e| ApiError(e.to_string()))?;
 
     let old_pwd = body.old_password.clone();
     let new_pwd = body.new_password.trim().to_string();
@@ -212,10 +221,9 @@ pub async fn change_password(
 
     // 验证旧密码 / Verify old password
     let app_state = std::sync::Arc::clone(&s.app_state);
-    let old_ok =
-        tokio::task::spawn_blocking(move || app_state.verify_admin_password(&old_pwd))
-            .await
-            .unwrap_or(false);
+    let old_ok = tokio::task::spawn_blocking(move || app_state.verify_admin_password(&old_pwd))
+        .await
+        .unwrap_or(false);
     if !old_ok {
         return Err(ApiError("旧密码错误 / Wrong current password".into()));
     }
@@ -228,5 +236,7 @@ pub async fn change_password(
     // 使当前 token 失效，强制重新登录 / Invalidate current token; force re-login
     s.token_store.clear();
 
-    Ok(Json(serde_json::json!({ "ok": true, "relogin_required": true })))
+    Ok(Json(
+        serde_json::json!({ "ok": true, "relogin_required": true }),
+    ))
 }

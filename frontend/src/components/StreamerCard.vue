@@ -34,13 +34,19 @@
 	import { ref, watch, computed } from "vue";
 	import { useFastThumbnail } from "@/composables/useFastThumbnail";
 	import { copyToClipboard } from "@/lib/utils";
-	import { X, Circle, Check, Copy } from "@lucide/vue";
+	import { X, Circle, Check, Copy, Eye, EyeOff } from "@lucide/vue";
 	import { useI18n } from "vue-i18n";
 
 	const props = defineProps<{
 		streamer: StreamerEntry;
 		selectMode?: boolean;
 		selected?: boolean;
+		/**
+		 * 隐私模式：off 不模糊；live 仅模糊在线（直播）预览图；all 在线与离线图都模糊。
+		 * Privacy mode: off = no blur; live = blur online (live) previews only;
+		 * all = blur both online previews and offline images.
+		 */
+		privacyMode?: "off" | "live" | "all";
 	}>();
 	const emit = defineEmits<{
 		remove: [];
@@ -59,6 +65,27 @@
 
 	const thumbnailSrc = computed(() => props.streamer.thumbnail_url ?? null);
 	const fastThumbnail = useFastThumbnail(thumbnailSrc);
+
+	/**
+	 * 本张卡片被用户手动解除模糊的会话级标记（不持久化，组件销毁即复位）。
+	 * Per-card session flag set when the user manually unblurs this thumbnail
+	 * (not persisted; resets when the component is destroyed).
+	 */
+	const unblurred = ref(false);
+
+	/**
+	 * 隐私模式是否作用于本卡片：all 对所有卡片生效；live 仅作用于在线卡片。
+	 * Whether the privacy mode applies to this card: `all` affects every card;
+	 * `live` only affects online (live-preview) cards.
+	 */
+	const privacyApplies = computed(
+		() =>
+			props.privacyMode === "all" ||
+			(props.privacyMode === "live" && props.streamer.is_online),
+	);
+
+	/** 当前是否处于模糊状态（模式适用且未被手动解除）/ Whether the thumbnail is currently blurred (mode applies and not manually unblurred) */
+	const shouldBlur = computed(() => privacyApplies.value && !unblurred.value);
 
 	const copied = ref(false);
 
@@ -120,19 +147,48 @@
 		}"
 		@click="onCardClick"
 	>
-		<div class="relative aspect-video bg-muted overflow-hidden">
-			<img
-				v-if="fastThumbnail"
-				:src="fastThumbnail"
-				loading="lazy"
-				class="w-full h-full object-cover"
-			/>
+		<!-- 缩略图区：contextmenu 仅在模糊时拦截（防止保存被模糊的原图），
+			未模糊时保留正常的右键/长按菜单 / Thumbnail area: context menu is
+			suppressed only while blurred (keeps the original from being saved);
+			the normal right-click/long-press menu still works when visible -->
+		<div
+			class="relative aspect-video bg-muted overflow-hidden select-none"
+			@contextmenu="shouldBlur && $event.preventDefault()"
+		>
+			<!-- 模糊容器：blur-2xl + scale-110 掩盖羽化边缘；transition 平滑切换 / Blur container: blur-2xl + scale-110 hides feathered edges; transition smooths toggling -->
 			<div
-				v-else
-				class="w-full h-full flex items-center justify-center text-4xl font-bold text-muted-foreground/20"
+				class="absolute inset-0 transition-[filter,transform] duration-300"
+				:class="shouldBlur ? 'blur-2xl scale-110' : ''"
 			>
-				{{ streamer.username[0].toUpperCase() }}
+				<img
+					v-if="fastThumbnail"
+					:src="fastThumbnail"
+					loading="lazy"
+					class="w-full h-full object-cover [-webkit-touch-callout:none]"
+				/>
+				<div
+					v-else
+					class="w-full h-full flex items-center justify-center text-4xl font-bold text-muted-foreground/20"
+				>
+					{{ streamer.username[0].toUpperCase() }}
+				</div>
 			</div>
+
+			<!-- 隐私模式眼睛按钮：模糊适用时常驻于缩略图右下角，点击在
+				模糊/清晰之间切换（z-10 盖过全图 checkbox 覆盖层）/
+				Privacy eye button: pinned to the thumbnail's bottom-right while
+				privacy mode applies; click toggles blur on/off (z-10 keeps it
+				above the full-image checkbox overlay) -->
+			<button
+				v-if="privacyApplies"
+				type="button"
+				class="absolute bottom-2 right-2 z-10 size-7 rounded-md bg-black/55 text-white/90 flex items-center justify-center opacity-100 transition-opacity hover:bg-black/75"
+				:title="shouldBlur ? t('streamerCard.revealImage') : t('streamerCard.blurImage')"
+				@click.stop.prevent="unblurred = !unblurred"
+			>
+				<Eye v-if="shouldBlur" class="size-4" />
+				<EyeOff v-else class="size-4" />
+			</button>
 
 			<!-- 录制状态指示器（非批量模式显示）/ Recording indicator (shown outside batch mode) -->
 			<Circle

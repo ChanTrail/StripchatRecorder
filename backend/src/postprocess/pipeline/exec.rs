@@ -2,14 +2,14 @@
 
 use super::model::{ModuleInfo, ModuleOutput, NodeResult, PipelineConfig, PipelineNode};
 use crate::config::app_state::exe_dir;
+use crate::core::no_window::NoWindowExt;
 use crate::recording::meta::PpExecCode;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use crate::core::no_window::NoWindowExt;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// 节点执行的上下文信息（传给模块的 recording 字段）。
 /// Context information for node execution (passed to module as the `recording` field).
@@ -42,10 +42,10 @@ pub fn run_pipeline(
     max_tmp_dir_gb: f64,
     pre_collected: HashMap<String, Vec<(usize, PathBuf)>>,
     skip_nodes: &std::collections::HashSet<String>,
-    on_node_start: &dyn Fn(&str, &str, &[PathBuf]),  // (effective_id, module_id, inputs)
+    on_node_start: &dyn Fn(&str, &str, &[PathBuf]), // (effective_id, module_id, inputs)
     on_node_done: &dyn Fn(NodeResult),
-    on_progress: &dyn Fn(&str, u32, u32, &str),      // (effective_id, done, total, status)
-    on_log: &dyn Fn(&str, &str, &str),               // (module_id, stream, line)
+    on_progress: &dyn Fn(&str, u32, u32, &str), // (effective_id, done, total, status)
+    on_log: &dyn Fn(&str, &str, &str),          // (module_id, stream, line)
 ) -> Vec<NodeResult> {
     // 队列键统一使用 effective_id / Queue key is always effective_id
     let mut collected: HashMap<String, Vec<(usize, PathBuf)>> = pre_collected;
@@ -86,7 +86,11 @@ pub fn run_pipeline(
         if enqueued.contains(topo_id.as_str()) {
             continue;
         }
-        let node = match pipeline.nodes.iter().find(|n| n.effective_id() == topo_id.as_str()) {
+        let node = match pipeline
+            .nodes
+            .iter()
+            .find(|n| n.effective_id() == topo_id.as_str())
+        {
             Some(n) => n,
             None => continue,
         };
@@ -132,7 +136,15 @@ pub fn run_pipeline(
         // pre_collected), the pass-through here still drives it.
         if skip_nodes.contains(&eid) {
             tracing::debug!("{}", crate::tl!("postprocess.nodeSkipped", id = eid));
-            dispatch_to_successors(pipeline, modules, &eid, &inputs, &mut collected, &mut enqueued, &mut queue);
+            dispatch_to_successors(
+                pipeline,
+                modules,
+                &eid,
+                &inputs,
+                &mut collected,
+                &mut enqueued,
+                &mut queue,
+            );
             continue;
         }
 
@@ -186,8 +198,19 @@ pub fn run_pipeline(
         // disabling it can't produce the second port it would normally split out — an
         // inherent semantic gap for that class of node when disabled, out of scope here.
         if !node.enabled {
-            tracing::debug!("{}", crate::tl!("postprocess.nodeDisabled", id = eid, count = inputs.len()));
-            dispatch_to_successors(pipeline, modules, &eid, &inputs, &mut collected, &mut enqueued, &mut queue);
+            tracing::debug!(
+                "{}",
+                crate::tl!("postprocess.nodeDisabled", id = eid, count = inputs.len())
+            );
+            dispatch_to_successors(
+                pipeline,
+                modules,
+                &eid,
+                &inputs,
+                &mut collected,
+                &mut enqueued,
+                &mut queue,
+            );
             continue;
         }
 
@@ -210,7 +233,10 @@ pub fn run_pipeline(
 
         on_node_start(&eid, &node.module_id, &inputs);
 
-        let result = if node.module_id.starts_with(crate::postprocess::builtin_nodes::BUILTIN_PREFIX) {
+        let result = if node
+            .module_id
+            .starts_with(crate::postprocess::builtin_nodes::BUILTIN_PREFIX)
+        {
             // 内置节点：由后端直接处理 / Built-in node: handled directly by backend
             match node.module_id.as_str() {
                 crate::postprocess::builtin_nodes::ID_UNPACK => {
@@ -251,7 +277,15 @@ pub fn run_pipeline(
             continue;
         }
 
-        dispatch_to_successors(pipeline, modules, &eid, &outputs, &mut collected, &mut enqueued, &mut queue);
+        dispatch_to_successors(
+            pipeline,
+            modules,
+            &eid,
+            &outputs,
+            &mut collected,
+            &mut enqueued,
+            &mut queue,
+        );
     }
 
     all_results
@@ -302,7 +336,14 @@ fn dispatch_to_successors(
         let path = match output_for_port {
             Some(p) => p,
             None => {
-                tracing::warn!("{}", crate::tl!("postprocess.portNotAvailable", from = from_eid, port = edge.from_port, to = edge.to_node_id)
+                tracing::warn!(
+                    "{}",
+                    crate::tl!(
+                        "postprocess.portNotAvailable",
+                        from = from_eid,
+                        port = edge.from_port,
+                        to = edge.to_node_id
+                    )
                 );
                 continue;
             }
@@ -311,7 +352,11 @@ fn dispatch_to_successors(
         let slot = collected.entry(edge.to_node_id.clone()).or_default();
         slot.push((edge.to_port, path));
 
-        let target_node = match pipeline.nodes.iter().find(|n| n.effective_id() == edge.to_node_id) {
+        let target_node = match pipeline
+            .nodes
+            .iter()
+            .find(|n| n.effective_id() == edge.to_node_id)
+        {
             Some(n) => n,
             None => continue,
         };
@@ -366,7 +411,25 @@ fn run_node(
         "recording": recording_ctx,
     });
 
+    // 模块（含社区模块）可能以裸 `ffmpeg` 拉起子进程：标记使用中并把 tools 目录
+    // 前置到其 PATH，使其优先使用本程序下载维护的副本。此外把主程序按
+    // `ffmpeg_preference` 解析好的 ffmpeg/ffprobe 路径经 `PP_FFMPEG`/`PP_FFPROBE`
+    // 显式传给模块——已适配的模块直接使用该路径，与主程序的调用完全同源；
+    // 未适配的模块仍走 PATH 注入兜底。
+    // Modules (including community modules) may spawn plain `ffmpeg`: mark it in
+    // use and prepend the tools dir to their PATH so they prefer our managed
+    // copy. On top of that, pass the paths the host resolved per
+    // `ffmpeg_preference` via `PP_FFMPEG`/`PP_FFPROBE` — adapted modules use
+    // those exact paths, keeping them strictly in sync with the host; the PATH
+    // injection stays as fallback for unadapted modules.
+    let _ffmpeg_guard = crate::ffmpeg::in_use();
+
     let mut cmd = std::process::Command::new(&module.exe_path);
+    cmd.env("PP_FFMPEG", crate::ffmpeg::ffmpeg_program());
+    cmd.env("PP_FFPROBE", crate::ffmpeg::ffprobe_program());
+    if let Some(path) = crate::ffmpeg::path_env_with_tools() {
+        cmd.env("PATH", path);
+    }
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -382,12 +445,16 @@ fn run_node(
                 message: format!("Failed to spawn: {}", e),
                 outputs: vec![],
                 inputs: inputs.to_vec(),
-            }
+            };
         }
     };
 
     if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(serde_json::to_string(&input_json).unwrap_or_default().as_bytes());
+        let _ = stdin.write_all(
+            serde_json::to_string(&input_json)
+                .unwrap_or_default()
+                .as_bytes(),
+        );
     }
 
     let mut last_message = String::new();
@@ -405,7 +472,9 @@ fn run_node(
         let tx2 = tx.clone();
         thread::spawn(move || {
             for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                if tx2.send(StreamEvent::StdoutLine(line)).is_err() { return; }
+                if tx2.send(StreamEvent::StdoutLine(line)).is_err() {
+                    return;
+                }
             }
             let _ = tx2.send(StreamEvent::StdoutEof);
         });
@@ -415,7 +484,9 @@ fn run_node(
         let tx2 = tx.clone();
         thread::spawn(move || {
             for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                if tx2.send(StreamEvent::StderrLine(line)).is_err() { return; }
+                if tx2.send(StreamEvent::StderrLine(line)).is_err() {
+                    return;
+                }
             }
             let _ = tx2.send(StreamEvent::StderrEof);
         });
@@ -429,7 +500,10 @@ fn run_node(
                 let pid = child.id();
                 let _ = std::process::Command::new("taskkill")
                     .args(["/F", "/T", "/PID", &pid.to_string()])
-                    .stdout(Stdio::null()).stderr(Stdio::null()).no_window().status();
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .no_window()
+                    .status();
             }
             let _ = child.kill();
             cancelled = true;
@@ -447,7 +521,8 @@ fn run_node(
                 if let Some(rest) = trimmed.strip_prefix("PROGRESS:") {
                     let mut parts = rest.splitn(2, '/');
                     if let (Some(d), Some(t)) = (parts.next(), parts.next())
-                        && let (Ok(done), Ok(total)) = (d.trim().parse::<u32>(), t.trim().parse::<u32>())
+                        && let (Ok(done), Ok(total)) =
+                            (d.trim().parse::<u32>(), t.trim().parse::<u32>())
                     {
                         on_module_progress(done, total);
                     }
@@ -455,23 +530,48 @@ fn run_node(
                     on_log("status", st.trim());
                     on_status(st.trim());
                 } else if !trimmed.is_empty() {
-                    tracing::info!("{}", crate::tl!("postprocess.moduleStdout", module = node.module_id, line = trimmed));
+                    tracing::info!(
+                        "{}",
+                        crate::tl!(
+                            "postprocess.moduleStdout",
+                            module = node.module_id,
+                            line = trimmed
+                        )
+                    );
                     on_log("stdout", trimmed);
                     last_message = trimmed.to_string();
                 }
             }
             Ok(StreamEvent::StderrLine(line)) => {
                 let t = line.trim();
-                if t.is_empty() || t.starts_with("note: run with `RUST_BACKTRACE") { continue; }
-                if t.contains("panicked at") && panic_msg.is_empty() { panic_msg = t.to_string(); }
-                tracing::warn!("{}", crate::tl!("postprocess.moduleStderr", module = node.module_id, line = t));
+                if t.is_empty() || t.starts_with("note: run with `RUST_BACKTRACE") {
+                    continue;
+                }
+                if t.contains("panicked at") && panic_msg.is_empty() {
+                    panic_msg = t.to_string();
+                }
+                tracing::warn!(
+                    "{}",
+                    crate::tl!(
+                        "postprocess.moduleStderr",
+                        module = node.module_id,
+                        line = t
+                    )
+                );
                 on_log("stderr", t);
                 stderr_msg = t.to_string();
             }
-            Ok(StreamEvent::StdoutEof) => { stdout_done = true; }
-            Ok(StreamEvent::StderrEof) => { stderr_done = true; }
+            Ok(StreamEvent::StdoutEof) => {
+                stdout_done = true;
+            }
+            Ok(StreamEvent::StderrEof) => {
+                stderr_done = true;
+            }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => { stdout_done = true; stderr_done = true; }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                stdout_done = true;
+                stderr_done = true;
+            }
         }
     }
 
@@ -487,7 +587,9 @@ fn run_node(
         };
     }
 
-    if !panic_msg.is_empty() { stderr_msg = panic_msg; }
+    if !panic_msg.is_empty() {
+        stderr_msg = panic_msg;
+    }
 
     let status = match child.wait() {
         Ok(s) => s,
@@ -499,12 +601,13 @@ fn run_node(
                 message: format!("wait failed: {}", e),
                 outputs: vec![],
                 inputs: inputs.to_vec(),
-            }
+            };
         }
     };
 
     if let Some(out) = final_json {
-        let outputs: Vec<PathBuf> = out.outputs
+        let outputs: Vec<PathBuf> = out
+            .outputs
             .unwrap_or_default()
             .into_iter()
             .map(PathBuf::from)
@@ -514,23 +617,41 @@ fn run_node(
             other => other,
         };
         let message = out.message.unwrap_or_else(|| {
-            if last_message.is_empty() { "OK".to_string() } else { last_message.clone() }
+            if last_message.is_empty() {
+                "OK".to_string()
+            } else {
+                last_message.clone()
+            }
         });
-        NodeResult { effective_id: effective_id.to_string(), module_id: node.module_id.clone(),
-                     code, message, outputs, inputs: inputs.to_vec() }
+        NodeResult {
+            effective_id: effective_id.to_string(),
+            module_id: node.module_id.clone(),
+            code,
+            message,
+            outputs,
+            inputs: inputs.to_vec(),
+        }
     } else if status.success() {
         NodeResult {
             effective_id: effective_id.to_string(),
             module_id: node.module_id.clone(),
             code: PpExecCode::Done,
-            message: if last_message.is_empty() { "OK".to_string() } else { last_message },
+            message: if last_message.is_empty() {
+                "OK".to_string()
+            } else {
+                last_message
+            },
             outputs: vec![],
             inputs: inputs.to_vec(),
         }
     } else {
-        let msg = if !stderr_msg.is_empty() { stderr_msg }
-                  else if !last_message.is_empty() { last_message }
-                  else { format!("exit {}", status) };
+        let msg = if !stderr_msg.is_empty() {
+            stderr_msg
+        } else if !last_message.is_empty() {
+            last_message
+        } else {
+            format!("exit {}", status)
+        };
         NodeResult {
             effective_id: effective_id.to_string(),
             module_id: node.module_id.clone(),

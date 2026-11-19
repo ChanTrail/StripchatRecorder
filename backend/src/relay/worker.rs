@@ -12,10 +12,11 @@
 //! /api/front/v1/broadcasts/{username} API call.
 
 use super::state::{NewRelayWorker, RelayManager, RelayStreamState};
-use crate::core::no_window::NoWindowExt;
 use crate::config::app_state::AppState;
-use crate::recording::hls::{get_url_prefix, parse_playlist};
+use crate::core::error::AppError;
+use crate::core::no_window::NoWindowExt;
 use crate::platform::stripchat::StripchatApi;
+use crate::recording::hls::{get_url_prefix, parse_playlist};
 use std::collections::HashSet;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -69,16 +70,27 @@ async fn worker_loop(
         settings.cdn_proxy_url.as_deref(),
         settings.sc_mirror_url.as_deref(),
         Some(settings.sc_mirror_scheme.as_str()),
+        settings.ech_enabled,
     ) {
         Ok(a) => a
             .with_mouflon_keys(app_state.get_mouflon_keys())
             .with_resolution_selection(
                 settings.preferred_resolution,
                 &settings.resolution_preference,
-            ),
+            )
+            .with_codec_selection(&settings.preferred_codec),
         Err(e) => {
-            tracing::error!("{}", crate::tl!("relay.apiClientError", username = username, error = e));
-            relay_manager.set_state(&username, session_id, RelayStreamState::Error { message: e.to_string() });
+            tracing::error!(
+                "{}",
+                crate::tl!("relay.apiClientError", username = username, error = e)
+            );
+            relay_manager.set_state(
+                &username,
+                session_id,
+                RelayStreamState::Error {
+                    message: e.to_string(),
+                },
+            );
             relay_manager.remove_if_current(&username, session_id);
             return;
         }
@@ -114,21 +126,53 @@ async fn worker_loop(
                             app_state.backfill_model_id(&username, new_mid);
                         }
                         relay_manager.set_state(&username, session_id, RelayStreamState::Live);
-                        relay_manager.set_streamer_status(&username, session_id, info.is_online, info.status);
+                        relay_manager.set_streamer_status(
+                            &username,
+                            session_id,
+                            info.is_online,
+                            info.status,
+                        );
                         relay_manager.clear_prebuffer(&username, session_id);
                         let new_mid = info.model_id.unwrap_or(mid);
                         (info.playlist_url.unwrap(), new_mid)
                     }
                     Ok(info) => {
-                        tracing::info!("{}", crate::tl!("relay.upstreamOffline", username = username, status = info.status));
-                        relay_manager.set_state(&username, session_id, RelayStreamState::Offline { status: info.status.clone() });
-                        relay_manager.set_streamer_status(&username, session_id, info.is_online, info.status);
+                        tracing::info!(
+                            "{}",
+                            crate::tl!(
+                                "relay.upstreamOffline",
+                                username = username,
+                                status = info.status
+                            )
+                        );
+                        relay_manager.set_state(
+                            &username,
+                            session_id,
+                            RelayStreamState::Offline {
+                                status: info.status.clone(),
+                            },
+                        );
+                        relay_manager.set_streamer_status(
+                            &username,
+                            session_id,
+                            info.is_online,
+                            info.status,
+                        );
                         relay_manager.remove_if_current(&username, session_id);
                         return;
                     }
                     Err(e) => {
-                        tracing::warn!("{}", crate::tl!("relay.streamInfoFailed", username = username, error = e));
-                        relay_manager.set_state(&username, session_id, RelayStreamState::Error { message: e.to_string() });
+                        tracing::warn!(
+                            "{}",
+                            crate::tl!("relay.streamInfoFailed", username = username, error = e)
+                        );
+                        relay_manager.set_state(
+                            &username,
+                            session_id,
+                            RelayStreamState::Error {
+                                message: e.to_string(),
+                            },
+                        );
                         relay_manager.remove_if_current(&username, session_id);
                         return;
                     }
@@ -146,21 +190,53 @@ async fn worker_loop(
                     app_state.backfill_model_id(&username, mid);
                 }
                 relay_manager.set_state(&username, session_id, RelayStreamState::Live);
-                relay_manager.set_streamer_status(&username, session_id, info.is_online, info.status);
+                relay_manager.set_streamer_status(
+                    &username,
+                    session_id,
+                    info.is_online,
+                    info.status,
+                );
                 relay_manager.clear_prebuffer(&username, session_id);
                 let mid = info.model_id.unwrap_or(0);
                 (info.playlist_url.unwrap(), mid)
             }
             Ok(info) => {
-                tracing::info!("{}", crate::tl!("relay.upstreamOffline", username = username, status = info.status));
-                relay_manager.set_state(&username, session_id, RelayStreamState::Offline { status: info.status.clone() });
-                relay_manager.set_streamer_status(&username, session_id, info.is_online, info.status);
+                tracing::info!(
+                    "{}",
+                    crate::tl!(
+                        "relay.upstreamOffline",
+                        username = username,
+                        status = info.status
+                    )
+                );
+                relay_manager.set_state(
+                    &username,
+                    session_id,
+                    RelayStreamState::Offline {
+                        status: info.status.clone(),
+                    },
+                );
+                relay_manager.set_streamer_status(
+                    &username,
+                    session_id,
+                    info.is_online,
+                    info.status,
+                );
                 relay_manager.remove_if_current(&username, session_id);
                 return;
             }
             Err(e) => {
-                tracing::warn!("{}", crate::tl!("relay.streamInfoFailed", username = username, error = e));
-                relay_manager.set_state(&username, session_id, RelayStreamState::Error { message: e.to_string() });
+                tracing::warn!(
+                    "{}",
+                    crate::tl!("relay.streamInfoFailed", username = username, error = e)
+                );
+                relay_manager.set_state(
+                    &username,
+                    session_id,
+                    RelayStreamState::Error {
+                        message: e.to_string(),
+                    },
+                );
                 relay_manager.remove_if_current(&username, session_id);
                 return;
             }
@@ -170,9 +246,16 @@ async fn worker_loop(
     relay_manager.set_playlist_url(&username, session_id, Some(playlist_url.clone()));
 
     feed_live(
-        &username, session_id, &playlist_url, model_id,
-        &app_state, Arc::clone(&relay_manager), &ts_tx, &mut stop_rx,
-    ).await;
+        &username,
+        session_id,
+        &playlist_url,
+        model_id,
+        &app_state,
+        Arc::clone(&relay_manager),
+        &ts_tx,
+        &mut stop_rx,
+    )
+    .await;
 
     relay_manager.set_playlist_url(&username, session_id, None);
     relay_manager.remove_if_current(&username, session_id);
@@ -200,17 +283,28 @@ async fn feed_live(
     ts_tx: &broadcast::Sender<Arc<Vec<u8>>>,
     stop_rx: &mut mpsc::Receiver<()>,
 ) {
+    // 标记 ffmpeg 使用中：converter 在整个在线阶段存活，自动更新须等本函数结束
+    // Mark ffmpeg in use: the converter lives for this whole live phase, so
+    // auto-update must wait until the function returns
+    let _ffmpeg_guard = crate::ffmpeg::in_use();
+
     // converter: fMP4 pipe:0 → HTTP-FLV pipe:1
     // -probesize / -analyzeduration 最小化，减少首帧延迟
-    let mut converter = match tokio::process::Command::new("ffmpeg")
+    let mut converter = match tokio::process::Command::new(crate::ffmpeg::ffmpeg_program())
         .args([
             "-y",
-            "-probesize", "32",
-            "-analyzeduration", "0",
-            "-f", "mp4",
-            "-i", "pipe:0",
-            "-c", "copy",
-            "-f", "flv",
+            "-probesize",
+            "32",
+            "-analyzeduration",
+            "0",
+            "-f",
+            "mp4",
+            "-i",
+            "pipe:0",
+            "-c",
+            "copy",
+            "-f",
+            "flv",
             "pipe:1",
         ])
         .stdin(Stdio::piped())
@@ -221,7 +315,10 @@ async fn feed_live(
     {
         Ok(c) => c,
         Err(e) => {
-            tracing::error!("{}", crate::tl!("relay.liveConverterFailed", username = username, error = e));
+            tracing::error!(
+                "{}",
+                crate::tl!("relay.liveConverterFailed", username = username, error = e)
+            );
             return;
         }
     };
@@ -234,7 +331,9 @@ async fn feed_live(
     let conv_stdin_task = tokio::spawn(async move {
         let mut stdin = converter_stdin;
         while let Some(data) = conv_in_rx.recv().await {
-            if stdin.write_all(&data).await.is_err() { break; }
+            if stdin.write_all(&data).await.is_err() {
+                break;
+            }
         }
         let _ = stdin.shutdown().await;
     });
@@ -249,12 +348,19 @@ async fn feed_live(
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
                     let chunk = Arc::new(buf[..n].to_vec());
-                    relay_manager_clone.push_prebuffer(&username_conv, session_id, Arc::clone(&chunk));
+                    relay_manager_clone.push_prebuffer(
+                        &username_conv,
+                        session_id,
+                        Arc::clone(&chunk),
+                    );
                     let _ = ts_tx_clone.send(chunk);
                 }
             }
         }
-        tracing::info!("{}", crate::tl!("relay.liveConverterClosed", username = username_conv));
+        tracing::info!(
+            "{}",
+            crate::tl!("relay.liveConverterClosed", username = username_conv)
+        );
     });
 
     let mut last_settings = app_state.get_settings();
@@ -263,13 +369,15 @@ async fn feed_live(
         last_settings.cdn_proxy_url.as_deref(),
         last_settings.sc_mirror_url.as_deref(),
         Some(last_settings.sc_mirror_scheme.as_str()),
+        last_settings.ech_enabled,
     ) {
         Ok(a) => a
             .with_mouflon_keys(app_state.get_mouflon_keys())
             .with_resolution_selection(
                 last_settings.preferred_resolution,
                 &last_settings.resolution_preference,
-            ),
+            )
+            .with_codec_selection(&last_settings.preferred_codec),
         Err(_) => {
             drop(conv_in_tx);
             let _ = conv_stdin_task.await;
@@ -289,7 +397,9 @@ async fn feed_live(
     const MAX_FAILURES: u32 = 3;
 
     loop {
-        if stop_rx.try_recv().is_ok() { break; }
+        if stop_rx.try_recv().is_ok() {
+            break;
+        }
         if relay_manager.is_idle(username, session_id, IDLE_STOP_SECS) {
             tracing::info!("{}", crate::tl!("relay.liveIdle", username = username));
             break;
@@ -301,29 +411,46 @@ async fn feed_live(
         let proxy_changed = current_settings.api_proxy_url != last_settings.api_proxy_url
             || current_settings.cdn_proxy_url != last_settings.cdn_proxy_url
             || current_settings.sc_mirror_url != last_settings.sc_mirror_url
-            || current_settings.sc_mirror_scheme != last_settings.sc_mirror_scheme;
-        let resolution_changed = current_settings.preferred_resolution != last_settings.preferred_resolution
-            || current_settings.resolution_preference != last_settings.resolution_preference;
-        if proxy_changed || resolution_changed || current_mouflon_keys != last_mouflon_keys {
+            || current_settings.sc_mirror_scheme != last_settings.sc_mirror_scheme
+            // ECH 开关改变客户端 TLS 栈，属同一重建条件 /
+            // The ECH toggle changes the client TLS stack — same rebuild condition
+            || current_settings.ech_enabled != last_settings.ech_enabled;
+        let stream_selection_changed = current_settings.preferred_resolution
+            != last_settings.preferred_resolution
+            || current_settings.resolution_preference != last_settings.resolution_preference
+            || current_settings.preferred_codec != last_settings.preferred_codec;
+        if proxy_changed || stream_selection_changed || current_mouflon_keys != last_mouflon_keys {
             if let Ok(new_api) = StripchatApi::new_api_only(
                 current_settings.api_proxy_url.as_deref(),
                 current_settings.cdn_proxy_url.as_deref(),
                 current_settings.sc_mirror_url.as_deref(),
                 Some(current_settings.sc_mirror_scheme.as_str()),
+                current_settings.ech_enabled,
             ) {
                 api = new_api
                     .with_mouflon_keys(current_mouflon_keys.clone())
                     .with_resolution_selection(
                         current_settings.preferred_resolution,
                         &current_settings.resolution_preference,
-                    );
+                    )
+                    .with_codec_selection(&current_settings.preferred_codec);
             }
             last_settings = current_settings;
             last_mouflon_keys = current_mouflon_keys;
         }
 
-        match poll_and_feed(&api, username, &current_url, &url_prefix, &conv_in_tx,
-                            &mut downloaded, &mut init_data, &mut cached_init_url).await {
+        match poll_and_feed(
+            &api,
+            username,
+            &current_url,
+            &url_prefix,
+            &conv_in_tx,
+            &mut downloaded,
+            &mut init_data,
+            &mut cached_init_url,
+        )
+        .await
+        {
             Ok(had_new) => {
                 consecutive_failures = 0;
                 if !had_new {
@@ -337,10 +464,26 @@ async fn feed_live(
             }
             Err(e) => {
                 consecutive_failures += 1;
-                tracing::warn!("{}", crate::tl!("relay.livePollFailed", username = username, cur = consecutive_failures, max = MAX_FAILURES, error = e));
+                tracing::warn!(
+                    "{}",
+                    crate::tl!(
+                        "relay.livePollFailed",
+                        username = username,
+                        cur = consecutive_failures,
+                        max = MAX_FAILURES,
+                        error = e
+                    )
+                );
 
                 if consecutive_failures >= MAX_FAILURES {
-                    tracing::info!("{}", crate::tl!("relay.upstreamOffline", username = username, status = "offline"));
+                    tracing::info!(
+                        "{}",
+                        crate::tl!(
+                            "relay.upstreamOffline",
+                            username = username,
+                            status = "offline"
+                        )
+                    );
                     break;
                 }
 
@@ -377,9 +520,27 @@ async fn feed_live(
                             consecutive_failures = 0;
                         }
                         Ok(info) => {
-                            tracing::info!("{}", crate::tl!("relay.upstreamOffline", username = username, status = info.status));
-                            relay_manager.set_state(username, session_id, RelayStreamState::Offline { status: info.status.clone() });
-                            relay_manager.set_streamer_status(username, session_id, info.is_online, info.status);
+                            tracing::info!(
+                                "{}",
+                                crate::tl!(
+                                    "relay.upstreamOffline",
+                                    username = username,
+                                    status = info.status
+                                )
+                            );
+                            relay_manager.set_state(
+                                username,
+                                session_id,
+                                RelayStreamState::Offline {
+                                    status: info.status.clone(),
+                                },
+                            );
+                            relay_manager.set_streamer_status(
+                                username,
+                                session_id,
+                                info.is_online,
+                                info.status,
+                            );
                             break;
                         }
                         Err(_) => { /* 查询失败，靠 MAX_FAILURES 自然退出 */ }
@@ -416,11 +577,13 @@ async fn poll_and_feed(
 ) -> Result<bool, String> {
     let mouflon_keys = api.mouflon_keys();
 
-    let playlist_text = api.fetch_playlist(playlist_url).await
+    let playlist_text = api
+        .fetch_playlist(playlist_url)
+        .await
         .map_err(|e| e.to_string())?;
 
-    let segments = parse_playlist(&playlist_text, url_prefix, mouflon_keys)
-        .map_err(|e| e.to_string())?;
+    let segments =
+        parse_playlist(&playlist_text, url_prefix, mouflon_keys).map_err(|e| e.to_string())?;
 
     let new_init_url: Option<String> = segments.iter().find_map(|s| s.init_url.clone());
 
@@ -428,7 +591,8 @@ async fn poll_and_feed(
     let new_init_path = new_init_url.as_deref().map(init_url_path);
     let cached_path = cached_init_url.as_deref().map(init_url_path);
 
-    if new_init_path.is_some() && new_init_path != cached_path
+    if new_init_path.is_some()
+        && new_init_path != cached_path
         && let Some(ref url) = new_init_url
     {
         match api.download_segment(url).await {
@@ -440,15 +604,80 @@ async fn poll_and_feed(
         }
     }
 
-    let mut had_new = false;
-    for seg in segments {
-        if downloaded.contains(&seg.sequence) { continue; }
+    // 清单里最后一条分片的下标：它常常还没发布完（所有 CDN 节点回 404，或只拿到很小的一截）
+    // Index of the last segment in the playlist: it is often not fully published yet (every CDN
+    // node answers 404, or only a tiny part is available)
+    let last_idx = segments.len().saturating_sub(1);
 
+    let mut had_new = false;
+    for (idx, seg) in segments.into_iter().enumerate() {
+        if downloaded.contains(&seg.sequence) {
+            continue;
+        }
+        let is_tail = idx == last_idx;
+
+        // 分片必须按序号升序送入转换器：序号靠后的先送入、靠前的之后再补，fMP4 的 tfdt 就会
+        // 倒退，播放器会倒放或跳回。因此：
+        // - 最后一条没发布完：结束本轮，不做标记，下一轮重新拉清单后再按序下载它；
+        // - 其余分片失败：标记为已处理，永久跳过（留一个缺口），不再在之后补送。
+        //
+        // Segments must be fed to the converter in ascending sequence order: feeding a later
+        // segment first and an earlier one afterwards makes the fMP4 tfdt go backwards, so players
+        // rewind or jump back. Therefore:
+        // - the last entry not fully published: end this round without marking it, so it is
+        //   downloaded in order after the next playlist fetch;
+        // - any other segment that fails: mark it handled and skip it for good (leaving a gap)
+        //   rather than feeding it later.
         let seg_bytes = match api.download_segment(&seg.url).await {
             Ok(d) if d.len() > 1000 => d,
-            Ok(_) => continue,
+            Err(AppError::HttpNotFound(_)) if is_tail => {
+                tracing::debug!(
+                    "{}",
+                    crate::tl!(
+                        "relay.liveTailNotPublished",
+                        seq = seg.sequence,
+                        username = username
+                    )
+                );
+                break;
+            }
+            Err(e) if is_tail => {
+                tracing::warn!(
+                    "{}",
+                    crate::tl!(
+                        "relay.liveSegmentFailed",
+                        seq = seg.sequence,
+                        username = username,
+                        error = e
+                    )
+                );
+                break;
+            }
+            Ok(_) if is_tail => break,
+            Ok(_) => {
+                tracing::warn!(
+                    "{}",
+                    crate::tl!(
+                        "relay.liveSegmentFailed",
+                        seq = seg.sequence,
+                        username = username,
+                        error = "segment body too small"
+                    )
+                );
+                downloaded.insert(seg.sequence);
+                continue;
+            }
             Err(e) => {
-                tracing::warn!("{}", crate::tl!("relay.liveSegmentFailed", seq = seg.sequence, username = username, error = e));
+                tracing::warn!(
+                    "{}",
+                    crate::tl!(
+                        "relay.liveSegmentFailed",
+                        seq = seg.sequence,
+                        username = username,
+                        error = e
+                    )
+                );
+                downloaded.insert(seg.sequence);
                 continue;
             }
         };

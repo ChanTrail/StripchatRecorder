@@ -115,11 +115,25 @@ pub fn write_meta(video_path: &Path, meta: &VideoMeta) {
                 }
             };
             if let Err(e) = result {
-                tracing::warn!("{}", crate::tl!("meta.writeMetaFailed", path = meta_path.display(), error = e));
+                tracing::warn!(
+                    "{}",
+                    crate::tl!(
+                        "meta.writeMetaFailed",
+                        path = meta_path.display(),
+                        error = e
+                    )
+                );
             }
         }
         Err(e) => {
-            tracing::warn!("{}", crate::tl!("meta.serializeMetaFailed", path = video_path.display(), error = e));
+            tracing::warn!(
+                "{}",
+                crate::tl!(
+                    "meta.serializeMetaFailed",
+                    path = video_path.display(),
+                    error = e
+                )
+            );
         }
     }
 }
@@ -235,8 +249,10 @@ pub fn set_pp_done(video_path: &Path, status: &str, pp_execution: Vec<PpExecutio
 /// Write the intra-module progress of the currently executing node
 /// (called on node start and on each on_progress update).
 pub fn set_pp_progress(video_path: &Path, mut progress: PpNodeProgress) {
-    let Some(mut meta) = read_meta(video_path) else { return };
-    
+    let Some(mut meta) = read_meta(video_path) else {
+        return;
+    };
+
     // 如果新进度的 mod_done 为 0，保留之前的值以避免前端显示"等待进度"
     // If the new progress has mod_done set to 0, preserve the previous value
     // to prevent the frontend from showing "waiting for progress"
@@ -245,7 +261,7 @@ pub fn set_pp_progress(video_path: &Path, mut progress: PpNodeProgress) {
     {
         progress.mod_done = prev.mod_done;
     }
-    
+
     meta.pp_progress = Some(progress);
     write_meta(video_path, &meta);
 }
@@ -253,7 +269,9 @@ pub fn set_pp_progress(video_path: &Path, mut progress: PpNodeProgress) {
 /// 清空当前节点的进度快照（节点完成时调用，无论成功/失败）。
 /// Clear the current node progress snapshot (called when a node finishes, success or failure).
 pub fn clear_pp_progress(video_path: &Path) {
-    let Some(mut meta) = read_meta(video_path) else { return };
+    let Some(mut meta) = read_meta(video_path) else {
+        return;
+    };
     if meta.pp_progress.is_none() {
         return; // 已是 None，无需写磁盘 / Already None, skip disk write
     }
@@ -264,7 +282,9 @@ pub fn clear_pp_progress(video_path: &Path) {
 /// 追加一条后处理执行记录（节点开始时调用），finished_at/result/outputs 为 null。
 /// Append a post-processing execution entry when a node starts.
 pub fn pp_execution_start(video_path: &Path, entry: PpExecutionEntry) {
-    let Some(mut meta) = read_meta(video_path) else { return };
+    let Some(mut meta) = read_meta(video_path) else {
+        return;
+    };
     meta.pp_execution.get_or_insert_with(Vec::new).push(entry);
     write_meta(video_path, &meta);
 }
@@ -278,11 +298,17 @@ pub fn pp_execution_finish(
     result: PpExecResult,
     outputs: Vec<Vec<String>>,
 ) {
-    let Some(mut meta) = read_meta(video_path) else { return };
+    let Some(mut meta) = read_meta(video_path) else {
+        return;
+    };
     if let Some(entries) = meta.pp_execution.as_mut() {
         // effective_id 对应 entry.node_id（若有）或 entry.module_id
         // effective_id corresponds to entry.node_id (if present) or entry.module_id
-        if let Some(entry) = entries.iter_mut().rev().find(|e| e.effective_id() == effective_id) {
+        if let Some(entry) = entries
+            .iter_mut()
+            .rev()
+            .find(|e| e.effective_id() == effective_id)
+        {
             entry.finished_at = Some(finished_at);
             entry.result = Some(result);
             entry.outputs = outputs;

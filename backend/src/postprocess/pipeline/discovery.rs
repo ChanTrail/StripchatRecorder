@@ -89,19 +89,42 @@ pub fn discover_modules() -> Vec<ModuleInfo> {
             // Files that don't match (e.g. bare binaries placed manually) are skipped
             // to avoid accidentally executing unknown files.
             if !has_valid_module_filename(&path) {
-                tracing::debug!("{}", crate::tl!("postprocess.discoverySkipFormat", path = path.display()));
+                tracing::debug!(
+                    "{}",
+                    crate::tl!("postprocess.discoverySkipFormat", path = path.display())
+                );
                 continue;
             }
             match describe_module(&path) {
                 Ok(mut info) => {
                     info.exe_path = path.clone();
                     match by_id.get(&info.id) {
-                        Some(existing) if compare_versions(&existing.version, &info.version) >= 0 => {
-                            tracing::warn!("{}", crate::tl!("postprocess.discoveryDupKeepHigher", id = info.id, a = existing.exe_path.display(), b = path.display(), va = existing.version, vb = info.version)
+                        Some(existing)
+                            if compare_versions(&existing.version, &info.version) >= 0 =>
+                        {
+                            tracing::warn!(
+                                "{}",
+                                crate::tl!(
+                                    "postprocess.discoveryDupKeepHigher",
+                                    id = info.id,
+                                    a = existing.exe_path.display(),
+                                    b = path.display(),
+                                    va = existing.version,
+                                    vb = info.version
+                                )
                             );
                         }
                         Some(existing) => {
-                            tracing::warn!("{}", crate::tl!("postprocess.discoveryDupReplace", id = info.id, a = path.display(), b = existing.exe_path.display(), va = info.version, vb = existing.version)
+                            tracing::warn!(
+                                "{}",
+                                crate::tl!(
+                                    "postprocess.discoveryDupReplace",
+                                    id = info.id,
+                                    a = path.display(),
+                                    b = existing.exe_path.display(),
+                                    va = info.version,
+                                    vb = existing.version
+                                )
                             );
                             by_id.insert(info.id.clone(), info);
                         }
@@ -110,7 +133,14 @@ pub fn discover_modules() -> Vec<ModuleInfo> {
                         }
                     }
                 }
-                Err(e) => tracing::error!("{}", crate::tl!("postprocess.discoveryDescribeFailed", path = path.display(), error = e)),
+                Err(e) => tracing::error!(
+                    "{}",
+                    crate::tl!(
+                        "postprocess.discoveryDescribeFailed",
+                        path = path.display(),
+                        error = e
+                    )
+                ),
             }
         }
     }
@@ -136,7 +166,9 @@ pub fn discover_modules() -> Vec<ModuleInfo> {
 /// considered lowest, so any versioned duplicate declaration takes precedence over them).
 fn compare_versions(a: &str, b: &str) -> i32 {
     let parse = |s: &str| -> Vec<u64> {
-        s.split('.').map(|seg| seg.parse::<u64>().unwrap_or(0)).collect()
+        s.split('.')
+            .map(|seg| seg.parse::<u64>().unwrap_or(0))
+            .collect()
     };
     let va = parse(a);
     let vb = parse(b);
@@ -165,7 +197,8 @@ fn describe_module(exe: &PathBuf) -> crate::core::error::Result<ModuleInfo> {
         .map_err(|e| crate::core::error::AppError::Other(format!("spawn: {}", e)))?;
     if !output.status.success() {
         return Err(crate::core::error::AppError::Other(format!(
-            "exit {}", output.status
+            "exit {}",
+            output.status
         )));
     }
     let mut info: ModuleInfo = serde_json::from_slice(&output.stdout)

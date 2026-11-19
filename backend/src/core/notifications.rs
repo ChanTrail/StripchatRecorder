@@ -9,10 +9,10 @@
 //! later in the same process lifetime can still pull unread notifications via
 //! GET /api/notifications.
 
+use crate::core::emitter::EmitterExt;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use crate::core::emitter::EmitterExt;
 
 /// 通知级别 / Notification level
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -219,7 +219,15 @@ impl NotificationStore {
         message_key: impl Into<String>,
         message_args: Option<HashMap<String, serde_json::Value>>,
     ) {
-        self.emit_i18n_with_action(emitter, level, source, message, message_key, message_args, None);
+        self.emit_i18n_with_action(
+            emitter,
+            level,
+            source,
+            message,
+            message_key,
+            message_args,
+            None,
+        );
     }
 
     /// 推入一条带 i18n 翻译键和操作的通知，并广播 `notification-created`。

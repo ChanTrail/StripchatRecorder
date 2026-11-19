@@ -40,5 +40,7 @@ const forwardedProps = useForwardProps(delegatedProps)
     <SelectItemText>
       <slot />
     </SelectItemText>
+    <!-- SelectItemText 之外的内容：渲染在下拉项中但不计入选中值的 textContent（即不会回显到触发按钮）。用于"仅下拉显示"的补充信息，如 FFmpeg 版本号。/ Content outside SelectItemText: rendered in the dropdown item but NOT counted in the selected value's textContent (so it never echoes back into the trigger). For dropdown-only extras like the FFmpeg version. -->
+    <slot name="extra" />
   </SelectItem>
 </template>

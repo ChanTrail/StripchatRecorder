@@ -1,12 +1,13 @@
 //! 后台定时任务调度器 / Background Scheduled Task Launchers
 //!
 //! 该模块汇总了所有需要**周期性运行**或**常驻后台**的任务启动逻辑与其具体实现，
-//! 包括主播状态轮询、Mouflon 密钥同步、孤立 meta 文件清理和输出目录维护。
+//! 包括主播状态轮询、Mouflon 密钥同步、孤立 meta 文件清理、输出目录维护和
+//! FFmpeg 自动更新。
 //! `config::app_state` 只负责配置数据结构与持久化，不包含任何定时/周期性逻辑。
 //!
 //! This module collects all **periodic** or **always-on background** task launchers
 //! and their implementations, including streamer status polling, Mouflon key sync,
-//! orphaned meta file cleanup, and output directory maintenance.
+//! orphaned meta file cleanup, output directory maintenance, and FFmpeg auto-update.
 //! `config::app_state` is limited to config data structures and persistence; it contains
 //! no scheduled/periodic logic.
 
@@ -49,19 +50,23 @@ fn secs_until_midnight() -> tokio::time::Duration {
     use chrono::{Local, Timelike};
     let now = Local::now();
     let tomorrow_midnight = (now + chrono::Duration::days(1))
-        .with_hour(0).unwrap()
-        .with_minute(0).unwrap()
-        .with_second(0).unwrap()
-        .with_nanosecond(0).unwrap();
+        .with_hour(0)
+        .unwrap()
+        .with_minute(0)
+        .unwrap()
+        .with_second(0)
+        .unwrap()
+        .with_nanosecond(0)
+        .unwrap();
     let secs = (tomorrow_midnight - now).num_seconds().max(0) as u64;
     tokio::time::Duration::from_secs(if secs == 0 { 86400 } else { secs })
 }
 
-/// 启动 Mouflon Keys 自动同步调度器：启动时延迟 10 秒执行一次，之后每天本地时间 00:00 同步一次。
+/// 启动 Mouflon Keys 自动同步调度器：启动时立即执行一次，之后每天本地时间 00:00 同步一次。
 /// 若 Settings 中未配置 mouflon_sync_url，则静默跳过。
 /// 同步失败超出重试上限时写入错误通知。
 ///
-/// Start the Mouflon Keys auto-sync scheduler: run once 10 s after launch, then daily at local 00:00.
+/// Start the Mouflon Keys auto-sync scheduler: run once right at launch, then daily at local 00:00.
 /// Silently skips if mouflon_sync_url is not configured in Settings.
 /// Pushes an error notification when sync fails after all retries.
 async fn schedule_mouflon_sync_inner(
@@ -74,23 +79,29 @@ async fn schedule_mouflon_sync_inner(
     const RETRY_INTERVAL: tokio::time::Duration = tokio::time::Duration::from_secs(300);
     const MAX_RETRIES: u32 = 3;
 
-    // 延迟 10 秒等主流程初始化完成 / Delay 10 s for the main flow to finish startup
-    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
-
+    // 首轮立即执行：`start_all` 被调用时主流程初始化早已完成（run_all 同步
+    // 执行完、各组件已构造），无需再延迟等待 web 先起来 /
+    // First pass runs immediately: by the time start_all is invoked the main
+    // flow is fully initialized (run_all finished synchronously, every
+    // component constructed) — no delay needed for the web to come up first
     loop {
         let settings = state.get_settings();
-        if let Some(url) = settings.mouflon_sync_url.as_deref().filter(|u| !u.is_empty()) {
+        if let Some(url) = settings
+            .mouflon_sync_url
+            .as_deref()
+            .filter(|u| !u.is_empty())
+        {
             let token = settings.mouflon_sync_token.clone();
             let url = url.to_string();
             let mut attempt = 0u32;
             loop {
-                match state.sync_mouflon_keys_from_worker(&url, token.as_deref()).await {
+                match state
+                    .sync_mouflon_keys_from_worker(&url, token.as_deref())
+                    .await
+                {
                     Ok(true) => {
                         tracing::info!("{}", crate::tl!("scheduler.mouflonSynced", url = url));
-                        emitter.emit(
-                            "mouflon-keys-updated",
-                            &state.get_mouflon_keys_store(),
-                        );
+                        emitter.emit("mouflon-keys-updated", &state.get_mouflon_keys_store());
                         break;
                     }
                     Ok(false) => {
@@ -100,7 +111,13 @@ async fn schedule_mouflon_sync_inner(
                     Err(e) => {
                         attempt += 1;
                         if attempt >= MAX_RETRIES {
-                            tracing::warn!("{}", crate::tl!("scheduler.mouflonSyncFailed", retries = attempt, error = format!("{:?}", e))
+                            tracing::warn!(
+                                "{}",
+                                crate::tl!(
+                                    "scheduler.mouflonSyncFailed",
+                                    retries = attempt,
+                                    error = format!("{:?}", e)
+                                )
                             );
                             // 超出重试上限 → 写入错误通知
                             // Exceeded retries → push error notification
@@ -113,14 +130,25 @@ async fn schedule_mouflon_sync_inner(
                                     &emitter,
                                     NotificationLevel::Error,
                                     "mouflon_sync",
-                                    format!("Mouflon key sync failed after {} retries: {}", MAX_RETRIES, e),
+                                    format!(
+                                        "Mouflon key sync failed after {} retries: {}",
+                                        MAX_RETRIES, e
+                                    ),
                                     "notifications.backend.mouflonSyncFailed",
                                     Some(args),
                                 );
                             }
                             break;
                         }
-                        tracing::warn!("{}", crate::tl!("scheduler.mouflonSyncRetrying", attempt = attempt, max = MAX_RETRIES, error = format!("{:?}", e), secs = RETRY_INTERVAL.as_secs())
+                        tracing::warn!(
+                            "{}",
+                            crate::tl!(
+                                "scheduler.mouflonSyncRetrying",
+                                attempt = attempt,
+                                max = MAX_RETRIES,
+                                error = format!("{:?}", e),
+                                secs = RETRY_INTERVAL.as_secs()
+                            )
                         );
                         tokio::time::sleep(RETRY_INTERVAL).await;
                     }
@@ -142,12 +170,12 @@ async fn schedule_mouflon_sync_inner(
     }
 }
 
-/// 启动 Mouflon 密钥自动同步调度器（启动 10 秒后执行一次，之后每天本地时间 0 点执行）。
+/// 启动 Mouflon 密钥自动同步调度器（启动即执行一次，之后每天本地时间 0 点执行）。
 ///
 /// 将通知发送端注入 `AppState`，使手动触发同步（`/api/mouflon-keys/sync`）
 /// 同样能够重置调度器计时器。
 ///
-/// Start the Mouflon key auto-sync scheduler (runs once 10 s after launch, then daily at local midnight).
+/// Start the Mouflon key auto-sync scheduler (runs once right at launch, then daily at local midnight).
 ///
 /// The notifier sender is injected into `AppState` so that a manual sync trigger
 /// (`/api/mouflon-keys/sync`) can also reset the scheduler timer.
@@ -160,21 +188,21 @@ pub fn start_mouflon_sync(app_state: Arc<AppState>, emitter: Arc<dyn Emitter>) {
     });
 }
 
-/// 启动孤立 meta 文件清理调度器（延迟 10 秒执行一次，之后每小时执行）。
+/// 启动孤立 meta 文件清理调度器（启动即执行一次，之后每小时执行）。
 /// 若清理到孤立文件，写入信息通知。
 ///
-/// Start the orphaned meta file cleanup scheduler (runs once after 10 s, then every hour).
+/// Start the orphaned meta file cleanup scheduler (runs once right at launch, then every hour).
 /// Pushes an info notification if orphaned files were cleaned up.
 pub fn start_meta_cleanup(app_state: Arc<AppState>, emitter: Arc<dyn Emitter>) {
     tokio::spawn(async move {
-        // 延迟 10 秒等主流程初始化完成 / Delay 10 s for the main flow to finish startup
-        tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+        // 首轮立即执行：主流程初始化在 start_all 调用点前已完成 /
+        // First pass runs immediately: main-flow init is complete before
+        // start_all is invoked
         loop {
-            let count = tokio::task::spawn_blocking(
-                crate::recording::meta::cleanup_orphaned_meta_files
-            )
-            .await
-            .unwrap_or(0);
+            let count =
+                tokio::task::spawn_blocking(crate::recording::meta::cleanup_orphaned_meta_files)
+                    .await
+                    .unwrap_or(0);
 
             if count > 0 {
                 use std::collections::HashMap;
@@ -184,7 +212,10 @@ pub fn start_meta_cleanup(app_state: Arc<AppState>, emitter: Arc<dyn Emitter>) {
                     &emitter,
                     NotificationLevel::Info,
                     "meta_cleanup",
-                    format!("Cleaned up {} orphaned meta file(s) whose video no longer exists.", count),
+                    format!(
+                        "Cleaned up {} orphaned meta file(s) whose video no longer exists.",
+                        count
+                    ),
                     "notifications.backend.metaCleanup",
                     Some(args),
                 );
@@ -195,15 +226,15 @@ pub fn start_meta_cleanup(app_state: Arc<AppState>, emitter: Arc<dyn Emitter>) {
     });
 }
 
-/// 启动输出目录维护调度器（延迟 10 秒执行一次，之后每 5 分钟执行）。
+/// 启动输出目录维护调度器（启动即执行一次，之后每 5 分钟执行）。
 ///
 /// 这是程序启动时和周期性维护共用的唯一入口：清理空目录、
 /// 重建缺失/损坏的 meta（含 ts_merge 自定义输出目录）、对因进程重启而遗留的
 /// 陈旧 pp_waiting/pp_running 录制（含未合并的 session_dir）以及遗漏的后处理任务重新触发。
-/// 程序启动时不再需要单独执行一遍——首次延迟 10 秒执行已覆盖启动时检查的需求。
+/// 程序启动时不再需要单独执行一遍——启动即执行的第一遍已覆盖启动时检查的需求。
 /// 维护单实例运行（上一次未结束时跳过本次）；触发的后处理在后台执行，不阻塞维护流程。
 ///
-/// Start the output-directory maintenance scheduler (runs once after 10 s, then every 5 minutes).
+/// Start the output-directory maintenance scheduler (runs once right at launch, then every 5 minutes).
 /// It is the single entry shared by startup and periodic maintenance: remove empty dirs, rebuild
 /// missing/corrupt meta, and re-trigger stale or missed post-processing (including unmerged
 /// session_dirs). Maintenance is single-instance (a run is skipped while the previous one is
@@ -214,21 +245,22 @@ pub fn start_output_dir_maintenance(
     recorder: Arc<crate::recording::recorder::RecorderManager>,
 ) {
     tokio::spawn(async move {
-        // 延迟 10 秒等主流程初始化完成 / Delay 10 s for the main flow to finish startup
-        tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+        // 首轮立即执行：主流程初始化在 start_all 调用点前已完成 /
+        // First pass runs immediately: main-flow init is complete before
+        // start_all is invoked
         crate::recording::meta::schedule_meta_version_check(app_state, emitter, recorder, 300)
             .await;
     });
 }
 
-/// 启动版本更新检查调度器（启动后延迟 10 秒执行第一次，之后每 24 小时检查一次），Server 与 Desktop 共用。
+/// 启动版本更新检查调度器（启动即执行第一次，之后每 24 小时检查一次），Server 与 Desktop 共用。
 ///
 /// 发现新版本时推送 Info 通知，携带 `view_update` action 供前端跳转关于页。
 /// 防重复逻辑：记录上次已通知的版本号，同一版本在进程生命周期内只通知一次。
 /// Docker 环境下仍然通知（提示用户更新镜像），非 Docker 环境同样通知（提示下载）。
 /// 检查失败时静默处理，不写入错误通知，等待下次周期自动重试。
 ///
-/// Start the version update check scheduler (runs 10 s after launch, then every 24 h), shared by
+/// Start the version update check scheduler (runs right at launch, then every 24 h), shared by
 /// Server and Desktop.
 ///
 /// Pushes an Info notification with a `view_update` action for the frontend to navigate
@@ -237,9 +269,9 @@ pub fn start_output_dir_maintenance(
 /// Silently ignores check failures and retries on the next cycle.
 pub fn start_update_check(app_state: Arc<AppState>, emitter: Arc<dyn Emitter>) {
     tokio::spawn(async move {
-
-        // 延迟 10 秒等主流程初始化完成 / Delay 10 s for the main flow to finish startup
-        tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+        // 首轮立即执行：主流程初始化在 start_all 调用点前已完成 /
+        // First pass runs immediately: main-flow init is complete before
+        // start_all is invoked
 
         // 记录本次进程已通知过的版本，避免每 24 小时重复弹同一版本的通知
         // Track the last notified version to avoid repeated notifications for the same version
@@ -250,7 +282,8 @@ pub fn start_update_check(app_state: Arc<AppState>, emitter: Arc<dyn Emitter>) {
             let proxy_url = settings.api_proxy_url;
             let check_prerelease = crate::update::is_beta_version() || settings.check_prerelease;
 
-            match crate::update::fetch_latest_release(proxy_url.as_deref(), check_prerelease).await {
+            match crate::update::fetch_latest_release(proxy_url.as_deref(), check_prerelease).await
+            {
                 Ok(release) => {
                     let current = crate::update::APP_VERSION;
                     let latest = &release.latest_version;
@@ -260,18 +293,30 @@ pub fn start_update_check(app_state: Arc<AppState>, emitter: Arc<dyn Emitter>) {
                     if crate::update::semver_gt(latest, current)
                         && last_notified_version.as_deref() != Some(latest.as_str())
                     {
-                        tracing::info!("{}", crate::tl!("scheduler.updateAvailable", latest = latest, current = current)
+                        tracing::info!(
+                            "{}",
+                            crate::tl!(
+                                "scheduler.updateAvailable",
+                                latest = latest,
+                                current = current
+                            )
                         );
 
                         let is_docker = crate::update::is_docker();
                         let (message, key) = if is_docker {
                             (
-                                format!("New version v{} available — update the Docker image to upgrade.", latest),
+                                format!(
+                                    "New version v{} available — update the Docker image to upgrade.",
+                                    latest
+                                ),
                                 "notifications.backend.updateAvailableDocker",
                             )
                         } else {
                             (
-                                format!("New version v{} available — go to the About page to download.", latest),
+                                format!(
+                                    "New version v{} available — go to the About page to download.",
+                                    latest
+                                ),
                                 "notifications.backend.updateAvailable",
                             )
                         };
@@ -293,14 +338,19 @@ pub fn start_update_check(app_state: Arc<AppState>, emitter: Arc<dyn Emitter>) {
 
                         last_notified_version = Some(latest.clone());
                     } else {
-                        tracing::debug!("{}", crate::tl!("scheduler.updateUpToDate", current = current)
+                        tracing::debug!(
+                            "{}",
+                            crate::tl!("scheduler.updateUpToDate", current = current)
                         );
                     }
                 }
                 Err(e) => {
                     // 静默处理，等下次周期重试
                     // Silently ignore; retry next cycle
-                    tracing::debug!("{}", crate::tl!("scheduler.updateCheckFailed", error = format!("{:?}", e)));
+                    tracing::debug!(
+                        "{}",
+                        crate::tl!("scheduler.updateCheckFailed", error = format!("{:?}", e))
+                    );
                 }
             }
 
@@ -334,10 +384,6 @@ pub fn start_pp_load_monitor(app_state: Arc<AppState>) {
 
     let (tx, mut rx) = tokio::sync::mpsc::channel::<crate::system::load_monitor::LoadSnapshot>(4);
 
-    // 将 pp_queue 的 running_count Arc 共享给阻塞线程，用于采样时读取实时任务数
-    // Share the pp_queue running_count Arc with the blocking thread for real-time task count
-    let pp_running_arc = app_state.pp_queue.running_count_arc();
-
     // 阻塞线程：持续采样并将快照发送到 channel
     // Blocking thread: continuously sample and send snapshots to the channel
     std::thread::spawn(move || {
@@ -346,8 +392,7 @@ pub fn start_pp_load_monitor(app_state: Arc<AppState>) {
         // After first sample, wait briefly so sysinfo can establish a CPU baseline (≥ 200ms)
         std::thread::sleep(std::time::Duration::from_millis(500));
         loop {
-            let running = pp_running_arc.load(std::sync::atomic::Ordering::Relaxed);
-            let snapshot = sampler.sample(running);
+            let snapshot = sampler.sample();
             if tx.blocking_send(snapshot).is_err() {
                 // 接收端已关闭（程序退出），退出采样线程
                 // Receiver dropped (program exiting), exit sampling thread
@@ -361,45 +406,39 @@ pub fn start_pp_load_monitor(app_state: Arc<AppState>) {
     // Async side: receive snapshots and adjust semaphore
     tokio::spawn(async move {
         while let Some(snapshot) = rx.recv().await {
-            // 调整后处理并发度 / Adjust post-processing concurrency
+            // 调整后处理并发度（AIMD）。录制不设限：实测非密集（占空比 ~2% 的
+            // `-c copy` 突发），系统压力统一由 pp 侧先让路吸收。
+            // Adjust post-processing concurrency (AIMD). Recordings are uncapped
+            // — measured non-intensive (~2% duty-cycle `-c copy` bursts); system
+            // pressure is absorbed by pp yielding first.
             app_state.pp_queue.adjust_for_load(&snapshot);
-
-            // 调整录制并发度：仅当用户配置了上限时才动态缩减
-            // （0 = 不限制，保持不变）
-            // Adjust recording concurrency: only shrink dynamically when user set a limit
-            // (0 = unlimited, leave unchanged)
-            let user_max = app_state.get_settings().max_concurrent;
-            if user_max > 0 {
-                let rec_running = app_state.active_recording_count
-                    .load(std::sync::atomic::Ordering::Relaxed);
-                let recommended = crate::system::load_monitor::recommend_permits(
-                    &snapshot,
-                    user_max,
-                    rec_running,
-                );
-                let effective = recommended.clamp(1, user_max);
-                app_state.effective_max_concurrent
-                    .store(effective, std::sync::atomic::Ordering::Relaxed);
-                tracing::debug!(
-                    "{}",
-                    crate::tl!(
-                        "scheduler.recordingConcurrencyAdjusted",
-                        effective = effective,
-                        user = user_max,
-                        running = rec_running,
-                        cpu = format!("{:.1}", snapshot.cpu_usage_pct),
-                        mem = format!("{:.1}", snapshot.mem_usage_pct),
-                        avail = snapshot.mem_available_bytes / 1024 / 1024
-                    )
-                );
-            }
         }
     });
 }
 
+/// 启动 FFmpeg 自动更新循环（启动 5 分钟后首轮，之后每 6 小时一轮）。
+///
+/// 每轮逻辑见 `ffmpeg::download::auto_update_loop`：ffmpeg 缺失时静默重试安装；
+/// tools 中是本程序下载的受管副本（带 ffmpeg-build.json 标记）且设置开启时，
+/// 比对远端校验文件并在空闲时替换二进制。
+///
+/// Start the FFmpeg auto-update loop (first round 5 minutes after launch, then
+/// every 6 hours).
+///
+/// See `ffmpeg::download::auto_update_loop` for the per-round logic: silently
+/// retry the install when ffmpeg is missing; when tools holds our managed copy
+/// (carrying the ffmpeg-build.json marker) and the setting is on, compare the
+/// remote checksum and swap binaries while idle.
+pub fn start_ffmpeg_update(app_state: Arc<AppState>, emitter: Arc<dyn Emitter>) {
+    tokio::spawn(crate::ffmpeg::download::auto_update_loop(
+        app_state, emitter,
+    ));
+}
+
 /// 统一启动所有后台定时任务，Server（`run_server`）与 Desktop（`setup_app`）都调用本函数，
 /// 两端的定时任务集合与首次执行时间完全一致：状态轮询、Mouflon 同步、孤立 meta 清理、
-/// 输出目录维护、版本更新检查、负载自适应、CGF schedule 刷新。
+/// 输出目录维护、版本更新检查、负载自适应、CGF schedule 刷新、FFmpeg 自动更新。
+/// 各任务首轮均在启动后立即执行（主流程初始化在本函数调用点前已完成，无需延迟等待）。
 ///
 /// 需要请求 Stripchat API 的工作都集中在状态轮询里（离线预览图刷新、model_id 回填都随轮询
 /// 进行），共用同一个跨轮复用的 API 客户端和同一个并发上限，不会在启动时另起一批请求。
@@ -407,7 +446,9 @@ pub fn start_pp_load_monitor(app_state: Arc<AppState>) {
 /// Launch all background scheduled tasks. Both Server (`run_server`) and Desktop (`setup_app`)
 /// call this, so both ends run exactly the same set of scheduled tasks with the same first-run
 /// timing: status polling, Mouflon sync, orphaned meta cleanup, output-dir maintenance, version
-/// update check, load-adaptive concurrency, CGF schedule refresh.
+/// update check, load-adaptive concurrency, CGF schedule refresh, FFmpeg auto-update.
+/// Every task's first pass runs right at launch (main-flow init is complete
+/// before this function is invoked — no warm-up delay needed).
 ///
 /// All work that hits the Stripchat API lives in status polling (offline preview refresh and
 /// model_id backfill happen as part of polling), sharing one API client reused across rounds and
@@ -428,6 +469,7 @@ pub fn start_all(
     start_output_dir_maintenance(Arc::clone(&app_state), Arc::clone(&emitter), recorder);
     start_update_check(Arc::clone(&app_state), Arc::clone(&emitter));
     start_pp_load_monitor(Arc::clone(&app_state));
+    start_ffmpeg_update(Arc::clone(&app_state), Arc::clone(&emitter));
     start_schedule_refresh(app_state);
 }
 
@@ -460,26 +502,38 @@ async fn run_schedule_refresh_pass(app_state: &Arc<AppState>) {
         return;
     }
 
-    tracing::info!("{}", crate::tl!("scheduler.cgfRefreshStart", count = usernames.len()));
+    tracing::info!(
+        "{}",
+        crate::tl!("scheduler.cgfRefreshStart", count = usernames.len())
+    );
 
     let sem = Arc::new(tokio::sync::Semaphore::new(CGF_REFRESH_CONCURRENCY));
     let mut tasks = tokio::task::JoinSet::new();
 
     for username in usernames {
-        let permit = Arc::clone(&sem).acquire_owned().await.expect("semaphore closed");
+        let permit = Arc::clone(&sem)
+            .acquire_owned()
+            .await
+            .expect("semaphore closed");
         let app_state = Arc::clone(app_state);
         let proxy_owned = proxy.clone();
 
         tasks.spawn(async move {
             let _permit = permit; // 持有信号量直到请求完成
-            if let Some(sched) = crate::platform::monitor::cgf_fetch_schedule(
-                &username,
-                proxy_owned.as_deref(),
-            ).await {
+            if let Some(sched) =
+                crate::platform::monitor::cgf_fetch_schedule(&username, proxy_owned.as_deref())
+                    .await
+            {
                 app_state.set_schedule(&username, sched);
-                tracing::info!("{}", crate::tl!("scheduler.cgfRefreshUpdated", username = username));
+                tracing::info!(
+                    "{}",
+                    crate::tl!("scheduler.cgfRefreshUpdated", username = username)
+                );
             } else {
-                tracing::warn!("{}", crate::tl!("scheduler.cgfRefreshUnavailable", username = username));
+                tracing::warn!(
+                    "{}",
+                    crate::tl!("scheduler.cgfRefreshUnavailable", username = username)
+                );
             }
         });
     }
@@ -494,7 +548,7 @@ async fn run_schedule_refresh_pass(app_state: &Arc<AppState>) {
 /// 启动 CGF schedule 定时刷新任务。
 ///
 /// 执行策略：
-/// 1. 启动后延迟 10 秒执行一次全量刷新（等待主流程完成初始化）。
+/// 1. 启动即执行一次全量刷新（主流程初始化在 start_all 调用点前已完成）。
 /// 2. 之后每天本地时间 00:00 再执行一次全量刷新，保持 schedule 数据与 CGF 同步。
 ///
 /// 全量刷新对所有非失效主播并发发起请求（最多 5 个，见 `CGF_REFRESH_CONCURRENCY`），
@@ -503,19 +557,16 @@ async fn run_schedule_refresh_pass(app_state: &Arc<AppState>) {
 /// Starts the CGF schedule periodic refresh task.
 ///
 /// Strategy:
-/// 1. One full-refresh pass 10 seconds after launch (lets the main flow initialize).
+/// 1. One full-refresh pass right at launch (main-flow init is already done by then).
 /// 2. Then a full-refresh pass daily at local 00:00, keeping schedule data in sync with CGF.
 ///
 /// Each pass fires requests concurrently (up to 5 at a time, see `CGF_REFRESH_CONCURRENCY`)
 /// for fast completion while staying within CGF's free API rate limits.
 pub fn start_schedule_refresh(app_state: Arc<AppState>) {
     tokio::spawn(async move {
-        // 延迟 10 秒等主流程初始化完成
-        // Delay 10 s for the main flow to finish startup
-        tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
-
-        // 延迟结束后执行一次全量刷新
-        // One full refresh once the startup delay has passed
+        // 启动即执行一次全量刷新：主流程初始化在 start_all 调用点前已完成 /
+        // One full refresh right away: main-flow init is complete before
+        // start_all is invoked
         run_schedule_refresh_pass(&app_state).await;
 
         // 之后每天本地时间 00:00 执行，复用 secs_until_midnight()

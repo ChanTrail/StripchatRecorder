@@ -19,11 +19,15 @@ pub async fn get_update_info(
     // Force check_prerelease on beta builds; otherwise respect user setting
     let check_prerelease = crate::update::is_beta_version() || settings.check_prerelease;
 
-    let (release, asset_names) =
-        match crate::update::fetch_latest_release_with_assets(proxy_url.as_deref(), check_prerelease).await {
-            Ok((r, names)) => (Some(r), names),
-            Err(_) => (None, vec![]),
-        };
+    let (release, asset_names) = match crate::update::fetch_latest_release_with_assets(
+        proxy_url.as_deref(),
+        check_prerelease,
+    )
+    .await
+    {
+        Ok((r, names)) => (Some(r), names),
+        Err(_) => (None, vec![]),
+    };
 
     Ok(Json(crate::update::UpdateInfo {
         current_version: crate::update::APP_VERSION.to_string(),

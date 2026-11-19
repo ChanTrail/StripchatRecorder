@@ -26,12 +26,14 @@
 	import { RouterView, useRouter, useRoute } from "vue-router";
 	import NotifyLayer from "./components/NotifyLayer.vue";
 	import DirectoryBrowserDialog from "./components/DirectoryBrowserDialog.vue";
+	import FFmpegPreferenceDialog from "./components/FFmpegPreferenceDialog.vue";
+	import FFmpegDownloadDialog from "./components/FFmpegDownloadDialog.vue";
 	import { Button } from "@/components/ui/button";
 	import { call, on, onSseReconnect } from "@/lib/api";
 	import {
 		Users, Video, Clapperboard, Search, Settings, Info,
 		ChevronsLeft, ChevronsRight, Bell, Store, X,
-		Menu,
+		Menu, LayoutGrid, Cpu, Activity,
 	} from "@lucide/vue";
 	import {
 		useNotify, notify,
@@ -42,10 +44,11 @@
 	import { useI18n } from "vue-i18n";
 	import { useScrollbar } from "@/composables/useScrollbar";
 	import { useMobileLayout } from "@/composables/useMobileLayout";
+	import { setupFfmpegProgressToast } from "@/composables/useFfmpegProgress";
 	import { loadLocaleFromServer } from "@/i18n";
 	import { useModuleLocaleStore } from "@/stores/moduleLocale";
 	import { useLocalesStore } from "@/stores/locales";
-	import { useNotificationsStore, type Notification } from "@/stores/notifications";
+	import { useNotificationsStore, resolveNotificationMessage, type Notification } from "@/stores/notifications";
 	import {
 		Dialog, DialogContent, DialogHeader, DialogTitle,
 	} from "@/components/ui/dialog";
@@ -108,9 +111,12 @@
 		{ to: "/",            labelKey: "nav.streamers",   icon: Users },
 		{ to: "/recordings",  labelKey: "nav.recordings",  icon: Video },
 		{ to: "/postprocess", labelKey: "nav.postprocess", icon: Clapperboard },
+		{ to: "/stripchat",   labelKey: "nav.stripchat",   icon: LayoutGrid },
 		{ to: "/finder",      labelKey: "nav.finder",      icon: Search },
 		{ to: "/community",   labelKey: "nav.community",   icon: Store },
 		{ to: "/settings",    labelKey: "nav.settings",    icon: Settings },
+		{ to: "/usage",       labelKey: "nav.usage",       icon: Cpu },
+		{ to: "/status",      labelKey: "nav.status",      icon: Activity },
 		{ to: "/about",       labelKey: "nav.about",       icon: Info },
 	];
 
@@ -153,6 +159,7 @@
 	let unlistenWarnings: (() => void) | null = null;
 	let unlistenLocaleWarnings: (() => void) | null = null;
 	let unlistenNotification: (() => void) | null = null;
+	let unlistenFfmpegProgress: (() => void) | null = null;
 
 	/**
 	 * 执行通知面板中的操作按钮。
@@ -177,15 +184,14 @@
 	}
 
 	/**
-	 * 渲染后端通知消息：若有 message_key 则查 i18n，否则返回 message。
+	 * 渲染后端通知消息：委托 stores/notifications 的共享实现
+	 * （message_key → i18n，缺失回退 message），与实时 toast 同源。
+	 * Render a backend notification message: delegates to the shared
+	 * implementation in stores/notifications (message_key → i18n, falls back
+	 * to message), the same source the real-time toast uses.
 	 */
 	function renderNotificationMessage(n: Notification): string {
-		if (n.message_key) {
-			const args = n.message_args ?? {};
-			const translated = t(n.message_key, args as Record<string, string | number>);
-			if (translated && translated !== n.message_key) return translated;
-		}
-		return n.message;
+		return resolveNotificationMessage(n);
 	}
 
 	function notificationLevelClass(level: Notification["level"]): string {
@@ -309,6 +315,11 @@
 
 		await localesStore.refresh();
 		await localesStore.setupListeners();
+
+		// FFmpeg 下载/安装进度 toast（拉一次当前状态，恢复进行中的下载显示）
+		// FFmpeg download/install progress toast (fetches current state once to
+		// restore an in-progress download)
+		unlistenFfmpegProgress = await setupFfmpegProgressToast(t);
 	});
 
 	onUnmounted(() => {
@@ -318,6 +329,7 @@
 		unlistenWarnings?.();
 		unlistenLocaleWarnings?.();
 		unlistenNotification?.();
+		unlistenFfmpegProgress?.();
 	});
 </script>
 
@@ -435,7 +447,9 @@
 				</div>
 
 				<main class="flex-1 overflow-hidden" :class="isMobile ? 'pb-16' : ''">
-					<div ref="mainScrollEl" class="h-full overflow-y-scroll scrollbar-overlay">
+					<!-- relative: 절대배치 자식의 containing block을 스크롤러로 한정 (문서 스크롤 방지)
+					     Contain absolute-positioned children to this scroller (prevents document scroll) -->
+					<div ref="mainScrollEl" class="relative h-full overflow-y-scroll scrollbar-overlay">
 						<RouterView v-slot="{ Component }">
 							<Transition name="page" mode="out-in">
 								<component :is="Component" :key="route.path" />
@@ -517,90 +531,111 @@
 				</div>
 			</Transition>
 
-			<!-- 通知面板 Dialog / Notification panel Dialog -->
-			<Dialog :open="notificationPanelOpen" @update:open="notificationPanelOpen = $event">
-				<DialogContent class="flex flex-col p-0 gap-0 max-w-sm w-full" style="max-height: 80vh">
-					<DialogHeader class="px-4 pt-4 pb-3 border-b shrink-0">
-						<div class="flex items-center justify-between">
-							<DialogTitle class="text-sm font-semibold">{{ t("nav.notifications") }}</DialogTitle>
-							<div class="flex items-center gap-2">
-								<button
-									v-if="totalNotificationCount > 0"
-									class="text-xs text-muted-foreground hover:text-foreground transition-colors"
-									@click="notificationsStore.markAllRead(); dismissAllFrontendNotifications()"
-								>
-									{{ t("notifications.markAllRead") }}
-								</button>
-								<button
-									class="p-0.5 rounded text-muted-foreground hover:text-foreground transition-colors"
-									@click="notificationPanelOpen = false"
-								>
-									<X class="size-4" />
-								</button>
-							</div>
-						</div>
+			<!-- 通知面板 / Notification panel -->
+			<Dialog :open="notificationPanelOpen" @update:open="(v) => (notificationPanelOpen = v)">
+				<DialogContent class="sm:max-w-md flex flex-col">
+					<DialogHeader class="shrink-0">
+						<DialogTitle>{{ t("nav.notifications") }}</DialogTitle>
 					</DialogHeader>
 
-					<div ref="notificationScrollEl" class="flex-1 min-h-0 overflow-y-auto scrollbar-overlay">
-						<div v-if="mergedNotifications.length === 0" class="flex flex-col items-center justify-center py-12 text-muted-foreground text-sm gap-2">
-							<Bell class="size-8 opacity-30" />
-							<span>{{ t("notifications.empty") }}</span>
-						</div>
-						<div v-else class="flex flex-col divide-y">
+					<!-- 全部已读操作行 / Mark-all-read action row -->
+					<div v-if="totalNotificationCount > 0" class="shrink-0 flex justify-end -mt-1">
+						<Button
+							variant="outline"
+							size="sm"
+							class="h-7 px-3 text-xs"
+							@click="notificationsStore.markAllRead(); dismissAllFrontendNotifications()"
+						>
+							{{ t("notifications.markAllRead") }}
+						</Button>
+					</div>
+
+					<!-- 合并通知列表 / Merged notification list -->
+					<!-- 超过 5 条时固定高度并开启滚动；5 条及以内自然撑开 dialog -->
+					<!-- Always scroll when content overflows, regardless of item count -->
+					<div
+						v-if="mergedNotifications.length > 0"
+						ref="notificationScrollEl"
+						class="flex flex-col gap-2 pr-1 overflow-y-auto scrollbar-overlay max-h-[60vh]"
+					>
+						<!-- 后端持久化通知（带 action 按钮）/ Backend persistent notification (with action button) -->
+						<template v-for="item in mergedNotifications" :key="item.source === 'backend' ? `b-${item.data.id}` : `f-${item.data.id}`">
 							<div
-								v-for="item in mergedNotifications"
-								:key="item.source === 'backend' ? `b-${item.data.id}` : `f-${item.data.id}`"
-								class="px-4 py-3 text-xs"
+								v-if="item.source === 'backend'"
+								class="rounded-lg border px-3 py-2.5 flex flex-col gap-1.5"
 							>
-								<template v-if="item.source === 'backend'">
-									<p :class="notificationLevelClass(item.data.level)">
+								<div class="flex items-start justify-between gap-2">
+									<p class="text-sm leading-snug flex-1" :class="notificationLevelClass(item.data.level)">
 										{{ renderNotificationMessage(item.data) }}
 									</p>
-									<div class="flex items-center justify-between mt-1.5 gap-2">
-										<span class="text-muted-foreground/60">
-											{{ new Date(item.data.created_at).toLocaleString() }}
-										</span>
-										<div class="flex items-center gap-2 shrink-0">
-											<button
-												v-if="item.data.action"
-												class="text-primary hover:underline"
-												@click="executeNotificationAction(item.data)"
-											>
-												{{ t(`notifications.action.${item.data.action.action_type}`) }}
-											</button>
-											<button
-												class="text-muted-foreground hover:text-foreground"
-												@click="notificationsStore.markRead([item.data.id])"
-											>
-												<X class="size-3" />
-											</button>
-										</div>
-									</div>
-								</template>
-								<template v-else>
-									<p :class="frontendNotificationClass(item.data.type)">
+									<Button
+										variant="ghost"
+										size="sm"
+										class="h-6 w-6 p-0 shrink-0 text-muted-foreground hover:text-foreground"
+										@click="notificationsStore.markRead([item.data.id])"
+									>
+										<X class="size-3.5" />
+									</Button>
+								</div>
+								<div class="flex items-center justify-between gap-2">
+									<p class="text-xs text-muted-foreground">
+										{{ new Date(item.data.created_at).toLocaleString() }}
+									</p>
+									<Button
+										v-if="item.data.action"
+										:variant="item.data.action.action_type === 'view_update' ? 'default' : 'destructive'"
+										size="sm"
+										:class="item.data.action.action_type === 'view_update'
+											? 'h-6 text-xs px-2 bg-green-600 hover:bg-green-700 text-white'
+											: 'h-6 text-xs px-2'"
+										@click="executeNotificationAction(item.data)"
+									>
+										{{ t(`notifications.action.${item.data.action.action_type}`) }}
+									</Button>
+								</div>
+							</div>
+
+							<!-- 前端内存通知（纯展示，刷新后消失）/ Frontend in-memory notification (display only, cleared on refresh) -->
+							<div
+								v-else
+								class="rounded-lg border px-3 py-2.5 flex flex-col gap-1.5"
+							>
+								<div class="flex items-start justify-between gap-2">
+									<p class="text-sm leading-snug flex-1" :class="frontendNotificationClass(item.data.type)">
 										{{ item.data.message }}
 									</p>
-									<div class="flex items-center justify-between mt-1.5 gap-2">
-										<span class="text-muted-foreground/60">
-											{{ item.data.timestamp.toLocaleString() }}
-										</span>
-										<button
-											class="text-muted-foreground hover:text-foreground shrink-0"
-											@click="dismissFrontendNotification(item.data.id)"
-										>
-											<X class="size-3" />
-										</button>
-									</div>
-								</template>
+									<Button
+										variant="ghost"
+										size="sm"
+										class="h-6 w-6 p-0 shrink-0 text-muted-foreground hover:text-foreground"
+										@click="dismissFrontendNotification(item.data.id)"
+									>
+										<X class="size-3.5" />
+									</Button>
+								</div>
+								<p class="text-xs text-muted-foreground">
+									{{ item.data.timestamp.toLocaleString() }}
+								</p>
 							</div>
-						</div>
+						</template>
+					</div>
+
+					<!-- 空状态 / Empty state -->
+					<div
+						v-else
+						class="flex items-center justify-center text-sm text-muted-foreground py-8"
+					>
+						{{ t("notifications.empty") }}
 					</div>
 				</DialogContent>
 			</Dialog>
 
 			<!-- 全局目录浏览器 / Global directory browser -->
 			<DirectoryBrowserDialog />
+
+			<!-- FFmpeg 首选项向导：ffmpeg_preference 未设置时自动弹出 / FFmpeg preference wizard: auto-opens while ffmpeg_preference is unset -->
+			<FFmpegPreferenceDialog />
+			<FFmpegDownloadDialog />
 
 			<NotifyLayer />
 		</div>

@@ -196,8 +196,9 @@ fn run() -> Result<serde_json::Value, String> {
 
     println!("PROGRESS:0/{}", PROGRESS_SCALE);
 
-    // 启动 ffmpeg 合并 / Launch ffmpeg merge
-    let mut child = Command::new("ffmpeg")
+    // 启动 ffmpeg 合并（优先用主程序按 ffmpeg_preference 解析好的路径）
+    // Launch ffmpeg merge (preferring the path the host resolved per ffmpeg_preference)
+    let mut child = Command::new(pp_utils::ffmpeg_program())
         .args(["-y", "-allowed_extensions", "ALL", "-protocol_whitelist",
                "file,crypto,data,http,https,tcp,tls", "-i"])
         .arg(&m3u8_path)

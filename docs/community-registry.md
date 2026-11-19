@@ -84,6 +84,7 @@ Release workflow 会自动推导并写入：
 | 标识符           | 说明                      |
 |------------------|---------------------------|
 | `windows-x86_64` | Windows 64 位             |
+| `windows-aarch64`| Windows ARM64             |
 | `linux-x86_64`   | Linux x86_64              |
 | `linux-aarch64`  | Linux ARM64               |
 | `darwin-x86_64`  | macOS Intel               |

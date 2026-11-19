@@ -171,16 +171,6 @@
   background-color: oklch(0.5 0 0 / 65%);
 }
 
-/* 设置页 section 副标题淡入 / Settings section label fade-in */
-.section-label-enter-active,
-.section-label-leave-active {
-  transition: opacity 0.2s ease;
-}
-.section-label-enter-from,
-.section-label-leave-to {
-  opacity: 0;
-}
-
 /* 页面切换淡入淡出 / Page transition fade */
 .page-enter-active,
 .page-leave-active {
@@ -235,4 +225,22 @@
 .step-back-leave-to {
   opacity: 0;
   transform: translateX(24px);
+}
+
+/* FFmpeg 进度 toast：展开/折叠同高 / FFmpeg progress toast: identical
+ * collapsed/expanded height
+ *
+ * vue-sonner 悬停展开时强制 `height: var(--initial-height)`——该值在挂载时
+ * 量一次且之后不会复测，与当前自然高度哪怕只差几 px，居中的内容就会随
+ * height 过渡上下推移（表现为进度条/百分比抖动）。给进度 toast 钉
+ * height:auto，展开态与折叠态恒等，悬停只剩"露出后方 toast"这一个效果。
+ * vue-sonner forces `height: var(--initial-height)` on hover-expand — that
+ * value is measured once at mount and never re-measured, so if it differs
+ * from the live natural height by even a few px the vertically-centered
+ * content shifts during the 400ms height transition (visible as the
+ * progress bar/percentage jittering). Pinning height:auto keeps expanded
+ * and collapsed heights identical; hovering then only reveals the toasts
+ * stacked behind. */
+[data-sonner-toast].ffmpeg-progress-toast {
+	height: auto !important;
 }

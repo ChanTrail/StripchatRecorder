@@ -23,7 +23,7 @@
 - **转发流（HLS Relay）**：无需录制即可将主播直播流转发给播放器，访问 `/stream/{modelname}` 自动启动，支持多客户端同时连接
 - 支持分离式网络代理：可分别配置 Stripchat API 代理与 CDN 分片代理
 - 支持配置 Stripchat 镜像站（将请求中的 `stripchat.com` 替换为镜像域名）
-- **Mouflon HLS 解密**：支持管理 `pkey → pdkey` 密钥对，用于解密 Stripchat 加密的 HLS 分片文件名；支持配置同步 URL 自动拉取最新密钥
+- **Mouflon HLS 解密**：支持管理 `pkey → pdkey` 密钥对和 `pkey → keystream` 密钥流，用于解密 Stripchat 加密的 HLS 分片文件名；支持配置同步 URL 自动拉取最新密钥
 - **可视化后处理流水线**：DAG 节点编辑器，支持分叉与合并，内置模块：
   - **ts_merge** — 将 TS 分片目录合并为单一视频文件（流水线首节点）
   - **contact_sheet** — 生成带时间戳的缩略图预览图
@@ -72,7 +72,7 @@ docker compose up -d
 
 启动后在浏览器中打开 `http://localhost:3030`。首次访问时会进入设置向导，引导你完成语言选择、录制目录设置、网络代理配置和管理员密码设置。
 
-Docker 镜像默认以 Server 模式运行（端口 3030），配置写入挂载的 `config/settings.json`。
+Docker 镜像默认以 Server 模式运行（端口 3030），配置写入挂载的 `config/settings.json`。镜像为多架构构建（`linux/amd64`、`linux/arm64`），x86 与 ARM64 主机均可直接拉取运行。
 
 ### docker run
 
@@ -131,7 +131,7 @@ Stripchat 镜像站项目：<https://github.com/ChanTrail/StripchatMirror>
 
 ### Mouflon HLS 解密密钥
 
-Stripchat 对 HLS 分片文件名进行了加密（Mouflon 系统）。若录制时遇到无法下载分片的情况，需在设置页的「Mouflon 解密密钥」中填入对应的 `pkey → pdkey` 密钥对。密钥可从社区渠道获取。
+Stripchat 对 HLS 分片文件名进行了加密（Mouflon 系统）。若录制时遇到无法下载分片的情况，需在设置页的「Mouflon 解密密钥」中填入对应的 `pkey → pdkey` 密钥对；没有 pdkey 时也可以填 `keystream`（十六进制，至少 16 字节），同一 `pkey` 两者都有时优先使用 pdkey。密钥可从社区渠道获取。
 
 也可以配置「同步地址」和可选的「同步令牌」，从指定 URL 自动拉取最新密钥。
 
@@ -184,9 +184,20 @@ Desktop 端安装包（NSIS/MSI、AppImage、deb/rpm、dmg）不把模块放在�
 
 ---
 
+## FFmpeg 自动管理
+
+程序依赖 ffmpeg 与 ffprobe，按以下顺序自动管理，通常无需手动安装：
+
+- **查找顺序**：启动时先检查 `tools` 文件夹（Server 为程序目录下；Desktop 为与 `modules` 相同的每用户数据目录下），再在系统 PATH 中查找。`tools` 中的副本优先于 PATH。
+- **自动下载**：两处都找不到时，自动从 [FFmpeg-Builds-Full](https://github.com/ChanTrail/FFmpeg-Builds-Full) 下载预编译静态构建（约 130–210 MB，Windows 为 7z 固实压缩包，Linux/macOS 为 tar.xz）到 `tools` 文件夹，下载进度以 toast 提示（支持 Windows x86_64/ARM64、Linux x86_64/ARM64、macOS ARM64）。
+- **空闲自动更新**：下载的副本会在没有录制和后处理任务运行时自动更新到最新版本（设置项「空闲时自动更新 FFmpeg」，默认开启）。PATH 中的 FFmpeg，以及手动放入 `tools`、没有 `ffmpeg-build.json` 标记文件的 FFmpeg 都不会被替换。
+- **Docker 镜像**已内置 ffmpeg，无需任何额外操作。
+
+---
+
 ## 从源码构建
 
-**前置依赖：** Rust、Node.js (LTS)、ffmpeg
+**前置依赖：** Rust、Node.js (LTS)、ffmpeg（可选：缺失时程序启动后会自动下载到程序目录的 `tools` 文件夹）
 
 ### 首次启动配置
 

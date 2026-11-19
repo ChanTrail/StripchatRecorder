@@ -54,7 +54,7 @@ pub fn extract_frames(
     );
     let frame_pattern = out_dir.join("frame_%06d.png");
 
-    let mut child = Command::new("ffmpeg")
+    let mut child = Command::new(pp_utils::ffmpeg_program())
         .args(["-y", "-i"])
         .arg(input)
         .args(["-vf", &vf])
@@ -162,7 +162,7 @@ pub fn tile_frames(
     quality: u32,
 ) -> Result<(), String> {
     let tile_filter = format!("tile={}x{}:padding={}", cols, rows, tile_pad);
-    let mut cmd = Command::new("ffmpeg");
+    let mut cmd = Command::new(pp_utils::ffmpeg_program());
     cmd.args(["-y", "-f", "concat", "-safe", "0", "-i"])
         .arg(filelist)
         .args(["-vf", &tile_filter, "-frames:v", "1"]);

@@ -15,8 +15,33 @@
 //! - Emitting progress information to stdout
 
 use std::env;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+
+/// 主程序按 `ffmpeg_preference` 设置解析好的 ffmpeg 程序路径（`PP_FFMPEG`
+/// 环境变量），由后端 `exec.rs` 在拉起模块进程时注入——模块侧应与主程序
+/// 使用同一个 ffmpeg 副本；未注入（如模块脱离主程序单独手动调用）时回退为
+/// 裸命令名，交由操作系统按 PATH 解析。
+///
+/// The ffmpeg path the host resolved per its `ffmpeg_preference` setting
+/// (`PP_FFMPEG` env var), injected by the backend's `exec.rs` when spawning the
+/// module — modules should invoke the same ffmpeg copy as the host. Falls back
+/// to the bare command name resolved via PATH when unset (e.g. the module is
+/// invoked standalone).
+pub fn ffmpeg_program() -> OsString {
+    env::var_os("PP_FFMPEG")
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| OsString::from("ffmpeg"))
+}
+
+/// 同 [`ffmpeg_program`]，解析 ffprobe（`PP_FFPROBE` 环境变量）。
+/// Same as [`ffmpeg_program`], resolving ffprobe (`PP_FFPROBE` env var).
+pub fn ffprobe_program() -> OsString {
+    env::var_os("PP_FFPROBE")
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| OsString::from("ffprobe"))
+}
 
 /// 使用 ffprobe 获取视频文件的时长（秒）。
 /// Get the duration of a video file in seconds using ffprobe.
@@ -25,7 +50,7 @@ use std::process::{Command, Stdio};
 /// 视频时长（秒），ffprobe 不可用或解析失败时返回 `None`。
 /// Video duration in seconds, or `None` if ffprobe is unavailable or parsing fails.
 pub fn video_duration(input: &Path) -> Option<f64> {
-    let out = Command::new("ffprobe")
+    let out = Command::new(ffprobe_program())
         .args([
             "-v",
             "error",
@@ -249,7 +274,7 @@ pub fn cleanup_tmp_dir(tmp: &Path, max_mb: u64) {
 /// `(width, height)`, or `None` on failure.
 pub fn image_dimensions(path: &Path) -> Option<(u32, u32)> {
     use std::process::Command;
-    let out = Command::new("ffprobe")
+    let out = Command::new(ffprobe_program())
         .args([
             "-v", "error",
             "-select_streams", "v:0",
@@ -275,7 +300,7 @@ pub fn image_dimensions(path: &Path) -> Option<(u32, u32)> {
 /// `(duration_secs, width, height)`，失败时返回 `None`。
 /// `(duration_secs, width, height)`, or `None` on failure.
 pub fn video_meta(input: &Path) -> Option<(f64, i32, i32)> {
-    let out = Command::new("ffprobe")
+    let out = Command::new(ffprobe_program())
         .args([
             "-v", "error",
             "-select_streams", "v:0",

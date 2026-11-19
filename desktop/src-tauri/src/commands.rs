@@ -91,6 +91,7 @@ pub async fn add_streamer(
             settings.cdn_proxy_url.as_deref(),
             settings.sc_mirror_url.as_deref(),
             Some(settings.sc_mirror_scheme.as_str()),
+            settings.ech_enabled,
         );
         match api_res {
             Err(e) => { failed += 1; tracing::warn!("add_streamer: api init failed for {username}: {e}"); }
@@ -168,9 +169,14 @@ pub async fn start_recording(
             settings.cdn_proxy_url.as_deref(),
             settings.sc_mirror_url.as_deref(),
             Some(settings.sc_mirror_scheme.as_str()),
+            settings.ech_enabled,
         )
         .map_err(map_err)?
-        .with_mouflon_keys(state.app_state.get_mouflon_keys());
+        .with_mouflon_keys(state.app_state.get_mouflon_keys())
+        // 与 Server 的 start_recording 路由一致：按设置选择分辨率与编码
+        // Same as the Server start_recording route: select resolution and codec from the settings
+        .with_resolution_selection(settings.preferred_resolution, &settings.resolution_preference)
+        .with_codec_selection(&settings.preferred_codec);
         let info = api.get_stream_info(&username, true, None, false).await.map_err(map_err)?;
         info.playlist_url
             .ok_or_else(|| format!("Stream offline: {}", username))?
@@ -208,6 +214,7 @@ pub async fn verify_streamer(
         settings.cdn_proxy_url.as_deref(),
         settings.sc_mirror_url.as_deref(),
         Some(settings.sc_mirror_scheme.as_str()),
+        settings.ech_enabled,
     )
     .map_err(map_err)?;
     match api.get_stream_info(&username, false, None, false).await {
@@ -215,6 +222,33 @@ pub async fn verify_streamer(
         Err(AppError::UserNotFound(_)) => Ok(serde_json::json!({ "exists": false })),
         Err(e) => Err(e.to_string()),
     }
+}
+
+/// SC 官方分类浏览列表（StripChat 页无限滚动，等价于 `GET /api/sc/models`）。
+/// The official SC category browse list (feeds the StripChat page's infinite
+/// scroll; equivalent to `GET /api/sc/models`).
+#[tauri::command]
+pub async fn list_sc_models(
+    primary_tag: Option<String>,
+    tag: Option<String>,
+    sort_by: Option<String>,
+    offset: Option<u32>,
+    limit: Option<u32>,
+    state: State<'_, DesktopState>,
+) -> CmdResult<serde_json::Value> {
+    let settings = state.app_state.get_settings();
+    // 浏览页专用镜像/代理（sc_browse_*），与主 API 设置相互独立
+    // Browse-page mirror/proxy (sc_browse_*), independent from the main API settings
+    let api = StripchatApi::new_for_browse(&settings).map_err(map_err)?;
+    api.list_models(
+        primary_tag.as_deref().unwrap_or("girls"),
+        tag.as_deref(),
+        sort_by.as_deref().unwrap_or("stripRanking"),
+        offset.unwrap_or(0),
+        limit.unwrap_or(40),
+    )
+    .await
+    .map_err(map_err)
 }
 
 // ─── Settings ─────────────────────────────────────────────────────────────────
@@ -289,10 +323,14 @@ pub async fn list_mouflon_keys(state: State<'_, DesktopState>) -> CmdResult<serd
 #[tauri::command]
 pub async fn add_mouflon_key(
     pkey: String,
-    pdkey: String,
+    pdkey: Option<String>,
+    keystream: Option<String>,
     state: State<'_, DesktopState>,
 ) -> CmdResult<serde_json::Value> {
-    state.app_state.add_mouflon_key(&pkey, &pdkey).map_err(map_err)?;
+    state
+        .app_state
+        .add_mouflon_key(&pkey, pdkey.as_deref(), keystream.as_deref())
+        .map_err(map_err)?;
     state.emitter.emit("mouflon-keys-updated", &state.app_state.get_mouflon_keys_store());
     Ok(serde_json::json!({ "ok": true }))
 }
@@ -995,4 +1033,94 @@ pub async fn apply_update_cmd(
 
     emitter.emit("desktop-update-progress", &serde_json::json!({ "phase": "done" }));
     Ok(serde_json::json!({ "ok": true }))
+}
+
+// ─── FFmpeg Status ────────────────────────────────────────────────────────────
+
+/// 查询当前 FFmpeg 下载/安装进度（与 `GET /api/ffmpeg/status` 等价，
+/// SSE `ffmpeg-progress` 事件断线重连后前端用本命令恢复状态）。
+///
+/// Query the current FFmpeg download/install progress (equivalent to
+/// `GET /api/ffmpeg/status`); the frontend uses this to restore state after an
+/// SSE `ffmpeg-progress` reconnect.
+#[tauri::command]
+pub async fn get_ffmpeg_status(state: State<'_, DesktopState>) -> CmdResult<serde_json::Value> {
+    let progress = stripchat_recorder_lib::ffmpeg::download::current_progress(&state.app_state);
+    serde_json::to_value(progress).map_err(|e| e.to_string())
+}
+
+/// 探测 system（PATH）与 tools 目录中 ffmpeg/ffprobe/ffplay 的存在情况与
+/// ffmpeg 版本（与 `GET /api/ffmpeg/locations` 等价，"FFmpeg 首选项"向导用）。
+/// 探测会对找到的 ffmpeg 运行 `-version`（拉起子进程），放到 blocking 线程执行。
+///
+/// Probe ffmpeg/ffprobe/ffplay presence plus the ffmpeg version on the system
+/// PATH and in the tools directory (equivalent to `GET /api/ffmpeg/locations`,
+/// used by the FFmpeg preference wizard). The probe runs `-version` on each
+/// found ffmpeg (spawns child processes), so it runs on a blocking thread.
+#[tauri::command]
+pub async fn get_ffmpeg_locations() -> CmdResult<serde_json::Value> {
+    let locations =
+        tokio::task::spawn_blocking(stripchat_recorder_lib::ffmpeg::ffmpeg_locations)
+            .await
+            .map_err(|e| e.to_string())?;
+    serde_json::to_value(locations).map_err(|e| e.to_string())
+}
+
+/// 手动触发 tools 目录的 FFmpeg 下载安装（"FFmpeg 首选项"向导的"下载"
+/// 按钮，等价于 `POST /api/ffmpeg/download`）。立即返回：下载在后台进行，
+/// 进度经 `ffmpeg-progress` 事件广播。首选项为系统环境变量或平台不支持
+/// 下载时为 no-op。
+///
+/// Manually trigger a tools-directory FFmpeg download/install (the FFmpeg
+/// preference wizard's Download button; equivalent to
+/// `POST /api/ffmpeg/download`). Returns immediately: the download runs in
+/// the background with progress over the `ffmpeg-progress` event. No-op when
+/// the preference is the system PATH or the platform can't download.
+#[tauri::command]
+pub async fn download_ffmpeg(state: State<'_, DesktopState>) -> CmdResult<()> {
+    stripchat_recorder_lib::ffmpeg::download::spawn_manual_install(
+        Arc::clone(&state.app_state),
+        Arc::clone(&state.emitter),
+    );
+    Ok(())
+}
+
+// ─── 资源占用 / Resource usage ───────────────────────────────────────────────
+
+/// 返回本进程及其全部后代（ffmpeg、后处理模块及其子进程等）的 CPU/内存
+/// 快照（与 `GET /api/process-usage` 等价）。单次调用内部跨一个 CPU 差分
+/// 采样窗口（约 450ms）。
+///
+/// Returns a CPU/memory snapshot of this process plus every descendant
+/// (ffmpeg, post-process modules and their children, ...) — equivalent to
+/// `GET /api/process-usage`. One call spans a CPU differential sampling
+/// window (~450 ms) internally.
+#[tauri::command]
+pub async fn process_usage() -> CmdResult<serde_json::Value> {
+    let snapshot = stripchat_recorder_lib::system::process::collect_process_usage().await;
+    serde_json::to_value(snapshot).map_err(|e| e.to_string())
+}
+
+// ─── 服务状态 / Service status ───────────────────────────────────────────────
+
+/// 并行探测后端各依赖的连通性与延时（与 `GET /api/service-status` 等价）。
+/// `skip_mirrored` 为非 0 时跳过走镜像的一次性条目（前端首轮全量探测后
+/// 改走此参，省流量）。前端传 `{ skip_mirrored: 1 }`，数值型实参。
+///
+/// Parallel connectivity+latency probes of backend dependencies —
+/// equivalent to `GET /api/service-status`. A non-zero `skip_mirrored`
+/// skips the one-shot mirror-routed items (the frontend switches to this
+/// after the first full round to save traffic). The frontend passes
+/// `{ skip_mirrored: 1 }` — a numeric argument.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn service_status(
+    state: State<'_, DesktopState>,
+    skip_mirrored: Option<i64>,
+) -> CmdResult<serde_json::Value> {
+    let resp = stripchat_recorder_lib::server::routes::status::collect_service_status(
+        &state.app_state,
+        matches!(skip_mirrored, Some(v) if v != 0),
+    )
+    .await;
+    serde_json::to_value(resp).map_err(|e| e.to_string())
 }

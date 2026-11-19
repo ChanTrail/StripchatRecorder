@@ -95,8 +95,16 @@ pub fn builtin_module_infos() -> Vec<ModuleInfo> {
         crate::locale::manager::read_module_locale("__builtin__", &locale_code)
             .and_then(|v| v.get(node_key).cloned())
             .map(|entry| {
-                let name = entry.get("name").and_then(|n| n.as_str()).unwrap_or(name_default).to_string();
-                let desc = entry.get("description").and_then(|d| d.as_str()).unwrap_or(desc_default).to_string();
+                let name = entry
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or(name_default)
+                    .to_string();
+                let desc = entry
+                    .get("description")
+                    .and_then(|d| d.as_str())
+                    .unwrap_or(desc_default)
+                    .to_string();
                 (name, desc)
             })
             .unwrap_or_else(|| (name_default.to_string(), desc_default.to_string()))
@@ -193,7 +201,13 @@ pub fn run_unpack(effective_id: &str, inputs: &[PathBuf]) -> NodeResult {
         if img.exists() {
             outputs.push(img);
         } else {
-            tracing::warn!("{}", crate::tl!("postprocess.builtinUnpackImageNotFound", path = img.display()));
+            tracing::warn!(
+                "{}",
+                crate::tl!(
+                    "postprocess.builtinUnpackImageNotFound",
+                    path = img.display()
+                )
+            );
         }
     }
 

@@ -2,7 +2,7 @@
 //!
 //! 解析 Stripchat 的 HLS m3u8 播放列表（媒体播放列表和主播放列表两种），提取分片 URL、
 //! fMP4 初始化段 URL，以及主播放列表中带宽最高的变体流 URL。
-//! 支持 Mouflon 加密系统：通过 SHA-256 密钥对分片 URL 进行 XOR 解密。
+//! 支持 Mouflon 加密系统：用 SHA-256(pdkey) 或直接给定的 keystream 对分片 URL 进行 XOR 解密。
 //!
 //! 本模块只负责纯文本解析，不涉及任何网络请求——播放列表文本的获取（含多 CDN 竞速）
 //! 由 `platform::stripchat::StripchatApi` 负责，解析后再调用本模块的函数。
@@ -10,7 +10,8 @@
 //! Parses Stripchat's HLS m3u8 playlists (both media playlists and master playlists),
 //! extracting segment URLs, fMP4 init segment URLs, and the highest-bandwidth variant
 //! stream URL from a master playlist.
-//! Supports the Mouflon encryption system: XOR-decrypts segment URLs using SHA-256 keys.
+//! Supports the Mouflon encryption system: XOR-decrypts segment URLs using SHA-256(pdkey) or a
+//! directly given keystream.
 //!
 //! This module performs pure text parsing only — no network requests. Fetching the
 //! playlist text (including multi-CDN racing) is the responsibility of
@@ -18,7 +19,7 @@
 //! once the text is retrieved.
 
 use crate::core::error::{AppError, Result};
-use base64::{engine::general_purpose::STANDARD, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use regex::Regex;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -28,6 +29,91 @@ use std::sync::LazyLock;
 /// Regex for extracting the encrypted string and sequence number from an encrypted URL.
 static SEGMENT_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"_([^_]+)_(\d+(?:_part\d+)?)\.mp4(?:[?#].*)?").unwrap());
+
+/// keystream 的最短字节数。解密时按位置循环使用密钥流，短于加密串的 keystream 会解出乱码，
+/// 参考脚本 `mouflon_download.py` 同样要求至少 16 字节才足以覆盖分片文件名里的加密串。
+///
+/// Minimum keystream length in bytes. Decryption cycles the key stream by position, so a
+/// keystream shorter than the encrypted token decrypts to garbage; the reference script
+/// `mouflon_download.py` likewise requires at least 16 bytes to cover the token in a segment name.
+pub const MIN_KEYSTREAM_BYTES: usize = 16;
+
+/// 把 keystream 的十六进制文本（如 `b8a651203a2caeca73eca302e161e30e`）解析为字节，
+/// 首尾空白会被忽略；不是合法十六进制、长度为奇数或短于 [`MIN_KEYSTREAM_BYTES`] 时返回原因。
+///
+/// Parse a keystream's hexadecimal text (e.g. `b8a651203a2caeca73eca302e161e30e`) into bytes,
+/// ignoring surrounding whitespace; returns the reason when it is not valid hex, has an odd
+/// length, or is shorter than [`MIN_KEYSTREAM_BYTES`].
+pub fn parse_keystream_hex(text: &str) -> std::result::Result<Vec<u8>, String> {
+    let text = text.trim();
+    if !text.len().is_multiple_of(2) {
+        return Err("hex length must be even".to_string());
+    }
+    let mut bytes = Vec::with_capacity(text.len() / 2);
+    for pair in text.as_bytes().chunks(2) {
+        let pair = std::str::from_utf8(pair).map_err(|_| "not valid hex".to_string())?;
+        bytes.push(u8::from_str_radix(pair, 16).map_err(|_| "not valid hex".to_string())?);
+    }
+    if bytes.len() < MIN_KEYSTREAM_BYTES {
+        return Err(format!(
+            "keystream must be at least {} bytes, got {}",
+            MIN_KEYSTREAM_BYTES,
+            bytes.len()
+        ));
+    }
+    Ok(bytes)
+}
+
+/// 把 keystream 字节编码为小写十六进制文本（[`parse_keystream_hex`] 的逆操作）。
+/// Encode keystream bytes as lowercase hexadecimal text (the inverse of [`parse_keystream_hex`]).
+pub fn encode_keystream_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+/// 解密 Mouflon 加密分片 URL 所需的全部密钥材料，按 pkey 索引。
+///
+/// 一个 pkey 可以有两种形式的密钥，解密时取其一：
+/// - `pdkey`：解密密钥本身，密钥流为 `SHA-256(pdkey)`（32 字节，完整）；
+/// - `keystream`：已经算好的密钥流（如同步服务从已知明文恢复出来的），无需知道 pdkey。
+///
+/// 两者都有时优先用 pdkey：恢复出来的 keystream 可能只是前缀。
+///
+/// All the key material needed to decrypt Mouflon-encrypted segment URLs, indexed by pkey.
+///
+/// A pkey may carry either form of key; decryption uses one of them:
+/// - `pdkey`: the decryption key itself, whose key stream is `SHA-256(pdkey)` (32 bytes, complete);
+/// - `keystream`: an already-computed key stream (e.g. recovered by the sync service from known
+///   plaintext), usable without knowing the pdkey.
+///
+/// When both exist the pdkey wins, since a recovered keystream may be only a prefix.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MouflonKeys {
+    /// pkey -> pdkey
+    pub pdkeys: HashMap<String, String>,
+    /// pkey -> keystream 字节 / pkey -> keystream bytes
+    pub keystreams: HashMap<String, Vec<u8>>,
+}
+
+impl MouflonKeys {
+    /// 该 pkey 是否有可用的密钥材料（pdkey 或 keystream）。
+    /// Whether this pkey has usable key material (a pdkey or a keystream).
+    pub fn contains(&self, pkey: &str) -> bool {
+        self.pdkeys.contains_key(pkey) || self.keystreams.get(pkey).is_some_and(|ks| !ks.is_empty())
+    }
+
+    /// 该 pkey 用于解密的密钥流：有 pdkey 时为 `SHA-256(pdkey)`，否则为 keystream；都没有返回 `None`。
+    /// The key stream used to decrypt for this pkey: `SHA-256(pdkey)` when a pdkey exists,
+    /// otherwise the keystream; `None` when neither exists.
+    pub fn key_stream(&self, pkey: &str) -> Option<Vec<u8>> {
+        if let Some(pdkey) = self.pdkeys.get(pkey) {
+            return Some(Sha256::digest(pdkey.as_bytes()).to_vec());
+        }
+        self.keystreams
+            .get(pkey)
+            .filter(|ks| !ks.is_empty())
+            .cloned()
+    }
+}
 
 /// HLS 分片信息 / HLS segment information
 #[derive(Debug, Clone)]
@@ -61,11 +147,11 @@ pub struct HlsSegment {
 /// # 参数 / Parameters
 /// - `playlist`: m3u8 文本内容 / m3u8 text content
 /// - `url_prefix`: 用于将相对路径转为绝对 URL 的前缀 / Prefix for converting relative paths to absolute URLs
-/// - `mouflon_keys`: Mouflon 解密密钥表（pkey -> pdkey）/ Mouflon decryption key map (pkey -> pdkey)
+/// - `mouflon_keys`: Mouflon 解密密钥（pdkey 与 keystream，按 pkey 索引）/ Mouflon decryption keys (pdkeys and keystreams, indexed by pkey)
 pub fn parse_playlist(
     playlist: &str,
     url_prefix: &str,
-    mouflon_keys: &HashMap<String, String>,
+    mouflon_keys: &MouflonKeys,
 ) -> Result<Vec<HlsSegment>> {
     let mut segments = Vec::new();
     // 解析过程中追踪的"当前" EXT-X-MAP URL（按行推进，在 segment 入列时快照）
@@ -74,7 +160,9 @@ pub fn parse_playlist(
     // 上一个推入 segments 的分片所用的 init URL（用于判断是否发生了变更）
     // The init URL used by the last pushed segment (for change detection)
     let mut last_pushed_init_url: Option<String> = None;
-    let mut current_pkey: Option<&str> = None;
+    // 当前 pkey 对应的密钥流（没有该 pkey 的密钥时为 None）
+    // Key stream for the current pkey (None when there is no key for it)
+    let mut current_key_stream: Option<Vec<u8>> = None;
     let mut pending_duration: f64 = 0.0;
 
     let lines: Vec<&str> = playlist.lines().collect();
@@ -86,7 +174,7 @@ pub fn parse_playlist(
             let parts: Vec<&str> = line.split(':').collect();
             if parts.len() >= 4 {
                 let pkey = parts[3];
-                current_pkey = mouflon_keys.get(pkey).map(|s| s.as_str());
+                current_key_stream = mouflon_keys.key_stream(pkey);
             }
         }
 
@@ -139,8 +227,8 @@ pub fn parse_playlist(
 
             // 若有解密密钥则解密 URL，否则直接使用
             // Decrypt URL if key is available, otherwise use as-is
-            if let Some(key) = current_pkey {
-                decrypt_segment_url(&encoded_url, key).unwrap_or(encoded_url)
+            if let Some(ref key_stream) = current_key_stream {
+                decrypt_segment_url(&encoded_url, key_stream).unwrap_or(encoded_url)
             } else {
                 encoded_url
             }
@@ -206,7 +294,8 @@ pub fn parse_master_playlist(
     let mut mouflon_pairs: Vec<(String, String)> = Vec::new();
     for &line in &lines {
         if let Some(rest) = line.strip_prefix("#EXT-X-MOUFLON:PSCH:")
-            && let Some((scheme, key)) = rest.split_once(':') {
+            && let Some((scheme, key)) = rest.split_once(':')
+        {
             mouflon_pairs.push((scheme.to_string(), key.to_string()));
         }
     }
@@ -231,7 +320,11 @@ pub fn parse_master_playlist(
             pending = Some((bandwidth, height));
         } else if !line.is_empty() && !line.starts_with('#') {
             if let Some((bandwidth, height)) = pending.take() {
-                variants.push(Variant { url: line.to_string(), bandwidth, height });
+                variants.push(Variant {
+                    url: line.to_string(),
+                    bandwidth,
+                    height,
+                });
             }
         } else {
             pending = None;
@@ -283,12 +376,22 @@ pub fn get_url_prefix(url: &str) -> String {
     }
 }
 
-/// 使用 SHA-256 密钥对 Mouflon 加密的分片 URL 进行 XOR 解密。
-/// Decrypt a Mouflon-encrypted segment URL using XOR with a SHA-256 key.
+/// 使用密钥流对 Mouflon 加密的分片 URL 进行 XOR 解密。
+/// Decrypt a Mouflon-encrypted segment URL by XOR-ing with a key stream.
 ///
-/// 解密流程：提取加密字符串 → Base64 解码（反转后补齐）→ SHA-256(key) XOR 解密 → 替换回 URL
-/// Decryption flow: extract encrypted string → Base64 decode (reversed + padded) → SHA-256(key) XOR decrypt → replace in URL
-fn decrypt_segment_url(encoded_url: &str, key: &str) -> Result<String> {
+/// 解密流程：提取加密字符串 → Base64 解码（反转后补齐）→ 与密钥流按位置循环异或 → 替换回 URL。
+/// 密钥流来自 `SHA-256(pdkey)` 或直接给定的 keystream（见 [`MouflonKeys::key_stream`]）。
+/// 解出的内容不是合法 UTF-8 时返回错误（密钥不对或 keystream 太短），而不是得到一个乱码 URL。
+///
+/// Decryption flow: extract encrypted string → Base64 decode (reversed + padded) → XOR with the
+/// key stream, cycled by position → replace in URL. The key stream comes from `SHA-256(pdkey)` or
+/// a directly given keystream (see [`MouflonKeys::key_stream`]). Returns an error when the
+/// result is not valid UTF-8 (wrong key or too-short keystream) instead of producing a garbled URL.
+fn decrypt_segment_url(encoded_url: &str, key_stream: &[u8]) -> Result<String> {
+    if key_stream.is_empty() {
+        return Err(AppError::Other("Empty Mouflon key stream".to_string()));
+    }
+
     let captures = SEGMENT_REGEX
         .captures(encoded_url)
         .ok_or_else(|| AppError::Other("Cannot parse encrypted URL".to_string()))?;
@@ -305,18 +408,14 @@ fn decrypt_segment_url(encoded_url: &str, key: &str) -> Result<String> {
         .decode(&reversed)
         .map_err(|e| AppError::Other(format!("Base64 decode error: {}", e)))?;
 
-    // 使用 SHA-256(key) 作为 XOR 密钥流 / Use SHA-256(key) as XOR keystream
-    let mut hasher = Sha256::new();
-    hasher.update(key.as_bytes());
-    let key_bytes = hasher.finalize();
-
     let decrypted: Vec<u8> = encrypted_bytes
         .iter()
         .enumerate()
-        .map(|(i, b)| b ^ key_bytes[i % key_bytes.len()])
+        .map(|(i, b)| b ^ key_stream[i % key_stream.len()])
         .collect();
 
-    let decrypted_str = String::from_utf8_lossy(&decrypted);
+    let decrypted_str = String::from_utf8(decrypted)
+        .map_err(|_| AppError::Other("Decrypted Mouflon token is not valid UTF-8".to_string()))?;
     Ok(encoded_url.replace(encrypted_str, &decrypted_str))
 }
 

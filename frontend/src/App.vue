@@ -19,12 +19,14 @@
 	import { RouterView, useRouter, useRoute } from "vue-router";
 	import NotifyLayer from "./components/NotifyLayer.vue";
 	import DirectoryBrowserDialog from "./components/DirectoryBrowserDialog.vue";
+	import FFmpegPreferenceDialog from "./components/FFmpegPreferenceDialog.vue";
+	import FFmpegDownloadDialog from "./components/FFmpegDownloadDialog.vue";
 	import { Button } from "@/components/ui/button";
 	import { call, on, onSseReconnect, onSseDisconnect } from "@/lib/api";
 	import {
 		Users, Video, Clapperboard, Radio, Search, Settings, Info, LogOut,
 		ChevronsLeft, ChevronsRight, Bell, Store, X, WifiOff, Loader2,
-		Menu,
+		Menu, LayoutGrid, Activity, Cpu,
 	} from "@lucide/vue";
 	import {
 		useNotify, notify,
@@ -35,11 +37,12 @@
 	import { useI18n } from "vue-i18n";
 	import { useScrollbar } from "@/composables/useScrollbar";
 	import { useMobileLayout } from "@/composables/useMobileLayout";
+	import { setupFfmpegProgressToast } from "@/composables/useFfmpegProgress";
 	import { loadLocaleFromServer } from "@/i18n";
 	import { useModuleLocaleStore } from "@/stores/moduleLocale";
 	import { useLocalesStore } from "@/stores/locales";
 	import { useAuthStore } from "@/stores/auth";
-	import { useNotificationsStore, type Notification } from "@/stores/notifications";
+	import { useNotificationsStore, resolveNotificationMessage, type Notification } from "@/stores/notifications";
 	import {
 		Dialog, DialogContent, DialogHeader, DialogTitle,
 	} from "@/components/ui/dialog";
@@ -126,10 +129,13 @@
 		{ to: "/", labelKey: "nav.streamers", icon: Users },
 		{ to: "/recordings", labelKey: "nav.recordings", icon: Video },
 		{ to: "/postprocess", labelKey: "nav.postprocess", icon: Clapperboard },
-		{ to: "/relay", labelKey: "nav.relay", icon: Radio },
+		{ to: "/stripchat", labelKey: "nav.stripchat", icon: LayoutGrid },
 		{ to: "/finder", labelKey: "nav.finder", icon: Search },
+		{ to: "/relay", labelKey: "nav.relay", icon: Radio },
 		{ to: "/community", labelKey: "nav.community", icon: Store },
 		{ to: "/settings", labelKey: "nav.settings", icon: Settings },
+		{ to: "/usage", labelKey: "nav.usage", icon: Cpu },
+		{ to: "/status", labelKey: "nav.status", icon: Activity },
 		{ to: "/about", labelKey: "nav.about", icon: Info },
 	];
 
@@ -187,6 +193,7 @@
 	let unlistenDisconnect: (() => void) | null = null;
 	let unlistenLocaleWarnings: (() => void) | null = null;
 	let unlistenNotification: (() => void) | null = null;
+	let unlistenFfmpegProgress: (() => void) | null = null;
 	/**
 	 * 执行通知面板中的操作按钮（删除主播、清理孤立记录等）。
 	 * Execute an action button in the notification panel.
@@ -217,19 +224,14 @@
 	}
 
 	/**
-	 * 渲染后端通知消息：若有 message_key 则查 i18n，否则直接返回 message。
-	 * Render a backend notification message: use i18n if message_key is present, else fall back to message.
+	 * 渲染后端通知消息：委托 stores/notifications 的共享实现
+	 * （message_key → i18n，缺失回退 message），与实时 toast 同源。
+	 * Render a backend notification message: delegates to the shared
+	 * implementation in stores/notifications (message_key → i18n, falls back
+	 * to message), the same source the real-time toast uses.
 	 */
 	function renderNotificationMessage(n: Notification): string {
-		if (n.message_key) {
-			const args = n.message_args ?? {};
-			const translated = t(n.message_key, args as Record<string, string | number>);
-			// vue-i18n missing handler returns the key itself when not found — treat that as fallback
-			if (translated && translated !== n.message_key) {
-				return translated;
-			}
-		}
-		return n.message;
+		return resolveNotificationMessage(n);
 	}
 
 	function notificationLevelClass(level: Notification["level"]): string {
@@ -329,6 +331,11 @@
 		await on("startup-scan-done", () => {
 			void notificationsStore.fetch();
 		});
+
+		// FFmpeg 下载/安装进度 toast（拉一次当前状态，恢复进行中的下载显示）
+		// FFmpeg download/install progress toast (fetches current state once to
+		// restore an in-progress download)
+		unlistenFfmpegProgress = await setupFfmpegProgressToast(t);
 	});
 
 	onUnmounted(() => {
@@ -339,6 +346,7 @@
 		unlistenDisconnect?.();
 		unlistenLocaleWarnings?.();
 		unlistenNotification?.();
+		unlistenFfmpegProgress?.();
 	});
 </script>
 
@@ -441,7 +449,12 @@
 				</div>
 			</aside>
 			<main class="flex-1 overflow-hidden">
-				<div ref="mainScrollEl" class="h-full overflow-y-auto scrollbar-overlay">
+				<!-- relative: 절대배치(sr-only 등) 자식의 containing block을 이 스크롤러로 한정해
+				     문서 scrollHeight가 부풀지 않게 함 — scrollIntoView 시 문서가 밀리는 버그 방지
+				     Keep absolute-positioned children (e.g. .sr-only inputs) contained to this
+				     scroller so document scrollHeight can't grow — prevents scrollIntoView
+				     from scrolling the whole document -->
+				<div ref="mainScrollEl" class="relative h-full overflow-y-auto scrollbar-overlay">
 					<RouterView v-slot="{ Component }">
 						<Transition name="page" mode="out-in">
 							<component :is="Component" :key="route.path" :class="isMobile ? 'pb-16' : ''" />
@@ -451,6 +464,9 @@
 			</main>
 			<NotifyLayer />
 			<DirectoryBrowserDialog />
+			<!-- FFmpeg 首选项向导：ffmpeg_preference 未设置时自动弹出 / FFmpeg preference wizard: auto-opens while ffmpeg_preference is unset -->
+			<FFmpegPreferenceDialog />
+			<FFmpegDownloadDialog />
 
 			<!-- ── 移动端底部 Tab 栏 / Mobile bottom tab bar ── -->
 			<nav
@@ -683,7 +699,7 @@
 
 	</Transition>
 
-	<!-- 断连全屏遮罩（叠在所有内容上）/ Disconnect full-screen overlay -->
+	<!-- 断连全屏遮罩（z-[60]：叠在 z-50 的对话框等所有内容上）/ Disconnect full-screen overlay (z-[60]: above z-50 dialogs and all content) -->
 	<Transition
 		enter-active-class="transition-opacity duration-300"
 		enter-from-class="opacity-0"
@@ -694,7 +710,7 @@
 	>
 		<div
 			v-if="isDisconnected"
-			class="fixed inset-0 z-50 flex flex-col items-center justify-center gap-6 bg-background/95 backdrop-blur-sm text-center px-6"
+			class="fixed inset-0 z-[60] flex flex-col items-center justify-center gap-6 bg-background/95 backdrop-blur-sm text-center px-6"
 		>
 			<div class="relative flex items-center justify-center">
 				<Loader2 class="size-16 animate-spin text-muted-foreground/25" />

@@ -11,5 +11,8 @@ path = "src/main.rs"
 pp_utils = { path = "../pp_utils" }
 serde_json = "1"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
-webpki-roots = "1"
+# 使用操作系统信任库校验 TLS 证书（而非内置 Mozilla 根），使拦截代理/杀软的根证书可用
+# Verify TLS certificates against the OS trust store (not bundled Mozilla roots), so
+# roots installed by TLS-intercepting proxies / antivirus software are honored
+rustls-platform-verifier = "0.7"
 socket2 = "0.6"

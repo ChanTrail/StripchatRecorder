@@ -5,14 +5,12 @@ use crate::server::error::{ApiError, ApiResult};
 use crate::server::router::ServerState;
 use axum::{
     Json,
-    extract::{Path, State as AxumState},
+    extract::{Path, Query, State as AxumState},
 };
 use serde::Deserialize;
 use std::sync::Arc;
 
-pub async fn list_streamers(
-    AxumState(s): AxumState<ServerState>,
-) -> ApiResult<serde_json::Value> {
+pub async fn list_streamers(AxumState(s): AxumState<ServerState>) -> ApiResult<serde_json::Value> {
     let streamers = s.app_state.get_streamers();
 
     let has_any_status = streamers
@@ -77,6 +75,7 @@ pub async fn add_streamer(
             settings.cdn_proxy_url.as_deref(),
             settings.sc_mirror_url.as_deref(),
             Some(settings.sc_mirror_scheme.as_str()),
+            settings.ech_enabled,
         )
         .map_err(ApiError::from)?,
     );
@@ -101,7 +100,9 @@ pub async fn add_streamer(
     // 每完成一个验证立即处理并推送进度事件，无需等待其他请求
     // Process and emit progress for each result as soon as it completes
     while let Some(res) = tasks.join_next().await {
-        let Ok((username, verify_result)) = res else { continue };
+        let Ok((username, verify_result)) = res else {
+            continue;
+        };
 
         let (ok, skipped_entry, error_msg) = match verify_result {
             Ok(model_id) => match s.app_state.add_streamer(&username, Some(model_id)) {
@@ -123,11 +124,22 @@ pub async fn add_streamer(
                         let uname = username.clone();
                         let proxy = s.app_state.get_settings().cgf_proxy_url;
                         tokio::spawn(async move {
-                            if let Some(sched) = crate::platform::monitor::cgf_fetch_schedule(&uname, proxy.as_deref()).await {
+                            if let Some(sched) = crate::platform::monitor::cgf_fetch_schedule(
+                                &uname,
+                                proxy.as_deref(),
+                            )
+                            .await
+                            {
                                 app_state.set_schedule(&uname, sched);
-                                tracing::info!("{}", crate::tl!("scheduler.cgfRefreshUpdated", username = uname));
+                                tracing::info!(
+                                    "{}",
+                                    crate::tl!("scheduler.cgfRefreshUpdated", username = uname)
+                                );
                             } else {
-                                tracing::warn!("{}", crate::tl!("scheduler.cgfRefreshUnavailable", username = uname));
+                                tracing::warn!(
+                                    "{}",
+                                    crate::tl!("scheduler.cgfRefreshUnavailable", username = uname)
+                                );
                             }
                         });
                     }
@@ -219,18 +231,28 @@ pub async fn remove_streamer(
     //    - split_by_streamer=true: remove {merge_output_dir}/{username}/ subdirectory
     //    - split_by_streamer=false: remove files matching {merge_output_dir}/{username}_*.{format}
     let pipeline = s.app_state.get_pipeline();
-    if let Some(node) = pipeline.nodes.iter().find(|n| n.module_id == "ts_merge" && n.enabled) {
-        let merge_output_dir = node.params.get("output_dir")
+    if let Some(node) = pipeline
+        .nodes
+        .iter()
+        .find(|n| n.module_id == "ts_merge" && n.enabled)
+    {
+        let merge_output_dir = node
+            .params
+            .get("output_dir")
             .and_then(|v| v.as_str())
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())
             .map(std::path::PathBuf::from);
 
         if let Some(merge_dir) = merge_output_dir {
-            let split_by_streamer = node.params.get("split_by_streamer")
+            let split_by_streamer = node
+                .params
+                .get("split_by_streamer")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
-            let format = node.params.get("format")
+            let format = node
+                .params
+                .get("format")
                 .and_then(|v| v.as_str())
                 .unwrap_or("mp4");
 
@@ -252,9 +274,7 @@ pub async fn remove_streamer(
                         if !path.is_file() {
                             continue;
                         }
-                        let fname = path.file_name()
-                            .and_then(|n| n.to_str())
-                            .unwrap_or("");
+                        let fname = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
                         if fname.starts_with(&prefix) && fname.ends_with(&suffix) {
                             let _ = std::fs::remove_file(&path);
                         }
@@ -306,13 +326,15 @@ pub async fn start_recording(
             settings.cdn_proxy_url.as_deref(),
             settings.sc_mirror_url.as_deref(),
             Some(settings.sc_mirror_scheme.as_str()),
+            settings.ech_enabled,
         )
         .map_err(ApiError::from)?
         .with_mouflon_keys(s.app_state.get_mouflon_keys())
         .with_resolution_selection(
             settings.preferred_resolution,
             &settings.resolution_preference,
-        );
+        )
+        .with_codec_selection(&settings.preferred_codec);
         let info = api
             .get_stream_info(&name, true, None, false)
             .await
@@ -354,6 +376,7 @@ pub async fn verify_streamer(
         settings.cdn_proxy_url.as_deref(),
         settings.sc_mirror_url.as_deref(),
         Some(settings.sc_mirror_scheme.as_str()),
+        settings.ech_enabled,
     )
     .map_err(ApiError::from)?;
     match api.verify_user_exists(&name).await {
@@ -363,4 +386,47 @@ pub async fn verify_streamer(
         }
         Err(e) => Err(ApiError(e.to_string())),
     }
+}
+
+/// SC 官方分类列表查询参数 / Query params for the official SC category list
+#[derive(Deserialize)]
+pub struct ScModelsQuery {
+    /// 一级分类 girls|couples|men|trans / Top-level category girls|couples|men|trans
+    pub primary_tag: Option<String>,
+    /// 二级标签 slug（filterGroupTags）/ Second-level tag slug (filterGroupTags)
+    pub tag: Option<String>,
+    /// 排序 stripRanking|trending / Sort order stripRanking|trending
+    pub sort_by: Option<String>,
+    /// 分页偏移 / Pagination offset
+    pub offset: Option<u32>,
+    /// 每页数量 / Page size
+    pub limit: Option<u32>,
+}
+
+/// GET /api/sc/models — SC 官方分类浏览列表（供「StripChat」页无限滚动）。
+/// StripchatApi::list_models 内部做参数白名单钳制。
+///
+/// GET /api/sc/models — the official SC category browse list (feeds the
+/// StripChat page's infinite scroll). StripchatApi::list_models clamps all
+/// params internally.
+pub async fn list_sc_models(
+    AxumState(s): AxumState<ServerState>,
+    Query(q): Query<ScModelsQuery>,
+) -> ApiResult<serde_json::Value> {
+    let settings = s.app_state.get_settings();
+    // 浏览页专用镜像/代理（sc_browse_*），与主 API 设置相互独立
+    // Browse-page mirror/proxy (sc_browse_*), independent from the main API settings
+    let api = crate::platform::stripchat::StripchatApi::new_for_browse(&settings)
+        .map_err(ApiError::from)?;
+    let json = api
+        .list_models(
+            q.primary_tag.as_deref().unwrap_or("girls"),
+            q.tag.as_deref(),
+            q.sort_by.as_deref().unwrap_or("stripRanking"),
+            q.offset.unwrap_or(0),
+            q.limit.unwrap_or(40),
+        )
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(json))
 }

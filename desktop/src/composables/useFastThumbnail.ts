@@ -10,8 +10,10 @@
 
 import { ref, watch, type Ref } from "vue";
 
-/** 支持的 CDN 顶级域名列表 / Supported CDN top-level domains */
-const CDN_TLDS = [
+/** 缩略图竞速用的 CDN 顶级域名列表（与后端 CDN_TLDS 不同：无 .media，
+ * 且顺序即生产竞速顺序）/ CDN TLDs raced for thumbnails (differs from
+ * the backend CDN_TLDS: no .media; order mirrors production racing) */
+export const THUMB_CDN_TLDS = [
 	"doppiocdn.com",
 	"doppiocdn.org",
 	"doppiocdn.live",
@@ -37,7 +39,7 @@ export function useFastThumbnail(thumbnailUrl: Ref<string | null | undefined>) {
 	async function race(url: string) {
 		// 检查 URL 是否包含已知 CDN 域名，否则直接使用原始 URL
 		// Check if URL contains a known CDN TLD, otherwise use the original URL directly
-		const matchedTld = CDN_TLDS.find((tld) => url.includes(tld));
+		const matchedTld = THUMB_CDN_TLDS.find((tld) => url.includes(tld));
 		if (!matchedTld) {
 			resolvedUrl.value = url;
 			return;
@@ -45,7 +47,7 @@ export function useFastThumbnail(thumbnailUrl: Ref<string | null | undefined>) {
 
 		// 创建所有候选 img 元素，胜出后立即清空其余 img 的 src 以中止请求
 		// Create all candidate img elements; clear the src of losers immediately after a winner is found
-		const imgs = CDN_TLDS.map((tld) => {
+		const imgs = THUMB_CDN_TLDS.map((tld) => {
 			const img = new Image();
 			img.src = url.replace(matchedTld, tld);
 			return { tld, img };

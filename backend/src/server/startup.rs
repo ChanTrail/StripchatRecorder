@@ -11,7 +11,8 @@
 //!    settings.json
 //! 3. `AppState::new`：创建配置/meta/输出目录、首次运行写入 settings.json、初始化并发上限
 //! 4. 构造 RecorderManager、Emitter、StatusMonitor（Desktop 随即注册托管状态）
-//! 5. [`run_all`]：清空 tmp → meta 迁移 → ffmpeg 检查 → 自定义语言文件校验 → 文件系统监控
+//! 5. [`run_all`]：清空 tmp → meta 迁移 → ffmpeg 检查（缺失时后台自动下载到 lib）→
+//!    自定义语言文件校验 → 文件系统监控
 //! 6. `scheduler::start_all`：启动全部后台定时任务（两端完全相同）
 //! 7. Server 开始监听 HTTP / Desktop 显示主窗口
 //!
@@ -27,7 +28,8 @@
 //! 3. `AppState::new`: create config/meta/output dirs, write settings.json on first run,
 //!    initialize concurrency limits
 //! 4. construct RecorderManager, Emitter, StatusMonitor (Desktop then registers managed state)
-//! 5. [`run_all`]: clear tmp → meta migrations → ffmpeg check → custom locale file validation →
+//! 5. [`run_all`]: clear tmp → meta migrations → ffmpeg check (auto-downloads into
+//!    tools in the background when missing) → custom locale file validation →
 //!    file system watchers
 //! 6. `scheduler::start_all`: start every background scheduled task (identical on both ends)
 //! 7. Server starts listening on HTTP / Desktop shows the main window
@@ -72,21 +74,26 @@ pub fn init_logging_and_locale() {
     crate::locale::manager::load_log_translations(&locale_code);
 }
 
-/// 检查 ffmpeg 是否在 PATH 中可用，若不可用则记录警告并写入通知。
+/// 启动 FFmpeg 检查入口：实际工作在 `ffmpeg::download::spawn_startup_install`
+/// 的后台任务里执行（本函数立即返回，不阻塞启动）：
+/// 1. 清理上次中断遗留的 `.download` / `.staging` / `*.old`
+/// 2. ffmpeg/ffprobe 可用（tools 副本优先，其次 PATH）→ 再做一次更新检查
+///    （`check_and_update`，条件不满足时内部短路）后结束
+/// 3. 不可用且平台不支持自动下载 → `ffmpegMissing` 错误通知
+/// 4. 不可用且支持下载 → 最多 3 次自动安装（5s/15s 退避），
+///    全部失败推送 `ffmpegDownloadFailed` 错误通知
 ///
-/// Check if ffmpeg is available on PATH; log a warning and push a notification if not found.
+/// Startup FFmpeg check entry: the real work happens in the background task
+/// spawned by `ffmpeg::download::spawn_startup_install` (this function returns
+/// immediately and never blocks startup):
+/// 1. clean up `.download` / `.staging` / `*.old` leftovers from an interrupted run
+/// 2. ffmpeg/ffprobe usable (tools copy first, then PATH) → also run an update
+///    check (`check_and_update`, short-circuits internally), then done
+/// 3. unusable on an unsupported platform → `ffmpegMissing` error notification
+/// 4. unusable on a supported platform → up to 3 auto-install attempts (5s/15s
+///    backoff); on final failure push the `ffmpegDownloadFailed` error notification
 pub fn check_ffmpeg(app_state: &Arc<AppState>, emitter: &Arc<dyn Emitter>) {
-    if !crate::recording::ffmpeg_util::ffmpeg_available() {
-        tracing::warn!("{}", crate::tl!("startup.ffmpegMissing"));
-        app_state.notification_store.emit_i18n(
-            emitter.as_ref(),
-            crate::core::notifications::NotificationLevel::Error,
-            "startup",
-            "ffmpeg not found. Recording and post-processing will be unavailable.",
-            "notifications.backend.ffmpegMissing",
-            None,
-        );
-    }
+    crate::ffmpeg::download::spawn_startup_install(Arc::clone(app_state), Arc::clone(emitter));
 }
 
 /// 扫描用户自定义语言文件，将校验警告通过 SSE 推送给前端。
@@ -105,7 +112,13 @@ pub fn check_locale_files(emitter: Arc<dyn Emitter>) {
             .into_iter()
             .map(|(path, reason)| serde_json::json!({ "path": path, "reason": reason }))
             .collect();
-        tracing::warn!("{}", crate::tl!("startup.localeFileWarning", payload = format!("{:?}", payload)));
+        tracing::warn!(
+            "{}",
+            crate::tl!(
+                "startup.localeFileWarning",
+                payload = format!("{:?}", payload)
+            )
+        );
         emitter.emit("locale-warnings", &payload);
     });
 }
@@ -137,7 +150,10 @@ pub fn migrate_flat_meta_files(app_state: &Arc<AppState>, emitter: &Arc<dyn Emit
             emitter.as_ref(),
             crate::core::notifications::NotificationLevel::Info,
             "startup",
-            format!("Migrated {} legacy meta file(s) to per-streamer subdirectory layout.", count),
+            format!(
+                "Migrated {} legacy meta file(s) to per-streamer subdirectory layout.",
+                count
+            ),
             "notifications.backend.metaMigrated",
             Some(args),
         );
@@ -216,12 +232,12 @@ pub fn apply_docker_env_overrides() {
 /// 1. 清空 tmp：上一个进程的后处理都已结束，tmp 里全是残留；必须在任何可能运行模块的
 ///    组件（状态监控、维护调度）启动之前执行
 /// 2. meta 迁移（扁平 meta → 按主播子目录；修正截断文件名）：必须在首次扫描之前
-/// 3. ffmpeg 检查：缺失时写入通知
+/// 3. ffmpeg 检查：在后台任务中检测，缺失时自动下载到 tools 目录（不支持的平台才通知）
 /// 4. 自定义语言文件校验：在后台线程执行，有问题时推送 `locale-warnings`
 /// 5. 文件系统监控：只在文件变化时推送事件
 ///
 /// 注意：输出目录维护（重建 meta、触发遗漏后处理、清理空目录、tmp 定时清理）不在此处执行，
-/// 而是交给 `scheduler::start_output_dir_maintenance`——它启动 10 秒后执行第一遍，
+/// 而是交给 `scheduler::start_output_dir_maintenance`——它启动即执行第一遍，
 /// 之后每 5 分钟重复，启动检查和周期性维护共用完全相同的逻辑。
 ///
 /// Run all one-shot startup tasks; both Server and Desktop call this (after
@@ -233,14 +249,16 @@ pub fn apply_docker_env_overrides() {
 ///    maintenance scheduler) starts
 /// 2. meta migrations (flat meta → per-streamer subdirs; truncated file names): must precede
 ///    the first scan
-/// 3. ffmpeg check: pushes a notification when missing
+/// 3. ffmpeg check: detects in a background task and auto-downloads into tools when
+///    missing (only unsupported platforms get a notification)
 /// 4. custom locale file validation: runs on a blocking thread, pushes `locale-warnings` on issues
 /// 5. file system watchers: only push events when files change
 ///
 /// Note: output-directory maintenance (rebuilding meta, triggering missed post-processing,
 /// removing empty dirs, the scheduled tmp cleanup) is intentionally NOT run here. It's handled
-/// by `scheduler::start_output_dir_maintenance`, which first runs 10 s after launch and then
-/// every 5 minutes, so the startup pass and periodic maintenance share identical logic.
+/// by `scheduler::start_output_dir_maintenance`, which runs its first pass right
+/// at launch and then every 5 minutes, so the startup pass and periodic
+/// maintenance share identical logic.
 pub fn run_all(app_state: Arc<AppState>, emitter: Arc<dyn Emitter>) {
     crate::recording::meta::cleanup_tmp_on_startup();
     migrate_flat_meta_files(&app_state, &emitter);

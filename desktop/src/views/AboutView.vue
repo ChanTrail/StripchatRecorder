@@ -23,7 +23,7 @@
 	import { on } from "@/lib/api";
 	import {
 		Bug, ExternalLink, Scale, Users, Link, RefreshCw,
-		ChevronDown, ChevronUp, Download, CheckCircle2, AlertCircle, Loader2,
+		ChevronDown, ChevronUp, Download, CheckCircle2, AlertCircle, Loader2, Send, Wrench,
 	} from "@lucide/vue";
 	import { Button } from "@/components/ui/button";
 
@@ -35,6 +35,10 @@
 	const repoUrl = `https://github.com/${owner}/${repo}`;
 	const bugsUrl = `${repoUrl}/issues/new`;
 	const contributorsUrl = `${repoUrl}/graphs/contributors`;
+	/** Telegram 频道链接 / Telegram channel link */
+	const tgUrl = "https://t.me/+HzvDUiJ9ewRlMDk1";
+	/** FFmpeg 构建项目地址 / FFmpeg builds project URL */
+	const ffmpegBuildsUrl = "https://github.com/ChanTrail/FFmpeg-Builds-Full";
 	const currentYear = new Date().getFullYear();
 
 	// ── GitHub API 贡献者类型 ─────────────────────────────────────────────────
@@ -254,6 +258,15 @@
 					<ExternalLink class="size-3.5 text-muted-foreground shrink-0" />
 				</a>
 
+				<a :href="ffmpegBuildsUrl" target="_blank" rel="noopener noreferrer"
+					class="flex items-center justify-between gap-3 rounded-lg border px-4 py-3 text-sm hover:bg-muted/50 transition-colors">
+					<div class="flex items-center gap-2.5">
+						<Wrench class="size-4 shrink-0 text-muted-foreground" />
+						<span>{{ t("about.ffmpegBuilds") }}</span>
+					</div>
+					<ExternalLink class="size-3.5 text-muted-foreground shrink-0" />
+				</a>
+
 				<a :href="`${repoUrl}/blob/main/LICENSE`" target="_blank" rel="noopener noreferrer"
 					class="flex items-center justify-between gap-3 rounded-lg border px-4 py-3 text-sm hover:bg-muted/50 transition-colors">
 					<div class="flex items-center gap-2.5">
@@ -295,6 +308,15 @@
 					<div class="flex items-center gap-2.5">
 						<Bug class="size-4 shrink-0 text-muted-foreground" />
 						<span>{{ t("about.reportBug") }}</span>
+					</div>
+					<ExternalLink class="size-3.5 text-muted-foreground shrink-0" />
+				</a>
+
+				<a :href="tgUrl" target="_blank" rel="noopener noreferrer"
+					class="flex items-center justify-between gap-3 rounded-lg border px-4 py-3 text-sm hover:bg-muted/50 transition-colors">
+					<div class="flex items-center gap-2.5">
+						<Send class="size-4 shrink-0 text-muted-foreground" />
+						<span>{{ t("about.telegram") }}</span>
 					</div>
 					<ExternalLink class="size-3.5 text-muted-foreground shrink-0" />
 				</a>

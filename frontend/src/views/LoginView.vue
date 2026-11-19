@@ -113,7 +113,8 @@ async function submit() {
 					<p v-if="isInit" class="text-xs text-muted-foreground">{{ t("login.passwordStrengthHint") }}</p>
 				</div>
 
-				<p v-if="error" class="text-sm text-destructive">{{ error }}</p>
+				<!-- 错误行常驻占位：登录失败时不挤压提交按钮位置 / Error line always rendered: a failed login doesn't shift the submit button -->
+				<p class="min-h-5 text-sm text-destructive">{{ error }}</p>
 
 				<Button type="submit" :disabled="loading" class="w-full">
 					{{ loading ? t("common.loading") : isInit ? t("login.initButton") : t("login.loginButton") }}

@@ -361,7 +361,9 @@ pub fn extract_verified_module_outputs(
         }
         let non_video = entry.outputs.iter().flatten().find(|p| {
             let lower = p.to_ascii_lowercase();
-            !VIDEO_EXTENSIONS.iter().any(|ext| lower.ends_with(&format!(".{}", ext)))
+            !VIDEO_EXTENSIONS
+                .iter()
+                .any(|ext| lower.ends_with(&format!(".{}", ext)))
         });
         if let Some(path) = non_video
             && Path::new(path).is_file()

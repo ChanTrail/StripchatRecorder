@@ -55,7 +55,10 @@ impl PortType {
         match (self, target) {
             // 任何文件类型（含 MediaBundle）都可以接入 AnyFile
             // Any file type (including MediaBundle) can connect to AnyFile
-            (PortType::VideoFile | PortType::ImageFile | PortType::MediaBundle, PortType::AnyFile) => true,
+            (
+                PortType::VideoFile | PortType::ImageFile | PortType::MediaBundle,
+                PortType::AnyFile,
+            ) => true,
             // 任何目录类型都可以接入 AnyDir / Any directory type can connect to AnyDir
             (PortType::TsSessionDir, PortType::AnyDir) => true,
             _ => false,
@@ -358,9 +361,11 @@ impl PipelineConfig {
 
         for edge in &edges {
             *in_degree.entry(edge.to_node_id.clone()).or_insert(0) += 1;
-            adj.entry(edge.from_node_id.clone())
-                .or_default()
-                .push((edge.from_port, edge.to_node_id.clone(), edge.to_port));
+            adj.entry(edge.from_node_id.clone()).or_default().push((
+                edge.from_port,
+                edge.to_node_id.clone(),
+                edge.to_port,
+            ));
         }
 
         // 每个节点的邻接表按 from_port 升序排列（保证同一上游多个下游按连线端口顺序入队）
@@ -469,12 +474,18 @@ impl NodeResult {
     /// 判断执行是否成功（ok 或 done 或 skipped）。
     /// Whether execution succeeded (ok, done, or skipped).
     pub fn is_success(&self) -> bool {
-        matches!(self.code, PpExecCode::Ok | PpExecCode::Done | PpExecCode::Skipped)
+        matches!(
+            self.code,
+            PpExecCode::Ok | PpExecCode::Done | PpExecCode::Skipped
+        )
     }
 
     /// 判断流水线是否应在此节点终止（done/error/cancelled）。
     /// Whether the pipeline should terminate at this node (done/error/cancelled).
     pub fn is_terminal(&self) -> bool {
-        matches!(self.code, PpExecCode::Done | PpExecCode::Error | PpExecCode::Cancelled)
+        matches!(
+            self.code,
+            PpExecCode::Done | PpExecCode::Error | PpExecCode::Cancelled
+        )
     }
 }

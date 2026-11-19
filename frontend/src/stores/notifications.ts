@@ -25,6 +25,7 @@ import { computed, ref } from "vue";
 import { call } from "@/lib/api";
 import { toast } from "@/composables/useNotify";
 import type { ToastType } from "@/composables/useNotify";
+import i18n from "@/i18n";
 
 export type NotificationLevel = "info" | "warning" | "error";
 
@@ -49,6 +50,30 @@ export interface Notification {
 interface NotificationsResponse {
 	notifications: Notification[];
 	unread_count: number;
+}
+
+/**
+ * 解析通知的显示文本：有 `message_key` 时查 i18n（缺失回退 `message`）。
+ * 实时 toast 与面板渲染共用——此前 toast 直接用英文 `message`，
+ * 中文界面下后端通知全部显示英文。
+ *
+ * Resolve a notification's display text: translate via `message_key`
+ * when present (falling back to `message` when the key is missing).
+ * Shared by the real-time toast and the panel renderer — previously the
+ * toast used the English `message` verbatim, so every backend
+ * notification showed English on a Chinese UI.
+ */
+export function resolveNotificationMessage(n: Notification): string {
+	if (n.message_key) {
+		const translated = i18n.global.t(
+			n.message_key,
+			(n.message_args ?? {}) as Record<string, string | number>,
+		);
+		if (translated && translated !== n.message_key) {
+			return translated;
+		}
+	}
+	return n.message;
 }
 
 /** 将通知级别映射到 toast 类型 / Map notification level to toast type */
@@ -92,7 +117,7 @@ export const useNotificationsStore = defineStore("notifications", () => {
 			notifications.value.push(n);
 		}
 		if (showToast) {
-			toast(n.message, levelToToastType(n.level));
+			toast(resolveNotificationMessage(n), levelToToastType(n.level));
 		}
 	}
 

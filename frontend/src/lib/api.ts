@@ -189,8 +189,38 @@ const COMMAND_MAP: Record<
 		method: "GET",
 		url: (a) => `/api/streamers/${a.username}/verify`,
 	},
+	// SC 官方分类浏览列表（StripChat 页）/ Official SC category list (StripChat page)
+	list_sc_models: {
+		method: "GET",
+		url: (a) => {
+			const p = new URLSearchParams();
+			if (a.primaryTag) p.set("primary_tag", String(a.primaryTag));
+			if (a.tag) p.set("tag", String(a.tag));
+			if (a.sortBy) p.set("sort_by", String(a.sortBy));
+			if (a.offset != null) p.set("offset", String(a.offset));
+			if (a.limit != null) p.set("limit", String(a.limit));
+			return `/api/sc/models?${p.toString()}`;
+		},
+	},
 	get_settings: { method: "GET", url: () => "/api/settings" },
 	get_system_info: { method: "GET", url: () => "/api/system-info" },
+	// 服务状态页：并行探测后端各依赖的连通性与延时（skip_mirrored=1 跳过一次性的镜像条目）
+	// Service status page: parallel connectivity+latency probes of backend
+	// dependencies (skip_mirrored=1 skips one-shot mirror-routed items)
+	service_status: {
+		method: "GET",
+		url: (a) =>
+			a?.skip_mirrored
+				? "/api/service-status?skip_mirrored=1"
+				: "/api/service-status",
+	},
+	// 资源占用页：本进程及其后代（ffmpeg、后处理模块等）的 CPU/内存快照
+	// Resource usage page: CPU/memory snapshot of this process and its
+	// descendants (ffmpeg, post-process modules, ...)
+	process_usage: {
+		method: "GET",
+		url: () => "/api/process-usage",
+	},
 	save_settings_cmd: {
 		method: "POST",
 		url: () => "/api/settings",
@@ -200,7 +230,7 @@ const COMMAND_MAP: Record<
 	add_mouflon_key: {
 		method: "POST",
 		url: () => "/api/mouflon-keys",
-		body: (a) => ({ pkey: a.pkey, pdkey: a.pdkey }),
+		body: (a) => ({ pkey: a.pkey, pdkey: a.pdkey, keystream: a.keystream }),
 	},
 	remove_mouflon_key: {
 		method: "DELETE",
@@ -308,6 +338,18 @@ const COMMAND_MAP: Record<
 		method: "GET",
 		url: () => "/api/update/status",
 	},
+	get_ffmpeg_status: {
+		method: "GET",
+		url: () => "/api/ffmpeg/status",
+	},
+	get_ffmpeg_locations: {
+		method: "GET",
+		url: () => "/api/ffmpeg/locations",
+	},
+	download_ffmpeg: {
+		method: "POST",
+		url: () => "/api/ffmpeg/download",
+	},
 	start_update_download: {
 		method: "POST",
 		url: () => "/api/update/download",
@@ -361,3 +403,5 @@ async function httpCall<T>(
 	if (!text) return undefined as T;
 	return JSON.parse(text) as T;
 }
+
+

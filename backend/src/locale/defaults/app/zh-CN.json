@@ -8,10 +8,13 @@
     "finder": "主播查找",
     "settings": "设置",
     "about": "关于",
+    "status": "服务状态",
+    "usage": "资源占用",
     "collapse": "收起",
     "expand": "展开",
     "notifications": "通知",
     "community": "模块社区",
+    "stripchat": "StripChat",
     "more": "更多"
   },
   "common": {
@@ -114,6 +117,12 @@
       "ticket": "票务秀",
       "virtualPrivate": "虚拟私密",
       "waiting": "等待中"
+    },
+    "privacy": {
+      "label": "隐私模式（模糊缩略图）",
+      "off": "关闭",
+      "live": "仅直播画面",
+      "all": "全部图片"
     }
   },
   "streamerCard": {
@@ -126,7 +135,9 @@
     "removeTitle": "移除主播",
     "streamUrl": "转发流地址",
     "streamUrlHint": "直接用播放器打开此地址即可播放",
-    "copyStreamUrl": "复制转发地址"
+    "copyStreamUrl": "复制转发地址",
+    "revealImage": "显示图片",
+    "blurImage": "重新模糊"
   },
   "addStreamer": {
     "title": "添加主播",
@@ -311,10 +322,108 @@
       "t": "跨性别"
     }
   },
+  "statusPage": {
+    "title": "服务状态",
+    "subtitle": "各依赖服务的连通性与延时",
+    "lastRun": "上次检测 {time} · 总耗时 {ms}ms",
+    "live": "持续探测中",
+    "probing": "探测中…",
+    "empty": "暂无探测项",
+    "footnote": "探测走与生产相同的通道（代理 / ECH / 镜像按当前设置生效）；CDN 域测的是边缘连通性，收到 404 说明连接通畅。",
+    "groups": {
+      "frontend": "前端",
+      "backend": "后端服务",
+      "cdn": "CDN 域"
+    },
+    "items": {
+      "cgf": "camgirlfinder",
+      "scApi": "StripChat API",
+      "scBrowse": "StripChat 浏览页",
+      "githubApi": "GitHub API",
+      "githubWeb": "GitHub 站点",
+      "cdnPlaylist": "列表域",
+      "cdnMedia": "分片域",
+      "cdnNode": "节点分片",
+      "thumb": "缩略图",
+      "preview": "离线预览图"
+    },
+    "roles": {
+      "playlist": "列表域",
+      "media": "分片域",
+      "node": "节点分片",
+      "other": "其他"
+    },
+    "mirror": "镜像",
+    "sample": "样本",
+    "sampleHint": "仅探测其中一个节点主机，不代表全部节点",
+    "legs": {
+      "direct": "普通"
+    },
+    "providers": {
+      "cloudflare": "Cloudflare",
+      "tencent": "腾讯云",
+      "cloudfront": "AWS CloudFront",
+      "baishan": "白山云",
+      "bytedance": "字节跳动",
+      "cdn77": "CDN77",
+      "github": "GitHub",
+      "sc": "StripChat",
+      "unknown": "未知"
+    }
+  },
+  "usagePage": {
+    "title": "资源占用",
+    "subtitle": "本程序及其唤起进程（ffmpeg、后处理模块等）的 CPU 与内存",
+    "live": "实时",
+    "loading": "加载中…",
+    "empty": "暂无进程数据",
+    "error": "获取失败：{msg}",
+    "read": "读",
+    "write": "写",
+    "summary": {
+      "totalCpu": "总 CPU",
+      "ofAllCores": "占 {n} 核的 {pct}%",
+      "totalMem": "总内存",
+      "procCount": "进程数",
+      "gpu": "总 GPU",
+      "gpuHint": "全树 GPU 引擎利用率合计（悬停进程行可见显存明细）",
+      "disk": "总磁盘",
+      "net": "系统网络",
+      "netHint": "操作系统不按进程归属网络流量，此处为整机口径（排除回环口）"
+    },
+    "roles": {
+      "main": "主程序",
+      "module": "模块",
+      "ffmpeg": "FFmpeg",
+      "other": "其他"
+    },
+    "table": {
+      "process": "进程",
+      "pid": "PID",
+      "role": "角色",
+      "cpu": "CPU",
+      "cpuHint": "100% = 单核满载，多核可超 100%",
+      "gpu": "GPU",
+      "gpuHint": "各 GPU 引擎利用率合计，可超 100%",
+      "vram": "显存",
+      "disk": "磁盘",
+      "diskHint": "磁盘 I/O 速率（读/写）",
+      "mem": "内存",
+      "uptime": "运行时长",
+      "cmd": "命令行"
+    },
+    "chart": {
+      "mem": "内存",
+      "disk": "磁盘 I/O",
+      "net": "网络"
+    }
+  },
   "settings": {
     "title": "设置",
     "loading": "加载中...",
     "saved": "设置已保存",
+    "saving": "保存中…",
+    "saveFailed": "自动保存失败",
     "updatedByOther": "设置已由其他客户端更新",
     "mouflonUpdatedByOther": "Mouflon Keys 已由其他客户端更新",
     "sections": {
@@ -336,16 +445,11 @@
       "pick": "选择",
       "changeTitle": "修改 TS 流输出目录",
       "changeMessage": "将 TS 流输出目录改为：\n{dir}\n\n此更改将在下次录制时生效。",
-      "changeConfirm": "确认",
-      "changeDone": "TS 流输出目录已更新，将在下次录制时生效"
-    },
-    "maxConcurrent": {
-      "label": "最大并发录制数",
-      "hint": "0 表示不限制"
+      "changeConfirm": "确认"
     },
     "maxPpConcurrent": {
       "label": "最大并发后处理数",
-      "hint": "同时处理的后处理任务数。0 = 自动（= CPU 逻辑核心数 × 2）；手动设置时上限同为 CPU 逻辑核心数 × 2，可设置低于自动值以主动限制并发。"
+      "hint": "同时处理的后处理任务数。0 = 自动（= CPU 逻辑核心数）；手动设置时上限同为 CPU 逻辑核心数，可设置低于自动值以主动限制并发。实际并发会随系统负载自动下调，上限只是天花板。"
     },
     "pollInterval": {
       "label": "轮询间隔（秒）"
@@ -361,9 +465,17 @@
       "higher": "优先较高画质",
       "hint": "先使用该方向最接近的画质；若不存在，则使用反方向最接近的画质，不会因缺少精确画质而失败。"
     },
+    "preferredCodec": {
+      "label": "首选视频编码",
+      "default": "默认（由服务器决定）",
+      "hint": "获取播放列表时附带 preferredVideoCodec 参数。是否生效取决于服务器是否提供该编码；H.265 / AV1 体积更小，但部分播放器和后处理工具可能不支持。修改后对之后新获取的播放列表生效。"
+    },
     "recordingDuration": {
-      "label": "录制文件时长（秒）",
-      "hint": "0 = 不限制；1800 = 30 分钟。自动保存并应用于正在录制的文件。达到时长后在下一个 HLS 分片边界开始新文件，实际时长可能多几秒。"
+      "label": "录制文件时长",
+      "hint": "设为 00:00:00 表示不限制时长。自动保存并应用于正在录制的文件。达到时长后在下一个 HLS 分片边界开始新文件，实际时长可能多几秒。",
+      "unitH": "时",
+      "unitM": "分",
+      "unitS": "秒"
     },
     "maxTmpDirGb": {
       "label": "后处理临时目录最大占用（GB）",
@@ -374,6 +486,25 @@
       "hint": "开启后将同时检查 beta 预发布版本。beta 版本可能不稳定，仅建议尝鲜用户开启。",
       "hintBeta": "当前运行的是 beta 版本，已自动启用 beta 更新检查。"
     },
+    "ffmpegAutoUpdate": {
+      "label": "空闲时自动更新 FFmpeg",
+      "hint": "开启后，程序会定期检查下载到 tools 文件夹中的 FFmpeg 是否有新版本，并在没有录制和后处理任务时自动更新。使用系统 PATH 中的 FFmpeg 或手动放入 tools 的 FFmpeg 不受影响。"
+    },
+    "ffmpegPreference": {
+      "label": "FFmpeg 首选项",
+      "hint": "选择使用系统环境变量（PATH）中的 FFmpeg，还是程序目录 tools 文件夹中的 FFmpeg。",
+      "system": "系统环境变量",
+      "tools": "tools 文件夹",
+      "unset": "未设置",
+      "systemNoAutoUpdate": "使用系统环境变量中的 FFmpeg 时将禁用 FFmpeg 自动更新。",
+      "pathMissingTitle": "未检测到 FFmpeg",
+      "pathMissingDesc": "系统环境变量（PATH）中未检测到完整的 FFmpeg 组件（ffmpeg、ffprobe、ffplay），无法使用该来源。确认后将自动改为 tools 文件夹。",
+      "toolsMissingTitle": "tools 文件夹缺少 FFmpeg",
+      "toolsMissingDesc": "tools 文件夹中未检测到完整的 FFmpeg 组件（ffmpeg、ffprobe、ffplay）。是否现在下载 FFmpeg 到 tools 文件夹？取消则改用系统环境变量（PATH）。",
+      "download": "下载",
+      "downloadStartFailed": "下载启动失败，请稍后重试",
+      "notInstalled": "未安装"
+    },
     "apiProxy": {
       "label": "API 代理（访问 stripchat.com，留空不使用）",
       "placeholder": "127.0.0.1:10808",
@@ -383,6 +514,16 @@
       "label": "Stripchat 镜像站（替换 API 中的 stripchat.com 域名，留空不使用）",
       "placeholder": "stripchat.example.com",
       "hint": "同时填写 API 代理与镜像站时，将通过 API 代理访问镜像站"
+    },
+    "scBrowseProxy": {
+      "label": "浏览页代理（StripChat 页列表/快照请求，与 API 代理相互独立，留空直连）",
+      "placeholder": "127.0.0.1:10808",
+      "hint": "仅作用于 StripChat 浏览页，不影响录制与状态轮询"
+    },
+    "scBrowseMirror": {
+      "label": "浏览页镜像站（StripChat 页专用，与上方镜像站相互独立，留空直连 stripchat.com）",
+      "placeholder": "stripchat.example.com",
+      "hint": "同时填写浏览页代理与镜像站时，将通过该代理访问该镜像站"
     },
     "cdnProxy": {
       "label": "CDN 代理（下载 HLS 分片，留空不使用）",
@@ -404,15 +545,21 @@
       "placeholder": "127.0.0.1:10808",
       "hint": "主播查找页面（人脸/名字搜索）为纯前端功能，直接从浏览器访问 camgirlfinder.net，无需此代理。本设置仅用于后端在后台获取主播历史在线规律（schedule），以自适应调整轮询间隔节省流量。修改后按回车或点击其他区域确认"
     },
+    "echEnabled": {
+      "label": "ECH（加密 ClientHello）",
+      "hint": "开启后仅 SC API 请求的 TLS ClientHello 经借用 ECH 配置加密，对外隐藏真实 SNI，可能有效改善 API 返回 403 的情况；不可路由或解析失败时自动回退普通连接。CDN 分片流量直取优先，仅全部直连失败后在兜底竞速中带 ECH 腿"
+    },
     "mouflonKeysDesc": "Stripchat 对 HLS 分片文件名进行了加密（Mouflon 系统）。录制前需在此填入对应的 pkey → pdkey 密钥对，密钥可从社区渠道获取。",
     "mouflonTable": {
       "pkey": "pkey（密钥标识符）",
-      "pdkey": "pdkey（解密密钥）"
+      "pdkey": "pdkey（解密密钥）",
+      "keystream": "keystream（密钥流）"
     },
+    "mouflonKeystreamHint": "pdkey 与 keystream 填一个即可：keystream 为十六进制（至少 16 字节），用于没有 pdkey 的 pkey；同一 pkey 两者都有时优先使用 pdkey。",
     "noKeys": "暂无密钥",
     "addKey": "添加",
     "keyError": {
-      "empty": "pkey 和 pdkey 均不能为空"
+      "needKey": "pkey 不能为空，且 pdkey 与 keystream 至少填写一个"
     },
     "mouflonSyncUrl": {
       "label": "同步地址",
@@ -515,6 +662,10 @@
       "desc": "如果服务器无法直接访问 Stripchat，可在此配置代理。不需要可直接跳过"
     },
     "step4": {
+      "title": "FFmpeg 检查",
+      "desc": "录制与后处理需要 ffmpeg / ffprobe / ffplay，请选择使用哪个位置的 FFmpeg"
+    },
+    "step5": {
       "title": "设置管理员密码",
       "desc": "设置一个访问管理界面的密码（至少 6 位），之后每次访问都需要输入此密码",
       "placeholder": "请输入密码（至少 6 位）",
@@ -529,7 +680,14 @@
       "view_update": "前往关于页面"
     },
     "backend": {
-      "ffmpegMissing": "未检测到 ffmpeg，录制和后处理功能将无法使用。请安装 ffmpeg 并确保其在 PATH 中。",
+      "ffmpegMissing": "未检测到 ffmpeg，录制和后处理功能将无法使用。请安装 ffmpeg 并确保其在 PATH 中，或放入程序目录的 tools 文件夹。",
+      "ffmpegDownloadFailed": "FFmpeg 自动下载失败：{error}。录制和后处理功能将无法使用，请手动安装 ffmpeg 并确保其在 PATH 中，或放入程序目录的 tools 文件夹。",
+      "ffmpegUpdateFailed": "FFmpeg 自动更新失败：{error}（将继续使用当前版本）",
+      "ffmpegUpdateAvailable": "检测到 FFmpeg 新版本，将在程序空闲时自动更新",
+      "ffmpegInstallStarted": "FFmpeg 下载安装已开始",
+      "ffmpegUpdateStarted": "FFmpeg 更新下载已开始",
+      "ffmpegInstalled": "FFmpeg 安装完成：{version}",
+      "ffmpegUpdated": "FFmpeg 更新完成：{version}",
       "metaMigrated": "已将 {count} 个旧版 meta 文件迁移到按主播子目录的新结构。",
       "mouflonSyncFailed": "Mouflon 密钥同步失败（已重试 {retries} 次）：{error}",
       "metaCleanup": "已清理 {count} 个孤立的 meta 文件（对应视频已不存在）",
@@ -569,6 +727,90 @@
     "otherClientAutoRecordDisable": "关闭",
     "renamed": "主播 {oldUsername} 已改名为 {newUsername}",
     "apiError": "Stripchat API 连接错误：{message}"
+  },
+  "stripchat": {
+    "title": "StripChat",
+    "description": "按 Stripchat 官方分类浏览直播，点击卡片右下角按钮添加主播",
+    "tabs": {
+      "girls": "女生",
+      "couples": "情侣",
+      "men": "男生",
+      "trans": "跨性别"
+    },
+    "sort": {
+      "stripRanking": "综合排名",
+      "trending": "热门趋势"
+    },
+    "groups": {
+      "traits": "特征",
+      "langs": "语言"
+    },
+    "tags": {
+      "all": "全部",
+      "ageTeen": "18岁+",
+      "ageYoung": "年轻",
+      "ageMilf": "熟女",
+      "ageMature": "成熟",
+      "ethnicityAsian": "亚洲",
+      "ethnicityWhite": "白人",
+      "ethnicityEbony": "黑人",
+      "ethnicityLatino": "拉丁裔",
+      "ethnicityIndian": "印度裔",
+      "ethnicityMiddleEastern": "中东",
+      "bodyTypePetite": "娇小",
+      "bodyTypeAthletic": "健美",
+      "bodyTypeCurvy": "丰满",
+      "bodyTypeBBW": "BBW",
+      "specificsBigTits": "巨乳",
+      "specificsBigAss": "翘臀",
+      "specificsBigCock": "大屌",
+      "hairColorBlonde": "金发",
+      "hairColorBlack": "黑发",
+      "hairColorRed": "红发",
+      "subcultureGoth": "哥特",
+      "subcultureRomantic": "浪漫",
+      "subcultureAnime": "动漫",
+      "subcultureStudent": "学生",
+      "tagLanguageChinese": "中文",
+      "tagLanguageJapanese": "日语",
+      "tagLanguageKorean": "韩语",
+      "tagLanguageTaiwanese": "台语",
+      "tagLanguageVietnamese": "越南语",
+      "tagLanguageThai": "泰语",
+      "tagLanguageFilipino": "菲律宾语",
+      "tagLanguageHindi": "印地语",
+      "tagLanguageBengali": "孟加拉语",
+      "tagLanguageUkrainian": "乌克兰语",
+      "tagLanguageRomanian": "罗马尼亚语",
+      "tagLanguageFrench": "法语",
+      "tagLanguageItalian": "意大利语",
+      "tagLanguageTurkish": "土耳其语",
+      "tagLanguageSpanish": "西班牙语",
+      "tagLanguageHungarian": "匈牙利语",
+      "tagLanguageDutch": "荷兰语",
+      "tagLanguagePolish": "波兰语",
+      "tagLanguageCzech": "捷克语",
+      "tagLanguagePortuguese": "葡萄牙语",
+      "tagLanguageGreek": "希腊语"
+    },
+    "add": "添加",
+    "added": "已添加",
+    "addedToast": "已添加 {username}",
+    "end": "已到底部",
+    "empty": "该分类暂无主播",
+    "error": "加载失败：{message}",
+    "status": {
+      "public": "公开秀",
+      "private": "私密秀",
+      "virtualPrivate": "虚拟私密",
+      "groupShow": "群组秀",
+      "ticketShow": "票务秀",
+      "p2p": "P2P",
+      "p2pVoice": "P2P语音",
+      "spy": "偷窥",
+      "idle": "等待",
+      "off": "离线"
+    }
   },
   "community": {
     "terms": {
@@ -659,6 +901,41 @@
     "dockerUpdateHint": "请更新 Docker 镜像",
     "reportBug": "反馈 Bug",
     "viewOnGitHub": "在 GitHub 上查看",
+    "telegram": "Telegram 频道",
+    "ffmpegBuilds": "FFmpeg 构建",
     "links": "相关链接"
+  },
+  "ffmpeg": {
+    "downloading": "正在下载 FFmpeg…",
+    "updating": "正在更新 FFmpeg…",
+    "installing": "正在校验并安装…",
+    "installed": "FFmpeg 已安装完成",
+    "updated": "FFmpeg 已更新到最新版本",
+    "preferenceWizard": {
+      "title": "选择 FFmpeg 来源",
+      "desc": "由于版本更新，请选择使用哪个位置的 FFmpeg，各位置的检测结果如下：",
+      "systemPath": "系统环境变量（PATH）",
+      "toolsDir": "tools 文件夹",
+      "checking": "正在检测…",
+      "checkFailed": "检测失败",
+      "retry": "重新检测",
+      "confirm": "确认",
+      "download": "下载",
+      "downloadStartFailed": "下载启动失败，请稍后重试",
+      "toolsRecommended": "推荐使用：程序将自动更新此位置的 FFmpeg",
+      "saveFailed": "保存失败，请重试",
+      "incompleteSelection": "注意：所选位置未检测到完整的 ffmpeg / ffprobe / ffplay"
+    },
+    "downloadDialog": {
+      "title": "下载 FFmpeg",
+      "titleInstalling": "校验并安装 FFmpeg",
+      "titleDone": "FFmpeg 安装完成",
+      "titleFailed": "FFmpeg 下载失败",
+      "desc": "正在下载并安装 FFmpeg 到 tools 文件夹，请稍候。",
+      "failed": "下载失败",
+      "retry": "重试下载",
+      "retryFailed": "下载启动失败，请稍后重试",
+      "close": "关闭"
+    }
   }
 }

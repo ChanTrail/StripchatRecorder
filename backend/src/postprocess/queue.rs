@@ -9,8 +9,8 @@
 //! ## 设计 / Design
 //!
 //! - 并发度由用户设置中的 `max_pp_concurrent` 决定，通过 [`PpQueue::set_concurrency`] 动态更新。
-//! - 0 = 自动（= CPU 逻辑核心数 × 2）；≥1 = 手动固定并发数，上限同为 CPU × 2。
-//!   手动设置的意义在于主动限制到低于自动值。
+//! - 0 = 自动（= CPU 逻辑核心数 × 4）；≥1 = 手动固定并发数，上限同为 CPU × 4。
+//!   上限只是天花板，实际并发由负载监控 AIMD 闭环调节。
 //! - 并发控制使用纯同步原语（`Mutex<SemState>` + `Condvar`）实现计数信号量，
 //!   不依赖 tokio async，避免在 `spawn_blocking` 栈上调用 `block_on` 导致栈溢出。
 //!   信号量分别记录上限 `limit` 与占用数 `in_use`，动态调整只修改上限，
@@ -21,21 +21,30 @@
 //!
 //! Concurrency is determined by the `max_pp_concurrent` user setting,
 //! updated dynamically via [`PpQueue::set_concurrency`].
-//! 0 = auto (= logical CPU count × 2); ≥1 = fixed count, capped at the same CPU × 2.
-//! Manual values are useful for deliberately going below the automatic default.
+//! 0 = auto (= logical CPU count × 4); ≥1 = fixed count, capped at the same CPU × 4.
+//! The cap is only a ceiling — actual concurrency is regulated by the load-monitor AIMD loop.
 //! Concurrency control uses a pure sync counting semaphore (`Mutex<SemState>` + `Condvar`)
 //! to avoid calling `block_on` on a `spawn_blocking` stack (which causes stack overflow).
 //! The semaphore tracks the ceiling `limit` and the held count `in_use` separately; dynamic
 //! adjustments only change the ceiling, so available permits are always `limit - in_use`
 //! and repeated adjustments can never over-issue permits.
 
-use parking_lot::{Condvar, Mutex, RwLock};
+use parking_lot::{Mutex, RwLock};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+// 同步计数信号量与 RAII 守卫分别在 `semaphore` 与 `guards` 子模块
+// The sync counting semaphore and RAII guards live in the `semaphore` and
+// `guards` submodules respectively
+mod guards;
+mod semaphore;
+
+pub use guards::{PpClaim, PpRemovalExecution, PpRemovalGuard, PpReservation};
+pub use semaphore::SyncPermit;
+use semaphore::SyncSemaphore;
 
 /// 计算录制身份键：同一录制的 session_dir（ts_fragment/{user}/{stem}）与合并后的视频文件
 /// （recordings/{user}/{stem}.mp4）共用同一个 meta 文件，因此以 meta 文件路径作为身份。
@@ -102,126 +111,6 @@ pub struct PpTaskStatus {
     pub from_memory: bool,
 }
 
-/// 纯同步计数信号量，基于 `parking_lot::Mutex` + `Condvar` 实现。
-///
-/// 不依赖 tokio async，可在 `spawn_blocking` 线程（栈较小）上安全调用，
-/// 避免 `block_on` 嵌套导致的栈溢出。
-///
-/// Pure sync counting semaphore backed by `parking_lot::Mutex` + `Condvar`.
-///
-/// Does not depend on tokio async; safe to call from `spawn_blocking` threads
-/// (which have smaller stacks), avoiding stack overflow from nested `block_on`.
-struct SyncSemaphore {
-    /// 许可上限与当前占用数 / Permit ceiling and current held count
-    state: Mutex<SemState>,
-    /// 许可释放 / 上限变更通知 / Permit-release / ceiling-change notification
-    condvar: Condvar,
-}
-
-/// 信号量内部状态：上限与占用数分开记录，调整上限不会影响已发出的许可。
-/// Semaphore internal state: ceiling and held count are tracked separately, so changing
-/// the ceiling never affects permits already handed out.
-struct SemState {
-    /// 许可上限 / Permit ceiling
-    limit: usize,
-    /// 已发出且尚未归还的许可数 / Permits handed out and not yet returned
-    in_use: usize,
-}
-
-impl SyncSemaphore {
-    fn new(permits: usize) -> Self {
-        Self {
-            state: Mutex::new(SemState { limit: permits, in_use: 0 }),
-            condvar: Condvar::new(),
-        }
-    }
-
-    /// 阻塞等待并获取一个许可（RAII guard 在 drop 时自动归还并递减运行计数），等待期间可取消。
-    /// 占用数达到上限时等待；上限被调低时，已运行的任务不受影响，新任务等到占用数回落。
-    /// 每轮先检查 `cancel`，已取消返回 `None`；等待以 200 ms 为上限，配合 [`Self::wake_all`]
-    /// 让取消能及时生效。
-    ///
-    /// Block until a permit is available, then acquire one; the wait can be cancelled.
-    /// The returned guard returns the permit and decrements the running count on drop.
-    /// Waits while the held count is at the ceiling; when the ceiling is lowered, running
-    /// tasks are unaffected and new tasks wait until the held count drops below it.
-    /// `cancel` is checked on every round and `None` is returned once it is set; each wait
-    /// is capped at 200 ms and combined with [`Self::wake_all`] so cancellation takes effect
-    /// promptly.
-    fn acquire_cancellable(
-        self: &Arc<Self>,
-        running: &Arc<AtomicUsize>,
-        cancel: &AtomicBool,
-    ) -> Option<SyncPermit> {
-        let mut st = self.state.lock();
-        loop {
-            if cancel.load(Ordering::Relaxed) {
-                // 可能消耗了一次 notify_one，转交给下一个等待者
-                // We may have consumed a notify_one; pass it on to the next waiter
-                self.condvar.notify_one();
-                return None;
-            }
-            if st.in_use < st.limit {
-                break;
-            }
-            self.condvar.wait_for(&mut st, Duration::from_millis(200));
-        }
-        st.in_use += 1;
-        running.fetch_add(1, Ordering::Relaxed);
-        Some(SyncPermit { sem: Arc::clone(self), running: Arc::clone(running) })
-    }
-
-    /// 唤醒所有等待者重新检查（取消请求后调用）。
-    /// Wake all waiters to re-check (called after a cancel request).
-    fn wake_all(&self) {
-        self.condvar.notify_all();
-    }
-
-    /// 归还一个许可并唤醒一个等待者。
-    /// Return a permit and wake one waiter.
-    fn release(&self) {
-        let mut st = self.state.lock();
-        st.in_use = st.in_use.saturating_sub(1);
-        self.condvar.notify_one();
-    }
-
-    /// 设置许可上限（动态调整并发度时调用）。只修改上限、不改占用数，
-    /// 因此反复调用不会让可用许可超过 `limit - in_use`。
-    ///
-    /// Set the permit ceiling (called when updating concurrency). Only the ceiling changes,
-    /// not the held count, so repeated calls never push available permits above
-    /// `limit - in_use`.
-    fn set_permits(&self, permits: usize) {
-        let mut st = self.state.lock();
-        st.limit = permits;
-        // 唤醒所有等待者重新检查，上限调高时新增的许可能被立即消费
-        // Wake all waiters to re-check; newly available permits after raising the ceiling get consumed
-        self.condvar.notify_all();
-    }
-
-    /// 返回当前可用许可数快照（= limit - in_use，瞬时值，仅供监控/调试使用）。
-    /// Returns a snapshot of the current available permit count
-    /// (= limit - in_use, instantaneous, for monitoring/debug only).
-    fn current_permits(&self) -> usize {
-        let st = self.state.lock();
-        st.limit.saturating_sub(st.in_use)
-    }
-}
-
-/// `SyncSemaphore` 的 RAII 许可守卫，drop 时自动归还许可并递减运行中计数。
-/// RAII permit guard for `SyncSemaphore`; returns the permit and decrements the running count on drop.
-pub struct SyncPermit {
-    sem: Arc<SyncSemaphore>,
-    running: Arc<std::sync::atomic::AtomicUsize>,
-}
-
-impl Drop for SyncPermit {
-    fn drop(&mut self) {
-        self.sem.release();
-        self.running.fetch_sub(1, Ordering::Relaxed);
-    }
-}
-
 /// 后处理任务队列：任务状态表 + 取消标志 + 并发执行信号量。
 /// Post-processing task queue: task status map + cancel flags + concurrency semaphore.
 pub struct PpQueue {
@@ -262,88 +151,6 @@ pub struct PpQueue {
     running_count: Arc<std::sync::atomic::AtomicUsize>,
 }
 
-/// 录制级后处理 claim 的 RAII 守卫：持有期间同一录制的其他触发会被拒绝。
-/// drop 时依次清理任务记录、取消标志与 claim（每把锁独立获取，不嵌套）。
-///
-/// RAII guard for a recording-level post-processing claim: while held, other triggers
-/// for the same recording are rejected. On drop it removes the task record, the cancel
-/// flag and the claim in turn (each lock is acquired independently, never nested).
-pub struct PpClaim<'a> {
-    queue: &'a PpQueue,
-    recording_key: String,
-    path_key: String,
-}
-
-impl Drop for PpClaim<'_> {
-    fn drop(&mut self) {
-        self.queue.tasks.write().remove(&self.path_key);
-        self.queue.cancel_flags.write().remove(&self.path_key);
-        self.queue.active.lock().remove(&self.recording_key);
-    }
-}
-
-/// 维护扫描对某个录制的短暂占位（RAII）：持有期间 `try_claim` 返回 `Err(Reserved)`。
-/// drop 时只在该键仍是占位时移除它，不触碰任务记录与取消标志。
-///
-/// Short-lived maintenance-scan reservation on a recording (RAII): while held, `try_claim`
-/// returns `Err(Reserved)`. On drop it removes the key only if it is still a reservation,
-/// and never touches task records or cancel flags.
-pub struct PpReservation<'a> {
-    queue: &'a PpQueue,
-    recording_key: String,
-}
-
-impl Drop for PpReservation<'_> {
-    fn drop(&mut self) {
-        let mut active = self.queue.active.lock();
-        if matches!(active.get(&self.recording_key), Some(ActiveEntry::Reserved)) {
-            active.remove(&self.recording_key);
-        }
-    }
-}
-
-/// 删除录制意图的 RAII 守卫：持有期间拒绝该录制新的 claim 与占位，drop 时撤销本守卫
-/// 登记的那一次意图（同一录制的其他守卫仍持有时，删除意图继续生效）。
-/// RAII guard for a recording-removal intent: while held, new claims and reservations for
-/// the recording are rejected; on drop it revokes only the intent it registered (the removal
-/// intent stays in effect while other guards for the same recording are still held).
-pub struct PpRemovalGuard<'a> {
-    queue: &'a PpQueue,
-    recording_key: String,
-}
-
-impl Drop for PpRemovalGuard<'_> {
-    fn drop(&mut self) {
-        use std::collections::hash_map::Entry;
-        // 计数减一，归零才移除 / Decrement the count; remove only when it reaches zero
-        if let Entry::Occupied(mut o) =
-            self.queue.removal_requested.lock().entry(self.recording_key.clone())
-        {
-            let n = o.get_mut();
-            *n = n.saturating_sub(1);
-            if *n == 0 {
-                o.remove();
-            }
-        }
-    }
-}
-
-/// 同一录制删除执行权的 RAII 守卫（见 [`PpQueue::try_begin_removal`]）：持有期间同一录制
-/// 的其他删除请求拿不到执行权，drop 时释放。
-/// RAII guard for the right to execute a recording's removal (see
-/// [`PpQueue::try_begin_removal`]): while held, other removal requests for the same recording
-/// can't obtain it; released on drop.
-pub struct PpRemovalExecution<'a> {
-    queue: &'a PpQueue,
-    recording_key: String,
-}
-
-impl Drop for PpRemovalExecution<'_> {
-    fn drop(&mut self) {
-        self.queue.removal_executing.lock().remove(&self.recording_key);
-    }
-}
-
 impl Default for PpQueue {
     fn default() -> Self {
         Self::new()
@@ -353,23 +160,28 @@ impl Default for PpQueue {
 /// 将用户配置的并发数（0=自动）解析为实际许可数。
 ///
 /// 后处理任务以磁盘 I/O（ts_merge）为主，每个任务都会驱动一个 ffmpeg 进程。
-/// 自动模式取 `cpu × 2` 作为默认值；用户手动设置时上限同样为 `cpu × 2`，
-/// 两者一致，手动设置的意义在于可以低于自动值以主动限制并发。
+/// 自动模式与手动上限统一取 **逻辑核数**——实测（real_pipeline_concurrency_smoke）
+/// 解码型 pp 任务在 ~12 路并发时已让 32 核机器饱和：核数×1 即合理上限。
+/// 上限只是天花板，实际并发由负载监控的 AIMD 闭环按真实压力调节
+/// （宽裕才慢慢爬上去）；手动设置的意义在于主动压低天花板。
 ///
 /// Resolve the configured concurrency (0 = auto) to the actual permit count.
 ///
 /// Post-processing tasks are primarily disk-I/O-bound (ts_merge drives one ffmpeg
-/// process per task). Auto mode uses `cpu × 2`; the hard cap for manually-set
-/// values is also `cpu × 2` — the purpose of manual setting is to go *below*
-/// the automatic value to limit concurrency intentionally.
+/// process per task). Auto mode and the manual cap are unified at the **logical
+/// core count** — measured via real_pipeline_concurrency_smoke: decode-type pp
+/// saturates a 32-core box at ~12 concurrent tasks, so cores×1 is a sound
+/// ceiling. It is only a ceiling: the load monitor's AIMD loop regulates
+/// actual concurrency against real pressure (climbing only while comfortable);
+/// manual values serve to deliberately lower the ceiling.
 pub fn resolve_concurrency(n: usize) -> usize {
     let cpu = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1);
-    // 上限为 cpu * 2 / Hard cap at cpu * 2
-    let cap = (cpu * 2).max(1);
+    // 自动默认值与手动上限统一为逻辑核数 / Auto default and manual cap unified at core count
+    let cap = cpu.max(1);
     if n == 0 {
-        // 自动：取 cpu × 2 / Auto: twice the core count
+        // 自动：取逻辑核数 / Auto: logical core count
         cap
     } else {
         n.min(cap)
@@ -402,14 +214,16 @@ impl PpQueue {
     /// 调用后正在等待的任务会立即以新的许可数重新竞争。
     /// 已持有许可正在运行的任务不受影响，继续运行直至完成。
     ///
-    /// `n = 0` 表示自动（由 `resolve_concurrency` 映射为 CPU 逻辑核心数 × 2）。
+    /// `n = 0` 表示自动（由 `resolve_concurrency` 映射为 CPU 逻辑核心数，
+    /// 与手动上限一致）。
     ///
     /// Dynamically update concurrency (from user config change).
     ///
     /// Also updates the theoretical upper bound (`max_permits`); subsequent
     /// `adjust_for_load` calls will never exceed this value.
     ///
-    /// `n = 0` means auto (= logical CPU count × 2); manually set values are capped at the same CPU × 2 by `resolve_concurrency`.
+    /// `n = 0` means auto (= logical CPU count × 4, same as the manual cap)
+    /// via `resolve_concurrency`.
     pub fn set_concurrency(&self, n: usize) {
         let permits = resolve_concurrency(n);
         self.max_permits.store(permits, Ordering::Relaxed);
@@ -418,27 +232,35 @@ impl PpQueue {
         tracing::debug!("{}", crate::tl!("postprocess.concurrencySet", n = permits));
     }
 
-    /// 根据实时系统负载动态调整当前信号量许可数。
+    /// 根据实时系统负载动态调整当前信号量许可数（闭环 AIMD）。
     ///
-    /// 调用 `recommend_permits` 根据实测每任务资源占用实时推算建议并发数，
-    /// 确保结果在 `[1, max_permits]` 范围内，再更新信号量。
+    /// 以 [`adjusted_permits`] 为 AIMD 状态：`assess` 判定压力等级后由
+    /// `next_pp_permits` 给出下一步值——危急直接降为 1、高压乘性退避、
+    /// 宽裕且槽位占满时加性恢复（步长随逻辑核数缩放）、迟滞带内保持。结果始终落在
+    /// `[1, max_permits]` 内，再更新信号量。
     /// 此方法由后台负载监控定时器调用，不影响 `max_permits`（理论上限）。
     ///
-    /// Dynamically adjust the current semaphore permit count based on real-time system load.
+    /// Dynamically adjust the current semaphore permit count from real-time
+    /// system load (closed-loop AIMD).
     ///
-    /// Uses `recommend_permits` to back-calculate a suggested value from measured
-    /// per-task resource usage, clamps it to `[1, max_permits]`, then updates the
+    /// Uses [`adjusted_permits`] as the AIMD state: `assess` classifies the
+    /// pressure level and `next_pp_permits` computes the next value — 1 when
+    /// critical, multiplicative backoff when high, additive reclaim (step scales
+    /// with logical cores) when comfortable and slots are saturated, hold inside
+    /// the hysteresis band.
+    /// The result stays within `[1, max_permits]` before updating the
     /// semaphore. Called by the background load monitor timer; does not modify
     /// `max_permits` (the theoretical ceiling).
     pub fn adjust_for_load(&self, snapshot: &crate::system::load_monitor::LoadSnapshot) {
+        use crate::system::load_monitor::{assess_pp, next_pp_permits};
         let max = self.max_permits.load(Ordering::Relaxed);
         let running = self.running_count.load(Ordering::Relaxed);
-        let recommended = crate::system::load_monitor::recommend_permits(
-            snapshot,
-            max,
-            running,
-        );
-        let new_permits = recommended.clamp(1, max);
+        let current = self.adjusted_permits.load(Ordering::Relaxed);
+        // pp 以收紧阈值判定：先让路、晚恢复，为不设限的录制与其他程序留余量 /
+        // pp uses deliberately tight thresholds: yields first, recovers last —
+        // keeping headroom for uncapped recordings and other programs
+        let level = assess_pp(snapshot);
+        let new_permits = next_pp_permits(level, current, running, max);
         self.adjusted_permits.store(new_permits, Ordering::Relaxed);
         self.semaphore.set_permits(new_permits);
         tracing::debug!(
@@ -448,7 +270,8 @@ impl PpQueue {
                 permits = new_permits,
                 max = max,
                 running = running,
-                cpu = format!("{:.1}", snapshot.cpu_usage_pct),
+                level = format!("{:?}", level),
+                cpu = format!("{:.1}", snapshot.smoothed_cpu_pct),
                 mem = format!("{:.1}", snapshot.mem_usage_pct),
                 avail = snapshot.mem_available_bytes / 1024 / 1024
             )
@@ -464,19 +287,14 @@ impl PpQueue {
     /// also wakes the waiters), so a queued task exits promptly after cancellation instead
     /// of waiting until it obtains a permit.
     pub fn acquire_concurrency_permit(&self, cancel: &AtomicBool) -> Option<SyncPermit> {
-        self.semaphore.acquire_cancellable(&self.running_count, cancel)
+        self.semaphore
+            .acquire_cancellable(&self.running_count, cancel)
     }
 
     /// 当前实际正在运行（持有许可）的任务数。精确计数：acquire +1，permit drop -1。
     /// Number of tasks currently running (holding a permit). Exact: acquire +1, drop -1.
     pub fn running_count(&self) -> usize {
         self.running_count.load(Ordering::Relaxed)
-    }
-
-    /// 返回 running_count 的 Arc 克隆，供需要跨线程实时读取任务数的场合使用。
-    /// Returns a cloned Arc of the running_count for cross-thread real-time reads.
-    pub fn running_count_arc(&self) -> Arc<std::sync::atomic::AtomicUsize> {
-        Arc::clone(&self.running_count)
     }
 
     /// 负载自适应后的当前许可上限（受 CPU/内存压力影响，≤ max_permits）。
@@ -566,7 +384,11 @@ impl PpQueue {
     /// After registering, the removal intent is re-checked once more (see
     /// [`Self::recheck_removal_after_insert`]), so that when racing `request_removal` +
     /// `is_recording_active`, at least one side always sees the other.
-    pub fn try_claim(&self, recording_key: &str, path_key: &str) -> Result<PpClaim<'_>, ClaimRejected> {
+    pub fn try_claim(
+        &self,
+        recording_key: &str,
+        path_key: &str,
+    ) -> Result<PpClaim<'_>, ClaimRejected> {
         use std::collections::hash_map::Entry;
         if self.is_removal_requested(recording_key) {
             return Err(ClaimRejected::RemovalRequested);
@@ -636,7 +458,10 @@ impl PpQueue {
                 v.insert(ActiveEntry::Reserved);
             }
         }
-        let reservation = PpReservation { queue: self, recording_key: recording_key.to_string() };
+        let reservation = PpReservation {
+            queue: self,
+            recording_key: recording_key.to_string(),
+        };
         // 插入后复查删除意图（同 try_claim）；失败时 drop 守卫撤销刚插入的占位
         // Re-check the removal intent after inserting (same as try_claim); on failure the
         // guard is dropped, rolling back the reservation just inserted
@@ -660,7 +485,10 @@ impl PpQueue {
             .lock()
             .entry(recording_key.to_string())
             .or_insert(0) += 1;
-        PpRemovalGuard { queue: self, recording_key: recording_key.to_string() }
+        PpRemovalGuard {
+            queue: self,
+            recording_key: recording_key.to_string(),
+        }
     }
 
     /// 判断某个录制当前是否正在被删除（尚有未撤销的删除意图）。
@@ -683,10 +511,17 @@ impl PpQueue {
     /// claims or reservations (those are rejected by the removal intent), so callers should
     /// call [`request_removal`](Self::request_removal) first.
     pub fn try_begin_removal(&self, recording_key: &str) -> Option<PpRemovalExecution<'_>> {
-        if !self.removal_executing.lock().insert(recording_key.to_string()) {
+        if !self
+            .removal_executing
+            .lock()
+            .insert(recording_key.to_string())
+        {
             return None;
         }
-        Some(PpRemovalExecution { queue: self, recording_key: recording_key.to_string() })
+        Some(PpRemovalExecution {
+            queue: self,
+            recording_key: recording_key.to_string(),
+        })
     }
 
     /// 判断某个录制当前是否已被 claim（正在排队或执行后处理）或被维护扫描占位。
@@ -731,10 +566,9 @@ impl PpQueue {
     /// hasn't switched meta.video_path yet, so only the stem can tie it to the running
     /// recording.
     pub fn is_stem_active(&self, stem: &std::ffi::OsStr) -> bool {
-        self.active
-            .lock()
-            .iter()
-            .any(|(k, e)| matches!(e, ActiveEntry::Claimed(_)) && Path::new(k).file_stem() == Some(stem))
+        self.active.lock().iter().any(|(k, e)| {
+            matches!(e, ActiveEntry::Claimed(_)) && Path::new(k).file_stem() == Some(stem)
+        })
     }
 
     /// 请求取消指定任务。

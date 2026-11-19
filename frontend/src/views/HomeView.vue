@@ -12,7 +12,7 @@
     Initializes event listeners and loads the streamer list from backend on mount.
 -->
 <script setup lang="ts">
-	import { onMounted, ref, computed } from "vue";
+	import { onMounted, ref, computed, watch } from "vue";
 	import { useStreamersStore } from "../stores/streamers";
 	import type { StreamerEntry } from "../stores/streamers";
 	import { useNotify } from "../composables/useNotify";
@@ -21,6 +21,10 @@
 	import StreamerCard from "../components/StreamerCard.vue";
 	import AddStreamerDialog from "../components/AddStreamerDialog.vue";
 	import { Button } from "@/components/ui/button";
+	import {
+		Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+	} from "@/components/ui/select";
+	import { EyeOff } from "@lucide/vue";
 	import { useI18n } from "vue-i18n";
 
 	const store = useStreamersStore();
@@ -31,6 +35,30 @@
 
 	/** 是否显示添加主播对话框 / Whether to show the add streamer dialog */
 	const showAdd = ref(false);
+
+	// ─── 隐私模式 / Privacy mode ───────────────────────────────────────────────
+	//
+	// 客户端本地偏好（localStorage）：按观察者区分而非按服务器设置——同一份
+	// 后端数据在不同客户端上可能分别需要遮挡。三档：
+	//   off  不模糊；live 仅模糊在线（直播）预览图；all 在线与离线图都模糊。
+	// 每张卡片的"眼睛"解除仅是卡片内的会话级标记，不写存储。
+	//
+	// Client-local preference (localStorage): it's per onlooker, not per server —
+	// the same backend data may need masking on one client but not another.
+	// Three modes: off = no blur; live = blur online previews only; all = blur
+	// online + offline images. A card's eye-toggle is a session-level flag
+	// inside the card and is never persisted.
+	type PrivacyMode = "off" | "live" | "all";
+	const PRIVACY_MODE_KEY = "sc.privacyMode";
+	const privacyMode = ref<PrivacyMode>(
+		(() => {
+			// 未设置/非法值默认仅直播画面模糊；仅尊重显式存储的 off/all /
+			// Unset/invalid defaults to blurring live previews; only explicit off/all are honored
+			const v = localStorage.getItem(PRIVACY_MODE_KEY);
+			return v === "off" || v === "all" ? v : "live";
+		})(),
+	);
+	watch(privacyMode, (v) => localStorage.setItem(PRIVACY_MODE_KEY, v));
 
 	onMounted(async () => {
 		store.initListeners();
@@ -396,8 +424,11 @@
 	<div class="flex flex-col gap-4 px-6">
 		<!-- 置顶区域：页头 + 筛选 Tab 栏 / Sticky zone: header + filter tabs -->
 		<div class="bg-background sticky top-0 z-20 -mx-6 px-6 border-b flex flex-col">
-		<!-- 页头 / Header -->
-		<header class="flex items-start justify-between gap-3 shrink-0 pt-6 pb-3">
+		<!-- 页头：窄屏（<640px）改纵向——标题行在上、控件逐行全宽在下，
+			标题不被挤压；宽屏保持左右布局 / Header: vertical below 640 px —
+			title on top, controls stacked full-width below so the title isn't
+			squeezed; wide screens keep the side-by-side layout -->
+		<header class="flex flex-col gap-3 shrink-0 pt-6 pb-3 sm:flex-row sm:items-start sm:justify-between">
 			<div>
 				<h1 class="text-xl font-bold mb-0.5">{{ t("home.title") }}</h1>
 				<p class="text-sm text-muted-foreground">
@@ -409,8 +440,20 @@
 					}}
 				</p>
 			</div>
-			<div class="flex items-center gap-2 shrink-0">
-				<Button @click="showAdd = true">{{ t("home.addStreamer") }}</Button>
+			<div class="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:shrink-0">
+				<!-- 隐私模式选择：off 不模糊 / live 仅直播图 / all 全部图 / Privacy mode: off = none, live = previews only, all = everything -->
+				<Select v-model="privacyMode">
+					<SelectTrigger class="w-full cursor-pointer sm:w-auto sm:shrink-0" :title="t('home.privacy.label')">
+						<EyeOff class="size-4 shrink-0 text-muted-foreground mr-1" />
+						<SelectValue />
+					</SelectTrigger>
+					<SelectContent>
+						<SelectItem value="off" class="cursor-pointer">{{ t("home.privacy.off") }}</SelectItem>
+						<SelectItem value="live" class="cursor-pointer">{{ t("home.privacy.live") }}</SelectItem>
+						<SelectItem value="all" class="cursor-pointer">{{ t("home.privacy.all") }}</SelectItem>
+					</SelectContent>
+				</Select>
+				<Button class="w-full sm:w-auto" @click="showAdd = true">{{ t("home.addStreamer") }}</Button>
 			</div>
 		</header>
 
@@ -581,6 +624,7 @@
 				:streamer="s"
 				:select-mode="selectMode"
 				:selected="selectedSet.has(s.username)"
+				:privacy-mode="privacyMode"
 				@remove="handleRemove(s.username)"
 				@toggle-auto="handleToggleAuto(s.username, s, $event)"
 				@start="handleStart(s.username)"

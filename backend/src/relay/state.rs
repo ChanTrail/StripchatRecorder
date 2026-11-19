@@ -237,7 +237,13 @@ impl RelayManager {
     /// 更新主播真实状态（由 worker 在每次 API 查询后调用）；仅在会话 ID 匹配时生效。
     /// Update the streamer's real status (called by worker after each API query); only
     /// takes effect when the session id matches.
-    pub fn set_streamer_status(&self, username: &str, session_id: u64, is_online: bool, status: String) {
+    pub fn set_streamer_status(
+        &self,
+        username: &str,
+        session_id: u64,
+        is_online: bool,
+        status: String,
+    ) {
         let mut sessions = self.sessions.write();
         if let Some(s) = Self::current_mut(&mut sessions, username, session_id) {
             s.streamer_is_online = is_online;

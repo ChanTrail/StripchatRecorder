@@ -5,12 +5,14 @@
 
 pub mod config;
 pub mod core;
+pub mod ech;
+pub mod ffmpeg;
 pub mod locale;
+pub mod platform;
 pub mod postprocess;
 pub mod recording;
 pub mod relay;
 pub mod server;
-pub mod platform;
 pub mod system;
 pub mod update;
 pub mod watcher;
@@ -26,7 +28,8 @@ pub fn run() {
     // 更新重启时延迟等待旧进程释放端口
     // When restarting after an update, wait for the old process to free the port
     if let Ok(ms_str) = std::env::var("STRIPCHAT_RESTART_DELAY_MS")
-        && let Ok(ms) = ms_str.parse::<u64>() {
+        && let Ok(ms) = ms_str.parse::<u64>()
+    {
         std::thread::sleep(std::time::Duration::from_millis(ms));
     }
 

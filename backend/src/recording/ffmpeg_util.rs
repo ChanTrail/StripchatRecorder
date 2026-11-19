@@ -9,124 +9,42 @@
 //! Does not manage recording session lifecycle (see `recording::recorder` for that).
 
 use crate::core::error::{AppError, Result};
-use std::fs;
 use crate::core::no_window::NoWindowExt;
+use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::OnceLock;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use tokio::sync::Semaphore;
 
-/// 当前 FFmpeg 信号量许可数（由 `set_ffmpeg_concurrency` 维护，用于差值更新）。
-/// Current FFmpeg semaphore permit count (maintained by `set_ffmpeg_concurrency` for delta updates).
-static FFMPEG_SEMAPHORE_PERMITS: AtomicUsize = AtomicUsize::new(0);
-
-/// 全局 FFmpeg 并发信号量。
-/// 由 `set_ffmpeg_concurrency` 首次调用时（`AppState::new()` 阶段）初始化，
-/// 此后只通过该函数的差值逻辑动态调整，不设任何硬编码初始值。
+/// 检查 ffmpeg 与 ffprobe 是否可用（lib 目录副本优先，其次 PATH）。
+/// 实际检测逻辑在 `crate::ffmpeg::ffmpeg_available`。
 ///
-/// Global FFmpeg concurrency semaphore.
-/// Initialized on the first call to `set_ffmpeg_concurrency` (during `AppState::new()`),
-/// then adjusted dynamically via delta logic in that function — no hardcoded initial value.
-static FFMPEG_SEMAPHORE: OnceLock<Semaphore> = OnceLock::new();
-
-/// 获取 FFmpeg 信号量引用，若尚未初始化则 panic（调用方保证在 `AppState::new()` 之后使用）。
-/// Get a reference to the FFmpeg semaphore, panicking if not yet initialized
-/// (callers guarantee use only after `AppState::new()`).
-fn ffmpeg_semaphore() -> &'static Semaphore {
-    FFMPEG_SEMAPHORE.get().expect("ffmpeg semaphore not initialized — call set_ffmpeg_concurrency first")
-}
-
-/// 动态更新 FFmpeg 并发许可数，使其与后处理并发数（`max_pp_concurrent`）保持一致。
-///
-/// **初始化**：首次调用（`AppState::new()` 阶段）会创建信号量，许可数由
-/// `resolve_concurrency(n)` 决定（`n=0` 时为自动，即 CPU × 2）。
-///
-/// **后续更新**：用差值法调整现有信号量：
-/// - 新 > 旧：`add_permits(diff)` 增加许可
-/// - 新 < 旧：`try_acquire_many(diff).forget()` 减少可用许可
-///   （若当前全部被占用则延迟消耗，持有者 drop 时自然归还并被消耗）
-///
-/// Dynamically update the FFmpeg concurrency permit count to match `max_pp_concurrent`.
-///
-/// **Initialization**: the first call (during `AppState::new()`) creates the semaphore
-/// with a permit count determined by `resolve_concurrency(n)` (auto = CPU × 2 when n=0).
-///
-/// **Subsequent updates**: adjusts the existing semaphore with a delta approach:
-/// - new > old: `add_permits(diff)`
-/// - new < old: `try_acquire_many(diff).forget()` — deferred if all permits are held
-pub fn set_ffmpeg_concurrency(n: usize) {
-    let new_permits = crate::postprocess::queue::resolve_concurrency(n);
-
-    // 首次调用：初始化信号量，不做差值运算
-    // First call: initialize the semaphore, no delta needed
-    if FFMPEG_SEMAPHORE.get().is_none() {
-        let _ = FFMPEG_SEMAPHORE.set(Semaphore::new(new_permits));
-        FFMPEG_SEMAPHORE_PERMITS.store(new_permits, Ordering::Relaxed);
-        tracing::debug!("{}", crate::tl!("ffmpegUtil.concurrencyInitialized", n = new_permits));
-        return;
-    }
-
-    let old_permits = FFMPEG_SEMAPHORE_PERMITS.swap(new_permits, Ordering::Relaxed);
-
-    match new_permits.cmp(&old_permits) {
-        std::cmp::Ordering::Greater => {
-            let diff = new_permits - old_permits;
-            ffmpeg_semaphore().add_permits(diff);
-        }
-        std::cmp::Ordering::Less => {
-            let diff = old_permits - new_permits;
-            // try_acquire_many 在许可不足时直接失败（不阻塞），forget 永久移除这些许可。
-            // 若许可全被占用，持有者 drop 后归还的许可会超出 new_permits，
-            // 下一次 acquire 完成后自然消耗到目标数。
-            //
-            // try_acquire_many fails fast if permits are insufficient; forget removes
-            // them permanently. If all permits are held, the excess returned on drop
-            // will be consumed naturally after the next acquire completes.
-            if let Ok(permit) = ffmpeg_semaphore().try_acquire_many(diff as u32) {
-                permit.forget();
-            }
-        }
-        std::cmp::Ordering::Equal => {}
-    }
-
-    tracing::debug!(
-        "{}",
-        crate::tl!("ffmpegUtil.concurrencyUpdated", old = old_permits, new = new_permits)
-    );
-}
-
-/// 检查 ffmpeg 是否在 PATH 中可用。
-/// Check if ffmpeg is available on PATH.
+/// Check whether ffmpeg and ffprobe are usable (lib-dir copy first, then PATH).
+/// The actual check lives in `crate::ffmpeg::ffmpeg_available`.
 pub fn ffmpeg_available() -> bool {
-    Command::new("ffmpeg")
-        .arg("-version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .no_window()
-        .status()
-        .is_ok()
+    crate::ffmpeg::ffmpeg_available()
 }
 
 /// 使用 ffmpeg 将 fMP4 数据转换为 MPEG-TS 格式（通过 stdin 管道传入）。
 ///
-/// 录制分片转码是实时路径，不参与后处理 FFmpeg 并发信号量的排队——信号量只约束
-/// 后处理模块（`pipeline/exec.rs`）启动的 FFmpeg 进程，保证录制完整性优先。
+/// 录制分片转码是实时路径，不受后处理并发许可约束——后处理任务的并发由
+/// `PpQueue` 的任务级许可统一控制，录制完整性优先，不与排队任务竞争。
 ///
 /// Convert fMP4 data to MPEG-TS format using ffmpeg (piped via stdin).
 ///
-/// Segment transcoding is on the real-time recording path and does NOT go through
-/// the post-processing FFmpeg concurrency semaphore — the semaphore only throttles
-/// FFmpeg processes spawned by post-processing modules (`pipeline/exec.rs`),
-/// ensuring recording integrity takes priority.
+/// Segment transcoding is on the real-time recording path and is not subject
+/// to post-processing concurrency permits — PP concurrency is controlled at
+/// the task level by `PpQueue`; recording integrity takes priority and never
+/// competes with queued tasks.
 pub(crate) async fn convert_to_ts(fmp4_data: Vec<u8>, ts_path: &PathBuf) -> Result<()> {
-    let mut child = tokio::process::Command::new("ffmpeg")
+    // 标记 ffmpeg 使用中，阻止自动更新在转码期间替换二进制
+    // Mark ffmpeg in use so auto-update won't swap the binary mid-transcode
+    let _ffmpeg_guard = crate::ffmpeg::in_use();
+    let mut child = tokio::process::Command::new(crate::ffmpeg::ffmpeg_program())
         .args(["-y", "-i", "pipe:0", "-c", "copy", "-f", "mpegts"])
         .arg(ts_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
-        .stderr(Stdio::piped())   // 捕获 stderr，失败时记录原因 / Capture stderr for failure diagnostics
+        .stderr(Stdio::piped()) // 捕获 stderr，失败时记录原因 / Capture stderr for failure diagnostics
         .no_window()
         .spawn()
         .map_err(|e| AppError::Other(format!("Failed to spawn ffmpeg: {}", e)))?;
@@ -181,42 +99,130 @@ pub(crate) async fn convert_to_ts(fmp4_data: Vec<u8>, ts_path: &PathBuf) -> Resu
     Ok(())
 }
 
-/// 将 TS 分片文件名追加到会话目录的 playlist.m3u8（标准 HLS 格式）。
-/// Append a TS segment filename to the session directory's playlist.m3u8 (standard HLS format).
+/// 串行化 playlist.m3u8 的所有写入：普通追加与重试乱序插入共用一把锁，
+/// 防止插入路径的"读-改-写"与 append 交错导致条目丢失。写入极稀有且文件
+/// 很小（每条目约 50 字节），全局锁的争用可忽略。
 ///
-/// 首次写入时自动添加 M3U8 文件头（`#EXTM3U` 和 `#EXT-X-VERSION:3`）。
-/// Automatically writes the M3U8 header (`#EXTM3U` and `#EXT-X-VERSION:3`) on first write.
-pub(crate) fn append_to_m3u8(session_dir: &std::path::Path, ts_path: &std::path::Path) {
+/// Serializes every playlist.m3u8 write: normal appends and out-of-order retry
+/// insertions share one lock so the insertion path's read-modify-write cannot
+/// interleave with an append and lose entries. Writes are rare and the file is
+/// small (~50 bytes per entry), so global-lock contention is negligible.
+static M3U8_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// 获取 m3u8 写锁；中毒后仍继续——最坏只是文件内容短暂不一致，
+/// 不应让整个写入路径停摆。
+///
+/// Take the m3u8 write lock; proceeds despite poisoning — the worst case is a
+/// briefly inconsistent file, which must not halt the whole write path.
+fn m3u8_lock() -> std::sync::MutexGuard<'static, ()> {
+    M3U8_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// 从 `{username}_segment{seq:06}.ts` 文件名解析分片序号。
+/// Parse the segment sequence out of a `{username}_segment{seq:06}.ts` filename.
+fn seq_from_ts_name(name: &str) -> Option<u32> {
+    let pos = name.rfind("_segment")?;
+    let digits = name[pos + "_segment".len()..].strip_suffix(".ts")?;
+    digits.parse().ok()
+}
+
+/// 将分片按 seq 顺序写入 playlist.m3u8（标准 HLS 格式）：
+/// - 其 seq 大于所有现有条目时退化为末尾追加（常规路径：并发任务虽乱序
+///   完成，但多数情况下序号本就递增，落在文件尾即可）
+/// - 否则把条目插到第一个 seq 更大的 `#EXTINF` 条目之前——文件不支持
+///   原地插入，实为重写插入点之后的字节（m3u8 很小，成本可忽略）
+/// - 幂等：条目文件名已存在时直接跳过
+/// - 首次写入时自动添加 M3U8 文件头（`#EXTM3U` 和 `#EXT-X-VERSION:3`）
+///
+/// 并发分片任务全部经本函数写清单，多任务写入共用 [`M3U8_LOCK`]，读写
+/// 互不交错。
+///
+/// Insert a segment into playlist.m3u8 in sequence order (standard HLS):
+/// - Falls back to a plain append when its seq exceeds every existing
+///   entry (the common path: concurrent jobs finish out of order but seqs
+///   are still mostly increasing, landing at the tail)
+/// - Otherwise inserts the entry before the first `#EXTINF` entry whose seq is
+///   greater — files don't support in-place insertion, so this rewrites the
+///   bytes from the insert point onward (trivial for a small m3u8)
+/// - Idempotent: skips when the filename is already present
+/// - Automatically writes the M3U8 header (`#EXTM3U` and `#EXT-X-VERSION:3`)
+///   on first write
+///
+/// All concurrent segment jobs write the playlist via this function, sharing
+/// [`M3U8_LOCK`] so reads and writes never interleave.
+pub(crate) fn insert_to_m3u8_sorted(
+    session_dir: &std::path::Path,
+    ts_path: &std::path::Path,
+    seq: u32,
+) {
+    let _guard = m3u8_lock();
     let m3u8_path = session_dir.join("playlist.m3u8");
     let Some(filename) = ts_path.file_name().and_then(|n| n.to_str()) else {
         return;
     };
 
-    // 首次创建时写入 M3U8 文件头 / Write M3U8 header on first creation
-    let needs_header = !m3u8_path.exists();
-    let mut file = match fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&m3u8_path)
-    {
-        Ok(f) => f,
-        Err(e) => {
-            tracing::error!("{}", crate::tl!("ffmpegUtil.openPlaylistFailed", error = e));
-            return;
-        }
-    };
-
-    if needs_header
-        && let Err(e) = file.write_all(b"#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-MEDIA-SEQUENCE:0\n")
-    {
-        tracing::error!("{}", crate::tl!("ffmpegUtil.writeM3u8HeaderFailed", error = e));
+    let existing = fs::read_to_string(&m3u8_path).unwrap_or_default();
+    // 幂等：条目已存在则跳过 / Idempotent: skip when the entry already exists
+    if existing.contains(filename) {
         return;
     }
 
-    // 写入分片条目（时长占位为 0，实际时长未知）/ Write segment entry (duration placeholder 0, actual duration unknown)
-    let line = format!("#EXTINF:0,\n{}\n", filename);
-    if let Err(e) = file.write_all(line.as_bytes()) {
-        tracing::error!("{}", crate::tl!("ffmpegUtil.updateM3u8Failed", error = e));
+    let entry = format!("#EXTINF:0,\n{}\n", filename);
+
+    // 尚无清单（首个分片即由重试写回的边界）：写头部 + 条目
+    // No playlist yet (edge: the very first segment lands via retry): header + entry
+    if existing.is_empty() {
+        let content = format!(
+            "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-MEDIA-SEQUENCE:0\n{}",
+            entry
+        );
+        if let Err(e) = fs::write(&m3u8_path, content) {
+            tracing::error!("{}", crate::tl!("ffmpegUtil.updateM3u8Failed", error = e));
+        }
+        return;
+    }
+
+    // 扫描条目行，找第一个 seq 更大的分片；其 `#EXTINF` 行起点即插入位置。
+    // prev_start 始终指向前一行起点——条目结构固定为 "#EXTINF:0,\n{file}\n"。
+    // Scan entry lines for the first segment with a greater seq; the start of
+    // its `#EXTINF` line is the insert point. `prev_start` always points at the
+    // previous line's start — entries are fixed "#EXTINF:0,\n{file}\n" pairs.
+    let mut insert_at: Option<usize> = None;
+    let mut line_start = 0usize;
+    let mut prev_start = 0usize;
+    for line in existing.split_inclusive('\n') {
+        let text = line.trim_end_matches(['\r', '\n']);
+        if !text.starts_with('#')
+            && let Some(other_seq) = seq_from_ts_name(text)
+            && other_seq > seq
+        {
+            insert_at = Some(prev_start);
+            break;
+        }
+        prev_start = line_start;
+        line_start += line.len();
+    }
+
+    match insert_at {
+        Some(pos) => {
+            // 把插入点之后的字节整体后移，写入新条目 / Shift the tail bytes and
+            // splice the new entry in place
+            let mut content = existing.into_bytes();
+            content.splice(pos..pos, entry.bytes());
+            if let Err(e) = fs::write(&m3u8_path, content) {
+                tracing::error!("{}", crate::tl!("ffmpegUtil.updateM3u8Failed", error = e));
+            }
+        }
+        None => {
+            // seq 最大：与 append 相同的末尾追加 / Largest seq: plain append
+            if let Err(e) = fs::OpenOptions::new()
+                .append(true)
+                .open(&m3u8_path)
+                .and_then(|mut f| f.write_all(entry.as_bytes()))
+            {
+                tracing::error!("{}", crate::tl!("ffmpegUtil.updateM3u8Failed", error = e));
+            }
+        }
     }
 }
 
@@ -237,7 +243,8 @@ pub fn dir_size_bytes(dir: &PathBuf) -> std::io::Result<u64> {
 /// 使用 ffprobe 获取视频文件的时长（秒）。
 /// Get the duration of a video file in seconds using ffprobe.
 pub fn get_video_duration(path: &std::path::Path) -> Option<u64> {
-    let output = Command::new("ffprobe")
+    let _ffmpeg_guard = crate::ffmpeg::in_use();
+    let output = Command::new(crate::ffmpeg::ffprobe_program())
         .args([
             "-v",
             "error",
@@ -260,12 +267,17 @@ pub fn get_video_duration(path: &std::path::Path) -> Option<u64> {
 /// 使用 ffprobe 获取视频文件的分辨率（如 "1920x1080"）。
 /// Get the resolution of a video file (e.g. "1920x1080") using ffprobe.
 pub fn get_video_resolution(path: &std::path::Path) -> Option<String> {
-    let output = Command::new("ffprobe")
+    let _ffmpeg_guard = crate::ffmpeg::in_use();
+    let output = Command::new(crate::ffmpeg::ffprobe_program())
         .args([
-            "-v", "error",
-            "-select_streams", "v:0",
-            "-show_entries", "stream=width,height",
-            "-of", "csv=s=x:p=0",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height",
+            "-of",
+            "csv=s=x:p=0",
         ])
         .arg(path)
         .stdout(Stdio::piped())
@@ -281,7 +293,11 @@ pub fn get_video_resolution(path: &std::path::Path) -> Option<String> {
         return None;
     }
     let parts: Vec<&str> = trimmed.split('x').collect();
-    if parts.len() == 2 && parts.iter().all(|p| p.parse::<u32>().map(|v| v > 0).unwrap_or(false)) {
+    if parts.len() == 2
+        && parts
+            .iter()
+            .all(|p| p.parse::<u32>().map(|v| v > 0).unwrap_or(false))
+    {
         Some(trimmed.to_string())
     } else {
         None

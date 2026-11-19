@@ -6,10 +6,10 @@
 //! Provides recording file list queries, merge status queries, and file deletion.
 //! Called by `server/routes/recording.rs` and `recording/recorder.rs`.
 
+use crate::config::app_state::AppState;
 use crate::core::error::Result;
 use crate::postprocess::queue::{PpQueue, PpRemovalExecution};
 use crate::recording::recorder::RecorderManager;
-use crate::config::app_state::AppState;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -93,8 +93,14 @@ pub fn list_recordings_inner(
             .and_then(|p| p.file_name())
             .and_then(|n| n.to_str())
             .unwrap_or("unknown");
-        let stem = session_dir.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        let (seg_dl, seg_fail) = live_segment_stats.get(&session_dir_str).copied().unwrap_or((0, 0));
+        let stem = session_dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("");
+        let (seg_dl, seg_fail) = live_segment_stats
+            .get(&session_dir_str)
+            .copied()
+            .unwrap_or((0, 0));
 
         files.push(RecordingFile {
             name: stem.to_string(),
@@ -129,7 +135,9 @@ pub fn list_recordings_inner(
         };
 
         // 跳过正在录制的（由活跃会话处理）/ Skip actively recording (handled by active sessions)
-        if meta.status == "recording" { continue; }
+        if meta.status == "recording" {
+            continue;
+        }
 
         // video_path 是对应的视频文件或 session_dir 路径
         let vp_str = match meta.video_path.as_deref() {
@@ -142,7 +150,9 @@ pub fn list_recordings_inner(
         let stem = crate::recording::meta::recording_stem(&video_path).unwrap_or("");
 
         // 跳过活跃录制中的 stem（避免重复）/ Skip stems currently being recorded
-        if active_stems.contains(stem) { continue; }
+        if active_stems.contains(stem) {
+            continue;
+        }
 
         // 从 pp_queue 获取更精确的运行时状态（若有）
         // Use runtime status from pp_queue if available (more accurate)
@@ -152,7 +162,9 @@ pub fn list_recordings_inner(
         let size_bytes = if is_dir {
             crate::recording::ffmpeg_util::dir_size_bytes(&video_path).unwrap_or(meta.size_bytes)
         } else if video_path.exists() {
-            fs::metadata(&video_path).map(|m| m.len()).unwrap_or(meta.size_bytes)
+            fs::metadata(&video_path)
+                .map(|m| m.len())
+                .unwrap_or(meta.size_bytes)
         } else {
             meta.size_bytes
         };
@@ -167,7 +179,11 @@ pub fn list_recordings_inner(
         let name = if is_dir {
             stem.to_string()
         } else {
-            video_path.file_name().and_then(|n| n.to_str()).unwrap_or(stem).to_string()
+            video_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(stem)
+                .to_string()
         };
 
         // 若 meta 中 size_bytes 与实际不符，顺手更新。
@@ -203,9 +219,8 @@ pub fn list_recordings_inner(
             crate::recording::meta::write_meta(&video_path, &fresh);
         }
 
-        let module_outputs = crate::recording::meta::extract_verified_module_outputs(
-            meta.pp_execution.as_deref(),
-        );
+        let module_outputs =
+            crate::recording::meta::extract_verified_module_outputs(meta.pp_execution.as_deref());
 
         files.push(RecordingFile {
             name,
@@ -400,7 +415,10 @@ pub fn delete_recording_inner(
     // Re-check: if both the files and the meta are already gone (e.g. removed by another
     // removal request), treat it as deleted without changing anything
     if is_already_removed(p, crate::recording::meta::resolve_meta_path(p).as_deref()) {
-        tracing::debug!("{}", crate::tl!("recorder.deleteAlreadyRemoved", path = path));
+        tracing::debug!(
+            "{}",
+            crate::tl!("recorder.deleteAlreadyRemoved", path = path)
+        );
         return Ok(DeleteOutcome::AlreadyDeleted);
     }
 
@@ -435,7 +453,8 @@ pub fn delete_recording_inner(
             return Err(crate::core::error::AppError::Other(e.to_string()));
         }
         if let Some(parent) = p.parent()
-            && let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+            && let Some(stem) = p.file_stem().and_then(|s| s.to_str())
+        {
             for ext in &["webp", "jpg", "jpeg", "png"] {
                 let sidecar = parent.join(format!("{}.{}", stem, ext));
                 if sidecar.exists() {

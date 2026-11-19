@@ -35,6 +35,12 @@ pub enum AppError {
         new: String,
         model_id: i64,
     },
+    /// 所有 CDN 节点对该 URL 都返回了 HTTP 404（携带 URL）。对 HLS 分片来说通常表示
+    /// 它还没发布完，而不是下载出了问题，调用方可据此留到下一轮再试。
+    /// Every CDN node answered HTTP 404 for this URL (carries the URL). For an HLS segment this
+    /// usually means it has not been published yet rather than a download problem, so callers
+    /// can leave it for the next round.
+    HttpNotFound(String),
     /// 其他错误 / Other errors
     Other(String),
 }
@@ -52,6 +58,7 @@ impl fmt::Display for AppError {
             Self::UserRenamed { old, new, .. } => {
                 write!(f, "Streamer renamed: {} -> {}", old, new)
             }
+            Self::HttpNotFound(url) => write!(f, "HTTP 404 on all CDN TLDs → {}", url),
             Self::Other(s) => write!(f, "{}", s),
         }
     }

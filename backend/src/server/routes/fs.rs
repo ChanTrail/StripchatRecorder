@@ -26,10 +26,7 @@ pub async fn get_disk_space_handler(
             .filter(|s| !s.trim().is_empty())
             .map(|s| s.trim().to_string());
 
-        crate::system::disk::get_disk_space_entries(
-            &ts_fragment_dir,
-            ts_merge_dir.as_deref(),
-        )
+        crate::system::disk::get_disk_space_entries(&ts_fragment_dir, ts_merge_dir.as_deref())
     })
     .await
     .map_err(|e| ApiError(e.to_string()))?;
@@ -48,12 +45,11 @@ pub async fn list_dir_handler(
     axum::extract::Query(q): axum::extract::Query<ListDirQuery>,
 ) -> ApiResult<serde_json::Value> {
     let path = q.path;
-    let result = tokio::task::spawn_blocking(move || {
-        crate::system::fs_browser::list_dir_inner(&path)
-    })
-    .await
-    .map_err(|e| ApiError(e.to_string()))?
-    .map_err(ApiError::from)?;
+    let result =
+        tokio::task::spawn_blocking(move || crate::system::fs_browser::list_dir_inner(&path))
+            .await
+            .map_err(|e| ApiError(e.to_string()))?
+            .map_err(ApiError::from)?;
     Ok(Json(serde_json::to_value(result).unwrap()))
 }
 
@@ -65,9 +61,7 @@ pub struct CreateDirBody {
 
 /// 在指定路径下创建新子目录，供前端目录浏览器的"新建文件夹"使用。
 /// Create a new subdirectory under the given path, for the frontend directory browser's "new folder" action.
-pub async fn create_dir_handler(
-    Json(body): Json<CreateDirBody>,
-) -> ApiResult<serde_json::Value> {
+pub async fn create_dir_handler(Json(body): Json<CreateDirBody>) -> ApiResult<serde_json::Value> {
     let result = tokio::task::spawn_blocking(move || {
         crate::system::fs_browser::create_dir_inner(&body.parent, &body.name)
     })

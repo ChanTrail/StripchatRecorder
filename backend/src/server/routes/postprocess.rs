@@ -2,12 +2,9 @@
 
 use crate::core::emitter::EmitterExt;
 use crate::server::error::{ApiError, ApiResult};
-use crate::server::routes::recording::PathBody;
 use crate::server::router::ServerState;
-use axum::{
-    Json,
-    extract::State as AxumState,
-};
+use crate::server::routes::recording::PathBody;
+use axum::{Json, extract::State as AxumState};
 use serde::Deserialize;
 use std::sync::Arc;
 
@@ -127,9 +124,7 @@ pub async fn get_postprocess_tasks(
 /// output/pipeline terminated, `error`/`cancelled` mean failure, `skipped` means not
 /// executed), avoiding returning paths that were never confirmed successful or that
 /// no longer match the actual params (e.g. contact_sheet's `format` param changed since).
-pub async fn get_module_outputs(
-    Json(body): Json<PathBody>,
-) -> ApiResult<serde_json::Value> {
+pub async fn get_module_outputs(Json(body): Json<PathBody>) -> ApiResult<serde_json::Value> {
     let video_path = std::path::Path::new(&body.path);
     let meta = crate::recording::meta::read_meta(video_path);
     let outputs = crate::recording::meta::extract_verified_module_outputs(
@@ -157,8 +152,7 @@ pub struct UninstallModuleBody {
 pub async fn get_install_tasks(
     AxumState(s): AxumState<ServerState>,
 ) -> ApiResult<serde_json::Value> {
-    let tasks: std::collections::HashMap<String, u64> =
-        s.app_state.install_tasks.read().clone();
+    let tasks: std::collections::HashMap<String, u64> = s.app_state.install_tasks.read().clone();
     Ok(Json(serde_json::to_value(tasks).unwrap()))
 }
 
@@ -180,12 +174,12 @@ pub async fn install_community_module(
 ) -> ApiResult<serde_json::Value> {
     use crate::postprocess::community;
 
-    let settings   = s.app_state.get_settings();
-    let proxy_url  = settings.community_proxy_url.clone();
+    let settings = s.app_state.get_settings();
+    let proxy_url = settings.community_proxy_url.clone();
     let mirror_url = settings.community_mirror_url.clone();
-    let emitter    = Arc::clone(&s.emitter);
-    let module_id  = module.id.clone();
-    let app_state  = Arc::clone(&s.app_state);
+    let emitter = Arc::clone(&s.emitter);
+    let module_id = module.id.clone();
+    let app_state = Arc::clone(&s.app_state);
     let app_state2 = Arc::clone(&s.app_state);
 
     // 写入安装任务表，记录初始已下载字节数为 0 / Record install task with 0 downloaded bytes
@@ -193,7 +187,10 @@ pub async fn install_community_module(
 
     let result = community::install_module(&module, proxy_url, mirror_url, |downloaded, total| {
         // 更新内存中的已下载字节数 / Update in-memory downloaded bytes
-        app_state2.install_tasks.write().insert(module_id.clone(), downloaded);
+        app_state2
+            .install_tasks
+            .write()
+            .insert(module_id.clone(), downloaded);
 
         let pct = if total > 0 {
             (downloaded as f64 / total as f64 * 100.0).min(100.0)
@@ -224,7 +221,14 @@ pub async fn install_community_module(
             Ok(Json(serde_json::json!({ "ok": true })))
         }
         Err(e) => {
-            tracing::error!("{}", crate::tl!("postprocess.communityInstallFailed", id = module.id, error = e));
+            tracing::error!(
+                "{}",
+                crate::tl!(
+                    "postprocess.communityInstallFailed",
+                    id = module.id,
+                    error = e
+                )
+            );
             s.emitter.emit(
                 "community-module-install-done",
                 &serde_json::json!({ "moduleId": module.id, "success": false, "error": e.to_string() }),
@@ -246,8 +250,7 @@ pub async fn uninstall_community_module(
 ) -> ApiResult<serde_json::Value> {
     use crate::postprocess::community;
 
-    community::uninstall_module(&body.module_id)
-        .map_err(|e| ApiError(e.to_string()))?;
+    community::uninstall_module(&body.module_id).map_err(|e| ApiError(e.to_string()))?;
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }

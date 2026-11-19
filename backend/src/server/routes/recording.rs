@@ -12,9 +12,7 @@ use axum::{
 use serde::Deserialize;
 use std::sync::Arc;
 
-pub async fn list_recordings(
-    AxumState(s): AxumState<ServerState>,
-) -> ApiResult<serde_json::Value> {
+pub async fn list_recordings(AxumState(s): AxumState<ServerState>) -> ApiResult<serde_json::Value> {
     let state = Arc::clone(&s.app_state);
     let recorder = Arc::clone(&s.recorder);
     let files = tokio::task::spawn_blocking(move || {
@@ -103,9 +101,7 @@ pub async fn open_recording(Json(body): Json<PathBody>) -> ApiResult<serde_json:
     Ok(Json(serde_json::json!({ "path": body.path })))
 }
 
-pub async fn open_output_dir(
-    AxumState(s): AxumState<ServerState>,
-) -> ApiResult<serde_json::Value> {
+pub async fn open_output_dir(AxumState(s): AxumState<ServerState>) -> ApiResult<serde_json::Value> {
     let settings = s.app_state.get_settings();
     Ok(Json(serde_json::json!({ "path": settings.output_dir })))
 }
@@ -161,9 +157,8 @@ pub async fn serve_output_file(Query(q): Query<FileQuery>) -> impl IntoResponse 
         Some(m) => m,
         None => return (StatusCode::NOT_FOUND, "recording not found").into_response(),
     };
-    let outputs = crate::recording::meta::extract_verified_module_outputs(
-        meta.pp_execution.as_deref(),
-    );
+    let outputs =
+        crate::recording::meta::extract_verified_module_outputs(meta.pp_execution.as_deref());
     let output_path = match outputs.get(&q.module_id) {
         Some(p) => p,
         None => return (StatusCode::NOT_FOUND, "module output not found").into_response(),

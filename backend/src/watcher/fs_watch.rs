@@ -8,12 +8,12 @@
 //! 1. Recording output directory watcher: detects file changes and emits `recordings-dir-changed` events (400ms debounce)
 //! 2. Modules directory watcher: detects module executable additions/removals and emits `modules-changed` events (500ms debounce)
 
-use crate::core::emitter::{Emitter, EmitterExt};
 use crate::config::app_state::AppState;
+use crate::core::emitter::{Emitter, EmitterExt};
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
 use std::sync::Arc;
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 /// 判断路径是否为"噪声"路径（.ts/.tmp/.part/.partial 文件），这些文件变化频繁，不需要触发刷新。
@@ -60,23 +60,45 @@ pub fn start_recordings_dir_watcher(state: Arc<AppState>, emitter: Arc<dyn Emitt
             // 若输出目录发生变化，重新创建监控器 / If output dir changed, recreate the watcher
             if current_dir != watched_dir {
                 if let Err(e) = std::fs::create_dir_all(&current_dir) {
-                    tracing::error!("{}", crate::tl!("watcher.recordingsCreateDirFailed", dir = current_dir.display(), error = e));
+                    tracing::error!(
+                        "{}",
+                        crate::tl!(
+                            "watcher.recordingsCreateDirFailed",
+                            dir = current_dir.display(),
+                            error = e
+                        )
+                    );
                 }
 
                 match RecommendedWatcher::new(tx.clone(), Config::default()) {
                     Ok(mut w) => match w.watch(&current_dir, RecursiveMode::Recursive) {
                         Ok(()) => {
-                            tracing::info!("{}", crate::tl!("watcher.recordingsWatching", dir = current_dir.display()));
+                            tracing::info!(
+                                "{}",
+                                crate::tl!(
+                                    "watcher.recordingsWatching",
+                                    dir = current_dir.display()
+                                )
+                            );
                             watched_dir = current_dir;
                             _watcher = Some(w);
                         }
                         Err(e) => {
-                            tracing::error!("{}", crate::tl!("watcher.recordingsWatchFailed", dir = current_dir.display(), error = e)
+                            tracing::error!(
+                                "{}",
+                                crate::tl!(
+                                    "watcher.recordingsWatchFailed",
+                                    dir = current_dir.display(),
+                                    error = e
+                                )
                             );
                         }
                     },
                     Err(e) => {
-                        tracing::error!("{}", crate::tl!("watcher.recordingsWatcherFailed", error = e));
+                        tracing::error!(
+                            "{}",
+                            crate::tl!("watcher.recordingsWatcherFailed", error = e)
+                        );
                     }
                 }
             }
@@ -100,7 +122,9 @@ pub fn start_recordings_dir_watcher(state: Arc<AppState>, emitter: Arc<dyn Emitt
                         }),
                     );
                 }
-                Ok(Err(e)) => tracing::error!("{}", crate::tl!("watcher.recordingsEventError", error = e)),
+                Ok(Err(e)) => {
+                    tracing::error!("{}", crate::tl!("watcher.recordingsEventError", error = e))
+                }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     tracing::error!("{}", crate::tl!("watcher.recordingsDisconnected"));
@@ -133,9 +157,19 @@ pub fn start_locale_dir_watcher(emitter: Arc<dyn Emitter>) {
                 // 只监控 locale/app/ 目录本身，不递归（只关心顶层 .json 文件的增删）
                 // Watch only the locale/app/ dir itself, non-recursive (only top-level .json changes matter)
                 if let Err(e) = w.watch(&locale_dir, RecursiveMode::NonRecursive) {
-                    tracing::error!("{}", crate::tl!("watcher.localeWatchFailed", dir = locale_dir.display(), error = e));
+                    tracing::error!(
+                        "{}",
+                        crate::tl!(
+                            "watcher.localeWatchFailed",
+                            dir = locale_dir.display(),
+                            error = e
+                        )
+                    );
                 } else {
-                    tracing::info!("{}", crate::tl!("watcher.localeWatching", dir = locale_dir.display()));
+                    tracing::info!(
+                        "{}",
+                        crate::tl!("watcher.localeWatching", dir = locale_dir.display())
+                    );
                 }
                 w
             }
@@ -154,9 +188,10 @@ pub fn start_locale_dir_watcher(emitter: Arc<dyn Emitter>) {
                     if matches!(event.kind, EventKind::Access(_)) {
                         continue;
                     }
-                    let has_json = event.paths.iter().any(|p| {
-                        p.extension().and_then(|e| e.to_str()) == Some("json")
-                    });
+                    let has_json = event
+                        .paths
+                        .iter()
+                        .any(|p| p.extension().and_then(|e| e.to_str()) == Some("json"));
                     if !has_json {
                         continue;
                     }
@@ -167,7 +202,9 @@ pub fn start_locale_dir_watcher(emitter: Arc<dyn Emitter>) {
                     last_emit = Instant::now();
                     emitter.emit("locale-files-changed", &serde_json::json!({}));
                 }
-                Ok(Err(e)) => tracing::error!("{}", crate::tl!("watcher.localeEventError", error = e)),
+                Ok(Err(e)) => {
+                    tracing::error!("{}", crate::tl!("watcher.localeEventError", error = e))
+                }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
@@ -196,7 +233,10 @@ pub fn start_modules_dir_watcher(emitter: Arc<dyn Emitter>) {
                 if let Err(e) = w.watch(&modules_dir, RecursiveMode::NonRecursive) {
                     tracing::error!("{}", crate::tl!("watcher.modulesWatchFailed", error = e));
                 } else {
-                    tracing::info!("{}", crate::tl!("watcher.modulesWatching", dir = modules_dir.display()));
+                    tracing::info!(
+                        "{}",
+                        crate::tl!("watcher.modulesWatching", dir = modules_dir.display())
+                    );
                 }
                 w
             }
@@ -220,7 +260,9 @@ pub fn start_modules_dir_watcher(emitter: Arc<dyn Emitter>) {
                     last_emit = Instant::now();
                     emitter.emit("modules-changed", &serde_json::json!({}));
                 }
-                Ok(Err(e)) => tracing::error!("{}", crate::tl!("watcher.modulesEventError", error = e)),
+                Ok(Err(e)) => {
+                    tracing::error!("{}", crate::tl!("watcher.modulesEventError", error = e))
+                }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }

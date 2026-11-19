@@ -74,6 +74,18 @@
 
 > **兼容旧协议：** 若 stdin 为空或解析失败，`pp_utils::ModuleInput::read()` 会自动回退到旧的环境变量协议（`PP_INPUT`、`PP_PARAM_<KEY>`、`PP_EXE_DIR`），以兼容老版本调用方式。
 
+### 注入的环境变量
+
+执行模式下，主程序还会向模块进程注入以下环境变量：
+
+| 环境变量       | 说明                                                                                                  |
+| -------------- | ----------------------------------------------------------------------------------------------------- |
+| `PP_FFMPEG`    | 主程序按 `ffmpeg_preference` 设置解析好的 ffmpeg 程序路径（绝对路径或裸命令名）                        |
+| `PP_FFPROBE`   | 同上，ffprobe 的解析路径                                                                              |
+| `PATH`         | 未选择系统 PATH 时，前置 `<exe_dir>/tools/`——模块以裸 `ffmpeg` 起进程也会优先命中主程序维护的副本      |
+
+需要调用 ffmpeg/ffprobe 的模块应优先使用 `PP_FFMPEG`/`PP_FFPROBE`（Rust 模块用 `pp_utils::ffmpeg_program()`/`ffprobe_program()`，未注入时自动回退裸命令名）；不读取这两个变量的模块，只要以裸命令名调用，也能经 PATH 注入解析到主程序设置的副本。
+
 ### stdout 协议
 
 模块通过向 stdout 写入内容与主程序通信。有两种类型的输出行：
@@ -373,6 +385,22 @@ let duration: Option<f64> = video_duration(Path::new("/path/to/video.ts"));
 // 一次获取时长、宽度和高度
 let meta: Option<(f64, i32, i32)> = video_meta(Path::new("/path/to/video.ts"));
 // Some((duration_secs, width, height))
+```
+
+### ffmpeg / ffprobe 程序路径
+
+主程序按 `ffmpeg_preference` 设置解析好的程序路径（`PP_FFMPEG`/`PP_FFPROBE` 环境变量注入）。需要自行启动 ffmpeg/ffprobe 的模块应使用这两个路径，与主程序保持同一个副本；未注入时自动回退为裸命令名。
+
+```rust
+use pp_utils::{ffmpeg_program, ffprobe_program};
+use std::process::Command;
+
+let status = Command::new(ffmpeg_program())
+    .args(["-y", "-i", "input.ts", "-c", "copy", "output.mp4"])
+    .status();
+
+// pp_utils 自带的 video_duration / video_meta / image_dimensions 已内部使用
+// ffprobe_program()，无需手动处理
 ```
 
 ### 格式化工具

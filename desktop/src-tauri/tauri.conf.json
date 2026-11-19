@@ -1,6 +1,6 @@
 {
 	"productName": "StripchatRecorder",
-	"version": "0.4.8-beta",
+	"version": "0.4.9-beta",
 	"identifier": "com.chantrail.stripchat-recorder",
 	"build": {
 		"beforeDevCommand": "npm run dev",
@@ -14,9 +14,9 @@
 			{
 				"title": "StripchatRecorder",
 				"width": 1600,
-				"height": 900,
+				"height": 720,
 				"minWidth": 1600,
-				"minHeight": 900,
+				"minHeight": 720,
 				"resizable": true,
 				"fullscreen": false,
 				"visible": false
@@ -28,7 +28,13 @@
 	},
 	"bundle": {
 		"active": true,
-		"targets": ["nsis", "app", "dmg", "appimage", "deb"],
+		"targets": [
+			"nsis",
+			"app",
+			"dmg",
+			"appimage",
+			"deb"
+		],
 		"createUpdaterArtifacts": true,
 		"icon": [
 			"icons/32x32.png",

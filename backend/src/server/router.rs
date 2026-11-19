@@ -9,43 +9,42 @@
 
 use crate::config::app_state::AppState;
 use crate::core::emitter::{BroadcastEmitter, Event};
+use crate::platform::monitor::StatusMonitor;
 use crate::recording::recorder::RecorderManager;
 use crate::relay::handler::{RelayState, relay_sessions, stop_relay_handler, stream_handler};
 use crate::relay::state::RelayManager;
 use crate::server::auth::TokenStore;
 use crate::server::routes::{
     auth::{auth_status, change_password, init_password, login, logout, renew},
+    ffmpeg::{download_ffmpeg, get_ffmpeg_locations, get_ffmpeg_status},
+    fs::{create_dir_handler, get_disk_space_handler, list_dir_handler, list_drives_handler},
     locale::{get_locale_handler, list_locales_handler},
+    notifications::{list_notifications, mark_notifications_read},
     postprocess::{
-        cancel_postprocess, get_module_outputs, get_pipeline, get_postprocess_tasks, list_modules,
-        run_postprocess, run_postprocess_batch, save_pipeline,
-        install_community_module, uninstall_community_module,
-        get_install_tasks,
+        cancel_postprocess, get_install_tasks, get_module_outputs, get_pipeline,
+        get_postprocess_tasks, install_community_module, list_modules, run_postprocess,
+        run_postprocess_batch, save_pipeline, uninstall_community_module,
     },
     recording::{
         delete_recording, get_merging_dirs_handler, list_recordings, open_output_dir,
         open_recording, serve_output_file,
     },
     settings::{
-        add_mouflon_key, get_settings, get_system_info,
-        list_mouflon_keys, remove_mouflon_key, save_settings, sync_mouflon_keys,
+        add_mouflon_key, get_settings, get_system_info, list_mouflon_keys, remove_mouflon_key,
+        save_settings, sync_mouflon_keys,
     },
-    fs::{
-        create_dir_handler, get_disk_space_handler, list_dir_handler, list_drives_handler,
-    },
-    notifications::{list_notifications, mark_notifications_read},
+    status::get_service_status,
+    usage::get_process_usage,
     streamer::{
-        add_streamer, list_streamers, remove_streamer, set_auto_record, start_recording,
-        stop_recording, verify_streamer,
+        add_streamer, list_sc_models, list_streamers, remove_streamer, set_auto_record,
+        start_recording, stop_recording, verify_streamer,
     },
     update::{get_update_info, get_update_status, start_download},
 };
 use crate::server::sse::sse_handler;
 use crate::server::static_files::static_handler;
-use crate::platform::monitor::StatusMonitor;
 use axum::{
-    Router,
-    middleware,
+    Router, middleware,
     routing::{delete, get, post},
 };
 use std::sync::Arc;
@@ -118,8 +117,13 @@ pub fn build_router(state: ServerState) -> Router {
         .route("/api/streamers/{name}/start", post(start_recording))
         .route("/api/streamers/{name}/stop", post(stop_recording))
         .route("/api/streamers/{name}/verify", get(verify_streamer))
+        // SC 官方分类浏览列表（StripChat 页无限滚动）/ Official SC category
+        // browse list (feeds the StripChat page's infinite scroll)
+        .route("/api/sc/models", get(list_sc_models))
         .route("/api/settings", get(get_settings).post(save_settings))
         .route("/api/system-info", get(get_system_info))
+        .route("/api/service-status", get(get_service_status))
+        .route("/api/process-usage", get(get_process_usage))
         .route(
             "/api/mouflon-keys",
             get(list_mouflon_keys).post(add_mouflon_key),
@@ -155,12 +159,22 @@ pub fn build_router(state: ServerState) -> Router {
         .route("/api/events", get(sse_handler))
         // 社区模块 / Community modules
         .route("/api/community-modules/tasks", get(get_install_tasks))
-        .route("/api/community-modules/install", post(install_community_module))
-        .route("/api/community-modules/uninstall", post(uninstall_community_module))
+        .route(
+            "/api/community-modules/install",
+            post(install_community_module),
+        )
+        .route(
+            "/api/community-modules/uninstall",
+            post(uninstall_community_module),
+        )
         // 更新检查与下载安装 / Update check, download, and install
         .route("/api/update/info", get(get_update_info))
         .route("/api/update/status", get(get_update_status))
         .route("/api/update/download", post(start_download))
+        // FFmpeg 下载/安装进度与位置探测 / FFmpeg download/install progress & location probe
+        .route("/api/ffmpeg/status", get(get_ffmpeg_status))
+        .route("/api/ffmpeg/locations", get(get_ffmpeg_locations))
+        .route("/api/ffmpeg/download", post(download_ffmpeg))
         .route_layer(middleware::from_fn_with_state(
             state.token_store.clone(),
             crate::server::auth::auth_middleware,

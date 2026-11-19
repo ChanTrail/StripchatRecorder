@@ -123,6 +123,15 @@ pub fn run() {
             // Update
             commands::check_for_updates_cmd,
             commands::apply_update_cmd,
+            // SC 官方分类浏览列表（StripChat 页）/ Official SC category list (StripChat page)
+            commands::list_sc_models,
+            // FFmpeg
+            commands::get_ffmpeg_status,
+            commands::get_ffmpeg_locations,
+            commands::download_ffmpeg,
+            // 资源占用 / Resource usage
+            commands::process_usage,
+            commands::service_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -185,15 +194,16 @@ async fn setup_app(app_handle: tauri::AppHandle) {
         pending_update: parking_lot::RwLock::new(None),
     });
 
-    // 启动时一次性任务（与 Server 共用）：清空 tmp → meta 迁移 → ffmpeg 检查 →
-    // 自定义语言文件校验 → 文件系统监控
-    // One-shot startup tasks (shared with Server): clear tmp → meta migrations → ffmpeg check →
-    // custom locale file validation → file system watchers
+    // 启动时一次性任务（与 Server 共用）：清空 tmp → meta 迁移 → ffmpeg 检查
+    // （缺失时后台自动下载到 lib）→ 自定义语言文件校验 → 文件系统监控
+    // One-shot startup tasks (shared with Server): clear tmp → meta migrations → ffmpeg check
+    // (auto-downloads into lib in the background when missing) → custom locale file
+    // validation → file system watchers
     startup::run_all(Arc::clone(&app_state), Arc::clone(&emitter));
 
-    // 启动全部后台定时任务（与 Server 完全相同，含版本更新检查，输出目录维护启动 10 秒后首次执行）
-    // Start every background scheduled task (identical to Server, including the version update
-    // check; output-dir maintenance first runs 10 s after launch)
+    // 启动全部后台定时任务（与 Server 完全相同，各任务首轮均启动即执行）
+    // Start every background scheduled task (identical to Server — every
+    // task's first pass runs right at launch)
     scheduler::start_all(
         Arc::clone(&app_state),
         Arc::clone(&monitor),

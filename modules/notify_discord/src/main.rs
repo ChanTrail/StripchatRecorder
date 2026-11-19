@@ -9,6 +9,13 @@
 //! - 标准输出 `OUTPUT:{path}`: 成功后输出视频路径 / Output video path on success
 //! - 标准输出 `PROGRESS:{done}/{total}`: 进度上报 / Progress reporting
 //! - 标准输出 `STATUS:{speed}`: 上传速度上报 / Upload speed reporting
+//!
+//! # TLS
+//! HTTPS 证书校验使用操作系统信任库（rustls-platform-verifier），
+//! 兼容将根证书装入系统信任库的 TLS 拦截代理/杀毒软件。
+//! HTTPS certificate verification uses the operating-system trust store
+//! (rustls-platform-verifier), compatible with TLS-intercepting proxies and
+//! antivirus software that install their root into the OS trust store.
 
 use pp_utils::{
     emit_progress_step, find_cover, format_bytes, format_duration, format_speed, parse_stem,
@@ -53,7 +60,7 @@ fn resize_cover_for_discord(img: &Path) -> Result<Option<PathBuf>, String> {
     // 逐步降低 JPEG 质量（ffmpeg -q:v 越大质量越低）直到文件小于 10MB
     // Progressively lower JPEG quality until the file is under 10 MB
     for &q in &["5", "10", "15", "20", "25", "31"] {
-        let status = Command::new("ffmpeg")
+        let status = Command::new(pp_utils::ffmpeg_program())
             .args(["-y", "-i"])
             .arg(img)
             .args(["-q:v", q])
@@ -284,12 +291,23 @@ fn tls_wrap(stream: TcpStream, host: &str) -> Result<rustls_wrapper::TlsStream, 
     rustls_wrapper::wrap(stream, host)
 }
 
+/// rustls 封装：证书校验交给操作系统信任库（rustls-platform-verifier），
+/// 而不是内置的 Mozilla 根证书集合。这样当用户环境存在 TLS 拦截代理或杀毒软件、
+/// 其根证书安装在系统信任库中时，HTTPS 仍能正常校验通过。
+///
+/// rustls wrapper: certificate verification is delegated to the operating-system
+/// trust store (rustls-platform-verifier) instead of a bundled Mozilla root set.
+/// This keeps HTTPS working in environments where a TLS-intercepting proxy or
+/// antivirus product installs its root certificate into the OS trust store.
 mod rustls_wrapper {
     use rustls::pki_types::ServerName;
     use rustls::{ClientConfig, ClientConnection, StreamOwned};
     use std::io::{self, Read, Write};
     use std::net::TcpStream;
-    use std::sync::Arc;
+    use std::sync::{Arc, OnceLock};
+
+    /// 缓存的全局 TLS 客户端配置 / Cached global TLS client configuration
+    static TLS_CONFIG: OnceLock<Result<Arc<ClientConfig>, String>> = OnceLock::new();
 
     pub struct TlsStream(StreamOwned<ClientConnection, TcpStream>);
 
@@ -307,15 +325,48 @@ mod rustls_wrapper {
         }
     }
 
-    pub fn wrap(stream: TcpStream, host: &str) -> Result<TlsStream, String> {
-        let mut root_store = rustls::RootCertStore::empty();
-        root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        let config = ClientConfig::builder()
-            .with_root_certificates(root_store)
+    /// 构造 TLS 客户端配置：ring 加密提供者 + 平台证书校验器。
+    /// 证书链/主机名/有效期全部交给操作系统校验器处理（Windows 证书链引擎、
+    /// macOS Security Framework、Linux 系统 CA 目录），不做任何校验绕过。
+    ///
+    /// Build the TLS client configuration: ring crypto provider + platform
+    /// certificate verifier. Chain building, host-name matching and validity
+    /// checks are all delegated to the OS verifier (Windows chain engine,
+    /// macOS Security Framework, Linux system CA store); nothing is bypassed.
+    fn build_config() -> Result<Arc<ClientConfig>, String> {
+        let provider: Arc<rustls::crypto::CryptoProvider> =
+            Arc::new(rustls::crypto::ring::default_provider());
+        let verifier = rustls_platform_verifier::Verifier::new(provider.clone())
+            .map_err(|e| format!("platform verifier init failed: {}", e))?;
+        let config = ClientConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .map_err(|e| format!("TLS protocol versions init failed: {}", e))?
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(verifier))
             .with_no_client_auth();
+        Ok(Arc::new(config))
+    }
+
+    /// 返回缓存的 TLS 客户端配置（首次调用时构造；构造失败只返回 Err，不 panic）。
+    /// Return the cached TLS client config (built on first use; a build failure
+    /// yields Err instead of panicking).
+    pub fn client_config() -> Result<Arc<ClientConfig>, String> {
+        TLS_CONFIG.get_or_init(build_config).clone()
+    }
+
+    /// 将已建立的 TCP 连接升级为 TLS，`host` 用于 SNI 与证书主机名校验。
+    /// Upgrade an established TCP connection to TLS; `host` is used for SNI
+    /// and certificate host-name verification.
+    ///
+    /// # 参数 / Parameters
+    /// - `stream`: 已建立的 TCP 连接（可经 HTTP/SOCKS5 代理隧道）
+    ///   established TCP stream (possibly through an HTTP/SOCKS5 proxy tunnel)
+    /// - `host`: 目标主机名 / target host name
+    pub fn wrap(stream: TcpStream, host: &str) -> Result<TlsStream, String> {
+        let config = client_config()?;
         let server_name = ServerName::try_from(host.to_string())
             .map_err(|e| format!("invalid server name '{}': {}", host, e))?;
-        let conn = ClientConnection::new(Arc::new(config), server_name)
+        let conn = ClientConnection::new(config, server_name)
             .map_err(|e| format!("TLS init failed: {}", e))?;
         Ok(TlsStream(StreamOwned::new(conn, stream)))
     }
@@ -800,5 +851,117 @@ fn main() {
         let json = serde_json::json!({ "code": "error", "message": e, "outputs": [] });
         println!("{}", json);
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! 单元测试与联网测试。
+    //! 联网测试需要可用的 HTTP 代理（环境变量 `NOTIFY_DISCORD_TEST_PROXY`，
+    //! 缺省 `http://192.168.1.5:10808`），故用 `#[ignore]` 默认跳过，用
+    //! `cargo test -- --ignored` 显式运行。
+    //!
+    //! Unit tests and networked tests. The networked ones need a working HTTP
+    //! proxy (`NOTIFY_DISCORD_TEST_PROXY`, default `http://192.168.1.5:10808`),
+    //! so they are `#[ignore]`d by default and run via `cargo test -- --ignored`.
+    use super::*;
+
+    /// TLS 客户端配置能成功构造（仅构造，不联网）。
+    /// The TLS client config can be built (construction only, no network).
+    #[test]
+    fn client_config_builds() {
+        let config = rustls_wrapper::client_config();
+        assert!(
+            config.is_ok(),
+            "TLS config build failed: {:?}",
+            config.err()
+        );
+    }
+
+    /// 联网测试用的代理地址：环境变量覆盖，缺省本机 HTTP 代理。
+    /// Proxy for the networked tests: env override, defaults to the local HTTP proxy.
+    fn test_proxy() -> String {
+        std::env::var("NOTIFY_DISCORD_TEST_PROXY")
+            .unwrap_or_else(|_| "http://192.168.1.5:10808".to_string())
+    }
+
+    /// 经代理对目标完成 TLS 握手并读取 HTTP 状态行。
+    /// 握手实际发生在第一次 IO（rustls 惰性握手）：证书校验失败会在此处返回
+    /// 包含证书信息的 IO 错误；代理隧道失败则在此之前就报错，两类错误可区分。
+    ///
+    /// Perform a TLS handshake with `host:port` through the proxy and read the
+    /// HTTP status line. The handshake happens on first IO (rustls is lazy):
+    /// certificate verification failures surface here as IO errors containing
+    /// certificate details, while proxy-tunnel failures fail earlier — the two
+    /// error classes stay distinguishable.
+    ///
+    /// # 参数 / Parameters
+    /// - `host`: 目标主机名 / target host name
+    /// - `port`: 目标端口 / target port
+    fn https_get_status_line(host: &str, port: u16) -> Result<String, String> {
+        let proxy = test_proxy();
+        let tcp = tcp_connect(host, port, &proxy)?;
+        let mut tls = tls_wrap(tcp, host)?;
+        tls.write_all(
+            format!("GET / HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n", host).as_bytes(),
+        )
+        .map_err(|e| format!("write: {}", e))?;
+        tls.flush().map_err(|e| format!("flush: {}", e))?;
+        let mut line = Vec::new();
+        let mut b = [0u8; 1];
+        loop {
+            tls.read_exact(&mut b).map_err(|e| format!("read: {}", e))?;
+            line.push(b[0]);
+            if line.ends_with(b"\n") || line.len() > 8192 {
+                break;
+            }
+        }
+        Ok(String::from_utf8_lossy(&line).trim_end().to_string())
+    }
+
+    /// 正向：经代理对 discord.com:443 握手成功并读到 `HTTP/1.` 状态行。
+    /// Positive: handshake with discord.com:443 through the proxy must succeed
+    /// and yield an `HTTP/1.` status line.
+    #[test]
+    #[ignore = "networked: requires the test proxy"]
+    fn handshake_discord_through_proxy() {
+        let status = https_get_status_line("discord.com", 443)
+            .expect("TLS exchange with discord.com failed");
+        println!("status line: {}", status);
+        assert!(
+            status.starts_with("HTTP/1."),
+            "unexpected status line: {}",
+            status
+        );
+    }
+
+    /// 负向：过期证书必须被拒绝（证明校验未被关闭）。
+    /// 断言错误文本包含证书相关字样，避免把网络故障误当成证书拒绝。
+    /// 说明：*.badssl.com 各测试端点会对 rustls 的 ClientHello 直接回
+    /// handshake-failure 警报（其 nginx 只支持旧式握手，openssl -tls1_3 同样被拒），
+    /// 与证书校验无关；因此改用 `expired-rsa-dv.ssl.com`（TLS1.3 + 过期证书）。
+    ///
+    /// Negative: an expired certificate must be rejected (proves verification
+    /// is still enabled). The error text must mention the certificate so that a
+    /// network failure is not mistaken for a certificate rejection.
+    /// Note: the *.badssl.com test endpoints abort rustls ClientHellos with a
+    /// handshake-failure alert (their nginx only accepts legacy handshakes;
+    /// `openssl -tls1_3` is rejected identically) — unrelated to certificate
+    /// verification — so `expired-rsa-dv.ssl.com` (TLS1.3 + expired cert) is used.
+    #[test]
+    #[ignore = "networked: requires the test proxy"]
+    fn handshake_rejects_expired_cert() {
+        // 目标可用环境变量覆盖便于排障 / target is env-overridable for troubleshooting
+        let host = std::env::var("NOTIFY_DISCORD_TEST_BAD_HOST")
+            .unwrap_or_else(|_| "expired-rsa-dv.ssl.com".to_string());
+        let result = https_get_status_line(&host, 443);
+        println!("raw result: {:?}", result);
+        let err = result.expect_err("expired certificate must be rejected");
+        let lower = err.to_lowercase();
+        assert!(
+            lower.contains("cert") || lower.contains("unknownissuer"),
+            "expected a certificate error, got: {}",
+            err
+        );
     }
 }

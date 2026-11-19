@@ -27,7 +27,10 @@ const router = createRouter({
 		{ path: "/community", component: () => import("../views/CommunityView.vue") },
 		{ path: "/settings", component: () => import("../views/SettingsView.vue") },
 		{ path: "/finder", component: () => import("../views/FinderView.vue") },
+		{ path: "/stripchat", component: () => import("../views/StripchatView.vue") },
 		{ path: "/relay", component: () => import("../views/RelayView.vue") },
+		{ path: "/usage", component: () => import("../views/UsageView.vue") },
+		{ path: "/status", component: () => import("../views/StatusView.vue") },
 		{ path: "/about", component: () => import("../views/AboutView.vue") },
 	],
 });

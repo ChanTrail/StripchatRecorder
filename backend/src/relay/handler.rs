@@ -75,7 +75,8 @@ pub async fn stream_handler(
     }
     impl Drop for UnsubscribeGuard {
         fn drop(&mut self) {
-            self.relay_manager.unsubscribe(&self.username, self.session_id);
+            self.relay_manager
+                .unsubscribe(&self.username, self.session_id);
         }
     }
     let _guard = UnsubscribeGuard {
@@ -129,9 +130,7 @@ pub async fn stream_handler(
 ///
 /// 返回所有活跃转发会话的状态列表。
 /// Returns the status list of all active relay sessions.
-pub async fn relay_sessions(
-    AxumState(s): AxumState<RelayState>,
-) -> impl IntoResponse {
+pub async fn relay_sessions(AxumState(s): AxumState<RelayState>) -> impl IntoResponse {
     let sessions = s.relay_manager.get_all_status();
     Json(sessions)
 }

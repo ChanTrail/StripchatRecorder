@@ -55,6 +55,8 @@ pub struct RegistryModule {
 pub fn current_platform() -> &'static str {
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
     return "windows-x86_64";
+    #[cfg(all(target_os = "windows", target_arch = "aarch64"))]
+    return "windows-aarch64";
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     return "linux-x86_64";
     #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
@@ -128,10 +130,20 @@ pub async fn install_module(
 
     let tmp_path = modules_dir.join(format!("{}.tmp", module.id));
     // 命名格式：{id}-{platform}-{version}{ext}
-    let final_name = format!("{}-{}-{}{}", module.id, platform, module.latest_version, file_ext);
+    let final_name = format!(
+        "{}-{}-{}{}",
+        module.id, platform, module.latest_version, file_ext
+    );
     let final_path = modules_dir.join(&final_name);
 
-    tracing::info!("{}", crate::tl!("community.downloading", id = module.id, version = module.latest_version));
+    tracing::info!(
+        "{}",
+        crate::tl!(
+            "community.downloading",
+            id = module.id,
+            version = module.latest_version
+        )
+    );
     let effective_url = apply_mirror(download_url, mirror_url.as_deref());
     let data = download_file_with_progress(&effective_url, proxy_url, on_progress).await?;
 
@@ -159,9 +171,8 @@ pub async fn install_module(
 
     remove_module_files(&module.id, &modules_dir);
 
-    std::fs::rename(&tmp_path, &final_path).map_err(|e| {
-        crate::core::error::AppError::Other(format!("重命名模块文件失败: {}", e))
-    })?;
+    std::fs::rename(&tmp_path, &final_path)
+        .map_err(|e| crate::core::error::AppError::Other(format!("重命名模块文件失败: {}", e)))?;
 
     #[cfg(unix)]
     {
@@ -174,7 +185,14 @@ pub async fn install_module(
             .map_err(|e| crate::core::error::AppError::Other(e.to_string()))?;
     }
 
-    tracing::info!("{}", crate::tl!("community.installSuccess", id = module.id, version = module.latest_version, path = final_path.display())
+    tracing::info!(
+        "{}",
+        crate::tl!(
+            "community.installSuccess",
+            id = module.id,
+            version = module.latest_version,
+            path = final_path.display()
+        )
     );
     Ok(())
 }
@@ -203,7 +221,10 @@ fn remove_module_files(module_id: &str, modules_dir: &std::path::Path) {
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_file() && is_module_file(module_id, &path) {
-            tracing::debug!("{}", crate::tl!("community.removeOldFile", path = path.display()));
+            tracing::debug!(
+                "{}",
+                crate::tl!("community.removeOldFile", path = path.display())
+            );
             let _ = std::fs::remove_file(&path);
         }
     }
@@ -249,8 +270,20 @@ async fn download_file_with_progress(
     if let Some(proxy) = proxy_url.as_deref().filter(|s| !s.is_empty()) {
         match reqwest::Proxy::all(proxy) {
             Ok(p) => builder = builder.proxy(p),
-            Err(e) => tracing::warn!("{}", crate::tl!("community.proxyInvalid", proxy = proxy, error = e)),
+            Err(e) => {
+                tracing::warn!(
+                    "{}",
+                    crate::tl!("community.proxyInvalid", proxy = proxy, error = e)
+                );
+                // 代理串无效同样禁用环境变量代理，避免意外回落 /
+                // An invalid proxy string still disables env proxies — no surprising fallback
+                builder = builder.no_proxy();
+            }
         }
+    } else {
+        // 与 SCAPI 一致：未配社区代理时显式禁用环境变量代理 /
+        // Same as SCAPI: explicitly disable env proxies when no community proxy is set
+        builder = builder.no_proxy();
     }
     let client = builder
         .build()
@@ -265,7 +298,8 @@ async fn download_file_with_progress(
     if !resp.status().is_success() {
         return Err(crate::core::error::AppError::Other(format!(
             "下载请求失败，HTTP {} | {}",
-            resp.status(), url
+            resp.status(),
+            url
         )));
     }
 
@@ -273,7 +307,11 @@ async fn download_file_with_progress(
     // Content-Length for percentage calculation; 0 if absent
     let total = resp.content_length().unwrap_or(0);
     let mut downloaded: u64 = 0;
-    let mut buf: Vec<u8> = if total > 0 { Vec::with_capacity(total as usize) } else { Vec::new() };
+    let mut buf: Vec<u8> = if total > 0 {
+        Vec::with_capacity(total as usize)
+    } else {
+        Vec::new()
+    };
 
     on_progress(0, total);
 

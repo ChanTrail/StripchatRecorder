@@ -7,7 +7,7 @@
 use std::fs::{self, File};
 use std::path::PathBuf;
 use tracing::level_filters::LevelFilter;
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
+use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 /// 使用系统本地时间格式化日志时间戳。
 /// Format log timestamps using the system local time.
@@ -15,7 +15,11 @@ struct LocalTimer;
 
 impl tracing_subscriber::fmt::time::FormatTime for LocalTimer {
     fn format_time(&self, w: &mut tracing_subscriber::fmt::format::Writer<'_>) -> std::fmt::Result {
-        write!(w, "{}", chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.3f"))
+        write!(
+            w,
+            "{}",
+            chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.3f")
+        )
     }
 }
 
@@ -62,7 +66,10 @@ pub fn init_logging(log_dir: &PathBuf) -> std::io::Result<()> {
         .with(file_layer)
         .init();
 
-    tracing::info!("{}", crate::tl!("logging.initialized", path = log_path.display()));
+    tracing::info!(
+        "{}",
+        crate::tl!("logging.initialized", path = log_path.display())
+    );
 
     Ok(())
 }

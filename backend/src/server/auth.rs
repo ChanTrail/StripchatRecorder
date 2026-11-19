@@ -23,9 +23,39 @@ use parking_lot::RwLock;
 use std::{
     collections::HashMap,
     net::{IpAddr, SocketAddr},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
+
+/// `setup_done` 设置的进程内镜像：由 `AppState` 在加载与每次保存设置时同步，
+/// 供 auth 中间件判断"首次配置是否完成"——未完成时所有 API 放行（向导阶段需要
+/// 探测/保存/下载等权限；此时可能已存在历史密码但无登录会话，不能按密码拦）。
+/// 默认 `true`（视为已完成 → 强制鉴权），`AppState::new` 会尽早播种。
+///
+/// In-process mirror of the `setup_done` setting: synced by `AppState` on load
+/// and on every save, letting the auth middleware tell whether first-launch
+/// setup is complete — while incomplete, all API routes pass (the wizard needs
+/// probe/save/download access; a stale password may already exist without a
+/// session and must not block). Defaults to `true` (treated as done → enforce
+/// auth) and is seeded early by `AppState::new`.
+static SETUP_DONE: AtomicBool = AtomicBool::new(true);
+
+/// 同步 `setup_done` 镜像（由 `AppState` 在加载/保存设置时调用）。
+/// Sync the `setup_done` mirror (called by `AppState` when settings load or are saved).
+///
+/// # 参数 / Parameters
+/// - `done`: `settings.setup_done` 的当前值 / Current value of `settings.setup_done`
+pub fn set_setup_done(done: bool) {
+    SETUP_DONE.store(done, Ordering::Relaxed);
+}
+
+/// 读取 `setup_done` 镜像。/ Read the `setup_done` mirror.
+fn setup_done() -> bool {
+    SETUP_DONE.load(Ordering::Relaxed)
+}
 
 // ─── 常量 / Constants ──────────────────────────────────────────────────────
 
@@ -304,7 +334,17 @@ pub async fn auth_middleware(
     if !path.starts_with("/api/") {
         return next.run(req).await;
     }
-    if (path.starts_with("/api/auth/") && path != "/api/auth/change-password") || path == "/api/events" {
+    // 首次配置未完成时全部放行：向导需要探测/保存/下载等 API 权限；此时可能已
+    // 存在历史密码（setup_done 被重置或未写盘）但无登录会话，按未完成态处理
+    // While first-launch setup is incomplete, all API routes pass: the wizard
+    // needs probe/save/download access; a stale password may already exist
+    // (setup_done reset or never flushed) with no session — treat as unconfigured
+    if !setup_done() {
+        return next.run(req).await;
+    }
+    if (path.starts_with("/api/auth/") && path != "/api/auth/change-password")
+        || path == "/api/events"
+    {
         return next.run(req).await;
     }
     // locale 路由公开，未登录时也需要加载语言包 / Locale routes are public
@@ -330,15 +370,9 @@ pub async fn auth_middleware(
     match token {
         Some(t) => match store.verify(t, ip) {
             VerifyResult::Ok => next.run(req).await,
-            VerifyResult::Expired => {
-                (StatusCode::UNAUTHORIZED, "Token expired").into_response()
-            }
-            VerifyResult::IpMismatch => {
-                (StatusCode::UNAUTHORIZED, "IP mismatch").into_response()
-            }
-            VerifyResult::Invalid => {
-                (StatusCode::UNAUTHORIZED, "Unauthorized").into_response()
-            }
+            VerifyResult::Expired => (StatusCode::UNAUTHORIZED, "Token expired").into_response(),
+            VerifyResult::IpMismatch => (StatusCode::UNAUTHORIZED, "IP mismatch").into_response(),
+            VerifyResult::Invalid => (StatusCode::UNAUTHORIZED, "Unauthorized").into_response(),
         },
         None => (StatusCode::UNAUTHORIZED, "Unauthorized").into_response(),
     }

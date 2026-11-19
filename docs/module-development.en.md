@@ -74,6 +74,18 @@ In execute mode, the host passes a JSON object to the module via stdin:
 
 > **Legacy protocol fallback:** If stdin is empty or fails to parse, `pp_utils::ModuleInput::read()` automatically falls back to the legacy environment variable protocol (`PP_INPUT`, `PP_PARAM_<KEY>`, `PP_EXE_DIR`), preserving backward compatibility.
 
+### Injected Environment Variables
+
+In execution mode, the host additionally injects these environment variables into the module process:
+
+| Variable     | Description                                                                                                                      |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| `PP_FFMPEG`  | The ffmpeg path resolved by the host per the `ffmpeg_preference` setting (absolute path or bare command name)                     |
+| `PP_FFPROBE` | Same as above, for ffprobe                                                                                                        |
+| `PATH`       | Unless the system PATH is selected, `<exe_dir>/tools/` is prepended — a module spawning plain `ffmpeg` still hits the host-managed copy |
+
+Modules that invoke ffmpeg/ffprobe should prefer `PP_FFMPEG`/`PP_FFPROBE` (Rust modules: `pp_utils::ffmpeg_program()`/`ffprobe_program()`, which fall back to bare command names when unset). Modules that don't read these variables still resolve the host-configured copy through the PATH injection as long as they spawn the bare command name.
+
 ### Stdout Protocol
 
 Modules communicate with the host by writing to stdout. There are two output types:
@@ -374,6 +386,22 @@ let duration: Option<f64> = video_duration(Path::new("/path/to/video.ts"));
 // Get duration, width, and height in one call
 let meta: Option<(f64, i32, i32)> = video_meta(Path::new("/path/to/video.ts"));
 // Some((duration_secs, width, height))
+```
+
+### ffmpeg / ffprobe Program Paths
+
+The program paths the host resolved per the `ffmpeg_preference` setting (injected via the `PP_FFMPEG`/`PP_FFPROBE` env vars). Modules that spawn ffmpeg/ffprobe themselves should use these paths to share the same binaries as the host; they fall back to bare command names when unset.
+
+```rust
+use pp_utils::{ffmpeg_program, ffprobe_program};
+use std::process::Command;
+
+let status = Command::new(ffmpeg_program())
+    .args(["-y", "-i", "input.ts", "-c", "copy", "output.mp4"])
+    .status();
+
+// pp_utils' own video_duration / video_meta / image_dimensions already use
+// ffprobe_program() internally — nothing to do manually
 ```
 
 ### Formatting Utilities

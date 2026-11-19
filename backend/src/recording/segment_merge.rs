@@ -62,7 +62,13 @@ pub fn startup_remove_empty_dirs(output_dir: &Path, recorder: &RecorderManager) 
         EMPTY_DIR_MIN_AGE,
     );
     if removed > 0 {
-        tracing::info!("{}", crate::tl!("segment.startupRemovedEmpty", count = removed, dir = output_dir.display())
+        tracing::info!(
+            "{}",
+            crate::tl!(
+                "segment.startupRemovedEmpty",
+                count = removed,
+                dir = output_dir.display()
+            )
         );
     }
 }
@@ -106,7 +112,11 @@ pub(crate) fn remove_empty_dirs_recursive(
             .and_then(|m| m.modified())
             .ok()
             // 修改时间晚于当前时间（时钟误差）视为年龄 0 / mtime in the future (clock skew) counts as age 0
-            .map(|t| SystemTime::now().duration_since(t).unwrap_or(Duration::ZERO))
+            .map(|t| {
+                SystemTime::now()
+                    .duration_since(t)
+                    .unwrap_or(Duration::ZERO)
+            })
             .is_some_and(|age| age >= min_age);
         if !old_enough {
             return removed;

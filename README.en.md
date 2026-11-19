@@ -23,7 +23,7 @@ A self-hosted Stripchat live stream recorder with a web-based management UI. Sup
 - **HLS Relay**: proxy a streamer's live stream to any player without recording — open `/stream/{modelname}` to start automatically; supports multiple simultaneous clients
 - Supports split network proxies: configure Stripchat API proxy and CDN chunk proxy separately
 - Supports configurable Stripchat mirror site (replaces `stripchat.com` in requests with your mirror domain)
-- **Mouflon HLS decryption**: manage `pkey → pdkey` key pairs for decrypting Stripchat's encrypted HLS segment filenames; supports automatic key sync from a configured URL
+- **Mouflon HLS decryption**: manage `pkey → pdkey` key pairs and `pkey → keystream` key streams for decrypting Stripchat's encrypted HLS segment filenames; supports automatic key sync from a configured URL
 - **Visual post-processing pipeline**: DAG node editor with fork and merge support; built-in modules:
   - **ts_merge** — merge TS segment directories into a single video file (first node of an official pipeline)
   - **contact_sheet** — generate a tiled preview image with timestamps
@@ -72,7 +72,7 @@ docker compose up -d
 
 Then open `http://localhost:3030` in your browser. On first visit, the setup wizard will guide you through language selection, output directory, network proxy, and admin password setup.
 
-The Docker image runs in Server mode by default (port 3030). Configuration is written to the mounted `config/settings.json`.
+The Docker image runs in Server mode by default (port 3030). Configuration is written to the mounted `config/settings.json`. The image is built multi-arch (`linux/amd64`, `linux/arm64`), so both x86 and ARM64 hosts can pull and run it directly.
 
 ### docker run
 
@@ -131,7 +131,7 @@ You can change the password in Settings under the "Security" section.
 
 ### Mouflon HLS Decryption Keys
 
-Stripchat encrypts HLS segment filenames (the Mouflon system). If recordings fail to download segments, add the corresponding `pkey → pdkey` key pairs in Settings under "Mouflon Decryption Keys". Keys can be obtained from community channels.
+Stripchat encrypts HLS segment filenames (the Mouflon system). If recordings fail to download segments, add the corresponding `pkey → pdkey` key pairs in Settings under "Mouflon Decryption Keys"; when there is no pdkey you can fill in a `keystream` instead (hex, at least 16 bytes), and when a `pkey` has both, the pdkey is used. Keys can be obtained from community channels.
 
 You can also configure a "Sync URL" and optional "Sync Token" to automatically pull the latest keys from a specified URL.
 
@@ -184,9 +184,20 @@ You can create the directory manually if it doesn't exist yet. The app watches t
 
 ---
 
+## FFmpeg Management
+
+The program depends on ffmpeg and ffprobe, managed automatically — manual installation is usually unnecessary:
+
+- **Lookup order**: on startup the program first checks the `tools` folder (Server: next to the program; Desktop: inside the same per-user data directory as `modules`), then the system PATH. The `tools` copy takes priority over PATH.
+- **Auto-download**: if neither location has them, a prebuilt static build (~130–210 MB; 7z solid archive on Windows, tar.xz on Linux/macOS) is downloaded from [FFmpeg-Builds-Full](https://github.com/ChanTrail/FFmpeg-Builds-Full) into `tools`, with progress shown as a toast (supported: Windows x86_64/ARM64, Linux x86_64/ARM64, macOS ARM64).
+- **Idle auto-update**: the downloaded copy is kept up to date automatically while no recording or post-processing task is running (Settings → "Auto-update FFmpeg when idle", on by default). An ffmpeg from PATH, or one placed in `tools` manually without the `ffmpeg-build.json` marker, is never replaced.
+- The **Docker image** ships with ffmpeg built in — nothing extra to do.
+
+---
+
 ## Building from Source
 
-**Prerequisites:** Rust, Node.js (LTS), ffmpeg
+**Prerequisites:** Rust, Node.js (LTS), ffmpeg (optional: if missing, the program automatically downloads it into the `tools` folder next to the program on startup)
 
 ### First-launch Setup
 
