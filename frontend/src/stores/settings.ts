@@ -16,7 +16,7 @@ import { call, on } from "@/lib/api";
 
 /** 应用设置数据结构 / Application settings data structure */
 export interface Settings {
-	/** TS 分片流输出目录 / TS segment stream output directory */
+	/** 分片流输出目录 / Segment stream output directory */
 	output_dir: string;
 	/** 主播状态轮询间隔（秒）/ Streamer status poll interval (seconds) */
 	poll_interval_secs: number;
@@ -42,6 +42,8 @@ export interface Settings {
 	resolution_preference: "lower" | "higher";
 	/** 首选视频编码（"h264" / "H265" / "AV1"，空串 = 不指定）/ Preferred video codec ("h264" / "H265" / "AV1", empty = unspecified) */
 	preferred_codec: string;
+	/** 自定义播放器程序路径（空 = 平台自动探测；仅桌面端使用）/ Custom player program path (empty = platform auto-probe; desktop only) */
+	player_path: string;
 	/** 后处理 tmp 目录最大占用（GB，0 = 不限制）/ Max tmp dir size in GB (0 = unlimited) */
 	max_tmp_dir_gb: number;
 	/** 界面语言 / UI language */
@@ -104,6 +106,7 @@ export const useSettingsStore = defineStore("settings", () => {
 		preferred_resolution: 0,
 		resolution_preference: "lower",
 		preferred_codec: "",
+		player_path: "",
 		max_tmp_dir_gb: 50,
 		language: "zh-CN",
 		mouflon_sync_url: null,

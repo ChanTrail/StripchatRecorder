@@ -1,7 +1,7 @@
 //! 输出目录维护主流程与定时调度子模块。
 //! Output-directory maintenance main flow and its scheduled wrapper.
 
-use super::super::scan::{ensure_meta_files, ts_merge_output_dir};
+use super::super::scan::{ensure_meta_files, segment_merge_output_dir};
 use super::super::store::{read_meta, write_meta};
 use super::cleanup::cleanup_stale_tmp;
 use std::path::Path;
@@ -37,18 +37,18 @@ impl Drop for MaintenanceGuard {
 /// 执行一次完整的输出目录维护：清理空目录、重建缺失/损坏的 meta、触发遗漏的后处理。
 /// 程序启动时和定时任务共用同一份逻辑，行为完全一致。
 ///
-/// 不再单独"合并遗留 TS 分片"——是否需要合并完全交给流水线首节点（ts_merge）
+/// 不再单独"合并遗留 TS 分片"——是否需要合并完全交给流水线首节点（segment_merge）
 /// 自行判断：只要触发后处理时把 session_dir 同时作为 `initial_path` 传入，
-/// ts_merge 发现输入是目录就会合并，是文件就直接透传，无需在这里重复实现。
+/// segment_merge 发现输入是目录就会合并，是文件就直接透传，无需在这里重复实现。
 ///
 /// 执行顺序：
-/// 1. 扫描输出目录（含 ts_merge 自定义输出目录），重建缺失/损坏/版本过旧的 meta，
+/// 1. 扫描输出目录（含 segment_merge 自定义输出目录），重建缺失/损坏/版本过旧的 meta，
 ///    收集所有需要（重新）触发后处理的路径（可能是视频文件，也可能是未合并的 session_dir）
 /// 2. 流水线为空时逐条按录制身份占位后，将待处理任务的 meta 回退为 `finish`（拿不到
 ///    占位的条目本轮跳过，由下一轮维护处理）；否则逐个触发后处理，
 ///    任务在后台运行（实际并发度由 pp_queue 信号量控制，幂等由录制身份 claim 保证），
 ///    本函数不等待它们完成
-/// 3. 删除空目录（可能与后处理并行，跳过 60 秒内修改过的目录，避免误删 ts_merge
+/// 3. 删除空目录（可能与后处理并行，跳过 60 秒内修改过的目录，避免误删 segment_merge
 ///    刚创建的输出目录）
 /// 4. 清理 tmp 目录中的过期文件
 ///
@@ -60,12 +60,12 @@ impl Drop for MaintenanceGuard {
 /// Shared by both the startup path and the periodic scheduler so behavior stays identical.
 ///
 /// No longer merges leftover TS segments as a separate step — whether merging is needed is
-/// entirely up to the pipeline's first node (ts_merge): as long as the session_dir is passed
-/// as `initial_path` when triggering post-processing, ts_merge merges it if it's a directory
+/// entirely up to the pipeline's first node (segment_merge): as long as the session_dir is passed
+/// as `initial_path` when triggering post-processing, segment_merge merges it if it's a directory
 /// or passes it through if it's already a file. No need to duplicate that logic here.
 ///
 /// Execution order:
-/// 1. Scan the output directory (plus ts_merge's custom output dir), rebuild missing/
+/// 1. Scan the output directory (plus segment_merge's custom output dir), rebuild missing/
 ///    corrupt/outdated meta, and collect all paths needing post-processing (re-)triggered
 ///    (either video files or unmerged session_dirs)
 /// 2. Revert pending tasks' meta to `finish` when the pipeline is empty, reserving each
@@ -75,7 +75,7 @@ impl Drop for MaintenanceGuard {
 ///    governed by the pp_queue semaphore, idempotency by the recording-identity claim) and
 ///    this function does not wait for them to finish
 /// 3. Remove empty directories (may run in parallel with post-processing; directories
-///    modified within the last 60 seconds are skipped so freshly created ts_merge output
+///    modified within the last 60 seconds are skipped so freshly created segment_merge output
 ///    directories aren't removed)
 /// 4. Clean up stale files in the tmp directory
 ///
@@ -104,8 +104,8 @@ pub async fn maintain_output_dir(
         let recorder = Arc::clone(&recorder);
         let output_dir = output_dir.clone();
         move || {
-            let ts_merge_extra = ts_merge_output_dir(&app_state);
-            let extra_refs: Vec<&Path> = ts_merge_extra.iter().map(|p| p.as_path()).collect();
+            let merge_extra = segment_merge_output_dir(&app_state);
+            let extra_refs: Vec<&Path> = merge_extra.iter().map(|p| p.as_path()).collect();
             let pp_pending =
                 ensure_meta_files(&output_dir, &extra_refs, &app_state, &recorder, is_startup);
             let pipeline = app_state.get_pipeline();

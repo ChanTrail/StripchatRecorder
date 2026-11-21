@@ -16,15 +16,17 @@ use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-/// 判断路径是否为"噪声"路径（.ts/.tmp/.part/.partial 文件），这些文件变化频繁，不需要触发刷新。
-/// Check if a path is a "noisy" path (.ts/.tmp/.part/.partial files) that change frequently
-/// and should not trigger a refresh.
+/// 判断路径是否为"噪声"路径（分片 .m4s/.ts 与半成品 .tmp/.part/.partial
+/// 文件），这些文件变化频繁，不需要触发刷新。
+/// Check if a path is a "noisy" path (segment .m4s/.ts and in-flight
+/// .tmp/.part/.partial files) that change frequently and should not
+/// trigger a refresh.
 fn is_noisy_path(path: &Path) -> bool {
     matches!(
         path.extension()
             .and_then(|e| e.to_str())
             .map(|s| s.to_ascii_lowercase()),
-        Some(ext) if ext == "ts" || ext == "tmp" || ext == "part" || ext == "partial"
+        Some(ext) if matches!(ext.as_str(), "m4s" | "ts" | "tmp" | "part" | "partial")
     )
 }
 

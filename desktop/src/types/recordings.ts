@@ -44,13 +44,13 @@ export function entryEffectiveId(entry: PpExecutionEntry): string {
  * 录制文件状态 / Recording file status
  *
  * - `recording`  — 正在录制
- * - `pp_waiting` — 等待后处理（含 ts_merge 合并，排队中）
- * - `pp_running` — 后处理执行中（含 ts_merge 合并）
+ * - `pp_waiting` — 等待后处理（含 segment_merge 合并，排队中）
+ * - `pp_running` — 后处理执行中（含 segment_merge 合并）
  * - `pp_error`   — 后处理失败
  * - `finish`     — 全部完成
  *
- * 注：合并 TS 分片现由 ts_merge 后处理模块负责，不再有单独的 merging 状态。
- * Note: TS segment merging is now handled by the ts_merge module; no separate merging status.
+ * 注：合并 TS 分片现由 segment_merge 后处理模块负责，不再有单独的 merging 状态。
+ * Note: TS segment merging is now handled by the segment_merge module; no separate merging status.
  */
 export type RecordingStatus =
 	| "recording"

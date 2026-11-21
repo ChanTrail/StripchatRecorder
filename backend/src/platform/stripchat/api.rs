@@ -4,16 +4,19 @@
 use super::net::https_host;
 use super::{BROADCAST_GONE_DESCRIPTIONS, StripchatApi, is_api_error_body};
 use crate::core::error::{AppError, Result};
-use reqwest::{Client, Response};
 
 impl StripchatApi {
-    /// 返回访问该 URL 应使用的 API 客户端：ECH 开启时按 URL 主机名解析并
-    /// 缓存 ECH 客户端，否则直接返回基础客户端。
-    /// The API client to use for this URL: with ECH enabled the per-host ECH
-    /// client is resolved and cached; otherwise the base client.
-    async fn api_client_for(&self, url: &str) -> Client {
+    /// 返回访问该 URL 应使用的 API 客户端：ECH 开启且该主机持有探活通过
+    /// 的通道时走 ECH 腿，否则走直连基线（两腿同为 wreq+Chrome 指纹）。
+    /// The API client to use for this URL: the ECH leg when ECH is enabled
+    /// and the host holds a probe-passed channel; otherwise the direct
+    /// baseline (both legs are wreq + Chrome fingerprint).
+    async fn api_client_for(&self, url: &str) -> wreq::Client {
         match (&self.api_ech, https_host(url)) {
-            (Some(ech), Some(host)) => ech.client_for(&host).await,
+            (Some(ech), Some(host)) => ech
+                .ech_client_for(&host)
+                .await
+                .unwrap_or_else(|| self.api_client.clone()),
             _ => self.api_client.clone(),
         }
     }
@@ -41,7 +44,7 @@ impl StripchatApi {
     async fn note_ech_result(
         ech: &Option<crate::ech::EchClients>,
         url: &str,
-        result: &std::result::Result<Response, reqwest::Error>,
+        result: &std::result::Result<wreq::Response, wreq::Error>,
     ) -> bool {
         let (Some(ech), Some(host)) = (ech, https_host(url)) else {
             return false;
@@ -51,7 +54,7 @@ impl StripchatApi {
                 ech.note_server_error(&host).await;
                 false
             }
-            Ok(resp) if resp.status() == reqwest::StatusCode::FORBIDDEN => {
+            Ok(resp) if resp.status() == wreq::StatusCode::FORBIDDEN => {
                 // 403 = CF WAF 拦截：若该主机持有 ECH 客户端，说明 ECH 也
                 // 被拦——驱逐并报告，供调用方换新连接重试 / 403 = CF WAF
                 // block: if the host holds an ECH client the block happened
@@ -82,7 +85,7 @@ impl StripchatApi {
     ///   flagged CF edge — the feedback evicts the entry, then the request
     ///   is **retried once** on a fresh connection (a new edge lottery;
     ///   plain-path 403s don't retry — a new conn changes nothing)
-    pub(super) async fn api_get(&self, url: &str, path: &str) -> Result<Response> {
+    pub(super) async fn api_get(&self, url: &str, path: &str) -> Result<wreq::Response> {
         let referer = self.referer_for_path(path);
         for attempt in 0..2 {
             let result = self
@@ -120,7 +123,7 @@ impl StripchatApi {
     /// Both map to `UserNotFound`; any other non-2xx response (404, 429, 5xx, etc.)
     /// is treated as a network/API error and is NOT misclassified as "user not found".
     pub(super) async fn parse_broadcast_response(
-        resp: Response,
+        resp: wreq::Response,
         username: &str,
     ) -> Result<serde_json::Value> {
         let status = resp.status();

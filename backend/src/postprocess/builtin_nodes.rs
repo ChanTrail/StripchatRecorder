@@ -11,10 +11,10 @@
 //!
 //! ### `recording_input`
 //! 虚拟录制输入节点。在前端画布上始终存在，不可删除。
-//! 输出 `ts_session_dir`（port 0），连接到 `ts_merge` 或其他接受目录输入的节点。
+//! 输出 `session_dir`（port 0），连接到 `segment_merge` 或其他接受目录输入的节点。
 //!
 //! Virtual recording input node. Always present on the frontend canvas and cannot be removed.
-//! Outputs `ts_session_dir` (port 0), wired to `ts_merge` or any node accepting a directory input.
+//! Outputs `session_dir` (port 0), wired to `segment_merge` or any node accepting a directory input.
 //!
 //! ### `unpack`
 //! MediaBundle 解组节点。接收 `media_bundle` 输入（port 0），
@@ -139,7 +139,7 @@ pub fn builtin_module_infos() -> Vec<ModuleInfo> {
             version: String::new(),
             description: ri_desc,
             input_types: vec![],
-            output_types: vec![PortType::TsSessionDir],
+            output_types: vec![PortType::SessionDir],
             params: vec![],
             i18n: None,
             official: false,

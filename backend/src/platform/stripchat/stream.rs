@@ -342,11 +342,11 @@ impl StripchatApi {
     }
 
     /// 对所有 CDN TLD 竞速请求 `_auto.m3u8` master playlist，返回最先成功的响应文本。
-    /// 配置了首选编码时，URL 末尾附加 `?preferredVideoCodec={codec}`。
+    /// `codec` 非空时 URL 末尾附加 `?preferredVideoCodec={codec}`。
     ///
     /// Race all CDN TLDs for the `_auto.m3u8` master playlist and return the first successful response text.
-    /// When a preferred codec is configured, `?preferredVideoCodec={codec}` is appended to the URL.
-    async fn fetch_auto_playlist(&self, model_id: i64) -> Result<String> {
+    /// When `codec` is set, `?preferredVideoCodec={codec}` is appended to the URL.
+    async fn fetch_auto_playlist(&self, model_id: i64, codec: Option<&str>) -> Result<String> {
         let mut tasks = tokio::task::JoinSet::new();
 
         for &tld in CDN_TLDS {
@@ -355,7 +355,7 @@ impl StripchatApi {
                 "https://edge-hls.{}/hls/{}/master/{}_auto.m3u8",
                 tld, model_id, model_id
             );
-            if let Some(codec) = self.preferred_codec {
+            if let Some(codec) = codec {
                 url.push_str("?preferredVideoCodec=");
                 url.push_str(codec);
             }
@@ -403,15 +403,61 @@ impl StripchatApi {
 
     /// 获取主播的 HLS 播放列表 URL。
     /// 直接对所有 CDN TLD 竞速请求 `{model_id}_auto.m3u8`，按配置选择流。
-    /// 若 playlist 包含 Mouflon 加密参数，则按用户配置的 Mouflon Keys 顺序逐一比对，
-    /// 取第一个匹配的 pkey 对应的 psch 拼入 URL。
+    /// 首选编码按向下回退链尝试（AV1→H265→h264）：仅当服务端没给所求编码的
+    /// 变体（CODECS 声明不含该编码族）时降一级重拉，末位兜底接受任何结果；
+    /// 拉取失败是纯粹的拉取失败，直接报错不降级。若 playlist 包含 Mouflon 加密
+    /// 参数，则按用户配置
+    /// 的 Mouflon Keys 顺序逐一比对，取第一个匹配的 pkey 对应的 psch 拼入 URL。
     ///
     /// Get the HLS playlist URL for a streamer.
     /// Races all CDN TLDs for `{model_id}_auto.m3u8` and selects a stream using the configured resolution preference.
-    /// If the playlist contains Mouflon encryption parameters, iterates through the user-configured
-    /// Mouflon Keys in order and uses the first matching pkey's psch in the URL.
+    /// The preferred codec is tried on a downward fallback chain (AV1→H265→h264): only when the
+    /// server doesn't hand back variants of the requested codec (the CODECS declaration lacks that
+    /// family) does the chain step down and retry; the last step accepts whatever it gets. A fetch
+    /// failure is a plain fetch failure and propagates without stepping down. If the playlist
+    /// contains Mouflon encryption parameters, iterates through the
+    /// user-configured Mouflon Keys in order and uses the first matching pkey's psch in the URL.
     pub async fn get_playlist_url(&self, username: &str, model_id: i64) -> Result<String> {
-        let playlist_text = self.fetch_auto_playlist(model_id).await?;
+        // VIDEO_CODECS 按升序排列（h264/H265/AV1），回退链 = 首选 + 其下所有编码
+        // VIDEO_CODECS is ordered ascending (h264/H265/AV1); the chain is the
+        // preferred codec plus every codec below it
+        let mut chain: Vec<Option<&'static str>> = Vec::new();
+        if let Some(preferred) = self.preferred_codec {
+            chain.push(Some(preferred));
+            if let Some(pos) = super::VIDEO_CODECS.iter().position(|c| *c == preferred) {
+                chain.extend(super::VIDEO_CODECS[..pos].iter().copied().rev().map(Some));
+            }
+        } else {
+            chain.push(None);
+        }
+
+        // 逐档拉取并校验编码：拉取失败是纯粹的拉取失败，直接报错不降级；
+        // 只有"拉到了但没有所求编码"才降一级。链末无条件接受（h264 兜底位）。
+        // Fetch and verify each chain entry: a fetch failure is a plain fetch
+        // failure — propagate it without stepping down. Only "fetched but the
+        // codec family is absent" steps down. The last entry accepts
+        // unconditionally (h264 floor).
+        let mut playlist_text: Option<String> = None;
+        for (idx, codec) in chain.iter().enumerate() {
+            let text = self.fetch_auto_playlist(model_id, *codec).await?;
+            if idx + 1 == chain.len()
+                || codec.is_none_or(|c| {
+                    crate::recording::hls::master_playlist_offers_codec(&text, c)
+                })
+            {
+                playlist_text = Some(text);
+                break;
+            }
+            tracing::debug!(
+                "{}",
+                crate::tl!(
+                    "stripchat.codecFallback",
+                    username = username,
+                    codec = codec.unwrap_or("")
+                )
+            );
+        }
+        let playlist_text = playlist_text.expect("chain is non-empty");
 
         let parsed = crate::recording::hls::parse_master_playlist(
             &playlist_text,

@@ -131,7 +131,7 @@
     "cgfRefreshUpdated": "CGF schedule 已更新：{username}",
     "cgfRefreshUnavailable": "CGF schedule 不可用：{username}（CGF 无此主播数据或网络错误）",
     "cgfRefreshDone": "CGF schedule 刷新完成",
-    "tsMergeOutputDirSynced": "ts_merge 输出目录已联动更新：{old} → {new}"
+    "mergeOutputDirSynced": "segment_merge 输出目录已联动更新：{old} → {new}"
   },
   "watcher": {
     "recordingsCreateDirFailed": "创建监控目录 {dir} 失败：{error}",
@@ -173,7 +173,8 @@
     "envOverrideWriteFailed": "写入环境变量覆盖到 {path} 失败：{error}",
     "envOverrideSkippedInvalid": "配置文件 {path} 无法解析（{error}），本次不应用环境变量 LANGUAGE / PORT",
     "envLanguageUnknown": "环境变量 LANGUAGE={value} 不是可用的语言代码（如 zh-CN、en-US），已忽略",
-    "envPortInvalid": "环境变量 PORT={value} 不是有效的端口号，已忽略"
+    "envPortInvalid": "环境变量 PORT={value} 不是有效的端口号，已忽略",
+    "outputDirRenameFailed": "分片输出目录从 {old} 改名为 {new} 失败（{error}），保留旧路径"
   },
   "sse": {
     "broadcastLagged": "SSE 广播队列溢出，丢失 {count} 条事件"
@@ -212,7 +213,8 @@
     "claimWaitReservationTimeout": "后处理：等待录制 {key} 的扫描占位释放超时，跳过本次触发 → {path}"
   },
   "ffmpegUtil": {
-    "stdinWriteIgnored": "convert_to_ts：stdin 写入错误已忽略（ffmpeg 正常退出）：{error}",
+    "stdinWriteIgnored": "convert_to_m4s：stdin 写入错误已忽略（ffmpeg 正常退出）：{error}",
+    "tfdtPatchFailed": "convert_to_m4s：tfdt 补丁失败（分片仍有效，合并时间轴可能偏移）：{error}",
     "openPlaylistFailed": "打开 playlist.m3u8 失败：{error}",
     "writeM3u8HeaderFailed": "写入 M3U8 头部失败：{error}",
     "updateM3u8Failed": "更新 playlist.m3u8 失败：{error}"
@@ -253,7 +255,8 @@
     "streamerRenamed": "检测到主播改名：{username} -> {newUsername}（model_id={modelId}）",
     "autoM3u8TldSuccess": "auto.m3u8 通过 CDN TLD 获取成功：{tld}",
     "autoM3u8Failed": "auto.m3u8 获取所有 CDN TLD 均失败 [{url}]：{error}",
-    "usingUrl": "使用 URL：{url}"
+    "usingUrl": "使用 URL：{url}",
+    "codecFallback": "{username}：播放列表不含 {codec} 变体，向下回退尝试"
   },
   "community": {
     "downloading": "正在下载模块 {id} v{version}...",

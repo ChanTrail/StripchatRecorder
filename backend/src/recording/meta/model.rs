@@ -37,7 +37,7 @@ pub fn meta_dir_for(username: &str) -> PathBuf {
 ///
 /// 与 `RecordingContext.username`（postprocess_cmd.rs）、`RecordingFile.username`
 /// （recording_cmd.rs）使用完全相同的推断规则——因为 session_dir 的结构始终是
-/// `{output_dir}/{username}/{username}_{timestamp}`，ts_merge 在 `split_by_streamer`
+/// `{output_dir}/{username}/{username}_{timestamp}`，segment_merge 在 `split_by_streamer`
 /// 开启时也会保持同样的 `{output_dir}/{username}/{stem}.{format}` 结构。这保证同一份
 /// 录制在 UI 展示、模块执行上下文和 meta 存储路径三处的"用户名"定义完全一致。
 ///
@@ -49,7 +49,7 @@ pub fn meta_dir_for(username: &str) -> PathBuf {
 /// Uses exactly the same derivation rule as `RecordingContext.username`
 /// (postprocess_cmd.rs) and `RecordingFile.username` (recording_cmd.rs) — since a
 /// session_dir is always structured as `{output_dir}/{username}/{username}_{timestamp}`,
-/// and ts_merge preserves the same `{output_dir}/{username}/{stem}.{format}` structure
+/// and segment_merge preserves the same `{output_dir}/{username}/{stem}.{format}` structure
 /// when `split_by_streamer` is enabled. This keeps the "username" concept consistent
 /// across the UI, module execution context, and meta storage path.
 ///

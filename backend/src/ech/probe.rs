@@ -1,20 +1,27 @@
 //! ECH 探活：对目标主机做裸 TLS+ECH 握手，并在同一连接上发一次最小 HTTP
 //! 请求，验证「CF 边缘能为 inner SNI 完成握手且能回源」。
 //!
+//! 传输栈为 btls（BoringSSL）+ tokio-btls——与 wreq 数据腿同一 TLS
+//! 家族，握手行为一致；探活不关心证书校验（只验证 ECH 接受与边缘回源，
+//! 不做任何敏感传输），故关闭验证以免被系统/代理根证书差异误伤。
+//!
 //! ECH probing: a bare TLS+ECH handshake plus a minimal HTTP request on the
 //! same connection, verifying "the CF edge can handshake for this inner SNI
 //! and route to its origin".
+//!
+//! The transport is btls (BoringSSL) + tokio-btls — the same TLS family as
+//! the wreq data legs, so handshake behavior matches. The probe does not
+//! verify certificates (it only checks ECH acceptance and edge routability
+//! and carries nothing sensitive), so verification is disabled to stay
+//! immune to system/proxy root-store differences.
 
-use rustls::client::EchStatus;
-use rustls::internal::msgs::handshake::EchConfigPayload;
-use rustls_pki_types::ServerName;
+use btls::ssl::{Ssl, SslConnector, SslMethod, SslVerifyMode};
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::pin::Pin;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio_rustls::TlsConnector;
-use tokio_rustls::client::TlsStream;
+use tokio_btls::SslStream;
 
 /// ECH 客户端建好后单次探活步骤的超时 / Timeout for a single probe step after build
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -33,65 +40,107 @@ pub(super) enum ProbeOutcome {
     /// host can be routed — zone-miss hosts return HTTP 530 at request time;
     /// the probe must see a real origin response to pass.
     Bad,
-    /// 服务端拒绝 ECH：`Some(payloads)` = 附了 retry_configs（借来的密钥
-    /// 已轮换，可就地换新）；`None` = 未附，只能经 DoH 重新解析。
-    /// Server rejected ECH: `Some(payloads)` = retry_configs attached (the
-    /// borrowed key rotated — can be swapped in place); `None` = none sent,
-    /// the borrowed config must be re-resolved via DoH.
-    Rejected(Option<Vec<EchConfigPayload>>),
+    /// 服务端拒绝 ECH：`Some(bytes)` = 附了 retry_configs 的原始
+    /// ECHConfigList（借来的密钥已轮换，可就地换新）；`None` = 未附
+    /// （经 `ech_name_override` 判定为拒绝），只能经 DoH 重新解析。
+    /// Server rejected ECH: `Some(bytes)` = the raw retry_configs
+    /// ECHConfigList (the borrowed key rotated — can be swapped in place);
+    /// `None` = none sent (identified as rejection via `ech_name_override`),
+    /// so the borrowed config must be re-resolved via DoH.
+    Rejected(Option<Vec<u8>>),
 }
 
-/// 探活：握手 + `ech_status` 断言 + 一次 `GET /` 回源检查（状态码 <500 才算
+/// 构造一次探活握手用的 `Ssl`：ECH config + http/1.1 ALPN，证书不验证
+/// （探活只关心 ECH 接受/边缘回源，真实数据腿的 wreq 客户端自带完整验证）。
+/// Builds the `Ssl` for one probe handshake: ECH config + http/1.1 ALPN,
+/// certificate verification off (the probe only cares about ECH
+/// acceptance/edge routability; the real wreq data legs verify normally).
+fn ech_ssl(ech_list: &[u8], host: &str) -> Option<Ssl> {
+    let connector = SslConnector::bare_builder(SslMethod::tls()).ok()?.build();
+    let mut cfg = connector.configure().ok()?;
+    cfg.set_verify(SslVerifyMode::NONE);
+    cfg.set_verify_hostname(false);
+    // ALPN 只报 http/1.1：裸写 GET / 后只需解析一行状态码 /
+    // offer only http/1.1: after a raw GET / just the status line needs parsing
+    cfg.set_alpn_protos(b"\x08http/1.1").ok()?;
+    let mut ssl = cfg.into_ssl(host).ok()?;
+    // `SSL_set1_ech_config_list`：外层 SNI 变为 public_name，真实主机进入
+    // 加密的 inner ClientHello / `SSL_set1_ech_config_list`: the outer SNI
+    // becomes public_name while the true host goes into the encrypted inner
+    // ClientHello
+    ssl.set_ech_config_list(ech_list).ok()?;
+    Some(ssl)
+}
+
+/// 单地址握手尝试的结果 / Outcome of one per-address handshake attempt
+enum Shake {
+    /// 握手完成且 `SSL_ech_accepted`——已建立可用连接 /
+    /// handshake done and `SSL_ech_accepted` — usable connection
+    Accepted(SslStream<TcpStream>),
+    /// 服务端拒绝 ECH：retry_configs（有则携带）/
+    /// server rejected ECH: retry_configs when provided
+    Rejected(Option<Vec<u8>>),
+    /// 其他失败（TCP/TLS/超时或握手完成但 ECH 未被接受）/
+    /// anything else (TCP/TLS/timeout, or handshake done without ECH acceptance)
+    Other,
+}
+
+/// 对单个地址做 TCP + TLS/ECH 握手分类。ECH 拒绝在 BoringSSL 里表现
+/// 为握手错误 + `get_ech_retry_configs`/`get_ech_name_override` 留痕
+/// （后者是服务器在拒绝时告知验备用名的字段）。
+/// TCP + TLS/ECH handshake against one address, classified. An ECH
+/// rejection surfaces in BoringSSL as a handshake error plus
+/// `get_ech_retry_configs`/`get_ech_name_override` left on the SSL
+/// object (the latter is the name the server tells the client to verify
+/// against on rejection).
+async fn shake(ech_list: &[u8], host: &str, addr: SocketAddr) -> Shake {
+    let Some(ssl) = ech_ssl(ech_list, host) else {
+        return Shake::Other;
+    };
+    tokio::time::timeout(PROBE_TIMEOUT, async {
+        let tcp = TcpStream::connect(addr).await.ok()?;
+        let mut stream = SslStream::new(ssl, tcp).ok()?;
+        match Pin::new(&mut stream).connect().await {
+            Ok(()) if stream.ssl().ech_accepted() => Some(Shake::Accepted(stream)),
+            Ok(()) => Some(Shake::Other), // 握手完成但 ECH 未接受 / handshake done, ECH not accepted
+            Err(_) => {
+                let ssl = stream.ssl();
+                if let Some(rc) = ssl.get_ech_retry_configs() {
+                    return Some(Shake::Rejected(Some(rc.to_vec())));
+                }
+                if ssl.get_ech_name_override().is_some() {
+                    return Some(Shake::Rejected(None));
+                }
+                Some(Shake::Other)
+            }
+        }
+    })
+    .await
+    .unwrap_or(Some(Shake::Other))
+    .unwrap_or(Shake::Other)
+}
+
+/// 探活：握手 + `ech_accepted` 断言 + 一次 `GET /` 回源检查（状态码 <500 才算
 /// 边缘能路由；5xx 为 CF 边缘→源站失败，如 530 zone-miss）。不走 3xx 之后的
 /// 路径——任何 HTTP 响应都证明边缘能路由该主机，重定向目标是业务层的事。
-/// Probe: handshake + `ech_status` assertion + one `GET /` routability check
+/// Probe: handshake + `ech_accepted` assertion + one `GET /` routability check
 /// (status <500 means the edge can route; 5xx is a CF edge→origin failure
 /// such as 530 zone-miss). Redirects are not followed — any HTTP response
 /// proves the edge routes the host; where it leads is the app's business.
-pub(super) async fn probe_ech(
-    tls: &rustls::ClientConfig,
-    host: &str,
-    addrs: &[SocketAddr],
-) -> ProbeOutcome {
-    let Ok(name) = ServerName::try_from(host.to_string()) else {
-        return ProbeOutcome::Bad;
-    };
-    // 探活强制 HTTP/1.1：裸写 GET / 后只需解析一行状态码 / Force HTTP/1.1
-    // for the probe: after a raw GET / only the status line needs parsing
-    let mut h1 = tls.clone();
-    h1.alpn_protocols = vec![b"http/1.1".to_vec()];
-    let connector = TlsConnector::from(Arc::new(h1));
-    let mut rejected: Option<Option<Vec<EchConfigPayload>>> = None;
+pub(super) async fn probe_ech(ech_list: &[u8], host: &str, addrs: &[SocketAddr]) -> ProbeOutcome {
+    let mut rejected: Option<Option<Vec<u8>>> = None;
     for addr in addrs {
-        let result = tokio::time::timeout(PROBE_TIMEOUT, async {
-            let stream = TcpStream::connect(addr).await?;
-            connector.connect(name.clone(), stream).await
-        })
-        .await;
-        match result {
-            Ok(Ok(mut stream)) => {
-                // 严格断言 Accepted——rustls 在未接受时本应硬失败，显式检查
-                // 防御未来行为变化 / Assert Accepted strictly — rustls already
-                // hard-fails on non-acceptance; the explicit check guards
-                // against future behavior changes
-                if stream.get_ref().1.ech_status() != EchStatus::Accepted {
-                    return ProbeOutcome::Bad;
-                }
-                return http_probe(&mut stream, host).await;
-            }
-            Ok(Err(e)) => {
-                // ECH 被拒：记下 retry_configs（若有），其余错误继续试下个地址 /
-                // ECH rejected: record retry_configs (if any); other errors
-                // just try the next address
-                if let Some(payloads) = ech_rejection_configs(&e) {
-                    rejected = Some(payloads);
-                }
-            }
-            Err(_) => {}
+        match shake(ech_list, host, *addr).await {
+            Shake::Accepted(mut stream) => return http_probe(&mut stream, host).await,
+            // ECH 被拒：记下 retry_configs（若有），继续试下个地址 /
+            // ECH rejected: record retry_configs (if any) and keep trying
+            // the next address
+            Shake::Rejected(rc) => rejected = Some(rc),
+            Shake::Other => {}
         }
     }
     match rejected {
-        Some(payloads) => ProbeOutcome::Rejected(payloads),
+        Some(rc) => ProbeOutcome::Rejected(rc),
         None => ProbeOutcome::Bad,
     }
 }
@@ -121,19 +170,19 @@ const RACE_TIMEOUT: Duration = Duration::from_secs(8);
 /// bytes → a real throughput sample for scoring; a small body (e.g. a 404
 /// error page) degrades to a handshake-latency sample.
 pub(super) async fn probe_addr_speed(
-    tls: &rustls::ClientConfig,
+    ech_list: &[u8],
     addr: SocketAddr,
 ) -> Option<(Duration, usize)> {
-    let name = ServerName::try_from(RACE_PROBE_HOST.to_string()).ok()?;
-    // 与 probe_ech 一致强制 HTTP/1.1 / Force HTTP/1.1 like probe_ech
-    let mut h1 = tls.clone();
-    h1.alpn_protocols = vec![b"http/1.1".to_vec()];
-    let connector = TlsConnector::from(Arc::new(h1));
+    let ssl = ech_ssl(ech_list, RACE_PROBE_HOST)?;
     let t0 = Instant::now();
     tokio::time::timeout(RACE_TIMEOUT, async {
-        let stream = TcpStream::connect(addr).await?;
-        let mut stream = connector.connect(name.clone(), stream).await?;
-        if stream.get_ref().1.ech_status() != EchStatus::Accepted {
+        let tcp = TcpStream::connect(addr).await?;
+        let mut stream = SslStream::new(ssl, tcp)?;
+        Pin::new(&mut stream)
+            .connect()
+            .await
+            .map_err(std::io::Error::other)?;
+        if !stream.ssl().ech_accepted() {
             return Err(std::io::Error::other("ECH not accepted"));
         }
         let req = format!(
@@ -162,7 +211,7 @@ pub(super) async fn probe_addr_speed(
 /// ≥500 或读写/解析失败判 `Bad`。/ Sends a minimal `GET /` on the established
 /// ECH connection: a status <500 means `Good` (the edge routes), ≥500 or any
 /// IO/parse failure means `Bad`.
-async fn http_probe(stream: &mut TlsStream<TcpStream>, host: &str) -> ProbeOutcome {
+async fn http_probe(stream: &mut SslStream<TcpStream>, host: &str) -> ProbeOutcome {
     let req = format!(
         "GET / HTTP/1.1\r\nHost: {host}\r\nUser-Agent: curl/8.0\r\nAccept: */*\r\nConnection: close\r\n\r\n"
     );
@@ -186,21 +235,5 @@ async fn http_probe(stream: &mut TlsStream<TcpStream>, host: &str) -> ProbeOutco
     match code {
         Some(c) if c < 500 => ProbeOutcome::Good,
         _ => ProbeOutcome::Bad,
-    }
-}
-
-/// 从握手 io 错误中提取 ECH 拒绝信息（tokio-rustls 把 rustls 错误包成
-/// `InvalidData` 内层错误）。返回 `Some(payloads)` 表示确为 ECH 拒绝，
-/// `payloads` 即服务端附带的 retry_configs（可为 None）。
-/// Extracts the ECH rejection detail from a handshake io error (tokio-rustls
-/// wraps the rustls error as an `InvalidData` inner). `Some(payloads)` means
-/// it really was an ECH rejection; `payloads` are the server's retry_configs
-/// (possibly None).
-fn ech_rejection_configs(e: &std::io::Error) -> Option<Option<Vec<EchConfigPayload>>> {
-    match e.get_ref()?.downcast_ref::<rustls::Error>()? {
-        rustls::Error::PeerIncompatible(
-            rustls::PeerIncompatible::ServerRejectedEncryptedClientHello(payloads),
-        ) => Some(payloads.clone()),
-        _ => None,
     }
 }

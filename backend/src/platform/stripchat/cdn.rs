@@ -7,7 +7,6 @@
 use super::net::{format_send_error, https_host};
 use super::{CDN_TLDS, StripchatApi};
 use crate::core::error::{AppError, Result};
-use reqwest::Response;
 use std::time::Duration;
 
 /// 首轮直取阶段的最长等待：源 TLD 被黑洞（连接超时 ~21-30s）时若让它
@@ -37,6 +36,24 @@ const RACE_COLLECT_TIMEOUT: Duration = Duration::from_secs(12);
 /// explicitly answered 404 with no non-404 outcome — a lone 404 could be
 /// an unsynced edge.
 const NOT_FOUND_QUORUM: usize = 2;
+
+/// ECH 腿的延迟起跑（happy-eyeballs 式）：ECH 通道命中缓存时
+/// `ech_client_for` 返回已钉好 IP 的现成客户端，天然快于冷启动的直连腿
+/// （DNS+TCP+TLS）——同权同刻起跑会让 ECH 几乎赢下每场竞速，违背
+/// 「直连优先、ECH 兜底」的设计（钉死 CF 任播 IP 绕开 CDN 地理调度）。
+/// 晚 2s 起跑：直连健康时 ECH 任务在睡眠中被 abort，不产生任何流量；
+/// 直连被 SNI 黑洞挂住时 ECH 于 +2s 进场，仍远快于 ~21s 连接超时。
+///
+/// Delayed start for ECH legs (happy-eyeballs style): a warm ECH channel
+/// makes `ech_client_for` return a ready pinned-IP client — inherently
+/// faster than a cold direct leg (DNS+TCP+TLS) — so racing them at the
+/// same instant lets ECH win almost every race, defeating the
+/// "direct-first, ECH-fallback" design (pinned anycast IPs bypass CDN
+/// geo-steering). Starting 2s late: on a healthy direct the ECH task is
+/// aborted mid-sleep and produces zero traffic; when direct legs hang on
+/// an SNI black-hole, ECH enters at +2s — still far ahead of the ~21s
+/// connect timeout.
+const ECH_LEG_DELAY: Duration = Duration::from_secs(2);
 
 impl StripchatApi {
     /// 从 CDN URL 中提取节点 ID：优先取 media-hls 路径里的 `b-hls-{node}`
@@ -73,7 +90,7 @@ impl StripchatApi {
     /// unusable legs (.net 403 / media-hls.live 530) simply lose the race.
     /// Returns the first usable response. Tracks the per-node preferred
     /// TLD.
-    async fn cdn_get(&self, url: &str) -> Result<Response> {
+    async fn cdn_get(&self, url: &str) -> Result<wreq::Response> {
         let src_tld = match CDN_TLDS.iter().find(|&&tld| url.contains(tld)) {
             Some(&tld) => tld,
             None => {
@@ -150,8 +167,8 @@ impl StripchatApi {
         // failed or the deadline expired → fall through to the race. The
         // results vec lives outside the async block so answers collected
         // before a deadline survive the cut.
-        let mut p1_hit: Option<(String, Response)> = None;
-        let mut p1_results: Vec<(String, reqwest::Result<Response>)> = Vec::new();
+        let mut p1_hit: Option<(String, wreq::Response)> = None;
+        let mut p1_results: Vec<(String, std::result::Result<wreq::Response, wreq::Error>)> = Vec::new();
         {
             let phase1 = async {
                 while let Some(join_result) = first.join_next().await {
@@ -186,7 +203,7 @@ impl StripchatApi {
             }
             match resp {
                 Ok(r) => {
-                    if r.status() == reqwest::StatusCode::NOT_FOUND {
+                    if r.status() == wreq::StatusCode::NOT_FOUND {
                         not_found_hits += 1;
                     } else {
                         all_not_found = false;
@@ -265,13 +282,16 @@ impl StripchatApi {
                 let ech = ech.clone();
                 let referer = self.referer_base();
                 tasks.spawn(async move {
+                    // 延迟起跑：直连优先；被 abort 的睡眠不产生任何流量 /
+                    // Delayed start keeps direct first; an aborted sleep costs nothing
+                    tokio::time::sleep(ECH_LEG_DELAY).await;
                     let Some(client) = ech.ech_client_for(&host).await else {
                         return (format!("{label}+ech"), None);
                     };
                     let resp = client.get(&target).header("Referer", referer).send().await;
                     match &resp {
                         Ok(r) if r.status().is_server_error() => ech.note_server_error(&host).await,
-                        Ok(r) if r.status() == reqwest::StatusCode::FORBIDDEN => {
+                        Ok(r) if r.status() == wreq::StatusCode::FORBIDDEN => {
                             ech.note_forbidden(&host).await;
                         }
                         Err(e) if e.is_connect() => ech.evict(&host).await,
@@ -287,7 +307,7 @@ impl StripchatApi {
         // Collect race results: first usable wins; at the deadline all
         // stragglers abort and the verdict uses the answers already in
         // (accumulators live outside the async block too).
-        let mut hit: Option<(String, Response)> = None;
+        let mut hit: Option<(String, wreq::Response)> = None;
         {
             let collect = async {
                 while let Some(join_result) = tasks.join_next().await {
@@ -304,7 +324,7 @@ impl StripchatApi {
                             return;
                         }
                         Ok(resp) => {
-                            if resp.status() == reqwest::StatusCode::NOT_FOUND {
+                            if resp.status() == wreq::StatusCode::NOT_FOUND {
                                 not_found_hits += 1;
                             } else {
                                 all_not_found = false;
@@ -357,13 +377,13 @@ impl StripchatApi {
     /// A response is usable only when it's 2xx and non-empty: .media edges
     /// answer un-replicated segments with `200 Content-Length:0` instead of
     /// 404 — accepting those would write empty segments.
-    fn usable_response(resp: &Response) -> bool {
+    fn usable_response(resp: &wreq::Response) -> bool {
         resp.status().is_success() && resp.content_length() != Some(0)
     }
 
     /// 失败响应的错误描述：区分空 200 与真实 HTTP 错误码。
     /// Describe a failed response: distinguishes empty 200s from real HTTP errors.
-    fn response_error(resp: &Response) -> String {
+    fn response_error(resp: &wreq::Response) -> String {
         if resp.status().is_success() {
             format!("HTTP {} (empty body)", resp.status())
         } else {

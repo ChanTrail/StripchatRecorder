@@ -112,6 +112,15 @@ pub struct Settings {
     /// let the server decide).
     #[serde(default)]
     pub preferred_codec: String,
+    /// 自定义播放器程序路径（空 = 按平台自动探测常见播放器）。
+    /// 桌面端「StripChat 浏览页点卡片 → 播放」用该程序以转发流地址为参数唤起；
+    /// macOS 下也可填 `.app` 包路径（经 `open -a` 唤起）。
+    /// Custom player program path (empty = auto-probe common players per platform).
+    /// The desktop "click a browse card → play" flow launches it with the relay
+    /// stream URL as the sole argument; on macOS a `.app` bundle path is also
+    /// accepted (launched via `open -a`).
+    #[serde(default)]
+    pub player_path: String,
     /// 后处理临时目录最大占用（GB，0 = 不限制，默认 50 GB）
     /// Max size of the post-processing tmp directory in GB (0 = unlimited, default 50 GB)
     #[serde(default = "default_max_tmp_dir_gb")]
@@ -245,9 +254,9 @@ fn default_ffmpeg_auto_update() -> bool {
 
 impl Default for Settings {
     fn default() -> Self {
-        // 默认输出目录为可执行文件同目录下的 ts_fragment 文件夹（存放 TS 分片流）
-        // Default output directory is the ts_fragment folder next to the executable (for TS segment streams)
-        let output_dir = exe_dir().join("ts_fragment").to_string_lossy().to_string();
+        // 默认输出目录为可执行文件同目录下的 fragment 文件夹（存放录制分片流）
+        // Default output directory is the fragment folder next to the executable (for segment streams)
+        let output_dir = exe_dir().join("fragment").to_string_lossy().to_string();
 
         Self {
             output_dir,
@@ -263,6 +272,7 @@ impl Default for Settings {
             preferred_resolution: 0,
             resolution_preference: default_resolution_preference(),
             preferred_codec: String::new(),
+            player_path: String::new(),
             max_tmp_dir_gb: default_max_tmp_dir_gb(),
             language: default_language(),
             server_port: default_server_port(),

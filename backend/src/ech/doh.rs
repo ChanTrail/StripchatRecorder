@@ -9,12 +9,10 @@
 
 use crate::core::error::{AppError, Result};
 use base64::Engine;
-use reqwest::Client;
-use rustls::client::EchConfig;
-use rustls_pki_types::EchConfigListBytes;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+use wreq::Client;
 
 /// DoH 端点的请求格式。/ Request flavor of a DoH endpoint.
 #[derive(Clone, Copy)]
@@ -154,8 +152,6 @@ pub(super) fn mark_borrowed_logged() -> bool {
 /// What an HTTPS record yields for borrowing: the ECH config, pin
 /// addresses, and the TTL.
 pub(super) struct RecordExtract {
-    /// 借用的 ECH 配置 / Borrowed ECH config
-    pub(super) ech: EchConfig,
     /// `ipv4hint=` / `ipv6hint=` 钉接地址（含 :443 端口）/
     /// Pin addresses from the `ipv4hint=` / `ipv6hint=` params (`:443`)
     pub(super) addrs: Vec<SocketAddr>,
@@ -166,11 +162,12 @@ pub(super) struct RecordExtract {
     /// (used as the ECH target host when race-probing — its own zone is
     /// always routable, so no zone-miss)
     pub(super) source: String,
-    /// 原始 ECHConfigList 字节：按密钥把候选分组——同密钥组的 hint 地址
-    /// 可合并竞速（实测 12/13 个源域发布的是同一份 CF 全网共享配置）/
-    /// Raw ECHConfigList bytes: groups candidates by key — hint addresses
-    /// of the same key pool together for the race (12/13 sources measured
-    /// publishing literally the same CF network-wide config)
+    /// 原始 ECHConfigList 字节：既是按密钥分组的键，也是直接喂给
+    /// `SSL_set1_ech_config_list` 的负载（实测 12/13 个源域发布的是同一
+    /// 份 CF 全网共享配置）/ Raw ECHConfigList bytes: doubles as the
+    /// key-grouping key and the payload fed straight to
+    /// `SSL_set1_ech_config_list` (12/13 sources measured publishing
+    /// literally the same CF network-wide config)
     pub(super) ech_raw: Vec<u8>,
 }
 
@@ -284,13 +281,13 @@ async fn fetch_https_records(
     endpoint: &str,
     name: &str,
 ) -> Result<Vec<RecordAnswer>> {
-    // reqwest 0.13 的 `.query` 需要单独 feature，改用 url crate 拼参数 /
-    // reqwest 0.13's `.query` sits behind a feature — build the params via the url crate instead
-    let url = reqwest::Url::parse_with_params(endpoint, &[("name", name), ("type", "HTTPS")])
-        .map_err(|e| AppError::Other(format!("DoH URL 构建失败: {e}")))?;
+    // 查询参数均为 ASCII 安全字符（域名 + 常量），直接拼接 /
+    // query params are all ASCII-safe (a domain name plus constants) —
+    // plain concatenation is fine
+    let url = format!("{endpoint}?name={name}&type=HTTPS");
     let resp = client
-        .get(url)
-        .header(reqwest::header::ACCEPT, "application/dns-json")
+        .get(&url)
+        .header(wreq::header::ACCEPT, "application/dns-json")
         .timeout(DOH_TIMEOUT)
         .send()
         .await?;
@@ -376,17 +373,15 @@ fn build_extract(
     let (Some(raw), false) = (ech_raw, addrs.is_empty()) else {
         return Ok(None);
     };
-    let ech = EchConfig::new(
-        EchConfigListBytes::from(raw.clone()),
-        rustls::crypto::aws_lc_rs::hpke::ALL_SUPPORTED_SUITES,
-    )
-    .map_err(|e| AppError::Other(format!("ECH 配置不兼容: {e}")))?;
+    // 合法性不在此校验：raw 原样进 `SSL_set1_ech_config_list`，格式非法
+    // 会在握手时报错、被探活判 Bad / Validity is not checked here: the raw
+    // bytes go straight into `SSL_set1_ech_config_list`; malformed input
+    // fails the handshake and the probe marks it Bad
     let ttl = ttl_min
         .map(Duration::from_secs)
         .unwrap_or(BORROWED_TTL_DEFAULT)
         .clamp(BORROWED_TTL_MIN, BORROWED_TTL_MAX);
     Ok(Some(RecordExtract {
-        ech,
         addrs,
         ttl,
         source: source.to_string(),
@@ -431,11 +426,12 @@ async fn fetch_wire_records(
     name: &str,
 ) -> Result<Vec<WireAnswer>> {
     let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(wire_query(name));
-    let url = reqwest::Url::parse_with_params(endpoint, &[("dns", encoded.as_str())])
-        .map_err(|e| AppError::Other(format!("DoH URL 构建失败: {e}")))?;
+    // base64url 输出不含特殊字符，直接拼接 / base64url output needs no
+    // escaping — plain concatenation
+    let url = format!("{endpoint}?dns={encoded}");
     let resp = client
-        .get(url)
-        .header(reqwest::header::ACCEPT, "application/dns-message")
+        .get(&url)
+        .header(wreq::header::ACCEPT, "application/dns-message")
         .timeout(DOH_TIMEOUT)
         .send()
         .await?;

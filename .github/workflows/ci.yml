@@ -149,6 +149,24 @@ jobs:
         shell: bash
         run: mkdir -p build_tmp/frontend/dist
 
+      # ── Windows ARM64 BoringSSL 回避 / Windows ARM64 BoringSSL workaround ──
+      # btls-sys 在原生 aarch64-pc-windows-msvc 构建（host == target）时提前
+      # 返回，不会定义 OPENSSL_NO_ASM；BoringSSL 于是启用 GAS 语法 .S 汇编源，
+      # MSVC armasm64 无法编译导致 LNK1181。通过 CMAKE_TOOLCHAIN_FILE 注入
+      # cmake/boringssl-win-arm64.cmake 关闭汇编（详见该文件注释）。
+      #
+      # On native aarch64-pc-windows-msvc builds (host == target) btls-sys
+      # returns early and never defines OPENSSL_NO_ASM, so BoringSSL enables
+      # GAS-syntax .S sources that MSVC's armasm64 cannot assemble (LNK1181).
+      # CMAKE_TOOLCHAIN_FILE injects cmake/boringssl-win-arm64.cmake which
+      # disables assembly (see that file for details).
+      - name: Configure BoringSSL no-asm toolchain (windows-11-arm)
+        if: matrix.os == 'windows-11-arm'
+        shell: pwsh
+        run: |
+          $toolchain = ($env:GITHUB_WORKSPACE -replace '\\', '/') + '/cmake/boringssl-win-arm64.cmake'
+          "CMAKE_TOOLCHAIN_FILE=$toolchain" >> $env:GITHUB_ENV
+
       - name: Check
         run: cargo check --manifest-path backend/Cargo.toml
         env:
@@ -198,13 +216,28 @@ jobs:
             modules/notify_discord -> ../../build_tmp/modules/notify_discord/target
             modules/notify_telegram -> ../../build_tmp/modules/notify_telegram/target
             modules/pp_utils -> ../../build_tmp/modules/pp_utils/target
-            modules/ts_merge -> ../../build_tmp/modules/ts_merge/target
+            modules/segment_merge -> ../../build_tmp/modules/segment_merge/target
           key: modules-ci-${{ matrix.os }}
+
+      # ── Windows ARM64 BoringSSL 回避 / Windows ARM64 BoringSSL workaround ──
+      # 目前模块不依赖 btls-sys；若未来引入 cmake 构建的 -sys 依赖，
+      # windows-11-arm 会踩与 check-server 相同的 LNK1181，预先注入同一
+      # toolchain 文件以免疫（详见 cmake/boringssl-win-arm64.cmake 注释）。
+      #
+      # Modules don't depend on btls-sys today; inject the same toolchain
+      # file anyway so a future cmake-built -sys dep can't trip the same
+      # LNK1181 on windows-11-arm (see cmake/boringssl-win-arm64.cmake).
+      - name: Configure BoringSSL no-asm toolchain (windows-11-arm)
+        if: matrix.os == 'windows-11-arm'
+        shell: pwsh
+        run: |
+          $toolchain = ($env:GITHUB_WORKSPACE -replace '\\', '/') + '/cmake/boringssl-win-arm64.cmake'
+          "CMAKE_TOOLCHAIN_FILE=$toolchain" >> $env:GITHUB_ENV
 
       - name: Check all modules
         shell: bash
         run: |
-          for module_dir in modules/cleanup modules/contact_sheet modules/filter_short modules/notify_discord modules/notify_telegram modules/pp_utils modules/ts_merge; do
+          for module_dir in modules/cleanup modules/contact_sheet modules/filter_short modules/notify_discord modules/notify_telegram modules/pp_utils modules/segment_merge; do
             if [ -f "$module_dir/Cargo.toml" ]; then
               echo "=== Checking $module_dir ==="
               cargo check --manifest-path "$module_dir/Cargo.toml"

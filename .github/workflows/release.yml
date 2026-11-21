@@ -63,7 +63,7 @@ jobs:
             modules/notify_discord -> ../../build_tmp/modules/notify_discord/target
             modules/notify_telegram -> ../../build_tmp/modules/notify_telegram/target
             modules/pp_utils -> ../../build_tmp/modules/pp_utils/target
-            modules/ts_merge -> ../../build_tmp/modules/ts_merge/target
+            modules/segment_merge -> ../../build_tmp/modules/segment_merge/target
           key: server-${{ matrix.platform }}
 
       # ── 系统依赖（仅 Linux）/ System libraries (Linux only) ──
@@ -76,6 +76,24 @@ jobs:
       - name: Install macOS system dependencies
         if: startsWith(matrix.os, 'macos')
         run: brew install pkg-config
+
+      # ── Windows ARM64 BoringSSL 回避 / Windows ARM64 BoringSSL workaround ──
+      # btls-sys 在原生 aarch64-pc-windows-msvc 构建（host == target）时提前
+      # 返回，不会定义 OPENSSL_NO_ASM；BoringSSL 于是启用 GAS 语法 .S 汇编源，
+      # MSVC armasm64 无法编译导致 LNK1181。通过 CMAKE_TOOLCHAIN_FILE 注入
+      # cmake/boringssl-win-arm64.cmake 关闭汇编（详见该文件注释）。
+      #
+      # On native aarch64-pc-windows-msvc builds (host == target) btls-sys
+      # returns early and never defines OPENSSL_NO_ASM, so BoringSSL enables
+      # GAS-syntax .S sources that MSVC's armasm64 cannot assemble (LNK1181).
+      # CMAKE_TOOLCHAIN_FILE injects cmake/boringssl-win-arm64.cmake which
+      # disables assembly (see that file for details).
+      - name: Configure BoringSSL no-asm toolchain (windows-11-arm)
+        if: matrix.os == 'windows-11-arm'
+        shell: pwsh
+        run: |
+          $toolchain = ($env:GITHUB_WORKSPACE -replace '\\', '/') + '/cmake/boringssl-win-arm64.cmake'
+          "CMAKE_TOOLCHAIN_FILE=$toolchain" >> $env:GITHUB_ENV
 
       # ── 构建 / Build ──
       - name: Full release build
@@ -222,7 +240,7 @@ jobs:
             modules/notify_discord -> ../../build_tmp/modules/notify_discord/target
             modules/notify_telegram -> ../../build_tmp/modules/notify_telegram/target
             modules/pp_utils -> ../../build_tmp/modules/pp_utils/target
-            modules/ts_merge -> ../../build_tmp/modules/ts_merge/target
+            modules/segment_merge -> ../../build_tmp/modules/segment_merge/target
           key: desktop-${{ matrix.platform }}
 
       # ── 平台系统依赖 / Platform-specific system dependencies ──
@@ -238,6 +256,20 @@ jobs:
       - name: Install macOS system dependencies
         if: startsWith(matrix.os, 'macos')
         run: brew install pkg-config
+
+      # ── Windows ARM64 BoringSSL 回避 / Windows ARM64 BoringSSL workaround ──
+      # 与上方 server 构建相同：btls-sys 原生构建早退不定义 OPENSSL_NO_ASM，
+      # 注入 no-asm toolchain 文件规避 LNK1181（详见 cmake/ 下该文件注释）。
+      #
+      # Same as the server build above: btls-sys returns early on native
+      # builds without defining OPENSSL_NO_ASM; inject the no-asm toolchain
+      # file to avoid LNK1181 (see comments in the cmake/ file).
+      - name: Configure BoringSSL no-asm toolchain (windows-11-arm)
+        if: matrix.os == 'windows-11-arm'
+        shell: pwsh
+        run: |
+          $toolchain = ($env:GITHUB_WORKSPACE -replace '\\', '/') + '/cmake/boringssl-win-arm64.cmake'
+          "CMAKE_TOOLCHAIN_FILE=$toolchain" >> $env:GITHUB_ENV
 
       # ── 构建 / Build ──
       - name: Full desktop release build
@@ -534,12 +566,18 @@ jobs:
 
           DESK_WIN_X64=$(cell 'StripchatRecorder-desktop-windows-x86_64-*.exe')
           DESK_WIN_A64=$(cell 'StripchatRecorder-desktop-windows-arm64-*.exe')
-          DESK_LIN_X64=$(cell 'StripchatRecorder-desktop-linux-x86_64-*.AppImage' 'StripchatRecorder-desktop-linux-x86_64-*.deb')
-          DESK_LIN_A64=$(cell 'StripchatRecorder-desktop-linux-arm64-*.AppImage' 'StripchatRecorder-desktop-linux-arm64-*.deb')
+          # Linux 桌面端只放 deb（安装版）；AppImage 带 portable feature
+          # 构建，归便携行 / Linux desktop row is deb-only (installed build);
+          # the AppImage is built with the portable feature and belongs
+          # in the Portable row
+          DESK_LIN_X64=$(cell 'StripchatRecorder-desktop-linux-x86_64-*.deb')
+          DESK_LIN_A64=$(cell 'StripchatRecorder-desktop-linux-arm64-*.deb')
           DESK_MAC_A64=$(cell 'StripchatRecorder-desktop-macos-arm64-*.dmg' 'StripchatRecorder-desktop-macos-arm64-*.app.tar.gz')
 
           PORT_WIN_X64=$(cell 'StripchatRecorder-desktop-windows-x86_64-*-portable.zip')
           PORT_WIN_A64=$(cell 'StripchatRecorder-desktop-windows-arm64-*-portable.zip')
+          PORT_LIN_X64=$(cell 'StripchatRecorder-desktop-linux-x86_64-*.AppImage')
+          PORT_LIN_A64=$(cell 'StripchatRecorder-desktop-linux-arm64-*.AppImage')
 
           SRV_WIN_X64=$(cell 'StripchatRecorder-server-windows-x86_64-*.zip')
           SRV_WIN_A64=$(cell 'StripchatRecorder-server-windows-arm64-*.zip')
@@ -574,7 +612,7 @@ jobs:
             echo "| 产物 Artifact | windows-x86_64 | windows-arm64 | linux-x86_64 | linux-arm64 | macos-arm64 |"
             echo "|---|---|---|---|---|---|"
             echo "| **桌面端 Desktop** | ${DESK_WIN_X64} | ${DESK_WIN_A64} | ${DESK_LIN_X64} | ${DESK_LIN_A64} | ${DESK_MAC_A64} |"
-            echo "| **便携版 Portable** | ${PORT_WIN_X64} | ${PORT_WIN_A64} | — | — | — |"
+            echo "| **便携版 Portable** | ${PORT_WIN_X64} | ${PORT_WIN_A64} | ${PORT_LIN_X64} | ${PORT_LIN_A64} | — |"
             echo "| **服务端 Server** | ${SRV_WIN_X64} | ${SRV_WIN_A64} | ${SRV_LIN_X64} | ${SRV_LIN_A64} | ${SRV_MAC_A64} |"
             echo "| **后处理模块 Modules** | ${MOD_WIN_X64} | ${MOD_WIN_A64} | ${MOD_LIN_X64} | ${MOD_LIN_A64} | ${MOD_MAC_A64} |"
             echo

@@ -19,12 +19,21 @@ pub struct DirEntryInfo {
 }
 
 /// 目录浏览响应：当前路径、父路径（到达根时为 None）、子目录列表。
+/// `include_files` 为 true 时附带 `files`（非隐藏文件；macOS 下 `.app` 包
+/// 也归入 files 而非 dirs，使文件选择模式能选中 .app 包）。
+///
 /// Directory browsing response: current path, parent path (None at root), subdirectory list.
+/// When `include_files` is requested, `files` carries non-hidden files (on
+/// macOS `.app` bundles are classified as files rather than dirs so the
+/// file-picking mode can select a bundle).
 #[derive(serde::Serialize)]
 pub struct ListDirResult {
     pub path: String,
     pub parent: Option<String>,
     pub dirs: Vec<DirEntryInfo>,
+    /// 文件条目（仅 include_files 请求时填充）/ File entries (populated only on include_files requests)
+    #[serde(default)]
+    pub files: Vec<DirEntryInfo>,
     /// 是否为"驱动器/根列表"视图（此时 path 无实际意义，不可直接选择）
     /// Whether this is a "drives/roots" listing view (path has no real meaning, not directly selectable)
     #[serde(default)]
@@ -56,15 +65,23 @@ fn strip_verbatim_prefix(p: &std::path::Path) -> std::path::PathBuf {
     p.to_path_buf()
 }
 
-/// 列出指定路径下的子目录（仅目录，不含文件），用于前端"选择目录"浏览器。
+/// 列出指定路径下的子目录（以及 `include_files` 时的非隐藏文件），用于前端
+/// "选择目录/文件"浏览器。`exec_only` 时 files 仅保留可执行项——Unix 按任一
+/// 执行位过滤，Windows 按 `.exe`/`.bat`/`.cmd`/`.com` 扩展名过滤；macOS 上
+/// `.app` 包归入 files（对选择程序的用户它是"文件"而非要进入的目录），且
+/// 不受 exec_only 过滤影响。
 ///
-/// 安全性：仅返回目录名列表，不读取文件内容；路径为空或不存在时回退到系统盘根/用户主目录，
+/// 安全性：仅返回条目名列表，不读取文件内容；路径为空或不存在时回退到系统盘根/用户主目录，
 /// 不会因意外路径而报错中断浏览流程。返回路径已去除 Windows 的 `\\?\` 前缀，
 /// 呈现为用户熟悉的普通路径格式。
 ///
-/// List subdirectories under the given path (directories only, no files), for the
-/// frontend's "choose directory" browser.
-pub fn list_dir_inner(path: &str) -> Result<ListDirResult> {
+/// List subdirectories under the given path (plus non-hidden files when
+/// `include_files` is set), for the frontend "choose directory/file" browser.
+/// `exec_only` keeps only executable entries in `files` — any execute bit on
+/// Unix, `.exe`/`.bat`/`.cmd`/`.com` extensions on Windows. On macOS `.app`
+/// bundles land in `files` (a program is a "file" to pick, not a directory to
+/// enter) and bypass the exec_only filter.
+pub fn list_dir_inner(path: &str, include_files: bool, exec_only: bool) -> Result<ListDirResult> {
     let requested = std::path::Path::new(path);
 
     let dir = if path.trim().is_empty() || !requested.is_dir() {
@@ -79,20 +96,42 @@ pub fn list_dir_inner(path: &str) -> Result<ListDirResult> {
     let canonical_clean = strip_verbatim_prefix(&canonical_raw);
 
     let mut dirs_list: Vec<DirEntryInfo> = Vec::new();
+    let mut files_list: Vec<DirEntryInfo> = Vec::new();
     match std::fs::read_dir(&canonical_raw) {
         Ok(entries) => {
             for entry in entries.flatten() {
-                if !entry.path().is_dir() {
-                    continue;
-                }
                 let name = entry.file_name().to_string_lossy().to_string();
                 if name.starts_with('.') {
                     continue;
                 }
-                dirs_list.push(DirEntryInfo {
-                    path: canonical_clean.join(&name).to_string_lossy().to_string(),
-                    name,
-                });
+                let is_dir = entry.path().is_dir();
+                // macOS：`.app` 包是目录，但对"选程序"场景它是可选中的文件
+                // macOS: `.app` bundles are directories, but for picking a
+                // program they're the selectable file
+                #[cfg(target_os = "macos")]
+                let is_app_bundle = name.ends_with(".app");
+                #[cfg(not(target_os = "macos"))]
+                let is_app_bundle = false;
+                let is_dir = is_dir && !is_app_bundle;
+                if is_dir {
+                    dirs_list.push(DirEntryInfo {
+                        path: canonical_clean.join(&name).to_string_lossy().to_string(),
+                        name,
+                    });
+                } else if include_files {
+                    // exec_only：只保留可执行项——Unix 看执行位，Windows 看
+                    // 可执行扩展名；.app 包本身就是程序不受过滤 /
+                    // exec_only: keep executables only — execute bits on Unix,
+                    // executable extensions on Windows; .app bundles are
+                    // programs by definition and bypass the filter
+                    if exec_only && !is_app_bundle && !is_executable(&entry.path()) {
+                        continue;
+                    }
+                    files_list.push(DirEntryInfo {
+                        path: canonical_clean.join(&name).to_string_lossy().to_string(),
+                        name,
+                    });
+                }
             }
         }
         Err(e) => {
@@ -103,6 +142,7 @@ pub fn list_dir_inner(path: &str) -> Result<ListDirResult> {
         }
     }
     dirs_list.sort_by_key(|a| a.name.to_lowercase());
+    files_list.sort_by_key(|a| a.name.to_lowercase());
 
     let parent = canonical_clean
         .parent()
@@ -112,6 +152,7 @@ pub fn list_dir_inner(path: &str) -> Result<ListDirResult> {
         path: canonical_clean.to_string_lossy().to_string(),
         parent,
         dirs: dirs_list,
+        files: files_list,
         is_drives: false,
     })
 }
@@ -150,8 +191,36 @@ pub fn list_drives_inner() -> Result<ListDirResult> {
         path: String::new(),
         parent: None,
         dirs: dirs_list,
+        files: Vec::new(),
         is_drives: true,
     })
+}
+
+/// 判断路径是否为可执行项：Unix 按任一执行位，Windows 按 `.exe`/`.bat`/
+/// `.cmd`/`.com` 扩展名；metadata 读取失败视为不可执行。
+///
+/// Whether a path counts as executable: any execute bit on Unix, the
+/// `.exe`/`.bat`/`.cmd`/`.com` extensions on Windows; a metadata read
+/// failure counts as non-executable.
+#[cfg(unix)]
+fn is_executable(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    path.metadata()
+        .map(|m| m.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "windows")]
+fn is_executable(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| matches!(e.to_ascii_lowercase().as_str(), "exe" | "bat" | "cmd" | "com"))
+        .unwrap_or(false)
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
+fn is_executable(_path: &std::path::Path) -> bool {
+    true
 }
 
 /// 在指定路径下创建一个新子目录（用于目录浏览器的"新建文件夹"操作）。

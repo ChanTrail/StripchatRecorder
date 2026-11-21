@@ -69,7 +69,7 @@
 
 	/** 磁盘空间条目 / Disk space entry */
 	interface DiskSpaceEntry {
-		label: string; // "ts_fragment" | "ts_merge"
+		label: string; // "fragment" | "segment_merge"
 		path: string;
 		total_bytes: number;
 		available_bytes: number;
@@ -210,7 +210,7 @@
 	 *
 	 * 传的是 `(video_path, module_id)` 而不是具体文件路径——后端会通过 meta 解析出
 	 * 该模块真正的输出路径（与 moduleOutputs 的来源同一套校验逻辑），不管该路径是否
-	 * 落在默认的 output_dir 内（ts_merge 等模块支持自定义输出目录，产物可能在别处）。
+	 * 落在默认的 output_dir 内（segment_merge 等模块支持自定义输出目录，产物可能在别处）。
 	 *
 	 * Open module output file (preview dialog).
 	 * Web version: builds the image URL directly from the backend's static file route
@@ -221,7 +221,7 @@
 	 * Passes `(video_path, module_id)` rather than a concrete file path — the backend
 	 * resolves that module's actual output path via meta (the same verification logic
 	 * that populates moduleOutputs), regardless of whether that path falls within the
-	 * default output_dir (modules like ts_merge support a custom output directory, so
+	 * default output_dir (modules like segment_merge support a custom output directory, so
 	 * the artifact may live elsewhere).
 	 */
 	function openModuleOutput(filePath: string, moduleId: string) {
@@ -547,9 +547,9 @@
 				};
 				if (!p.meta) return;
 
-				// 路径迁移：ts_merge 成功后后端会在同一事件里携带 old_path，
+				// 路径迁移：segment_merge 成功后后端会在同一事件里携带 old_path，
 				// 用精确的旧路径完成迁移，避免多任务并发时靠搜索猜测导致的状态错乱。
-				// Path migration: after ts_merge the backend includes old_path in the same event;
+				// Path migration: after segment_merge the backend includes old_path in the same event;
 				// use the precise old path to migrate state, avoiding corruption when multiple
 				// tasks run concurrently and guessing the old path would pick the wrong one.
 				const oldPath = p.old_path ?? null;

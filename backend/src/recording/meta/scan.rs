@@ -1,11 +1,11 @@
 //! Meta 扫描、修复与重建 / Meta Scanning, Repair, and Rebuild
 //!
-//! 扫描输出目录（及 ts_merge 自定义输出目录），为缺失/损坏/陈旧的 meta 文件
+//! 扫描输出目录（及 segment_merge 自定义输出目录），为缺失/损坏/陈旧的 meta 文件
 //! 执行创建、修复或重建，并收集需要（重新）触发后处理的路径列表。
 //! 不涉及 meta 文件本身的读写原语（见 `super::store`）或调度/清理逻辑
 //! （见 `super::maintenance`）。
 //!
-//! Scans the output directory (and ts_merge's custom output dir) to create, repair,
+//! Scans the output directory (and segment_merge's custom output dir) to create, repair,
 //! or rebuild meta files that are missing, corrupt, or stale, collecting the list of
 //! paths needing post-processing (re-)triggered. Does not implement meta file I/O
 //! primitives (see `super::store`) or scheduling/cleanup logic (see `super::maintenance`).
@@ -103,7 +103,7 @@ fn repair_meta(meta: &VideoMeta, path: &Path) -> Option<VideoMeta> {
 /// 扫描输出目录（以及可选的额外目录），为所有缺少或版本过旧的 meta 文件执行创建/重建。
 ///
 /// 独立视频文件和 session_dir（含 .ts 分片目录）采用完全一致的处理规则——是否需要
-/// 合并交由流水线首节点（ts_merge）自行判断：输入是目录就合并，已经是文件就直传。
+/// 合并交由流水线首节点（segment_merge）自行判断：输入是目录就合并，已经是文件就直传。
 /// 本函数只负责判断"是否需要（重新）触发后处理"，不关心输入形态。
 ///
 /// 处理规则（视频文件与 session_dir 通用）：
@@ -113,7 +113,7 @@ fn repair_meta(meta: &VideoMeta, path: &Path) -> Option<VideoMeta> {
 /// - **meta 存在且状态终态**（`finish`/`pp_error`）→ 仅修复可推断字段，不重新触发
 /// - **meta 存在但活跃状态被追踪中** → 跳过，不触碰
 ///
-/// `extra_dirs` 传入 ts_merge 模块配置的自定义输出目录。
+/// `extra_dirs` 传入 segment_merge 模块配置的自定义输出目录。
 /// `recorder` 用于判断 session_dir 的 `recording` 状态是否真实活跃
 /// （`recorder.is_file_locked`），而非仅凭 meta 中的字符串。
 ///
@@ -125,7 +125,7 @@ fn repair_meta(meta: &VideoMeta, path: &Path) -> Option<VideoMeta> {
 ///
 /// Standalone video files and session_dirs (directories containing .ts segments) are handled
 /// with identical rules — whether merging is needed is decided by the pipeline's first node
-/// (ts_merge) itself: merge if the input is a directory, pass through if it's already a file.
+/// (segment_merge) itself: merge if the input is a directory, pass through if it's already a file.
 /// This function only decides whether post-processing needs to be (re-)triggered, regardless
 /// of the input's shape.
 ///
@@ -136,7 +136,7 @@ fn repair_meta(meta: &VideoMeta, path: &Path) -> Option<VideoMeta> {
 /// - **meta exists with a terminal status** (`finish`/`pp_error`) → repair inferrable fields only
 /// - **meta exists and the active status is genuinely tracked** → skip untouched
 ///
-/// `extra_dirs` passes the custom output directory configured in the ts_merge module.
+/// `extra_dirs` passes the custom output directory configured in the segment_merge module.
 /// `recorder` is used to determine whether a session_dir's `recording` status is genuinely
 /// active (`recorder.is_file_locked`), rather than trusting the meta string alone.
 ///
@@ -255,7 +255,7 @@ fn scan_and_ensure_meta(
     //   真实活跃（本进程内存中确实有记录）与陈旧状态（上次异常退出遗留，无人追踪）。
     //
     //   注意：pp_queue 追踪的 key 是最初传入 run_postprocess_for_path 的 video_path
-    //   字符串（session_dir 或原始视频路径）。ts_merge 完成后会在磁盘上生成同名视频
+    //   字符串（session_dir 或原始视频路径）。segment_merge 完成后会在磁盘上生成同名视频
     //   文件，scan 此时可能扫描到这个新文件，用新文件路径查 is_tracked 会找不到，
     //   因为队列里存的仍是原始路径。因此对 pp_waiting/pp_running，需要额外用
     //   meta.video_path（后处理正在使用的权威路径）做兜底查询，两者任一被追踪即视为
@@ -273,7 +273,7 @@ fn scan_and_ensure_meta(
     //
     //   Important: the key stored in pp_queue is the video_path string originally passed to
     //   run_postprocess_for_path (either a session_dir or the original video file path).
-    //   After ts_merge completes it creates a same-stem video file on disk, which a
+    //   After segment_merge completes it creates a same-stem video file on disk, which a
     //   concurrent scan may encounter; looking up that new file path via is_tracked returns
     //   false because the queue still holds the original path. Therefore, for pp_waiting/
     //   pp_running we also fall back to checking meta.video_path (the authoritative path
@@ -312,13 +312,13 @@ fn scan_and_ensure_meta(
                     return true;
                 }
                 // 若扫描的是视频文件（有扩展名），还需检查同名的 session_dir 是否在追踪中。
-                // ts_merge 完成前后处理以 session_dir 路径为 key 入队；ts_merge 完成后
+                // segment_merge 完成前后处理以 session_dir 路径为 key 入队；segment_merge 完成后
                 // meta.video_path 已更新为 .mkv，但 pp_queue 里的 key 仍是 session_dir，
                 // 若不检查 session_dir，scan 扫到 .mkv 时会误判为陈旧而重复触发后处理。
                 //
                 // If scanning a video file (has an extension), also check if the corresponding
                 // session_dir (same parent and stem, no extension) is tracked.
-                // Post-processing is queued with the session_dir path as key; after ts_merge
+                // Post-processing is queued with the session_dir path as key; after segment_merge
                 // meta.video_path switches to .mkv, but the pp_queue key remains the session_dir.
                 // Without this check, scanning a .mkv would be misclassified as stale and
                 // trigger a duplicate post-processing run.
@@ -380,7 +380,7 @@ fn scan_and_ensure_meta(
                 // 归属 meta 已经由 resolve_meta_path 实时反查（扁平目录合并文件的 meta 存在时
                 // 不会进入此分支，A4）；下面的 owned_elsewhere 快照只作附加保护。
                 // 视频已由其他 meta 的 video_path 引用（如扁平输出目录下的合并文件）→ 跳过
-                // 同 stem 的录制正在后处理（ts_merge 正写入扁平目录、video_path 尚未切换）→ 同样跳过
+                // 同 stem 的录制正在后处理（segment_merge 正写入扁平目录、video_path 尚未切换）→ 同样跳过
                 // （is_stem_active 只统计 Claimed，不会被本扫描自己的占位命中）
                 //
                 // The owning meta has already been looked up live via resolve_meta_path (a flat-dir
@@ -388,7 +388,7 @@ fn scan_and_ensure_meta(
                 // snapshot below is only an extra safeguard.
                 // Video already referenced by another meta's video_path (e.g. merged file in
                 // a flat output dir) → skip
-                // A same-stem recording is being post-processed (ts_merge writing into a flat dir,
+                // A same-stem recording is being post-processed (segment_merge writing into a flat dir,
                 // video_path not switched yet) → skip as well
                 // (is_stem_active only counts Claimed entries, so this scan's own reservation
                 // doesn't match)
@@ -567,12 +567,20 @@ fn scan_and_ensure_meta(
             continue;
         }
 
-        // ── session_dir（含 .ts 分片的目录）/ session_dir containing .ts segments ──
+        // ── session_dir（含分片的目录）：现行为 .m4s（fMP4），旧会话可能
+        // 残留 .ts——两者都算分片目录。
+        // ── session_dir (a dir containing segments): currently .m4s
+        // (fMP4); legacy sessions may still hold .ts — both count.
         let has_ts = std::fs::read_dir(&path)
             .map(|mut e| {
                 e.any(|f| {
                     f.ok()
-                        .map(|f| f.path().extension().and_then(|x| x.to_str()) == Some("ts"))
+                        .map(|f| {
+                            matches!(
+                                f.path().extension().and_then(|x| x.to_str()),
+                                Some("m4s") | Some("ts")
+                            )
+                        })
                         .unwrap_or(false)
                 })
             })
@@ -607,9 +615,9 @@ fn scan_and_ensure_meta(
             }
             if !meta_path.exists() {
                 // meta 缺失：创建 pp_waiting 状态，加入待后处理列表。
-                // ts_merge 会自行判断输入是目录（此处）还是文件并相应处理。
+                // segment_merge 会自行判断输入是目录（此处）还是文件并相应处理。
                 // Meta missing: create pp_waiting status, add to pending list.
-                // ts_merge decides on its own whether the input is a directory (here) or a
+                // segment_merge decides on its own whether the input is a directory (here) or a
                 // file and handles it accordingly.
                 let started_at = parse_timestamp_from_stem(name).unwrap_or_else(|| {
                     std::fs::metadata(&path)
@@ -794,24 +802,23 @@ fn scan_and_ensure_meta(
     }
 }
 
-/// 从流水线配置中提取 ts_merge 节点的 `output_dir` 参数（非空时才返回）。
+/// 从流水线配置中提取 segment_merge 节点的 `output_dir` 参数（非空时才返回）。
 /// 若开启了 `split_by_streamer`，返回该目录本身（按主播分子目录时根目录就是扫描起点）。
 /// 若未开启，直接返回固定的自定义输出目录。
 /// 这是独立视频文件的唯一已知输出路径，用于 meta 扫描重建。
 ///
-/// Extract the scan root from the ts_merge node's params in the pipeline config.
+/// Extract the scan root from the segment_merge node's params in the pipeline config.
 /// - `split_by_streamer=true`: returns `output_dir` (the root to scan for per-streamer subdirs)
 /// - `split_by_streamer=false`: returns `output_dir` directly as the flat output location
 ///
 /// Returns `None` if the node is absent, disabled, or `output_dir` is empty.
-pub fn ts_merge_output_dir(
+pub fn segment_merge_output_dir(
     state: &crate::config::app_state::AppState,
 ) -> Option<std::path::PathBuf> {
     let pipeline = state.get_pipeline();
-    let node = pipeline
-        .nodes
-        .iter()
-        .find(|n| n.module_id == "ts_merge" && n.enabled)?;
+    let node = pipeline.nodes.iter().find(|n| {
+        (n.module_id == crate::postprocess::pipeline::SEGMENT_MERGE_MODULE_ID) && n.enabled
+    })?;
     let dir = node.params.get("output_dir")?.as_str()?.trim();
     if dir.is_empty() {
         None

@@ -140,15 +140,45 @@ impl AppState {
         // as missing; files that can't be read or parsed are backed up before falling back to
         // defaults (see backup_invalid_config)
         let settings_path = config_dir.join("settings.json");
-        let (settings, settings_missing): (Settings, bool) = match load_config_file(&settings_path)
-        {
-            ConfigFile::Parsed(s) => (s, false),
-            ConfigFile::Missing => (Settings::default(), true),
-            ConfigFile::Invalid(err) => {
-                backup_invalid_config(&settings_path, &err);
-                (Settings::default(), false)
+        let (mut settings, settings_missing): (Settings, bool) =
+            match load_config_file(&settings_path) {
+                ConfigFile::Parsed(s) => (s, false),
+                ConfigFile::Missing => (Settings::default(), true),
+                ConfigFile::Invalid(err) => {
+                    backup_invalid_config(&settings_path, &err);
+                    (Settings::default(), false)
+                }
+            };
+
+        // 分片输出目录旧默认值 ts_fragment 已改名为 fragment：把仍指向旧默认的
+        // settings 收敛到新约定，并尝试把磁盘目录一并改名。用户自定义的路径不动；
+        // 改名失败时保留旧路径，避免分片写到别处而丢失对既有数据的引用。
+        // The old default segment output dir ts_fragment was renamed to fragment:
+        // converge settings still pointing at the old default onto the new
+        // convention and try to rename the on-disk directory alongside. Custom
+        // paths are untouched; on rename failure the old path is kept so
+        // segments aren't written elsewhere while existing data becomes stale.
+        let old_output_default = exe_dir().join("ts_fragment");
+        if std::path::Path::new(settings.output_dir.trim()) == old_output_default {
+            let new_output_default = exe_dir().join("fragment");
+            if old_output_default.exists()
+                && !new_output_default.exists()
+                && let Err(e) = fs::rename(&old_output_default, &new_output_default)
+            {
+                tracing::warn!(
+                    "{}",
+                    crate::tl!(
+                        "startup.outputDirRenameFailed",
+                        old = old_output_default.display(),
+                        new = new_output_default.display(),
+                        error = e
+                    )
+                );
             }
-        };
+            if new_output_default.exists() || !old_output_default.exists() {
+                settings.output_dir = new_output_default.to_string_lossy().into_owned();
+            }
+        }
 
         // 首次运行（settings.json 不存在或为空）时立即用默认值落盘，保证文件始终存在、可被读写；
         // Server 与 Desktop 都经由此处初始化，两端行为一致。文件无效时不在此覆盖（已备份），
@@ -182,28 +212,28 @@ impl AppState {
         let mouflon_keys: MouflonKeysStore =
             load_config_or_backup(&config_dir.join("mouflon_keys.json")).unwrap_or_default();
         let pipeline_path = config_dir.join("pipeline.json");
-        let pipeline: PipelineConfig = match load_config_file(&pipeline_path) {
+        let mut pipeline: PipelineConfig = match load_config_file(&pipeline_path) {
             ConfigFile::Parsed(p) => p,
             ConfigFile::Invalid(err) => {
                 backup_invalid_config(&pipeline_path, &err);
                 PipelineConfig::default()
             }
-            // pipeline.json 不存在或为空时（首次启动），注入默认 ts_merge 节点
-            // On first startup (pipeline.json absent or blank), inject default ts_merge node
+            // pipeline.json 不存在或为空时（首次启动），注入默认 segment_merge 节点
+            // On first startup (pipeline.json absent or blank), inject default segment_merge node
             ConfigFile::Missing => {
                 let mut p = PipelineConfig::default();
-                // ts_merge 的 output_dir 默认指向程序所在目录下的 recordings 文件夹，
-                // 与录制输出目录（ts_fragment）分离，便于区分原始分片和合并后视频。
-                // ts_merge output_dir defaults to the recordings folder next to the executable,
-                // separate from the TS segment output dir (ts_fragment), making it easy to
-                // distinguish raw segments from merged videos.
+                // segment_merge 的 output_dir 默认指向程序所在目录下的 recordings 文件夹，
+                // 与录制分片输出目录（fragment）分离，便于区分原始分片和合并后视频。
+                // segment_merge output_dir defaults to the recordings folder next to the
+                // executable, separate from the segment output dir (fragment), making it
+                // easy to distinguish raw segments from merged videos.
                 let default_output_dir = exe_dir().join("recordings").to_string_lossy().to_string();
                 p.nodes.push(crate::postprocess::pipeline::PipelineNode {
                     node_id: None,
-                    module_id: "ts_merge".to_string(),
+                    module_id: crate::postprocess::pipeline::SEGMENT_MERGE_MODULE_ID.to_string(),
                     params: {
                         let mut m = std::collections::HashMap::new();
-                        m.insert("format".to_string(), serde_json::json!("mp4"));
+                        m.insert("format".to_string(), serde_json::json!("mkv"));
                         m.insert(
                             "output_dir".to_string(),
                             serde_json::json!(default_output_dir),
@@ -228,6 +258,35 @@ impl AppState {
                 p
             }
         };
+
+        // 旧配置的 segment_merge 节点 output_dir 可能为空——空值在模块侧的语义是
+        // "写入分片目录的父目录"，与新约定（分片目录同级的 recordings 子目录，见
+        // update_settings 的联动逻辑）不符。为空的节点统一填上默认推导路径。
+        // segment_merge nodes in old configs may carry an empty output_dir—an
+        // empty value means "the session dir's parent" on the module side, which
+        // differs from the new convention (a sibling 'recordings' dir of the
+        // segment dir, see the sync logic in update_settings). Fill empty nodes
+        // with the default derived path.
+        let default_merge_dir = PathBuf::from(&settings.output_dir)
+            .parent()
+            .map(|p| p.join("recordings").to_string_lossy().into_owned());
+        if let Some(ref default_dir) = default_merge_dir {
+            for node in &mut pipeline.nodes {
+                if node.module_id != crate::postprocess::pipeline::SEGMENT_MERGE_MODULE_ID {
+                    continue;
+                }
+                let empty = node
+                    .params
+                    .get("output_dir")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.trim().is_empty())
+                    .unwrap_or(true);
+                if empty {
+                    node.params
+                        .insert("output_dir".to_string(), serde_json::json!(default_dir));
+                }
+            }
+        }
         let data = AppData {
             settings,
             streamers,
@@ -335,14 +394,14 @@ impl AppState {
         crate::server::auth::set_setup_done(new_setup_done);
         self.save()?;
 
-        // 若 TS 分片输出目录发生变化，检查 ts_merge 节点的合并输出目录是否遵循
-        // "与 TS 分片目录同级的 recordings 子目录"的默认关系；若是则联动更新，
+        // 若分片输出目录发生变化，检查 segment_merge 节点的合并输出目录是否遵循
+        // "与分片目录同级的 recordings 子目录"的默认关系；若是则联动更新，
         // 若用户已手动配置为其他路径则保持不变。
         //
-        // If the TS fragment output directory changed, check whether the ts_merge node's
-        // output_dir follows the default convention of "a 'recordings' sibling of the TS
-        // fragment dir"; if so, update it to match the new location. If the user configured
-        // a custom path, leave it unchanged.
+        // If the segment output directory changed, check whether the segment_merge
+        // node's output_dir follows the default convention of "a 'recordings'
+        // sibling of the segment dir"; if so, update it to match the new
+        // location. If the user configured a custom path, leave it unchanged.
         if output_dir_changed {
             let old_default = std::path::PathBuf::from(&old_output_dir)
                 .parent()
@@ -350,7 +409,7 @@ impl AppState {
             let mut pipeline = self.data.read().pipeline.clone();
             let mut pipeline_changed = false;
             for node in &mut pipeline.nodes {
-                if node.module_id != "ts_merge" {
+                if node.module_id != crate::postprocess::pipeline::SEGMENT_MERGE_MODULE_ID {
                     continue;
                 }
                 let current_ts_out = node
@@ -375,7 +434,7 @@ impl AppState {
                     tracing::info!(
                         "{}",
                         crate::tl!(
-                            "scheduler.tsMergeOutputDirSynced",
+                            "scheduler.mergeOutputDirSynced",
                             old = old_def.display(),
                             new = new_default.display()
                         )

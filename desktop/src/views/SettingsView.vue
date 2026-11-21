@@ -44,7 +44,7 @@
 		SelectValue,
 	} from "@/components/ui/select";
 	import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-	import { FolderOpen, Eye, EyeOff, Check, Loader2 } from "@lucide/vue";
+	import { FolderOpen, Eye, EyeOff, Check, Loader2, X } from "@lucide/vue";
 
 	const store = useSettingsStore();
 	const systemStore = useSystemStore();
@@ -105,6 +105,7 @@
 		preferred_resolution: 0,
 		resolution_preference: "lower" as "lower" | "higher",
 		preferred_codec: "",
+		player_path: "",
 		max_tmp_dir_gb: 50,
 		language: "zh-CN",
 		mouflon_sync_url: null,
@@ -251,6 +252,7 @@
 			preferred_resolution: form.preferred_resolution,
 			resolution_preference: form.resolution_preference,
 			preferred_codec: form.preferred_codec,
+			player_path: form.player_path,
 			max_tmp_dir_gb: form.max_tmp_dir_gb,
 			sc_mirror_scheme: form.sc_mirror_scheme,
 			max_pp_concurrent: form.max_pp_concurrent,
@@ -512,6 +514,20 @@
 		});
 	}
 
+	/** 打开文件浏览器选择自定义播放器程序（可执行文件模式）；选中后由
+	 * watch 防抖自动保存 / Open the browser in executable mode to pick a
+	 * custom player program; the watch-based debounced autosave persists
+	 * the pick */
+	function browsePlayer() {
+		openDirectoryBrowser(
+			form.player_path,
+			(picked) => {
+				form.player_path = picked;
+			},
+			{ exec: true },
+		);
+	}
+
 	const mouflonStore = ref<MouflonKeysStore>({
 		keys: {},
 		keystreams: {},
@@ -771,6 +787,37 @@
 							<SelectItem v-for="c in videoCodecs" :key="c.value" :value="c.value">{{ c.label }}</SelectItem>
 						</SelectContent>
 					</Select>
+				</div>
+
+				<!-- 自定义播放器：留空 = 平台自动探测；点选程序走文件模式目录浏览器 /
+					Custom player: empty = platform auto-probe; the picker opens the
+					directory browser in file mode -->
+				<div class="flex items-center justify-between gap-4">
+					<div class="flex min-w-0 flex-col gap-0.5">
+						<Label>{{ t("settings.playerPath.label") }}</Label>
+						<p class="text-xs text-muted-foreground">{{ t("settings.playerPath.hint") }}</p>
+					</div>
+					<div :class="isMobile ? 'flex w-full items-center gap-1.5' : 'flex w-96 shrink-0 items-center gap-1.5'">
+						<Input
+							v-model="form.player_path"
+							:placeholder="t('settings.playerPath.placeholder')"
+							autocomplete="off"
+							class="flex-1"
+						/>
+						<Button
+							v-if="form.player_path"
+							type="button"
+							variant="outline"
+							size="icon"
+							:title="t('settings.playerPath.clear')"
+							@click="form.player_path = ''"
+						>
+							<X class="size-4" />
+						</Button>
+						<Button type="button" variant="outline" size="icon" :title="t('settings.playerPath.pick')" @click="browsePlayer">
+							<FolderOpen class="size-4" />
+						</Button>
+					</div>
 				</div>
 
 				<div class="flex items-center justify-between gap-4">

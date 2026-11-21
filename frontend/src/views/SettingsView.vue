@@ -132,6 +132,7 @@
 		preferred_resolution: 0,
 		resolution_preference: "lower" as "lower" | "higher",
 		preferred_codec: "",
+		player_path: "",
 		max_tmp_dir_gb: 50,
 		language: "zh-CN",
 		mouflon_sync_url: null,

@@ -6,17 +6,14 @@
 
 use super::doh;
 use super::probe::{ProbeOutcome, probe_addr_speed, probe_ech};
-use crate::core::error::{AppError, Result};
-use reqwest::Client;
-use rustls::client::{EchConfig, EchMode};
-use rustls::internal::msgs::handshake::EchConfigPayload;
-use rustls_pki_types::EchConfigListBytes;
+use crate::core::error::Result;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
+use wreq::Client;
 
 /// 借用配置整体解析失败后的冷却时长 / Cooldown after the borrowed-config lookup fails entirely
 const BORROWED_FAIL_TTL: Duration = Duration::from_secs(300);
@@ -41,9 +38,9 @@ const ENTRY_TTL: Duration = Duration::from_secs(600);
 /// while keeping every host from re-running DoH.
 const ROTATED_STALE_TTL: Duration = Duration::from_secs(60);
 
-/// 单个 ECH 客户端的连接目标：`resolve_to_addrs(host, addrs)` + 预配置 TLS。
-/// Connection target for one ECH client: `resolve_to_addrs(host, addrs)` plus
-/// the preconfigured TLS stack.
+/// 单个 ECH 客户端的连接目标：`resolve_to_addrs(host, addrs)` + 待注入的
+/// ECHConfigList。/ Connection target for one ECH client:
+/// `resolve_to_addrs(host, addrs)` plus the ECHConfigList to inject.
 #[derive(Clone)]
 pub struct EchTarget {
     /// 目标主机名（TLS ServerName / inner SNI / Host 头，同时是 DNS 覆盖键）
@@ -52,17 +49,19 @@ pub struct EchTarget {
     pub host: String,
     /// 钉到的 CF 边缘地址（含端口，通常 :443）/ Pinned CF edge addresses (with port, usually :443)
     pub addrs: Vec<SocketAddr>,
-    /// 借用配置构建的 rustls 客户端配置 / rustls client config built from the borrowed ECH config
-    pub tls: rustls::ClientConfig,
+    /// 借用的 ECHConfigList 原始字节（握手前经 `SSL_set1_ech_config_list`
+    /// 注入）/ Borrowed ECHConfigList raw bytes (injected via
+    /// `SSL_set1_ech_config_list` before the handshake)
+    pub ech_list: Vec<u8>,
 }
 
-/// 借来的 ECH 配置：一个源域的 ECH 配置 + CF 任播 IP + 过期时刻。
+/// 借来的 ECH 配置：一个源域的 ECHConfigList + CF 任播 IP + 过期时刻。
 /// 对同一 TTL 周期内的所有目标主机复用。
-/// The borrowed ECH config: one source domain's ECH config + CF anycast IPs +
-/// expiry. Reused for every target host within its TTL.
+/// The borrowed ECH config: one source domain's ECHConfigList + CF anycast
+/// IPs + expiry. Reused for every target host within its TTL.
 #[derive(Clone)]
 struct Borrowed {
-    ech: EchConfig,
+    ech_list: Vec<u8>,
     addrs: Vec<SocketAddr>,
     expires: Instant,
 }
@@ -88,24 +87,37 @@ struct Entry {
 /// Builder type that rebuilds a same-flavored client for a target
 type ClientBuilder = Arc<dyn Fn(&EchTarget) -> Result<Client> + Send + Sync>;
 
-/// 应用借用式 ECH 到 reqwest 客户端构建器：预配置 TLS 栈 + 把目标主机
-/// 钉到 CF 任播 IP。同时把 www↔apex 对应主机钉到同一组 IP——裸域与 www
-/// 互跳 301 很常见，缺了配对钉接会让重定向跳出 ECH 覆盖范围、回落到
-/// （可能被污染的）DNS。
-/// Applies borrowed ECH to a reqwest client builder: preconfigured TLS
-/// stack + pins the target host to the CF anycast IPs. The www↔apex
-/// counterpart is pinned to the same IPs — apex↔www 301s are common, and
-/// without the paired pin a redirect would escape ECH coverage and fall
-/// back to (possibly poisoned) DNS.
-pub fn apply_ech(
-    mut builder: reqwest::ClientBuilder,
-    t: &EchTarget,
-) -> reqwest::ClientBuilder {
+/// 由借用配置构建 TLS 选项：Chrome149 指纹档的 `TlsOptions` + 注入
+/// `ech_config_list`（内层 ClientHello 因此也是完整 Chrome 指纹）。
+/// Builds the TLS options from the borrowed config: the Chrome149
+/// emulation `TlsOptions` plus the injected `ech_config_list` (so the
+/// inner ClientHello is a full Chrome fingerprint too).
+fn ech_tls_options(ech_list: &[u8]) -> wreq::tls::TlsOptions {
+    let mut opts = wreq::IntoEmulation::into_emulation(wreq_util::Emulation::Chrome149)
+        .tls_options
+        .unwrap_or_default();
+    opts.ech_config_list = Some(ech_list.to_vec());
+    opts
+}
+
+/// 应用借用式 ECH 到 wreq 客户端构建器：注入带 ECHConfigList 的 TLS 选项
+/// （`tls_options` 整组替换——须在所有 `emulation()` 之后调用，替换项本身
+/// 已是 Chrome 指纹档）+ 把目标主机钉到 CF 任播 IP。同时把 www↔apex
+/// 对应主机钉到同一组 IP——裸域与 www 互跳 301 很常见，缺了配对钉接
+/// 会让重定向跳出 ECH 覆盖范围、回落到（可能被污染的）DNS。
+/// Applies borrowed ECH to a wreq client builder: injects the TLS options
+/// carrying the ECHConfigList (`tls_options` replaces the whole group —
+/// must be called after all `emulation()` calls; the replacement itself
+/// is already the Chrome profile) and pins the target host to the CF
+/// anycast IPs. The www↔apex counterpart is pinned to the same IPs —
+/// apex↔www 301s are common, and without the paired pin a redirect would
+/// escape ECH coverage and fall back to (possibly poisoned) DNS.
+pub fn apply_ech(mut builder: wreq::ClientBuilder, t: &EchTarget) -> wreq::ClientBuilder {
     builder = builder
-        .tls_backend_preconfigured(t.tls.clone())
-        .resolve_to_addrs(&t.host, &t.addrs);
+        .tls_options(ech_tls_options(&t.ech_list))
+        .resolve_to_addrs(t.host.clone(), t.addrs.iter().copied());
     if let Some(alt) = www_counterpart(&t.host) {
-        builder = builder.resolve_to_addrs(&alt, &t.addrs);
+        builder = builder.resolve_to_addrs(alt, t.addrs.iter().copied());
     }
     builder
 }
@@ -354,24 +366,10 @@ impl EchClients {
             return None;
         };
 
-        // 平台校验器初始化失败（极端少见，说明系统 TLS 栈异常）→ 按无 ECH
-        // 通道负缓存 / Platform-verifier init failure (extremely rare — the
-        // OS TLS stack is broken) → negative-cache as no-ECH
-        let Ok(tls) = borrowed.tls_config() else {
-            tracing::warn!("{}", crate::tl!("ech.tlsConfigFailed", host = host));
-            self.map.lock().await.insert(
-                host.to_string(),
-                Entry {
-                    client: None,
-                    expires: Instant::now() + ENTRY_NEG_TTL,
-                },
-            );
-            return None;
-        };
         let mut target = EchTarget {
             host: host.to_string(),
             addrs: borrowed.addrs.clone(),
-            tls,
+            ech_list: borrowed.ech_list.clone(),
         };
         // 驱逐后重建：按打击计数轮换钉接地址顺序，新连接与探活都首选另
         // 一条任播 IP——否则同序重连只会落回刚才 403/失败的那条边缘。
@@ -402,24 +400,20 @@ impl EchClients {
                     break;
                 }
             };
-            match probe_ech(&target.tls, host, &target.addrs).await {
+            match probe_ech(&target.ech_list, host, &target.addrs).await {
                 ProbeOutcome::Good => {
                     entry_client = Some(client);
                     break;
                 }
-                ProbeOutcome::Rejected(Some(payloads)) if attempt == 0 => {
-                    // 规范恢复路径：服务端把新配置直接塞进拒绝错误里，就地
-                    // 更新借用槽并换新 TLS 配置重试，无需再打 DoH / The spec's
-                    // recovery path: the server embeds fresh configs in the
-                    // rejection — update the slot in place and retry with the
-                    // new TLS config, no extra DoH needed
-                    match self.apply_retry_configs(&borrowed, &payloads).await {
-                        Some(new_tls) => {
-                            target.tls = new_tls;
-                            continue;
-                        }
-                        None => break,
-                    }
+                ProbeOutcome::Rejected(Some(retry_list)) if attempt == 0 => {
+                    // 规范恢复路径：服务端把新配置直接塞进拒绝里，就地更新
+                    // 借用槽并换新 ECHConfigList 重试，无需再打 DoH /
+                    // The spec's recovery path: the server embeds fresh
+                    // configs in the rejection — update the slot in place
+                    // and retry with the new ECHConfigList, no extra DoH
+                    self.apply_retry_configs(&borrowed, &retry_list).await;
+                    target.ech_list = retry_list;
+                    continue;
                 }
                 ProbeOutcome::Rejected(None) => {
                     // 密钥轮换但服务端没给新配置：借用配置标为短冷却，让下次
@@ -562,35 +556,19 @@ impl EchClients {
         });
     }
 
-    /// ECH 拒绝附带的 retry_configs → ECHConfigList：就地更新借用槽（密钥
-    /// 轮换的规范恢复路径，不打 DoH）。返回新的 TLS 配置；编码非法返回 None。
-    /// Server retry_configs from an ECH rejection → ECHConfigList: updates
-    /// the borrowed slot in place (the spec's key-rotation recovery path —
-    /// no DoH needed). Returns the new TLS config; None if encoding fails.
-    async fn apply_retry_configs(
-        &self,
-        old: &Borrowed,
-        payloads: &[EchConfigPayload],
-    ) -> Option<rustls::ClientConfig> {
-        use rustls::internal::msgs::codec::Codec;
-        let mut bytes = Vec::new();
-        for p in payloads {
-            bytes.extend(p.get_encoding());
-        }
-        let ech = EchConfig::new(
-            EchConfigListBytes::from(bytes),
-            rustls::crypto::aws_lc_rs::hpke::ALL_SUPPORTED_SUITES,
-        )
-        .ok()?;
+    /// ECH 拒绝附带的 retry_configs（已是序列化的 ECHConfigList）：就地
+    /// 更新借用槽——密钥轮换的规范恢复路径，不打 DoH。
+    /// The server retry_configs attached to an ECH rejection (already a
+    /// serialized ECHConfigList): updates the borrowed slot in place —
+    /// the spec's key-rotation recovery path, no DoH needed.
+    async fn apply_retry_configs(&self, old: &Borrowed, retry_list: &[u8]) {
         let new = Borrowed {
-            ech,
+            ech_list: retry_list.to_vec(),
             addrs: old.addrs.clone(),
             expires: old.expires,
         };
-        let tls = new.tls_config().ok()?;
         tracing::info!("{}", crate::tl!("ech.keysRotated"));
         *borrowed_slot().lock().await = BorrowSlot::Ready(new);
-        Some(tls)
     }
 
     /// 借用配置被判失效（密钥轮换且未附新配置）：置短期冷却让请求走
@@ -738,7 +716,7 @@ fn race_score_text(score: RaceScore, elapsed: Duration) -> String {
 /// 展示用标签）。/ Race outcome: the winning key group (ech + speed-ranked
 /// addr pool + TTL + display label).
 struct RacePick {
-    ech: EchConfig,
+    ech_list: Vec<u8>,
     addrs: Vec<SocketAddr>,
     ttl: Duration,
     /// 日志用：胜出地址来自的源域 / For logging: the source domain of the
@@ -785,11 +763,11 @@ async fn resolve_borrowed(doh_client: &Client) -> Option<Borrowed> {
                     score = race_score_text(p.best, p.elapsed)
                 )
             );
-            (p.ech, p.addrs, p.ttl)
+            (p.ech_list, p.addrs, p.ttl)
         }
         None => {
             let rec = cands.into_iter().next().expect("non-empty");
-            (rec.ech, rec.addrs, rec.ttl)
+            (rec.ech_raw, rec.addrs, rec.ttl)
         }
     };
     // 就绪提示仅在首次借到配置时输出；此后 TTL 刷新静默，
@@ -800,7 +778,7 @@ async fn resolve_borrowed(doh_client: &Client) -> Option<Borrowed> {
         tracing::info!("{}", crate::tl!("ech.borrowedReady"));
     }
     Some(Borrowed {
-        ech: ech_cfg,
+        ech_list: ech_cfg,
         addrs,
         expires: Instant::now() + ttl,
     })
@@ -832,16 +810,15 @@ async fn race_borrowed(cands: &[doh::RecordExtract]) -> Option<RacePick> {
     let mut set = tokio::task::JoinSet::new();
     let mut seen: HashSet<SocketAddr> = HashSet::new();
     for (i, c) in cands.iter().enumerate() {
-        let Ok(tls) = tls_config_for(&c.ech) else {
-            continue;
-        };
         for addr in &c.addrs {
             if !seen.insert(*addr) {
                 continue;
             }
-            let tls = tls.clone();
+            let ech_list = c.ech_raw.clone();
             let addr = *addr;
-            set.spawn(async move { probe_addr_speed(&tls, addr).await.map(|s| (i, addr, s)) });
+            set.spawn(
+                async move { probe_addr_speed(&ech_list, addr).await.map(|s| (i, addr, s)) },
+            );
         }
     }
     // 2) 收集全部样本（首个通过即返回会退化成握手竞速——速度层要等读体，
@@ -913,7 +890,7 @@ async fn race_borrowed(cands: &[doh::RecordExtract]) -> Option<RacePick> {
         .min()
         .unwrap_or(doh::BORROWED_TTL_FALLBACK);
     Some(RacePick {
-        ech: cands[win_i].ech.clone(),
+        ech_list: cands[win_i].ech_raw.clone(),
         addrs,
         ttl,
         source: cands[win_i].source.clone(),
@@ -921,49 +898,4 @@ async fn race_borrowed(cands: &[doh::RecordExtract]) -> Option<RacePick> {
         best: RaceScore::of(win_el, win_bytes),
         elapsed: win_el,
     })
-}
-
-/// 由 ECH 配置构建 rustls 客户端配置（与 Borrowed::tls_config 同实现，
-/// 供竞速阶段尚未成形的候选复用）。/ Builds a rustls client config from
-/// an ECH config (same implementation as Borrowed::tls_config; shared with
-/// the race stage where candidates aren't Borrowed yet).
-fn tls_config_for(ech: &EchConfig) -> Result<rustls::ClientConfig> {
-    use rustls_platform_verifier::BuilderVerifierExt;
-    let mut cfg = rustls::ClientConfig::builder_with_provider(
-        rustls::crypto::aws_lc_rs::default_provider().into(),
-    )
-    .with_ech(EchMode::Enable(ech.clone()))
-    .expect(
-        "TLS1.3 是唯一合法版本，with_ech 不会失败 / TLS1.3 is always valid, with_ech cannot fail",
-    )
-    .with_platform_verifier()
-    .map_err(|e| AppError::Other(format!("ECH 平台证书校验初始化失败: {e}")))?
-    .with_no_client_auth();
-    cfg.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
-    Ok(cfg)
-}
-
-impl Borrowed {
-    /// 由借用的 ECH 配置构建 rustls 客户端配置（TLS 1.3；ALPN 提供 h2 +
-    /// http/1.1，h2 在前优先——HTTP 版本由协商结果决定，CF 边缘总选 h2；
-    /// reqwest 对 preconfigured 配置不补 ALPN，必须在此显式给出，缺省空
-    /// ALPN 会导致永远协商不出 h2）。
-    /// 证书校验走平台校验器（Windows 走 schannel——杀软 HTTPS 扫描 / 解密型
-    /// 代理装进系统信任库的 CA 也能验）。reqwest 的 `rustls` feature 自带
-    /// rustls-platform-verifier，普通客户端已是此行为；preconfigured 的 ECH
-    /// 客户端必须显式对齐，否则 TLS 拦截环境下只有 ECH 握手会挂、静默回落
-    /// 成普通连接。
-    /// Builds a rustls client config from the borrowed ECH config (TLS 1.3;
-    /// ALPN offers h2 + http/1.1, h2 first — the HTTP version follows the
-    /// negotiated ALPN and CF edges always pick h2; reqwest does not fill in
-    /// ALPN for preconfigured configs, so it must be set here explicitly — an
-    /// empty list would never negotiate h2). Certificates verify via the
-    /// platform verifier (schannel on Windows — so proxy/AV roots installed
-    /// into the OS store also verify). reqwest's `rustls` feature already
-    /// bundles rustls-platform-verifier for normal clients; the preconfigured
-    /// ECH client must opt in explicitly or ECH handshakes alone break under
-    /// TLS interception and silently fall back.
-    fn tls_config(&self) -> Result<rustls::ClientConfig> {
-        tls_config_for(&self.ech)
-    }
 }

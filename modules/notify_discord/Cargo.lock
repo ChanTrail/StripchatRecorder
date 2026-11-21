@@ -148,7 +148,7 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "notify_discord"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "pp_utils",
  "rustls",
@@ -171,7 +171,7 @@ checksum = "7e036b411754132fd6b74e94b74e9a13c5cf606fa93d1885c35860d3060820b1"
 
 [[package]]
 name = "pp_utils"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "serde",
  "serde_json",

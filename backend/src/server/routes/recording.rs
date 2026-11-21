@@ -124,7 +124,7 @@ pub struct FileQuery {
 /// [`crate::recording::meta::extract_verified_module_outputs`]）。
 ///
 /// 这样设计的原因：此前的实现接受任意 `path` 参数，用 `canonicalize` +
-/// `starts_with(output_dir)` 校验请求路径必须落在配置的输出目录内——但 ts_merge
+/// `starts_with(output_dir)` 校验请求路径必须落在配置的输出目录内——但 segment_merge
 /// 等模块支持自定义输出目录参数（`output_dir`），一旦用户配置了与 `settings.output_dir`
 /// 不同的合并输出目录，contact_sheet 等下游模块的产物自然也会落在这个自定义目录下，
 /// 导致校验以"access denied"失败，预览图无法加载。改为通过 meta 解析而非直接校验
@@ -143,7 +143,7 @@ pub struct FileQuery {
 /// Why this design: the previous implementation accepted an arbitrary `path` parameter
 /// and validated it with `canonicalize` + `starts_with(output_dir)`, requiring the
 /// requested path to fall within the configured output directory — but modules like
-/// ts_merge support a custom output directory param (`output_dir`); once a user
+/// segment_merge support a custom output directory param (`output_dir`); once a user
 /// configures a merge output directory different from `settings.output_dir`, downstream
 /// modules like contact_sheet naturally produce their output under that custom
 /// directory too, causing the boundary check to fail with "access denied" and the

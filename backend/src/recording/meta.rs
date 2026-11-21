@@ -20,9 +20,9 @@
 //!                                     ↘ pp_error
 //! ```
 //!
-//! 注：TS 分片合并现在是后处理流水线的第一个节点（ts_merge 模块），
+//! 注：TS 分片合并现在是后处理流水线的第一个节点（segment_merge 模块），
 //! 不再有单独的 merging_waiting / merging 状态。
-//! Note: TS segment merging is now the first pipeline node (ts_merge module);
+//! Note: TS segment merging is now the first pipeline node (segment_merge module);
 //! the separate merging_waiting / merging statuses no longer exist.
 //!
 //! ## 子模块划分 / Submodule breakdown
@@ -52,7 +52,7 @@ pub use model::{
     meta_dir, meta_dir_for, meta_path_for, meta_path_in, parse_timestamp_from_stem, recording_stem,
     resolve_meta_path, resolve_meta_path_in, username_from_path, username_from_stem,
 };
-pub use scan::{ensure_meta_files, ts_merge_output_dir};
+pub use scan::{ensure_meta_files, segment_merge_output_dir};
 pub use store::{
     clear_pp_progress, delete_meta, ensure_meta, pp_execution_finish, pp_execution_start,
     read_meta, set_pp_done, set_pp_progress, set_segment_stats, set_status, write_meta,

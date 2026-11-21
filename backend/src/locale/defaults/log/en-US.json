@@ -131,7 +131,7 @@
     "cgfRefreshUpdated": "CGF schedule updated for {username}",
     "cgfRefreshUnavailable": "CGF schedule not available for {username} (CGF does not have this anchor data or there is a network error)",
     "cgfRefreshDone": "CGF schedule refresh pass complete",
-    "tsMergeOutputDirSynced": "ts_merge output_dir synced: {old} → {new}"
+    "mergeOutputDirSynced": "segment_merge output_dir synced: {old} → {new}"
   },
   "watcher": {
     "recordingsCreateDirFailed": "Failed to create watch dir {dir}: {error}",
@@ -173,7 +173,8 @@
     "envOverrideWriteFailed": "Failed to write environment variable overrides to {path}: {error}",
     "envOverrideSkippedInvalid": "Config file {path} could not be parsed ({error}); LANGUAGE / PORT environment variables not applied this run",
     "envLanguageUnknown": "Environment variable LANGUAGE={value} is not an available locale code (e.g. zh-CN, en-US); ignored",
-    "envPortInvalid": "Environment variable PORT={value} is not a valid port number; ignored"
+    "envPortInvalid": "Environment variable PORT={value} is not a valid port number; ignored",
+    "outputDirRenameFailed": "Could not rename segment output directory {old} to {new} ({error}); keeping the old path"
   },
   "sse": {
     "broadcastLagged": "SSE broadcast lagged, {count} events dropped"
@@ -212,7 +213,8 @@
     "claimWaitReservationTimeout": "Post-processing: timed out waiting for the scan reservation on recording {key} to be released, skipping this trigger → {path}"
   },
   "ffmpegUtil": {
-    "stdinWriteIgnored": "convert_to_ts: stdin write error ignored (ffmpeg exited OK): {error}",
+    "stdinWriteIgnored": "convert_to_m4s: stdin write error ignored (ffmpeg exited OK): {error}",
+    "tfdtPatchFailed": "convert_to_m4s: tfdt patching failed (segment still valid; merged timeline may drift): {error}",
     "openPlaylistFailed": "Failed to open playlist.m3u8: {error}",
     "writeM3u8HeaderFailed": "Failed to write M3U8 header: {error}",
     "updateM3u8Failed": "Failed to update playlist.m3u8: {error}"
@@ -253,7 +255,8 @@
     "streamerRenamed": "Streamer renamed detected: {username} -> {newUsername} (model_id={modelId})",
     "autoM3u8TldSuccess": "auto.m3u8 via CDN TLD: {tld}",
     "autoM3u8Failed": "auto.m3u8 fetch failed [{url}]: {error}",
-    "usingUrl": "Using the URL: {url}"
+    "usingUrl": "Using the URL: {url}",
+    "codecFallback": "{username}: playlist offers no {codec} variants, trying the next codec down"
   },
   "community": {
     "downloading": "Downloading module {id} v{version}...",

@@ -108,16 +108,36 @@
 	}
 
 
+	/**
+	 * 打开录制文件：设置中配置了自定义播放器时用它播放，否则系统默认程序。
+	 * 播放器路径失效/未找到时把后端标记映射为本地化提示。
+	 *
+	 * Open a recording file: the configured custom player plays it when set,
+	 * otherwise the system default handler. Maps the backend's player markers
+	 * to localized hints.
+	 */
 	async function openFile(path: string) {
-		await call("open_recording", { path });
+		try {
+			await call("open_recording", { path });
+		} catch (e) {
+			const msg = e instanceof Error ? e.message : String(e);
+			toast(
+				msg === "no_player"
+					? t("stripchat.noPlayer")
+					: msg === "player_missing"
+						? t("stripchat.playerMissing")
+						: msg,
+				"error",
+			);
+		}
 	}
 
 	/**
 	 * 在文件管理器中打开合并后视频文件夹。
-	 * ts_merge 配置了 output_dir → 打开该目录；否则打开 settings.output_dir。
+	 * segment_merge 配置了 output_dir → 打开该目录；否则打开 settings.output_dir。
 	 *
 	 * Open the merged video folder in the file manager.
-	 * Uses ts_merge's output_dir if set, otherwise falls back to settings.output_dir.
+	 * Uses segment_merge's output_dir if set, otherwise falls back to settings.output_dir.
 	 */
 	async function openMergedDir() {
 		try {
@@ -140,7 +160,15 @@
 		try {
 			await call("open_output_file", { videoPath: filePath, moduleId });
 		} catch (e) {
-			toast(String(e), "error");
+			const msg = e instanceof Error ? e.message : String(e);
+			toast(
+				msg === "no_player"
+					? t("stripchat.noPlayer")
+					: msg === "player_missing"
+						? t("stripchat.playerMissing")
+						: msg,
+				"error",
+			);
 		}
 	}
 
@@ -359,9 +387,9 @@
 			};
 			if (!p.meta) return;
 
-			// 路径迁移：ts_merge 成功后后端会在同一事件里携带 old_path，
+			// 路径迁移：segment_merge 成功后后端会在同一事件里携带 old_path，
 			// 用精确的旧路径完成迁移，避免多任务并发时靠搜索猜测导致的状态错乱。
-			// Path migration: after ts_merge the backend includes old_path in the same event;
+			// Path migration: after segment_merge the backend includes old_path in the same event;
 			// use the precise old path to migrate state, avoiding corruption when multiple
 			// tasks run concurrently and guessing the old path would pick the wrong one.
 			const oldPath = p.old_path ?? null;

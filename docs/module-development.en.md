@@ -139,7 +139,7 @@ When invoked with `--describe`, the module must print a JSON object to stdout an
   "version": "1.0.0",             // Version (injected by pp_utils::describe_with_version; don't hardcode)
   "inputTypes": ["video_file"],   // Input port types; see Port Type System
   "outputTypes": ["video_file"],  // Output port types; empty means pipeline terminates here
-  "official": false,              // Whether this is an official module (UI hint to place after ts_merge)
+  "official": false,              // Whether this is an official module (UI hint to place after segment_merge)
   "params": [
     {
       "key": "param_key",         // Parameter key; maps to params.param_key in the input JSON
@@ -186,7 +186,7 @@ The `type` field of each param object determines how the UI renders it:
   "key": "format",
   "label": "Output Format",
   "type": "select",
-  "default": "mp4",
+  "default": "mkv",
   "options": ["mp4", "mkv", "ts"]
 }
 ```
@@ -212,12 +212,14 @@ Each module declares its input/output port data types via `inputTypes` and `outp
 
 | Identifier      | Description                                                                              |
 | --------------- | ---------------------------------------------------------------------------------------- |
-| `ts_session_dir`| TS segment recording directory (produced by the recording system, input to `ts_merge`)   |
+| `session_dir`| Segment recording directory (fMP4 .m4s; legacy recordings may hold TS .ts; produced by the recording system, input to `segment_merge`)   |
 | `video_file`    | Single video file (mp4 / mkv / ts etc.)                                                  |
 | `image_file`    | Single image file (webp / jpg / png etc.)                                                |
 | `media_bundle`  | Media bundle (video path + image path separated by `\n`, passed as a single path string) |
 | `any_file`      | Any file type (accepts any upstream file type, including `media_bundle`)                 |
 | `any_dir`       | Any directory type (accepts any upstream directory type)                                 |
+
+> Rename note: `session_dir` was previously named `ts_session_dir` (and the merge module `ts_merge` is now `segment_merge`). The rename keeps no backward compatibility — older modules must update their `--describe` declaration before use.
 
 **Compatibility rules:**
 - Identical types can always connect
@@ -271,16 +273,16 @@ Priority: **server-side `locale/modules/<id>/` JSON files** override `--describe
 The pipeline is a **DAG (directed acyclic graph)** of nodes and edges, supporting branches and merges. The host executes enabled nodes in topological order:
 
 1. Upstream node `outputs[]` paths are passed to downstream node `inputs[]` according to the wired port indices.
-2. The pipeline always starts from the `recording_input` built-in node, which outputs `ts_session_dir` — the TS segment directory from the current recording.
+2. The pipeline always starts from the `recording_input` built-in node, which outputs `session_dir` — the segment directory from the current recording.
 3. If a module returns `{"code": "error"}` or exits with a non-zero code, the pipeline aborts immediately.
 4. If a module returns `{"code": "done"}` or `outputs` is empty, that branch terminates and no further downstream nodes receive input.
 
 ```
-recording_input (TS segment dir)
+recording_input (segment dir)
     │
-    ▼  inputs[0] = /ts_fragment/alice_20240101_120000/
+    ▼  inputs[0] = /fragment/alice_20240101_120000/
 ┌──────────┐
-│ ts_merge │── outputs[0] = /recordings/alice/alice_20240101_120000.mp4
+│ segment_merge │── outputs[0] = /recordings/alice/alice_20240101_120000.mp4
 └──────────┘
     │
     ▼  inputs[0] = /recordings/alice/alice_20240101_120000.mp4
@@ -642,7 +644,7 @@ The project ships the following official modules:
 
 | Module ID         | Input Type       | Output Type       | Description                                                                                     |
 | ----------------- | ---------------- | ----------------- | ----------------------------------------------------------------------------------------------- |
-| `ts_merge`        | `ts_session_dir` | `video_file`      | Merges a TS segment directory into a single video file; **the first node in an official pipeline** |
+| `segment_merge`        | `session_dir` | `video_file`      | Merges a recorded segment directory into a single video file; **the first node in an official pipeline** |
 | `filter_short`    | `video_file`     | `video_file`      | Deletes videos shorter than a threshold and terminates the pipeline; supports `dry_run` preview mode |
 | `contact_sheet`   | `video_file`     | `media_bundle`    | Extracts frames at an interval and tiles them into a preview image; outputs a media_bundle       |
 | `notify_discord`  | `media_bundle`   | `media_bundle`    | Sends recording info and cover image to Discord via Webhook; supports HTTP/SOCKS5 proxy          |
@@ -650,10 +652,10 @@ The project ships the following official modules:
 | `cleanup`         | `any_file`       | — (terminates)    | Cleans up recording-related files: optionally deletes video/preview/meta, and tmp cache files   |
 
 > **Built-in DAG nodes** (not executables; handled directly by the backend):
-> - `recording_input`: virtual recording input node, always present and non-deletable, outputs `ts_session_dir`
+> - `recording_input`: virtual recording input node, always present and non-deletable, outputs `session_dir`
 > - `unpack`: splits a `media_bundle` into `video_file` (port 0) and `image_file` (port 1)
 
-### ts_merge parameters
+### segment_merge parameters
 
 | Parameter          | Type    | Default | Description                                                                |
 | ------------------ | ------- | ------- | -------------------------------------------------------------------------- |

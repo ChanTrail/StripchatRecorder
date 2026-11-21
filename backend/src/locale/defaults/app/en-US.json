@@ -163,8 +163,8 @@
     },
     "diskLabel": {
       "all": "Storage",
-      "ts_fragment": "Segments",
-      "ts_merge": "Merged"
+      "fragment": "Segments",
+      "segment_merge": "Merged"
     },
     "batchPostprocess": "Batch Post-process ({count})",
     "deleteSelected": "Delete Selected ({count})",
@@ -231,7 +231,7 @@
     "saved": "Auto-saved",
     "input": {
       "label": "Input",
-      "description": "TS segment recording folder"
+      "description": "Segment recording folder (fMP4 .m4s)"
     },
     "node": {
       "skip": "Skip",
@@ -253,7 +253,7 @@
     },
     "updatedByOther": "Post-process pipeline has been updated by another client",
     "fitView": "Fit View",
-    "guide": "Right-click on canvas to add modules · Right-drag to pan · Left-drag to box-select nodes · Press Delete after selection to remove · ts_merge merges TS segments into a video file; other modules (accepting video_file input) must be placed after it",
+    "guide": "Right-click on canvas to add modules · Right-drag to pan · Left-drag to box-select nodes · Press Delete after selection to remove · segment_merge merges recorded segments into a video file; other modules (accepting video_file input) must be placed after it",
     "multiSelected": "{count} node(s) selected, press Delete to batch remove",
     "snapToGrid": "Snap to Grid",
     "mobileHint": "The post-processing pipeline editor requires mouse interaction. Please use this feature in a desktop browser."
@@ -439,12 +439,12 @@
       "enUS": "English"
     },
     "outputDir": {
-      "label": "TS Stream Output Directory",
+      "label": "Segment Stream Output Directory",
       "placeholder": "/path/to/recordings",
-      "hint": "Location where TS segment streams are stored. Press Enter or click elsewhere to confirm after change.",
+      "hint": "Location where recorded segment streams (fMP4 .m4s) are stored. Press Enter or click elsewhere to confirm after change.",
       "pick": "Browse",
-      "changeTitle": "Change TS Stream Output Directory",
-      "changeMessage": "Change TS stream output directory to:\n{dir}\n\nThis change will take effect on the next recording.",
+      "changeTitle": "Change Segment Stream Output Directory",
+      "changeMessage": "Change segment stream output directory to:\n{dir}\n\nThis change will take effect on the next recording.",
       "changeConfirm": "Confirm"
     },
     "maxPpConcurrent": {
@@ -469,6 +469,13 @@
       "label": "Preferred Video Codec",
       "default": "Default (server decides)",
       "hint": "Sent as the preferredVideoCodec parameter when fetching the playlist. Whether it takes effect depends on the server offering that codec; H.265 / AV1 files are smaller, but some players and post-processing tools may not support them. Applies to playlists fetched after the change."
+    },
+    "playerPath": {
+      "label": "Custom player",
+      "placeholder": "Leave empty to auto-detect",
+      "hint": "Player program launched for relay streams and recording files; leave empty for platform defaults (relay streams probe mpv/VLC/PotPlayer etc., recordings use the system association).",
+      "pick": "Pick program",
+      "clear": "Restore auto-detect"
     },
     "recordingDuration": {
       "label": "Recording File Duration",
@@ -720,6 +727,8 @@
   },
   "dirBrowser": {
     "title": "Select Directory",
+    "titleFile": "Select File",
+    "titleExec": "Select Program",
     "pathLabel": "Path",
     "pathPlaceholder": "Enter path and press Enter to navigate",
     "thisPc": "This PC",
@@ -729,9 +738,13 @@
     "newFolder": "New Folder",
     "newFolderPlaceholder": "Folder name",
     "empty": "No subdirectories",
+    "emptyFile": "No subdirectories or files",
+    "emptyExec": "No executables in this directory",
     "loadFailed": "Cannot access this directory",
     "createFailed": "Failed to create folder",
     "select": "Select this directory",
+    "selectFile": "Select this file",
+    "selectExec": "Select this program",
     "cancel": "Cancel"
   },
   "streamers": {
@@ -818,6 +831,7 @@
     "play": "Play the relay stream in the system player",
     "playFailed": "Failed to launch the player: {message}",
     "noPlayer": "No usable player found — install VLC, mpv or PotPlayer",
+    "playerMissing": "The configured player path no longer exists — reselect it in Settings",
     "status": {
       "public": "Public",
       "private": "Private",

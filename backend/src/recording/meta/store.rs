@@ -68,10 +68,10 @@ pub fn write_meta(video_path: &Path, meta: &VideoMeta) {
     let mut meta = meta.clone();
     meta.meta_version = META_VERSION;
     // 仅在 meta.video_path 尚未设置时，用参数路径作为初始值。
-    // 已有值时保留不覆盖，允许上层（如 ts_merge 完成后）显式更新为新路径。
+    // 已有值时保留不覆盖，允许上层（如 segment_merge 完成后）显式更新为新路径。
     //
     // Only set video_path from the parameter if it hasn't been set yet.
-    // If it's already set (e.g. updated to ts_merge output path), preserve it.
+    // If it's already set (e.g. updated to segment_merge output path), preserve it.
     if meta.video_path.is_none() {
         meta.video_path = Some(video_path.to_string_lossy().to_string());
     }

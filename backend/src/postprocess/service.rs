@@ -43,8 +43,8 @@ pub use incremental::infer_initial_path;
 /// Public post-processing entry point (used for automatic triggering after recording completes).
 /// Enqueues the task and then calls the inner implementation.
 pub fn run_postprocess_for_path(
-    // 后处理的初始输入路径（通常是 ts_session_dir；若跳过 ts_merge 则为 video_file）
-    // Initial input path for post-processing (usually ts_session_dir; video_file if ts_merge is skipped)
+    // 后处理的初始输入路径（通常是 session_dir；若跳过 segment_merge 则为 video_file）
+    // Initial input path for post-processing (usually session_dir; video_file if segment_merge is skipped)
     initial_path: &std::path::Path,
     // 关联的视频文件路径（用于 meta 文件定位，可能与 initial_path 不同）
     // Associated video file path (for meta file location; may differ from initial_path)
@@ -283,9 +283,9 @@ pub fn run_postprocess_inner(
     let state_ref = Arc::clone(state);
     let emitter_ref = Arc::clone(emitter);
     // path_str_ref 用于 SSE 事件的 path 字段，初始值为 video_path，
-    // ts_merge 成功后会更新为新生成的视频文件路径
+    // segment_merge 成功后会更新为新生成的视频文件路径
     // path_str_ref for SSE event path field, initial value is video_path,
-    // updated to newly generated video file path after ts_merge succeeds
+    // updated to newly generated video file path after segment_merge succeeds
     let path_str_ref = std::sync::Mutex::new(path_str.clone());
     let video_path_buf = video_path.to_path_buf();
 
@@ -431,19 +431,19 @@ pub fn run_postprocess_inner(
                 outputs,
             );
 
-            // ts_merge 成功后更新 meta.video_path，切换 SSE path。
+            // segment_merge 成功后更新 meta.video_path，切换 SSE path。
             //
             // 视频时长/分辨率的探测和写入不在此处进行——原因见 run_postprocess_inner
-            // 末尾 backfill_video_probe_fields 调用点的说明：本次 ts_merge 若因"已成功
+            // 末尾 backfill_video_probe_fields 调用点的说明：本次 segment_merge 若因"已成功
             // 且配置未变"被跳过（见 compute_dirty_nodes/build_effective_pipeline），
             // on_node_done 根本不会为它触发，写在这里会导致老录制的 meta 永远补不上
             // 这两个字段。
             //
-            // After ts_merge succeeds, update meta.video_path and switch the SSE path.
+            // After segment_merge succeeds, update meta.video_path and switch the SSE path.
             //
             // Video duration/resolution probing and writing does NOT happen here — see the
             // comment at the backfill_video_probe_fields call site near the end of
-            // run_postprocess_inner for why: if this run's ts_merge was skipped because it
+            // run_postprocess_inner for why: if this run's segment_merge was skipped because it
             // "already succeeded with unchanged config" (see compute_dirty_nodes/
             // build_effective_pipeline), on_node_done never fires for it at all, so writing
             // here would leave these two fields permanently unfilled for any recording that
@@ -457,7 +457,8 @@ pub fn run_postprocess_inner(
             // it in this postprocess-meta-update push, so the frontend can perform the path
             // migration precisely rather than guessing by searching all running paths — which
             // causes state corruption when multiple tasks are running concurrently.
-            let old_path_for_migration: Option<String> = if result.module_id == "ts_merge"
+            let old_path_for_migration: Option<String> = if result.module_id
+                == crate::postprocess::pipeline::SEGMENT_MERGE_MODULE_ID
                 && result.is_success()
                 && let Some(output_path) = result.outputs.first()
             {
@@ -546,16 +547,18 @@ pub fn run_postprocess_inner(
     let merged_results = merge_with_prev_results(results, &prev_execution, pipeline, &dirty_nodes);
     let all_ok = merged_results.iter().all(|r| r.is_success());
 
-    // 先提取 ts_merge 输出路径（若有），再判断文件是否真正被删除
-    // Extract ts_merge output path first (if any), then check if the file was truly deleted
-    let ts_merge_output: Option<std::path::PathBuf> = merged_results
+    // 先提取 segment_merge 输出路径（若有），再判断文件是否真正被删除
+    // Extract segment_merge output path first (if any), then check if the file was truly deleted
+    let merge_output: Option<std::path::PathBuf> = merged_results
         .iter()
-        .find(|r| r.module_id == "ts_merge" && r.is_success())
+        .find(|r| {
+            (r.module_id == crate::postprocess::pipeline::SEGMENT_MERGE_MODULE_ID) && r.is_success()
+        })
         .and_then(|r| r.outputs.first().cloned());
 
-    // 确定"实际存活路径"：ts_merge 有输出时用输出路径，否则用原始 video_path
-    // Determine the "surviving path": use ts_merge output if available, else original video_path
-    let surviving_path = ts_merge_output.as_deref().unwrap_or(video_path);
+    // 确定"实际存活路径"：segment_merge 有输出时用输出路径，否则用原始 video_path
+    // Determine the "surviving path": use segment_merge output if available, else original video_path
+    let surviving_path = merge_output.as_deref().unwrap_or(video_path);
 
     // 若实际存活路径不存在，说明视频被某个模块（如 filter_short）删除，清理 meta 并退出
     // If the surviving path doesn't exist, the video was deleted by a module (e.g. filter_short)
@@ -599,7 +602,9 @@ pub fn run_postprocess_inner(
             {
                 return Some(entry.clone());
             }
-            // 回退到上次成功的条目（被跳过的节点）/ Fall back to previously succeeded entry (skipped nodes)
+            // 回退到上次成功的条目（被跳过的节点），按 effective_id 匹配。
+            // Fall back to the previously succeeded entry (skipped nodes),
+            // matched by effective_id.
             prev_execution
                 .iter()
                 .find(|e| e.effective_id() == r.effective_id)
@@ -610,39 +615,39 @@ pub fn run_postprocess_inner(
     let final_status = if all_ok { "finish" } else { "pp_error" };
     crate::recording::meta::set_pp_done(video_path, final_status, final_execution.clone());
 
-    // ts_merge 产生的输出与 session_dir 的 stem 相同，meta 文件名不变，无需迁移。
-    // ts_merge output has the same stem as the session_dir — meta filename is unchanged, no migration needed.
+    // segment_merge 产生的输出与 session_dir 的 stem 相同，meta 文件名不变，无需迁移。
+    // segment_merge output has the same stem as the session_dir — meta filename is unchanged, no migration needed.
 
-    // 无条件补写视频时长/分辨率（若尚未写入）：不依赖本次 ts_merge 是否真的执行过。
+    // 无条件补写视频时长/分辨率（若尚未写入）：不依赖本次 segment_merge 是否真的执行过。
     //
-    // 之前的实现把 ffprobe 探测放在 on_node_done 的 ts_merge 分支里，只有该节点
-    // 本次真正跑过才会触发；但重新后处理一个"ts_merge 已成功且配置未变"的历史
-    // 视频时，compute_dirty_nodes 会把 ts_merge 标记为非 dirty，
+    // 之前的实现把 ffprobe 探测放在 on_node_done 的 segment_merge 分支里，只有该节点
+    // 本次真正跑过才会触发；但重新后处理一个"segment_merge 已成功且配置未变"的历史
+    // 视频时，compute_dirty_nodes 会把 segment_merge 标记为非 dirty，
     // build_effective_pipeline 直接把它从本次要执行的节点列表中过滤掉，
     // on_node_done 根本不会为它调用——导致这两个字段永远停留在 null，
     // 无论重新触发多少次后处理都补不上。
     //
     // 这里改为在流水线整个跑完之后、按 surviving_path 是否已存在探测结果统一检查
     // 一次：只要 meta 里这两个字段任一为 None，且 surviving_path 是一个真实存在的
-    // 视频文件（而非目录——若流水线尚未跑到 ts_merge，surviving_path 仍是原始
+    // 视频文件（而非目录——若流水线尚未跑到 segment_merge，surviving_path 仍是原始
     // session_dir，ffprobe 对目录必然失败，get_video_duration/get_video_resolution
     // 内部的 Command 调用会静默返回 None，不会报错也不会误写），就补一次 ffprobe。
     // 已有值时不重新探测，避免徒增磁盘 IO。
     //
     // Unconditionally backfill video duration/resolution (if not already set) —
-    // independent of whether this run's ts_merge actually executed.
+    // independent of whether this run's segment_merge actually executed.
     //
-    // The previous implementation put the ffprobe probing inside on_node_done's ts_merge
+    // The previous implementation put the ffprobe probing inside on_node_done's segment_merge
     // branch, which only fires when that node genuinely runs this time. But re-processing
-    // a historical video whose ts_merge "already succeeded with unchanged config" causes
-    // compute_dirty_nodes to mark ts_merge as not dirty, and build_effective_pipeline
+    // a historical video whose segment_merge "already succeeded with unchanged config" causes
+    // compute_dirty_nodes to mark segment_merge as not dirty, and build_effective_pipeline
     // filters it out of this run's node list entirely — on_node_done is never called for
     // it, leaving these two fields permanently null no matter how many times
     // post-processing is re-triggered.
     // This is now checked once after the whole pipeline finishes, based on whether
     // surviving_path already has probed values in meta: as long as either field is still
     // None and surviving_path is a real video file (not a directory — if the pipeline never
-    // reached ts_merge, surviving_path is still the original session_dir; ffprobe on a
+    // reached segment_merge, surviving_path is still the original session_dir; ffprobe on a
     // directory simply fails and the get_video_duration/get_video_resolution helpers'
     // internal Command calls silently return None, without erroring or writing anything
     // wrong), a single ffprobe backfill pass runs. Fields already set are left untouched to
@@ -664,7 +669,7 @@ pub fn run_postprocess_inner(
     // `postprocess-done` 的 path 字段必须用 path_str_ref 的最终值，而不是本函数
     // 开头就固定下来的 path_str。
     //
-    // 当流水线从 TS 分片目录开始执行时，ts_merge 成功后会把 path_str_ref 更新为
+    // 当流水线从 TS 分片目录开始执行时，segment_merge 成功后会把 path_str_ref 更新为
     // 合并后的视频文件路径（`postprocess-meta-update` 事件全程用的都是这个会变化
     // 的值），但 path_str 从函数开始到结束始终是最初传入的 video_path（分片目录）
     // 不变。前端在收到第一个"新路径"的 postprocess-meta-update 时会尝试把
@@ -681,7 +686,7 @@ pub fn run_postprocess_inner(
     // path_str which was fixed at the start of this function.
     //
     // When the pipeline starts from a TS segment directory, path_str_ref gets updated
-    // to the merged video file path once ts_merge succeeds (postprocess-meta-update
+    // to the merged video file path once segment_merge succeeds (postprocess-meta-update
     // uses this evolving value throughout), but path_str stays as the originally
     // passed-in video_path (the segment directory) for the entire function. The
     // frontend tries to migrate ppStatus/ppProgress from the old path to the new one
@@ -736,7 +741,7 @@ pub fn run_postprocess_inner(
             "path": final_path_str,
             "success": all_ok,
             "pp_execution": final_execution,
-            "video_path": ts_merge_output.as_ref().map(|p| p.to_string_lossy().to_string()),
+            "video_path": merge_output.as_ref().map(|p| p.to_string_lossy().to_string()),
         }),
     );
 }

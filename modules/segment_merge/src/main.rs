@@ -1,19 +1,21 @@
-//! TS 分片合并模块 / TS Segment Merge Module
+//! 分片合并模块 / Segment Merge Module
 //!
-//! 接收录制产生的 TS 分片会话目录，使用 ffmpeg 将其合并为单一视频文件。
+//! 接收录制产生的分片会话目录（现行为 fMP4 .m4s，旧会话可能残留 TS .ts），
+//! 使用 ffmpeg 将其合并为单一视频文件。
 //! 这是官方后处理流水线的首节点，其他官方模块（如 filter_short、contact_sheet）
 //! 应置于本模块之后。
 //!
-//! Receives the TS segment session directory from a recording and merges all segments
-//! into a single video file using ffmpeg.
+//! Receives the segment session directory from a recording (currently fMP4 .m4s;
+//! legacy sessions may still hold TS .ts) and merges all segments into a single
+//! video file using ffmpeg.
 //! This is the first node in the official post-processing pipeline; other official modules
 //! (e.g. filter_short, contact_sheet) should be placed after this one.
 //!
 //! # 协议 / Protocol
 //! - `--describe`: 输出 JSON 格式的模块元数据 / Output module metadata as JSON
-//! - stdin: JSON 输入（inputs[0] 为 ts_session_dir）/ JSON input (inputs[0] is ts_session_dir)
+//! - stdin: JSON 输入（inputs[0] 为 session_dir）/ JSON input (inputs[0] is session_dir)
 //! - stdout 进度行: `PROGRESS:{done}/{total}` / Progress lines
-//! - stdout 最终 JSON: `{"code":"ok","message":"...","outputs":["/path/to/merged.mp4"]}`
+//! - stdout 最终 JSON: `{"code":"ok","message":"...","outputs":["/path/to/merged.mkv"]}`
 
 use pp_utils::PROGRESS_SCALE;
 use serde::Deserialize;
@@ -25,10 +27,10 @@ use std::process::{Command, Stdio};
 /// 模块元数据 JSON，通过 `--describe` 参数输出。
 /// Module metadata JSON, output via `--describe` argument.
 const DESCRIBE: &str = r#"{
-    "id": "ts_merge",
-    "name": "合并 TS 分片",
-    "description": "将录制产生的 TS 分片目录合并为单一视频文件。官方后处理模块应置于本模块之后。",
-    "inputTypes": ["ts_session_dir"],
+    "id": "segment_merge",
+    "name": "合并录制分片",
+    "description": "将录制产生的分片目录（fMP4 .m4s，旧录制为 TS .ts）合并为单一视频文件。官方后处理模块应置于本模块之后。",
+    "inputTypes": ["session_dir"],
     "outputTypes": ["video_file"],
     "official": true,
     "params": [
@@ -36,7 +38,7 @@ const DESCRIBE: &str = r#"{
             "key": "format",
             "label": "输出格式",
             "type": "select",
-            "default": "mp4",
+            "default": "mkv",
             "options": ["mp4", "mkv", "ts"]
         },
         {
@@ -44,7 +46,7 @@ const DESCRIBE: &str = r#"{
             "label": "合并输出目录",
             "type": "dir",
             "default": "",
-            "description": "合并后视频文件的输出目录。留空则与 TS 分片目录的父目录相同。首次启动时默认设为程序目录下的 recordings 文件夹。"
+            "description": "合并后视频文件的输出目录。留空则与分片目录的父目录相同。首次启动时默认设为程序目录下的 recordings 文件夹。"
         },
         {
             "key": "split_by_streamer",
@@ -114,7 +116,7 @@ fn run() -> Result<serde_json::Value, String> {
         .map_err(|e| format!("Failed to parse stdin JSON: {}", e))?;
 
     let session_dir_str = input.inputs.first()
-        .ok_or_else(|| "inputs[0] (ts_session_dir) is required".to_string())?;
+        .ok_or_else(|| "inputs[0] (session_dir) is required".to_string())?;
     let session_dir = PathBuf::from(session_dir_str);
 
     if !session_dir.exists() {
@@ -135,7 +137,7 @@ fn run() -> Result<serde_json::Value, String> {
 
     let format = input.params.get("format")
         .and_then(|v| v.as_str())
-        .unwrap_or("mp4")
+        .unwrap_or("mkv")
         .to_string();
 
     let output_dir = input.params.get("output_dir")
@@ -178,13 +180,19 @@ fn run() -> Result<serde_json::Value, String> {
         let _ = f.write_all(b"#EXT-X-ENDLIST\n");
     }
 
-    // 计算分片总大小（用于进度估算）/ Calculate total segment size for progress estimation
+    // 计算分片总大小（用于进度估算）：现行分片是 .m4s（fMP4），旧会话
+    // 目录可能残留 .ts——两者都计入。
+    // Calculate total segment size for progress estimation: segments are
+    // now .m4s (fMP4); legacy session dirs may still hold .ts — count both.
     let total_bytes: u64 = fs::read_dir(&session_dir)
         .map(|entries| {
             entries.flatten()
                 .filter_map(|e| {
                     let p = e.path();
-                    if p.extension().and_then(|x| x.to_str()) == Some("ts") {
+                    if matches!(
+                        p.extension().and_then(|x| x.to_str()),
+                        Some("m4s") | Some("ts")
+                    ) {
                         fs::metadata(&p).ok().map(|m| m.len())
                     } else {
                         None

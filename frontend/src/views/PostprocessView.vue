@@ -7,7 +7,7 @@
     - 画布平移和缩放
     - 右键画布添加节点（按上下文过滤）
     - 节点参数内联编辑
-    - ts_merge 作为官方首节点（带徽章提示）
+    - segment_merge 作为官方首节点（带徽章提示）
 
     UE/ComfyUI-style node graph editor supporting:
     - Node drag placement
@@ -15,7 +15,7 @@
     - Canvas pan and zoom
     - Right-click canvas to add nodes (context-filtered)
     - Inline node parameter editing
-    - ts_merge as the official first node (with badge hint)
+    - segment_merge as the official first node (with badge hint)
 -->
 <script setup lang="ts">
 import { onMounted, computed, ref, onUnmounted, nextTick } from "vue";
@@ -293,10 +293,10 @@ function onNodePortMouseup(e: MouseEvent, nodeId: string, portIndex: number, typ
 	onPortMouseup(e, { nodeId, portIndex, isOutput, type });
 }
 function onInputPortMousedown(e: MouseEvent) {
-	onPortMousedown(e, { nodeId: INPUT_NODE_ID, portIndex: 0, isOutput: true, type: "ts_session_dir" });
+	onPortMousedown(e, { nodeId: INPUT_NODE_ID, portIndex: 0, isOutput: true, type: "session_dir" });
 }
 function onInputPortMouseup(e: MouseEvent) {
-	onPortMouseup(e, { nodeId: INPUT_NODE_ID, portIndex: 0, isOutput: true, type: "ts_session_dir" });
+	onPortMouseup(e, { nodeId: INPUT_NODE_ID, portIndex: 0, isOutput: true, type: "session_dir" });
 }
 /** 虚拟输入节点的唯一输出端口（port 0）当前是否已有连线 / Whether the virtual input node's sole output port (port 0) currently has a wire */
 const inputPortConnected = computed(() =>

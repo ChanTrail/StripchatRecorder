@@ -1,6 +1,6 @@
 [package]
 name = "stripchat-recorder-desktop"
-version = "0.4.11-beta"
+version = "0.5.0-beta"
 description = "Stripchat Stream Recorder (Desktop)"
 authors = ["ChanTrail"]
 edition = "2024"
@@ -45,3 +45,11 @@ url = "2"
 
 [lints.rust]
 linker_messages = "allow"
+
+# 与 backend/Cargo.toml 相同的 wreq vendored 补丁（本 crate 是独立
+# 解析根，backend 里的 [patch] 对此构建不生效——两边必须都写）。
+# Same vendored-wreq patch as backend/Cargo.toml (this crate is a
+# separate resolution root; the backend's [patch] doesn't apply to this
+# build — both manifests must carry it).
+[patch.crates-io]
+wreq = { path = "../../vendor/wreq" }

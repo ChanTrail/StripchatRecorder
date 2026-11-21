@@ -26,9 +26,11 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PortType {
-    /// TS 分片录制目录（主程序产生，作为 ts_merge 的输入）
-    /// TS segment recording directory (produced by the host, input to ts_merge)
-    TsSessionDir,
+    /// 分片录制目录（主程序产生，fMP4 .m4s 分片，作为 segment_merge 的输入）。
+    /// 分片录制目录（主程序产生，fMP4 .m4s 分片，作为 segment_merge 的输入）。
+    /// Segment recording directory (produced by the host, fMP4 .m4s
+    /// segments, input to segment_merge).
+    SessionDir,
     /// 单个视频文件（mp4/mkv/ts 等）/ Single video file (mp4/mkv/ts etc.)
     VideoFile,
     /// 单个图片文件 / Single image file
@@ -60,11 +62,15 @@ impl PortType {
                 PortType::AnyFile,
             ) => true,
             // 任何目录类型都可以接入 AnyDir / Any directory type can connect to AnyDir
-            (PortType::TsSessionDir, PortType::AnyDir) => true,
+            (PortType::SessionDir, PortType::AnyDir) => true,
             _ => false,
         }
     }
 }
+
+/// 官方合并模块的模块 ID。
+/// Module ID of the official merge module.
+pub const SEGMENT_MERGE_MODULE_ID: &str = "segment_merge";
 
 // ─── 模块描述 / Module Description ───────────────────────────────────────────
 
@@ -118,8 +124,8 @@ pub struct ModuleInfo {
     /// 多语言翻译（可选）/ i18n translations (optional)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub i18n: Option<serde_json::Value>,
-    /// 是否为官方模块（在 UI 中显示提示，建议置于 ts_merge 之后）
-    /// Whether this is an official module (UI shows a hint to place it after ts_merge)
+    /// 是否为官方模块（在 UI 中显示提示，建议置于 segment_merge 之后）
+    /// Whether this is an official module (UI shows a hint to place it after segment_merge)
     #[serde(default)]
     pub official: bool,
     /// 是否为可复用内置节点（可在流水线中放置多次，需要 node_id 区分实例）
@@ -487,5 +493,28 @@ impl NodeResult {
             self.code,
             PpExecCode::Done | PpExecCode::Error | PpExecCode::Cancelled
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! 端口协议名的钉死测试：序列化/反序列化都用 `session_dir`，
+    //! 旧名 `ts_session_dir` 不再被接受（改名不设兼容）。
+    //! Pin-down tests for the port protocol name: `session_dir` on both
+    //! serialize and deserialize; the legacy `ts_session_dir` is no
+    //! longer accepted (the rename keeps no compatibility).
+    use super::*;
+
+    #[test]
+    fn session_dir_port_type_roundtrip() {
+        assert_eq!(
+            serde_json::to_string(&PortType::SessionDir).unwrap(),
+            "\"session_dir\""
+        );
+        assert_eq!(
+            serde_json::from_str::<PortType>("\"session_dir\"").unwrap(),
+            PortType::SessionDir
+        );
+        assert!(serde_json::from_str::<PortType>("\"ts_session_dir\"").is_err());
     }
 }

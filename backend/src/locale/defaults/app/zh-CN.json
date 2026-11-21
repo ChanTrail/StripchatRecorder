@@ -163,8 +163,8 @@
     },
     "diskLabel": {
       "all": "存储空间",
-      "ts_fragment": "分片",
-      "ts_merge": "合并"
+      "fragment": "分片",
+      "segment_merge": "合并"
     },
     "batchPostprocess": "批量后处理 ({count})",
     "deleteSelected": "删除选中 ({count})",
@@ -231,7 +231,7 @@
     "saved": "已自动保存",
     "input": {
       "label": "输入",
-      "description": "TS 分片录制目录"
+      "description": "分片录制目录（fMP4 .m4s）"
     },
     "node": {
       "skip": "跳过",
@@ -253,7 +253,7 @@
     },
     "updatedByOther": "后处理流水线已由其他客户端更新",
     "fitView": "自适应视图",
-    "guide": "右键单击画布添加模块 · 右键拖拽平移 · 左键拖拽框选节点 · 选中后按 Delete 删除 · ts_merge 将 TS 分片合并为视频文件，其他模块（接受 video_file 输入）需置于其后",
+    "guide": "右键单击画布添加模块 · 右键拖拽平移 · 左键拖拽框选节点 · 选中后按 Delete 删除 · segment_merge 将录制分片合并为视频文件，其他模块（接受 video_file 输入）需置于其后",
     "multiSelected": "已选中 {count} 个节点，按 Delete 批量删除",
     "snapToGrid": "对齐网格",
     "mobileHint": "后处理流水线编辑器需要鼠标操作，请在 PC 端浏览器中使用此功能。"
@@ -439,12 +439,12 @@
       "enUS": "English"
     },
     "outputDir": {
-      "label": "TS 流输出目录",
+      "label": "分片流输出目录",
       "placeholder": "/path/to/recordings",
-      "hint": "录制产生的 TS 分片流存放位置。修改后按回车或点击其他区域确认。",
+      "hint": "录制产生的分片流（fMP4 .m4s）存放位置。修改后按回车或点击其他区域确认。",
       "pick": "选择",
-      "changeTitle": "修改 TS 流输出目录",
-      "changeMessage": "将 TS 流输出目录改为：\n{dir}\n\n此更改将在下次录制时生效。",
+      "changeTitle": "修改分片流输出目录",
+      "changeMessage": "将分片流输出目录改为：\n{dir}\n\n此更改将在下次录制时生效。",
       "changeConfirm": "确认"
     },
     "maxPpConcurrent": {
@@ -469,6 +469,13 @@
       "label": "首选视频编码",
       "default": "默认（由服务器决定）",
       "hint": "获取播放列表时附带 preferredVideoCodec 参数。是否生效取决于服务器是否提供该编码；H.265 / AV1 体积更小，但部分播放器和后处理工具可能不支持。修改后对之后新获取的播放列表生效。"
+    },
+    "playerPath": {
+      "label": "自定义播放器",
+      "placeholder": "留空自动探测",
+      "hint": "播放转发流与录制文件时唤起的播放器程序；留空则按平台自动探测（转发流探测 mpv/VLC/PotPlayer 等，录制文件走系统默认程序）。",
+      "pick": "选择程序",
+      "clear": "恢复自动探测"
     },
     "recordingDuration": {
       "label": "录制文件时长",
@@ -720,6 +727,8 @@
   },
   "dirBrowser": {
     "title": "选择目录",
+    "titleFile": "选择文件",
+    "titleExec": "选择程序",
     "pathLabel": "路径",
     "pathPlaceholder": "输入路径后按回车跳转",
     "thisPc": "此电脑",
@@ -729,9 +738,13 @@
     "newFolder": "新建文件夹",
     "newFolderPlaceholder": "文件夹名称",
     "empty": "此目录下没有子目录",
+    "emptyFile": "此目录下没有子目录或文件",
+    "emptyExec": "此目录下没有可执行程序",
     "loadFailed": "无法访问该目录",
     "createFailed": "创建文件夹失败",
     "select": "选择此目录",
+    "selectFile": "选择此文件",
+    "selectExec": "选择此程序",
     "cancel": "取消"
   },
   "streamers": {
@@ -818,6 +831,7 @@
     "play": "用系统播放器播放转发流",
     "playFailed": "唤起播放器失败：{message}",
     "noPlayer": "未找到可用的播放器，请安装 VLC、mpv 或 PotPlayer",
+    "playerMissing": "设置的播放器路径不存在，请在设置中重新选择",
     "status": {
       "public": "公开秀",
       "private": "私密秀",

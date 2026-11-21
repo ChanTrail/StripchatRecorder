@@ -26,6 +26,10 @@ dist-ssr
 # Build output
 build/
 build_tmp/
+# Rust 模块就地构建产物（backend 有独立 target 配置，这里覆盖 modules/*/）
+# In-place Rust module build output (backend has its own target dir; this
+# covers modules/*/)
+target/
 SCAPI Test/
 modules/test_suffix/
 

@@ -7,7 +7,7 @@
 //! 录制会话的生命周期管理（见 `recording::recorder`）。
 //!
 //! 遗留分片与未完成后处理由 `meta::ensure_meta_files` 统一处理：session_dir 和视频文件
-//! 采用相同的（重新）触发规则，是否需要合并交给流水线首节点（ts_merge）自行判断。
+//! 采用相同的（重新）触发规则，是否需要合并交给流水线首节点（segment_merge）自行判断。
 //! 原先的启动遗留分片合并函数在 Server 与 Desktop 均已无调用方，且绕过录制身份占位
 //! 与 claim，因此已删除。
 //!
@@ -21,7 +21,7 @@
 //!
 //! Leftover segments and unfinished post-processing are handled uniformly by
 //! `meta::ensure_meta_files`: session_dirs and video files share the same (re-)trigger rules,
-//! and the pipeline's first node (ts_merge) decides whether merging is needed. The former
+//! and the pipeline's first node (segment_merge) decides whether merging is needed. The former
 //! startup leftover-segment merge function had no callers in either Server or Desktop and
 //! bypassed the recording-identity reservation and claim, so it has been removed.
 
@@ -30,7 +30,7 @@ use std::fs;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 
-/// 空目录的最小年龄：修改时间距今小于该值的目录不删除，防止误删 ts_merge 等后处理
+/// 空目录的最小年龄：修改时间距今小于该值的目录不删除，防止误删 segment_merge 等后处理
 /// 刚创建、尚未写入文件的输出目录（维护不再等待后处理完成，两者可能并行）。
 /// tmp 目录的空子目录清理（`meta::maintenance::cleanup_stale_tmp`）同样使用该值，
 /// 避免误删 notify_telegram 刚创建、ffmpeg 尚未写入的 `split_*` 目录。
@@ -38,7 +38,7 @@ use std::time::{Duration, SystemTime};
 /// 避免误删 `write_meta` 刚创建、尚未写入 meta 文件的子目录。
 ///
 /// Minimum age of an empty directory: directories modified more recently than this are kept,
-/// so output directories just created by post-processing (e.g. ts_merge) and not yet written
+/// so output directories just created by post-processing (e.g. segment_merge) and not yet written
 /// to aren't removed (maintenance no longer waits for post-processing, so they can overlap).
 /// The tmp dir's empty-subdirectory cleanup (`meta::maintenance::cleanup_stale_tmp`) uses the
 /// same value, so `split_*` dirs just created by notify_telegram and not yet written by ffmpeg

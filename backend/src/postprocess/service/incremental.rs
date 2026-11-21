@@ -9,14 +9,14 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// 根据 video_path 推断后处理流水线的初始输入路径。
 ///
-/// 规则：若与 video_path 同级、同名的目录（session_dir）存在，说明 TS 分片尚未被
-/// ts_merge 合并，此时首节点（通常是 ts_merge）需要以 session_dir 作为输入。
+/// 规则：若与 video_path 同级、同名的目录（session_dir）存在，说明分片尚未被
+/// segment_merge 合并，此时首节点（通常是 segment_merge）需要以 session_dir 作为输入。
 /// 否则（session_dir 已删，或从未存在），直接用 video_path 作为输入。
 ///
 /// Infer the initial input path for the post-processing pipeline from video_path.
 ///
 /// Rule: if a directory with the same stem exists alongside video_path (session_dir),
-/// the TS segments haven't been merged yet, so the first node (typically ts_merge)
+/// the segments haven't been merged yet, so the first node (typically segment_merge)
 /// must receive session_dir as its input.
 /// Otherwise (session_dir already deleted or never existed), use video_path directly.
 pub fn infer_initial_path(video_path: &std::path::Path) -> std::path::PathBuf {
@@ -106,6 +106,9 @@ pub(super) fn node_config_fingerprint(node: &PipelineNode) -> String {
 /// is gone"). Folding this into "self-changed" makes the node re-execute (regenerating
 /// the missing output) instead of pretending it's still successful.
 fn node_self_changed(node: &PipelineNode, prev_execution: &[PpExecutionEntry]) -> bool {
+    // effective_id 缺省即 module_id：按它先找到同一节点的上次执行记录。
+    // effective_id defaults to module_id: look up the node's previous
+    // execution record by it first.
     let eid = node.effective_id();
     let Some(prev) = prev_execution.iter().find(|e| e.effective_id() == eid) else {
         return true;
@@ -117,6 +120,9 @@ fn node_self_changed(node: &PipelineNode, prev_execution: &[PpExecutionEntry]) -
     if !was_success {
         return true;
     }
+    // 模块 ID 一致才继续比较参数，不同模块一律视为"配置变更"。
+    // Only compare params when the module ID matches; a different module
+    // always counts as a "config change".
     if prev.module_id != node.module_id {
         return true;
     }

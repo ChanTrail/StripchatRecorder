@@ -114,12 +114,16 @@ pub async fn stream_handler(
         }
     };
 
+    // 不手动设置 Transfer-Encoding：hyper 会对流式 body 自动使用 chunked，
+    // 手动再设会产生重复头，部分客户端（ffmpeg http 层）会拒绝
+    // No manual Transfer-Encoding: hyper applies chunked automatically for
+    // streamed bodies; setting it ourselves can duplicate the header, which
+    // some clients (ffmpeg's http layer) reject
     (
         [
             (header::CONTENT_TYPE, "video/x-flv"),
             (header::CACHE_CONTROL, "no-cache, no-store"),
             (header::ACCESS_CONTROL_ALLOW_ORIGIN, "*"),
-            (header::TRANSFER_ENCODING, "chunked"),
         ],
         Body::from_stream(stream),
     )

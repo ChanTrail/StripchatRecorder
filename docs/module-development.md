@@ -139,7 +139,7 @@
   "version": "1.0.0",           // 版本号（由 pp_utils::describe_with_version 注入，无需手写）
   "inputTypes": ["video_file"], // 输入端口类型列表，见端口类型系统
   "outputTypes": ["video_file"],// 输出端口类型列表，留空表示流水线在此终止
-  "official": false,            // 是否为官方模块（官方模块建议置于 ts_merge 之后）
+  "official": false,            // 是否为官方模块（官方模块建议置于 segment_merge 之后）
   "params": [
     {
       "key": "param_key",       // 参数键名，对应 JSON 中 params.param_key
@@ -160,7 +160,7 @@
 | `description` | string  | 是   | UI 显示描述                                                  |
 | `inputTypes`  | array   | 是   | 输入端口类型列表（顺序对应 `inputs[]` 索引），见[端口类型系统](#端口类型系统) |
 | `outputTypes` | array   | 是   | 输出端口类型列表（顺序对应 `outputs[]` 索引），为空表示流水线在此终止  |
-| `official`    | boolean | 否   | 是否为官方模块（UI 中会提示应置于 `ts_merge` 之后），默认 `false` |
+| `official`    | boolean | 否   | 是否为官方模块（UI 中会提示应置于 `segment_merge` 之后），默认 `false` |
 | `params`      | array   | 是   | 参数定义列表，无参数时传空数组                               |
 
 > **版本号：** 不要在 `DESCRIBE` 常量中手写 `"version"` 字段。使用 `pp_utils::describe_with_version(DESCRIBE, env!("CARGO_PKG_VERSION"))` 在运行时自动从 `Cargo.toml` 注入，只需维护一处。
@@ -186,7 +186,7 @@
   "key": "format",
   "label": "输出格式",
   "type": "select",
-  "default": "mp4",
+  "default": "mkv",
   "options": ["mp4", "mkv", "ts"]
 }
 ```
@@ -212,12 +212,14 @@
 
 | 类型标识符      | 说明                                                        |
 | --------------- | ----------------------------------------------------------- |
-| `ts_session_dir`| TS 分片录制目录（由录制系统产生，作为 `ts_merge` 的输入）  |
+| `session_dir`| 分片录制目录（fMP4 .m4s；旧录制可能残留 TS .ts，由录制系统产生，作为 `segment_merge` 的输入）  |
 | `video_file`    | 单个视频文件（mp4 / mkv / ts 等）                          |
 | `image_file`    | 单个图片文件（webp / jpg / png 等）                        |
 | `media_bundle`  | 媒体包（视频路径 + 图片路径，以 `\n` 分隔的单一路径字符串）|
 | `any_file`      | 任意文件（可接受上游任何文件类型，包括 `media_bundle`）    |
 | `any_dir`       | 任意目录（可接受上游任何目录类型）                         |
+
+> 改名说明：`session_dir` 在旧版本中名为 `ts_session_dir`（旧合并模块 `ts_merge` 现名 `segment_merge`）。改名不设向后兼容——旧模块需更新 `--describe` 声明后方可继续使用。
 
 **兼容规则：**
 - 完全相同的类型可以连接
@@ -271,16 +273,16 @@
 流水线是一个 **DAG（有向无环图）**，由节点和连线组成，支持分叉与合并。主程序按拓扑顺序执行每个启用的节点：
 
 1. 上游节点 `outputs[]` 中的路径，按连线定义的端口索引传入下游节点的 `inputs[]`。
-2. 流水线的起始节点为 `recording_input` 内置节点，输出类型为 `ts_session_dir`，接收当次录制产生的 TS 分片目录。
+2. 流水线的起始节点为 `recording_input` 内置节点，输出类型为 `session_dir`，接收当次录制产生的分片目录。
 3. 若模块返回 `{"code": "error"}` 或退出码非零，流水线立即中止。
 4. 若模块返回 `{"code": "done"}` 或 `outputs` 为空，该分支在此终止，不继续向下游传递。
 
 ```
-recording_input（TS 分片目录）
+recording_input（分片目录）
     │
-    ▼  inputs[0] = /ts_fragment/alice_20240101_120000/
+    ▼  inputs[0] = /fragment/alice_20240101_120000/
 ┌──────────┐
-│ ts_merge │── outputs[0] = /recordings/alice/alice_20240101_120000.mp4
+│ segment_merge │── outputs[0] = /recordings/alice/alice_20240101_120000.mp4
 └──────────┘
     │
     ▼  inputs[0] = /recordings/alice/alice_20240101_120000.mp4
@@ -641,7 +643,7 @@ Desktop 安装版（NSIS、deb、dmg）的模块安装到每用户数据目录�
 
 | 模块 ID           | 输入类型         | 输出类型          | 说明                                                                              |
 | ----------------- | ---------------- | ----------------- | --------------------------------------------------------------------------------- |
-| `ts_merge`        | `ts_session_dir` | `video_file`      | 将 TS 分片目录合并为单一视频文件，**官方流水线的首节点**，其他模块应置于其后     |
+| `segment_merge`        | `session_dir` | `video_file`      | 将录制分片目录合并为单一视频文件，**官方流水线的首节点**，其他模块应置于其后     |
 | `filter_short`    | `video_file`     | `video_file`      | 删除时长低于阈值的视频并使流水线在此终止，支持 `dry_run` 预览模式                |
 | `contact_sheet`   | `video_file`     | `media_bundle`    | 按指定间隔截帧，拼合成带时间戳预览图，输出 media_bundle（视频路径 + 图片路径）    |
 | `notify_discord`  | `media_bundle`   | `media_bundle`    | 将录制信息和封面图通过 Webhook 发送到 Discord，支持 HTTP/SOCKS5 代理              |
@@ -649,15 +651,15 @@ Desktop 安装版（NSIS、deb、dmg）的模块安装到每用户数据目录�
 | `cleanup`         | `any_file`       | —（流水线终止）   | 清理本次录制相关文件：可选删除视频/预览图/meta 记录，以及其他模块产生的临时缓存  |
 
 > **内置 DAG 节点**（不是可执行文件，由后端直接处理）：
-> - `recording_input`：虚拟录制输入节点，始终存在，不可删除，输出 `ts_session_dir`
+> - `recording_input`：虚拟录制输入节点，始终存在，不可删除，输出 `session_dir`
 > - `unpack`：将 `media_bundle` 拆分为 `video_file`（端口 0）和 `image_file`（端口 1）两个独立输出
 
-### ts_merge 参数
+### segment_merge 参数
 
 | 参数               | 类型    | 默认值  | 说明                                                              |
 | ------------------ | ------- | ------- | ----------------------------------------------------------------- |
 | `format`           | select  | `mp4`   | 输出格式：`mp4`、`mkv`、`ts`                                     |
-| `output_dir`       | dir     | `""`    | 合并后视频的输出目录，留空则与 TS 分片目录的父目录相同            |
+| `output_dir`       | dir     | `""`    | 合并后视频的输出目录，留空则与分片目录的父目录相同            |
 | `split_by_streamer`| boolean | `true`  | 在输出目录下按主播用户名创建子目录（仅当设置了 `output_dir` 时有意义）|
 
 ### filter_short 参数

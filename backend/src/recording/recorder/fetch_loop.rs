@@ -16,7 +16,7 @@ use super::{PlaylistRefresh, RecorderManager, refresh_playlist_target};
 use crate::core::emitter::{Emitter, EmitterExt};
 use crate::core::error::{AppError, Result};
 use crate::platform::stripchat::StripchatApi;
-use crate::recording::ffmpeg_util::{convert_to_ts, dir_size_bytes, insert_to_m3u8_sorted};
+use crate::recording::ffmpeg_util::{convert_to_m4s, dir_size_bytes, insert_to_m3u8_sorted};
 use crate::recording::hls::{HlsSegment, MouflonKeys, get_url_prefix, parse_playlist};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -91,6 +91,71 @@ struct PendingSeg {
     /// Session-dir snapshot at enqueue (a write landing after rotation
     /// still goes to the old dir — the exit merge takes care of it)
     session_dir: PathBuf,
+    /// 该分片在会话时间轴上的累计位置（秒）：由 [`SegTimeline`] 在入队时
+    /// 按清单条目序累计 EXTINF 得出，写进 .m4s 的 tfdt——remux 的归零
+    /// 重基线之后靠它恢复段间连续时间轴。
+    /// The segment's cumulative timeline position (seconds): accumulated
+    /// from playlist EXTINF order by [`SegTimeline`] at enqueue, written
+    /// into the .m4s tfdt — it restores the continuous cross-segment
+    /// timeline after remux's zeroing rebase.
+    tfdt_offset: f64,
+}
+
+/// 分片→累计时间轴位置登记簿。
+///
+/// 每轮 poll 按清单条目序为每个条目登记一次（含已处理条目——其时长
+/// 同样占用时间轴空间），累计值为该分片写盘时要用的 tfdt 偏移。
+/// 源侧 tfdt 本身不可靠（CDN 重发/重基线会错乱），这份由清单声明时长
+/// 推出的累计轴是合并端唯一可信的时间基准。
+///
+/// Segment→cumulative timeline position ledger.
+///
+/// Each poll registers every playlist entry once, in list order
+/// (already-handled ones included — their durations still occupy
+/// timeline space); the accumulated value is the tfdt offset used when
+/// the segment is written. Source tfdt itself is unreliable (CDN
+/// re-publishes/rebases can scramble it) — this EXTINF-derived axis is
+/// the only trustworthy time base for the merge stage.
+#[derive(Default)]
+struct SegTimeline {
+    /// seq → 累计偏移（秒）/ seq → cumulative offset (seconds)
+    offsets: HashMap<u32, f64>,
+    /// 已登记条目的累计时长端点 / cumulative duration edge of registered entries
+    end: f64,
+}
+
+impl SegTimeline {
+    /// 登记一条目并返回其累计偏移；重复出现的 seq 返回首次登记的值
+    /// （不重复计入时长）。
+    /// Register an entry and return its cumulative offset; a seq seen
+    /// again returns its first-registered value (its duration is not
+    /// double-counted).
+    fn register(&mut self, seq: u32, dur: f64) -> f64 {
+        if let Some(&off) = self.offsets.get(&seq) {
+            return off;
+        }
+        let off = self.end;
+        self.offsets.insert(seq, off);
+        self.end += dur.max(0.0);
+        off
+    }
+
+    /// 清单重编号（URL 切换/发布侧重基线）后调用：丢弃旧 seq 映射，
+    /// 但累计端点保留——时间轴单向推进，新编号条目继续排在端点之后。
+    /// Called after playlist renumbering (URL swap / publisher rebase):
+    /// drops the old seq map but keeps the accumulated edge — the
+    /// timeline only moves forward and renumbered entries keep landing
+    /// after it.
+    fn renumber(&mut self) {
+        self.offsets.clear();
+    }
+
+    /// 会话轮转：全新时间轴归零。
+    /// Session rotation: a fresh timeline starts at zero.
+    fn reset(&mut self) {
+        self.offsets.clear();
+        self.end = 0.0;
+    }
 }
 
 /// 分片任务回报：主循环在下一轮开头统一收取并更新统计/轮转/去标记。
@@ -179,6 +244,12 @@ impl RecorderManager {
         // Playlist-window tracking: cross-round state for gap detection,
         // numbering stride and media-sequence coverage
         let mut window_track = WindowTrack::default();
+        // 分片累计时间轴登记簿：跨轮/跨轮转持续——fMP4 分片的 tfdt 目标
+        // 值都从这里出（清单 EXTINF 累计，替代不可信的源侧 tfdt）
+        // Segment cumulative-timeline ledger: persists across polls and
+        // rotations — every fMP4 segment's target tfdt comes from it
+        // (EXTINF accumulation, replacing the untrustworthy source tfdt)
+        let mut seg_timeline = SegTimeline::default();
         // 轮询间隙预取的下一轮清单快照（跨迭代传递；URL 不符时在消费侧作废）
         // Next-poll playlist snapshot prefetched between polls (threaded
         // across iterations; a URL mismatch discards it on the consume side)
@@ -303,6 +374,11 @@ impl RecorderManager {
                             // URL 换了，MEDIA-SEQUENCE 可能换基线：重置覆盖端点防止误报
                             // URL swapped — media-sequence may rebase: reset coverage to avoid false gaps
                             window_track.covered_end = None;
+                            // seq 编号可能随新清单重排：旧偏移映射作废，
+                            // 累计端点保留（时间轴单向推进）
+                            // seq numbering may restart with the new
+                            // playlist: drop old offsets but keep the edge
+                            seg_timeline.renumber();
                             playlist_refresh_failures = 0;
                         }
                         Ok(Err(e)) => {
@@ -376,7 +452,15 @@ impl RecorderManager {
             let limit = self.state.get_settings().max_recording_duration_secs;
             if limit > 0 && recorded_secs >= limit as f64 {
                 match self.rotate_session(username, session_dir, &emitter) {
-                    Ok(()) => recorded_secs = 0.0,
+                    Ok(()) => {
+                        recorded_secs = 0.0;
+                        // 新会话目录起全新时间轴（旧目录的在飞任务仍按旧
+                        // 快照偏移写盘，与旧清单自洽）/ New session dir
+                        // starts a fresh timeline (in-flight jobs still
+                        // write to the old dir with old offsets, consistent
+                        // with the old playlist)
+                        seg_timeline.reset();
+                    }
                     Err(e) => {
                         tracing::warn!(
                             "{}",
@@ -415,6 +499,11 @@ impl RecorderManager {
                             // URL 换了，MEDIA-SEQUENCE 可能换基线：重置覆盖端点防止误报
                             // URL swapped — media-sequence may rebase: reset coverage to avoid false gaps
                             window_track.covered_end = None;
+                            // seq 编号可能随新清单重排：旧偏移映射作废，
+                            // 累计端点保留（时间轴单向推进）
+                            // seq numbering may restart with the new
+                            // playlist: drop old offsets but keep the edge
+                            seg_timeline.renumber();
                             playlist_refresh_failures = 0;
                             last_progress = Instant::now();
                             skip_sleep = true;
@@ -463,6 +552,7 @@ impl RecorderManager {
                     session_dir,
                     &mut downloaded_sequences,
                     &mut window_track,
+                    &mut seg_timeline,
                     &mut cur_init_url,
                     &init_cache,
                     &seg_permits,
@@ -722,6 +812,7 @@ async fn poll_once(
     session_dir: &std::path::Path,
     downloaded_sequences: &mut HashSet<u32>,
     window_track: &mut WindowTrack,
+    seg_timeline: &mut SegTimeline,
     cur_init_url: &mut Option<String>,
     init_cache: &InitCache,
     seg_permits: &Arc<Semaphore>,
@@ -870,6 +961,14 @@ async fn poll_once(
             *cur_init_url = Some(new_init.clone());
             prefetch_init(init_cache, api, new_init);
         }
+        // 每条目都登记时间轴偏移（含已处理条目——其时长同样占位）；
+        // 必须在 contains 判定之前，否则重复出现的条目会把后面的累计
+        // 轴推歪。
+        // Register every entry on the timeline (handled ones included —
+        // their durations still occupy space); this must run BEFORE the
+        // contains check or re-listed entries would skew the cumulative
+        // axis for everything after them.
+        let tfdt_offset = seg_timeline.register(seg.sequence, seg.duration_secs);
         if downloaded_sequences.contains(&seg.sequence) {
             continue;
         }
@@ -885,6 +984,7 @@ async fn poll_once(
             username,
             seg,
             idx == last_idx,
+            tfdt_offset,
             cur_init_url.clone(),
             session_dir,
             init_cache,
@@ -916,6 +1016,7 @@ fn spawn_segment_job(
     username: &str,
     seg: &HlsSegment,
     is_tail: bool,
+    tfdt_offset: f64,
     init_url: Option<String>,
     session_dir: &std::path::Path,
     init_cache: &InitCache,
@@ -929,6 +1030,7 @@ fn spawn_segment_job(
         duration_secs: seg.duration_secs,
         is_tail,
         session_dir: session_dir.to_path_buf(),
+        tfdt_offset,
     };
     let api = api.clone();
     let username = username.to_string();
@@ -1097,11 +1199,11 @@ async fn segment_job(
         None => data,
     };
 
-    let ts_path = job
+    let m4s_path = job
         .session_dir
-        .join(format!("{}_segment{:06}.ts", username, job.seq));
+        .join(format!("{}_segment{:06}.m4s", username, job.seq));
 
-    match convert_to_ts(fmp4, &ts_path).await {
+    match convert_to_m4s(fmp4, &m4s_path, job.tfdt_offset).await {
         Ok(_) => {
             // 按 seq 有序插入而非末尾追加：并发任务完成顺序不定，有序插入
             // 保证条目总落在真实时间位置，m3u8 顺序不倒退
@@ -1109,8 +1211,8 @@ async fn segment_job(
             // finish out of order, and sorted insertion lands every entry at
             // its true chronological position — the m3u8 never regresses
             insert_to_m3u8_sorted(
-                ts_path.parent().unwrap_or(&ts_path),
-                &ts_path,
+                m4s_path.parent().unwrap_or(&m4s_path),
+                &m4s_path,
                 job.seq,
                 job.duration_secs,
             );

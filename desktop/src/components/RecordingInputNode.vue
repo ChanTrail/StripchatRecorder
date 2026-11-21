@@ -2,7 +2,7 @@
     虚拟录制输入节点组件 / Virtual Recording Input Node Component
 
     节点图编辑器中始终存在、不可删除的虚拟节点，代表录制产生的 TS 分片目录来源。
-    只有一个输出端口（ts_session_dir）。
+    只有一个输出端口（session_dir）。
 -->
 <script setup lang="ts">
 	import { PORT_TYPE_COLORS } from "@/stores/postprocess";
@@ -43,15 +43,15 @@
 			</div>
 			<div class="flex justify-end px-3 pb-2">
 				<div class="flex items-center gap-1.5">
-					<span class="text-[9px] text-muted-foreground">ts session dir</span>
+					<span class="text-[9px] text-muted-foreground">session dir</span>
 					<div
 						:ref="(el) => registerPortEl(el as HTMLElement | null, INPUT_NODE_ID, true, 0)"
 						class="w-3 h-3 rounded-full border-2 cursor-crosshair -mr-4.5 shrink-0 transition-transform hover:scale-125"
 						:style="{
-							borderColor: PORT_TYPE_COLORS['ts_session_dir'],
-							backgroundColor: connected ? PORT_TYPE_COLORS['ts_session_dir'] : PORT_TYPE_COLORS['ts_session_dir'] + '40',
+							borderColor: PORT_TYPE_COLORS['session_dir'],
+							backgroundColor: connected ? PORT_TYPE_COLORS['session_dir'] : PORT_TYPE_COLORS['session_dir'] + '40',
 						}"
-						title="ts_session_dir"
+						title="session_dir"
 						@mousedown.stop="$emit('port-mousedown', $event)"
 						@mouseup.stop="$emit('port-mouseup', $event)"
 					/>

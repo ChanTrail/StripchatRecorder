@@ -46,13 +46,13 @@ pub use guards::{PpClaim, PpRemovalExecution, PpRemovalGuard, PpReservation};
 pub use semaphore::SyncPermit;
 use semaphore::SyncSemaphore;
 
-/// 计算录制身份键：同一录制的 session_dir（ts_fragment/{user}/{stem}）与合并后的视频文件
+/// 计算录制身份键：同一录制的 session_dir（fragment/{user}/{stem}）与合并后的视频文件
 /// （recordings/{user}/{stem}.mp4）共用同一个 meta 文件，因此以 meta 文件路径作为身份。
 /// 通过 [`crate::recording::meta::resolve_meta_path`] 解析：派生 meta 缺失时（如
 /// split_by_streamer=false 的扁平目录合并文件）返回 video_path 指向该路径的归属 meta，
 /// 与 read/write/delete_meta 使用同一身份。无法推断 meta 路径时回退为路径字符串本身。
 ///
-/// Compute the recording identity key: a recording's session_dir (ts_fragment/{user}/{stem})
+/// Compute the recording identity key: a recording's session_dir (fragment/{user}/{stem})
 /// and its merged video file (recordings/{user}/{stem}.mp4) share the same meta file, so the
 /// meta file path is used as the identity. Resolved via
 /// [`crate::recording::meta::resolve_meta_path`]: when the derived meta is missing (e.g. a
@@ -159,7 +159,7 @@ impl Default for PpQueue {
 
 /// 将用户配置的并发数（0=自动）解析为实际许可数。
 ///
-/// 后处理任务以磁盘 I/O（ts_merge）为主，每个任务都会驱动一个 ffmpeg 进程。
+/// 后处理任务以磁盘 I/O（segment_merge）为主，每个任务都会驱动一个 ffmpeg 进程。
 /// 自动模式与手动上限统一取 **逻辑核数**——实测（real_pipeline_concurrency_smoke）
 /// 解码型 pp 任务在 ~12 路并发时已让 32 核机器饱和：核数×1 即合理上限。
 /// 上限只是天花板，实际并发由负载监控的 AIMD 闭环按真实压力调节
@@ -167,7 +167,7 @@ impl Default for PpQueue {
 ///
 /// Resolve the configured concurrency (0 = auto) to the actual permit count.
 ///
-/// Post-processing tasks are primarily disk-I/O-bound (ts_merge drives one ffmpeg
+/// Post-processing tasks are primarily disk-I/O-bound (segment_merge drives one ffmpeg
 /// process per task). Auto mode and the manual cap are unified at the **logical
 /// core count** — measured via real_pipeline_concurrency_smoke: decode-type pp
 /// saturates a 32-core box at ~12 concurrent tasks, so cores×1 is a sound
@@ -557,12 +557,12 @@ impl PpQueue {
     /// 判断是否有已被 claim 的录制与给定文件名 stem 相同（录制身份键是 `.../{stem}.json`）。
     /// 只统计流水线 claim，不统计扫描占位（扫描自身的占位不能挡住自己）。
     /// 用于 split_by_streamer=false 时：合并文件落在扁平目录、推导出的身份键不同，
-    /// 且 ts_merge 尚未把 meta.video_path 切换过去，只能按 stem 识别出它属于执行中的录制。
+    /// 且 segment_merge 尚未把 meta.video_path 切换过去，只能按 stem 识别出它属于执行中的录制。
     ///
     /// Check whether any claimed recording has the given file stem (identity keys are
     /// `.../{stem}.json`). Only pipeline claims count, not scan reservations (a scan's own
     /// reservation must not block itself). Used when split_by_streamer=false: the merged
-    /// file lands in a flat directory with a different derived identity key and ts_merge
+    /// file lands in a flat directory with a different derived identity key and segment_merge
     /// hasn't switched meta.video_path yet, so only the stem can tie it to the running
     /// recording.
     pub fn is_stem_active(&self, stem: &std::ffi::OsStr) -> bool {

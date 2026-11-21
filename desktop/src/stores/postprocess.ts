@@ -35,7 +35,7 @@ function generateId(): string {
 }
 
 /** 端口类型，与后端 PortType 枚举对应 / Port type, mirrors backend PortType enum */
-export type PortType = "ts_session_dir" | "video_file" | "image_file" | "media_bundle" | "any_file" | "any_dir";
+export type PortType = "session_dir" | "video_file" | "image_file" | "media_bundle" | "any_file" | "any_dir";
 
 /**
  * 判断上游输出类型是否兼容下游输入类型（与后端 is_compatible_with 逻辑一致）。
@@ -45,13 +45,13 @@ export type PortType = "ts_session_dir" | "video_file" | "image_file" | "media_b
 export function isPortCompatible(from: PortType, to: PortType): boolean {
 	if (from === to) return true;
 	if (to === "any_file" && (from === "video_file" || from === "image_file" || from === "media_bundle")) return true;
-	if (to === "any_dir" && from === "ts_session_dir") return true;
+	if (to === "any_dir" && from === "session_dir") return true;
 	return false;
 }
 
 /** 端口类型的显示颜色 / Display color per port type */
 export const PORT_TYPE_COLORS: Record<PortType, string> = {
-	ts_session_dir: "#f59e0b", // amber
+	session_dir: "#f59e0b", // amber
 	video_file: "#3b82f6",     // blue
 	image_file: "#10b981",     // emerald
 	media_bundle: "#a855f7",   // purple

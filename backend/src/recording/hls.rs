@@ -365,6 +365,60 @@ pub fn parse_master_playlist(
     selected.map(|v| (v.url.clone(), mouflon_pairs))
 }
 
+/// 判断 master playlist 是否提供指定编码的变体流——逐个读取 `#EXT-X-STREAM-INF`
+/// 的 `CODECS` 属性，与编码族的 RFC 6381 前缀比对：
+/// `AV1`→`av01`、`H265`→`hvc1`/`hev1`、`h264`→`avc1`/`avc2`/`avc3`。
+///
+/// 返回 `false` 的唯一情形是 playlist 里至少一个变体声明了 CODECS 且没有任何
+/// 变体声明该编码族——即确定服务端没给所求编码。playlist 完全没有 CODECS
+/// 声明（旧格式）时无法判断，返回 `true` 以免误回退。
+///
+/// Whether a master playlist offers variants of the requested codec — reads the
+/// `CODECS` attribute of every `#EXT-X-STREAM-INF` and matches codec-family
+/// RFC 6381 prefixes: `AV1`→`av01`, `H265`→`hvc1`/`hev1`,
+/// `h264`→`avc1`/`avc2`/`avc3`.
+///
+/// Returns `false` only when at least one variant declares CODECS and none
+/// declares the requested family — i.e. the server positively did not honor
+/// the codec. A playlist with no CODECS declarations at all (legacy format)
+/// cannot be verified and returns `true` to avoid a false fallback.
+pub fn master_playlist_offers_codec(playlist: &str, codec: &str) -> bool {
+    let prefixes: &[&str] = if codec.eq_ignore_ascii_case("AV1") {
+        &["av01"]
+    } else if codec.eq_ignore_ascii_case("H265") {
+        &["hvc1", "hev1"]
+    } else {
+        &["avc1", "avc2", "avc3"]
+    };
+
+    let mut declared_any = false;
+    let normalized = playlist.replace("\r\n", "\n").replace('\r', "\n");
+    for line in normalized.split('\n').map(str::trim) {
+        let Some(attrs) = line.strip_prefix("#EXT-X-STREAM-INF:") else {
+            continue;
+        };
+        // CODECS 属性值本身含逗号（视频+音频 token），不能按逗号切属性串；
+        // 定位 `CODECS="` 后取到下一个引号为止 / The CODECS value itself
+        // contains commas (video + audio tokens), so the attribute string
+        // cannot be split on commas — locate `CODECS="` and take up to the
+        // next quote
+        let Some(codecs_attr) = attrs.find("CODECS=\"").and_then(|start| {
+            attrs[start + "CODECS=\"".len()..].split('"').next()
+        }) else {
+            continue;
+        };
+        declared_any = true;
+        if codecs_attr
+            .split(',')
+            .map(str::trim)
+            .any(|tok| prefixes.iter().any(|p| tok.starts_with(p)))
+        {
+            return true;
+        }
+    }
+    !declared_any
+}
+
 /// 从完整 URL 中提取 URL 前缀（去掉最后一个路径段）。
 /// Extract the URL prefix from a full URL (removes the last path segment).
 pub fn get_url_prefix(url: &str) -> String {
@@ -427,4 +481,52 @@ fn extract_sequence(url: &str) -> Option<u32> {
     let last = parts.last()?;
     let num_str = last.split('.').next()?;
     num_str.parse().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::master_playlist_offers_codec;
+
+    fn master(codecs: &str) -> String {
+        format!(
+            "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-STREAM-INF:BANDWIDTH=3000000,RESOLUTION=1280x720,CODECS=\"{}\"\n\
+             https://cdn.example/v.m3u8\n",
+            codecs
+        )
+    }
+
+    /// CODECS 前缀匹配与回退判定 / CODECS prefix matching and the fallback verdict
+    #[test]
+    fn codec_offer_detection() {
+        // 视频+音频双 token（CODECS 值内含逗号，必须整体取值）/ video+audio
+        // tokens — the CODECS value contains commas and must be read whole
+        assert!(master_playlist_offers_codec(
+            &master("av01.0.08M.08,mp4a.40.2"),
+            "AV1"
+        ));
+        assert!(master_playlist_offers_codec(
+            &master("hvc1.1.6.L120.90,mp4a.40.2"),
+            "H265"
+        ));
+        assert!(master_playlist_offers_codec(
+            &master("avc1.640028,mp4a.40.2"),
+            "h264"
+        ));
+        // 编码族不匹配 → false（触发向下回退）/ family mismatch → false
+        // (triggers the downward fallback)
+        assert!(!master_playlist_offers_codec(
+            &master("avc1.640028,mp4a.40.2"),
+            "AV1"
+        ));
+        assert!(!master_playlist_offers_codec(
+            &master("av01.0.08M.08,mp4a.40.2"),
+            "h264"
+        ));
+        // 无 CODECS 声明 → 无法判断，接受 / no CODECS declaration →
+        // unverifiable, accept
+        let legacy = "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=3000000\nhttps://cdn.example/v.m3u8\n";
+        assert!(master_playlist_offers_codec(legacy, "AV1"));
+        // 仅音频 token 不算命中 / an audio-only token doesn't count
+        assert!(!master_playlist_offers_codec(&master("mp4a.40.2"), "h264"));
+    }
 }

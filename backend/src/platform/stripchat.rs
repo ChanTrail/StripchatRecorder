@@ -25,8 +25,9 @@
 
 use crate::core::error::Result;
 use crate::recording::hls::MouflonKeys;
-use net::{build_api_client, build_client};
-use reqwest::Client;
+use net::{
+    build_api_client, build_client,
+};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -144,9 +145,9 @@ pub struct StreamInfo {
 #[derive(Clone)]
 pub struct StripchatApi {
     /// API 请求客户端 / API request client
-    api_client: Client,
+    api_client: wreq::Client,
     /// CDN 分片下载客户端 / CDN segment download client
-    cdn_client: Client,
+    cdn_client: wreq::Client,
     /// ECH 客户端缓存（API 侧；None = 未启用 ECH）
     /// ECH client cache (API side; None = ECH disabled)
     api_ech: Option<crate::ech::EchClients>,
@@ -210,32 +211,37 @@ impl StripchatApi {
     ) -> Result<Self> {
         let api_client = build_api_client(api_proxy, None)?;
         let cdn_client = build_client(cdn_proxy, None)?;
-        // ECH 客户端集合 API/CDN 各持一份（两者 base 客户端的代理/超时/H2
-        // 参数不同；借用配置由进程级槽位共享，不会重复借用）。策略不同：
+        // ECH 客户端集合 API/CDN 各持一份（两者的 base 客户端各自代理/超时
+        // 参数不同；借用配置由进程级槽位共享，不会重复借用）。base 同为
+        // wreq 指纹档——既作无通道时的回退目标也兼 DoH 传输；ECH 腿与直连
+        // 腿同栈同指纹，只在 TLS 选项上多注一份 ECHConfigList。策略不同：
         // API 侧常态走 ECH；CDN 侧只在 cdn_get 的兜底竞速里作候选——分片
         // 流量大且钉死 CF 任播 IP 会绕开 CDN 地理调度，原生直取必须优先，
         // 仅当全部 TLD 直连失败（如 SNI 阻断）才经 ECH 通道重试源 URL。
-        // `base` 客户端同时充当回退与 DoH 传输（已携带对应代理）。
         // One EchClients per side — API and CDN (their base clients differ
-        // in proxy/timeout/H2 settings; the borrowed config itself is shared
-        // through the process-global slot and never re-borrowed). Policies
-        // differ: the API side rides ECH permanently, while the CDN side
-        // only enters cdn_get's fallback race as a candidate — segment
-        // traffic is heavy and pinning CF anycast IPs would bypass the CDN's
-        // geo steering, so the native try stays first and ECH retries the
-        // source URL only after every direct TLD attempt failed (e.g. under
-        // SNI blocking). `base` doubles as fallback and DoH transport
-        // (already proxy-aware).
+        // in proxy/timeout settings; the borrowed config itself is shared
+        // through the process-global slot and never re-borrowed). The base
+        // is the same wreq fingerprint profile — both the no-channel
+        // fallback target and the DoH transport; ECH legs share the stack
+        // and fingerprint with direct legs, adding only an injected
+        // ECHConfigList in the TLS options. Policies differ: the API side
+        // rides ECH permanently, while the CDN side only enters cdn_get's
+        // fallback race as a candidate — segment traffic is heavy and
+        // pinning CF anycast IPs would bypass the CDN's geo steering, so
+        // the native try stays first and ECH retries the source URL only
+        // after every direct TLD attempt failed (e.g. under SNI blocking).
         let (api_ech, cdn_ech) = if ech_enabled {
             let api_proxy_owned = api_proxy.map(|s| s.to_string());
             let cdn_proxy_owned = cdn_proxy.map(|s| s.to_string());
             (
-                Some(crate::ech::EchClients::new(api_client.clone(), move |t| {
-                    build_api_client(api_proxy_owned.as_deref(), Some(t))
-                })),
-                Some(crate::ech::EchClients::new(cdn_client.clone(), move |t| {
-                    build_client(cdn_proxy_owned.as_deref(), Some(t))
-                })),
+                Some(crate::ech::EchClients::new(
+                    api_client.clone(),
+                    move |t| build_api_client(api_proxy_owned.as_deref(), Some(t)),
+                )),
+                Some(crate::ech::EchClients::new(
+                    cdn_client.clone(),
+                    move |t| build_client(cdn_proxy_owned.as_deref(), Some(t)),
+                )),
             )
         } else {
             (None, None)

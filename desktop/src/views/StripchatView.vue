@@ -297,12 +297,15 @@ async function playRelay(m: ScModel) {
 		});
 	} catch (e) {
 		const msg = e instanceof Error ? e.message : String(e);
-		// 未找到播放器时给安装提示，其余错误原样透出 /
-		// show an install hint when no player was found; surface other errors as-is
+		// 未找到播放器时给安装提示，自定义路径失效时给重选提示，其余错误原样透出 /
+		// show an install hint when no player was found, a reselect hint when the
+		// custom path is gone; surface other errors as-is
 		toast(
 			msg === "no_player"
 				? t("stripchat.noPlayer")
-				: t("stripchat.playFailed", { message: msg }),
+				: msg === "player_missing"
+					? t("stripchat.playerMissing")
+					: t("stripchat.playFailed", { message: msg }),
 			"error",
 		);
 	} finally {

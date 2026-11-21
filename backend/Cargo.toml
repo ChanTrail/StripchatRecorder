@@ -1,6 +1,6 @@
 [package]
 name = "stripchat-recorder"
-version = "0.4.11-beta"
+version = "0.5.0-beta"
 description = "Stripchat Stream Recorder"
 authors = ["ChanTrail"]
 edition = "2024"
@@ -14,24 +14,26 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 # ECH 探活用裸 TLS 握手（TLS1.3 + ECH），不经 HTTP——避免重定向把探活
-# 拖进无关主机。与 hyper-rustls 保持同一 semver。/ The ECH liveness probe
-# uses a bare TLS handshake (TLS1.3 + ECH) without HTTP, so redirects can't
-# drag it onto unrelated hosts. Same semver as hyper-rustls.
-tokio-rustls = "0.26"
+# 拖进无关主机。与 wreq 数据腿同一 BoringSSL 家族，握手行为一致。/
+# The ECH liveness probe uses a bare TLS handshake (TLS1.3 + ECH) without
+# HTTP, so redirects can't drag it onto unrelated hosts. Same BoringSSL
+# family as the wreq data legs so handshake behavior matches.
+btls = "0.5.6"
+tokio-btls = "0.5.6"
 reqwest = { version = "0.13", features = ["json", "socks", "rustls", "http2", "stream"], default-features = false }
-# ECH（Encrypted Client Hello）：与 reqwest 内的 rustls 保持同一 semver 版本，
-# `tls_backend_preconfigured` 按类型向下转型，版本不一致会导致 TLS 后端不识别。
-# ECH (Encrypted Client Hello): keep the same semver as reqwest's bundled rustls —
-# `tls_backend_preconfigured` downcasts by type and a version mismatch yields an
-# "unknown" TLS backend.
-rustls = { version = "0.23", features = ["aws_lc_rs"] }
-rustls-pki-types = "1"
-# ECH 客户端的证书校验走系统信任库（Windows 走 schannel）——TLS 拦截代理/
-# 杀软装进系统库的 CA 也能验证；reqwest 普通客户端已自带此行为。/
-# ECH clients verify against the OS trust store (schannel on Windows) so
-# proxy/AV roots installed there also verify — reqwest's normal clients
-# already do this via its bundled dependency.
-rustls-platform-verifier = "0.7"
+# Stripchat 全链路的浏览器指纹客户端：reqwest fork + BoringSSL，模拟
+# Chrome 的 TLS(JA3/JA4)/H2(Akamai)/头部序指纹——CF WAF 按指纹判 bot，
+# rustls 裸指纹是 403 主因。直连与 ECH 腿同栈：ECH 经 vendored 补丁的
+# `TlsOptions::ech_config_list` 注入（见 vendor/wreq + vendor/README.md）。/
+# Browser-fingerprint client for all Stripchat legs: a reqwest fork on
+# BoringSSL emulating Chrome's TLS (JA3/JA4), H2 (Akamai) and header-order
+# fingerprints — CF WAF scores on fingerprint and bare rustls was the main
+# 403 driver. Direct and ECH legs share the stack: ECH injects via the
+# vendored patch `TlsOptions::ech_config_list` (see vendor/wreq +
+# vendor/README.md).
+wreq = { version = "0.16", features = ["json", "socks", "gzip", "brotli", "zstd"] }
+wreq-util = { version = "0.2", features = ["emulation"] }
+bytes = "1"
 futures-util = "0.3"
 chrono = { version = "0.4", features = ["serde"] }
 regex = "1"
@@ -72,3 +74,17 @@ sevenz-rust2 = { version = "0.25", default-features = false }
 # resolver v2 a dev-dependency's features don't leak into normal builds, so
 # shipped binaries still only carry the decoder.
 sevenz-rust2 = { version = "0.25", default-features = false, features = ["compress"] }
+
+# wreq 定向到 vendored 补丁版（`TlsOptions::ech_config_list` 注入点，
+# ECH 腿必需）——wreq-util 也以 wreq 为依赖，不 patch 会同时出现
+# registry 与 vendored 两份 wreq、模拟档类型对不上。
+# 注意：[patch] 只对本 crate 为根的解析生效——desktop/src-tauri 独立
+# 构建后端，自己的 manifest 里也要带同一段。
+# Points wreq at the vendored patched copy (the `TlsOptions::ech_config_list`
+# injection point the ECH legs need) — wreq-util also depends on wreq, so
+# without the patch both a registry and a vendored wreq would coexist and
+# the emulation types would not match. Note: [patch] only applies to
+# resolutions rooted at this manifest — desktop/src-tauri builds the
+# backend separately and carries the same stanza in its own manifest.
+[patch.crates-io]
+wreq = { path = "../vendor/wreq" }

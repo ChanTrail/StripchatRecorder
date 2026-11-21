@@ -223,19 +223,17 @@ pub async fn remove_streamer(
         let _ = std::fs::remove_dir_all(&meta_dir);
     }
 
-    // 3. 删除 ts_merge 合并输出中属于该主播的文件
+    // 3. 删除 segment_merge 合并输出中属于该主播的文件
     //    - split_by_streamer=true：删除 {merge_output_dir}/{username}/ 整个子目录
     //    - split_by_streamer=false：删除 {merge_output_dir}/{username}_*.{format} 匹配的文件
     //
-    // 3. Remove the streamer's merged output files from ts_merge output directory.
+    // 3. Remove the streamer's merged output files from segment_merge output directory.
     //    - split_by_streamer=true: remove {merge_output_dir}/{username}/ subdirectory
     //    - split_by_streamer=false: remove files matching {merge_output_dir}/{username}_*.{format}
     let pipeline = s.app_state.get_pipeline();
-    if let Some(node) = pipeline
-        .nodes
-        .iter()
-        .find(|n| n.module_id == "ts_merge" && n.enabled)
-    {
+    if let Some(node) = pipeline.nodes.iter().find(|n| {
+        (n.module_id == crate::postprocess::pipeline::SEGMENT_MERGE_MODULE_ID) && n.enabled
+    }) {
         let merge_output_dir = node
             .params
             .get("output_dir")
@@ -254,7 +252,7 @@ pub async fn remove_streamer(
                 .params
                 .get("format")
                 .and_then(|v| v.as_str())
-                .unwrap_or("mp4");
+                .unwrap_or("mkv");
 
             if split_by_streamer {
                 // 按主播子目录存放：直接删除 {merge_dir}/{username}/

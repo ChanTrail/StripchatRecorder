@@ -29,7 +29,7 @@
 - **ECH（加密 ClientHello）**：可选开启，StripChat API 请求的 TLS ClientHello 经借用 ECH 配置加密以隐藏真实 SNI，可能改善 API 返回 403 的情况；不可路由或解析失败时自动回退普通连接，CDN 分片仅在直连全部失败后的兜底竞速中带 ECH 腿
 - **Mouflon HLS 解密**：支持管理 `pkey → pdkey` 密钥对和 `pkey → keystream` 密钥流，用于解密 Stripchat 加密的 HLS 分片文件名；支持配置同步 URL 自动拉取最新密钥
 - **可视化后处理流水线**：DAG 节点编辑器，支持分叉与合并，内置模块：
-  - **ts_merge** — 将 TS 分片目录合并为单一视频文件（流水线首节点）
+  - **segment_merge** — 将录制分片目录（fMP4 .m4s）合并为单一视频文件（流水线首节点）
   - **contact_sheet** — 生成带时间戳的缩略图预览图
   - **filter_short** — 删除低于最短时长的录制文件
   - **notify_discord** — 通过 Discord Webhook 发送录制信息和封面图
@@ -67,11 +67,12 @@ services:
       - "${PORT:-3030}:${PORT:-3030}"
     volumes:
       - ./data/logs:/app/stripchat-recorder/logs           # 运行日志
-      - ./data/ts_fragment:/app/stripchat-recorder/ts_fragment  # 录制中的 TS 分片（即 TS 流输出目录）
-      - ./data/recordings:/app/stripchat-recorder/recordings  # ts_merge 等模块的输出视频
+      - ./data/fragment:/app/stripchat-recorder/fragment  # 录制中的分片（即分片流输出目录）
+      - ./data/recordings:/app/stripchat-recorder/recordings  # segment_merge 等模块的输出视频
       - ./data/modules:/app/stripchat-recorder/modules     # 后处理模块可执行文件
       - ./data/meta:/app/stripchat-recorder/meta           # 录制元数据
       - ./data/config:/app/stripchat-recorder/config       # 配置文件（含 settings.json）
+      - ./data/tools:/app/stripchat-recorder/tools         # FFmpeg（程序自动下载或自备构建）
 ```
 
 ```bash
@@ -80,7 +81,7 @@ docker compose up -d
 
 启动后在浏览器中打开 `http://localhost:3030`。首次访问时会进入设置向导，引导你完成语言选择、录制目录设置、网络代理配置、FFmpeg 来源检查和管理员密码设置。
 
-Docker 镜像默认以 Server 模式运行（端口 3030），配置写入挂载的 `config/settings.json`。镜像为多架构构建（`linux/amd64`、`linux/arm64`），x86 与 ARM64 主机均可直接拉取运行。同一 tag 同时发布到 **Docker Hub**（`chantrail/stripchat-recorder`）与 **GHCR**（`ghcr.io/chantrail/stripchat-recorder`），内容一致，可按网络环境任选其一。
+Docker 镜像默认以 Server 模式运行（端口 3030），配置写入挂载的 `config/settings.json`。镜像为多架构构建（`linux/amd64`、`linux/arm64`），x86 与 ARM64 主机均可直接拉取运行。同一 tag 同时发布到 **Docker Hub**（`chantrail/stripchat-recorder`）与 **GHCR**（`ghcr.io/chantrail/stripchat-recorder`），内容一致，可按网络环境任选其一。**镜像不内置 FFmpeg**：首次启动由设置向导就地自动下载到挂载的 `tools` 目录（需能访问 GitHub Releases），也可预先把自备构建放入 `tools` 目录——详见下文「硬件要求与 `-legacy` 构建轨」。
 
 ### docker run
 
@@ -93,11 +94,12 @@ docker run -d \
   -e PORT=3030 \
   -p 3030:3030 \
   -v ./data/logs:/app/stripchat-recorder/logs \
-  -v ./data/ts_fragment:/app/stripchat-recorder/ts_fragment \
+  -v ./data/fragment:/app/stripchat-recorder/fragment \
   -v ./data/recordings:/app/stripchat-recorder/recordings \
   -v ./data/modules:/app/stripchat-recorder/modules \
   -v ./data/meta:/app/stripchat-recorder/meta \
   -v ./data/config:/app/stripchat-recorder/config \
+  -v ./data/tools:/app/stripchat-recorder/tools \
   chantrail/stripchat-recorder:latest
 # 使用 GHCR：将镜像名替换为 ghcr.io/chantrail/stripchat-recorder:latest
 ```
@@ -110,11 +112,11 @@ docker run -d \
 
 | 设置项                       | 说明                                                                                                          |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| TS 流输出目录                | 录制产生的 TS 分片存放路径                                                                                    |
+| 分片流输出目录               | 录制产生的分片（fMP4 .m4s）存放路径                                                                                    |
 | 后处理最大并发数             | 同时运行的后处理任务数；`0` 表示自动（= CPU 逻辑核心数）；手动设置时上限同为 CPU 逻辑核心数，可主动设置低于自动值以压低天花板。实际并发会随系统负载自动下调，上限只是天花板 |
 | 轮询间隔（秒）               | 检查主播是否上线的基础间隔，范围 10–300；有历史在线规律数据的主播在低活跃时段会自适应拉长（上限 200 秒）以节省流量 |
 | 首选录制分辨率               | 目标录制画质（0 = 原始/最高画质），可设置画质不可用时的回退方向                                               |
-| 首选视频编码                 | 获取播放列表时附带 `preferredVideoCodec` 参数（H.264 / H.265 / AV1，默认由服务器决定）；H.265 / AV1 体积更小，但需播放器与后处理工具支持 |
+| 首选视频编码                 | 获取播放列表时附带 `preferredVideoCodec` 参数（H.264 / H.265 / AV1，不选则由服务器决定）；所选编码不可用时按 AV1→H.265→H.264 向下回退；H.265 / AV1 体积更小，但需播放器与后处理工具支持 |
 | 录制文件时长（秒）           | 每个分片文件的最长时长，`0` 表示不限制；可用于按时段切割长播录制                                             |
 | 后处理临时目录最大占用（GB） | 后处理模块运行时产生的临时文件上限，超出后自动删除最旧的文件；`0` 表示不限制，默认 50 GB                      |
 | FFmpeg 首选项                | 选择使用系统 PATH 中的 FFmpeg 还是程序目录 `tools` 文件夹中的 FFmpeg；未设置时启动后弹出选择向导 |
@@ -169,7 +171,7 @@ http://localhost:3030/stream/{modelname}
 
 | 模块              | 说明                                                              |
 | ----------------- | ----------------------------------------------------------------- |
-| `ts_merge`        | 将 TS 分片目录合并为单一视频文件，**官方流水线的首节点**         |
+| `segment_merge`        | 将录制分片目录合并为单一视频文件，**官方流水线的首节点**         |
 | `contact_sheet`   | 按配置间隔截帧并拼合为预览图                                      |
 | `filter_short`    | 删除低于最短时长的录制文件                                        |
 | `notify_discord`  | 通过 Discord Webhook 发送录制信息和封面图                         |
@@ -208,7 +210,23 @@ Desktop 端安装包（NSIS、deb、dmg）不把模块放在程序安装目录�
 - **自动下载**：两处都找不到时，自动从 [FFmpeg-Builds-Full](https://github.com/ChanTrail/FFmpeg-Builds-Full) 下载预编译静态构建（约 130–210 MB，Windows 为 7z 固实压缩包，Linux/macOS 为 tar.xz）到 `tools` 文件夹，下载进度以 toast 提示（支持 Windows x86_64/ARM64、Linux x86_64/ARM64、macOS ARM64）。
 - **FFmpeg 首选项**：尚未选择来源时（如旧版本升级后 `ffmpeg_preference` 为空），启动后会弹出选择向导，列出各位置检测结果供指定使用系统 PATH 还是 `tools` 文件夹中的 FFmpeg，也可在设置页随时修改；选择 PATH 来源时自动更新功能停用。
 - **空闲自动更新**：下载的副本会在没有录制和后处理任务运行时自动更新到最新版本（设置项「空闲时自动更新 FFmpeg」，默认开启；程序启动即检查一次）。PATH 中的 FFmpeg，以及手动放入 `tools`、没有 `ffmpeg-build.json` 标记文件的 FFmpeg 都不会被替换。检测到新版、开始安装、完成/失败等里程碑会写入应用内通知面板。
-- **Docker 镜像**已内置 FFmpeg-Builds-Full 自编译静态构建（位于 `tools/` 并带 `ffmpeg-build.json` 安装标记，容器内同样参与空闲自动更新；不占用容器 PATH），无需任何额外操作。
+- **Docker 镜像**不内置 FFmpeg：首次启动由设置向导引导就地自动下载到 `tools`（镜像内是 `VOLUME`，下载副本随卷持久并带 `ffmpeg-build.json` 标记，容器内同样参与空闲自动更新），或指定系统 PATH 中的 FFmpeg；也可预先把自备构建放进挂载的 `tools` 目录，程序即按 tools 优先使用。
+
+### 硬件要求与 `-legacy` 构建轨
+
+下载与镜像内置的 FFmpeg 均来自 FFmpeg-Builds-Full 的**默认构建轨**，面向新硬件基线；同名还有 `-legacy` 轨面向老硬件。两条轨启用库与功能完全一致，差异只在 CPU 基线世代：
+
+| 构建轨                                            | x86_64                                                     | arm64                        |
+| ------------------------------------------------- | ---------------------------------------------------------- | ---------------------------- |
+| 默认（`linux-x86_64` / `linux-arm64`）            | **x86-64-v3+**（AVX2/BMI2/FMA3，≈Haswell/2013 起）         | 任意 ARMv8                   |
+| `-legacy`（`linux-x86_64-legacy` / `-arm64-legacy`） | SSE2 基线，任意 x86-64 CPU（AVX2+ SIMD 走 cpuid 运行时分发，老 CPU 自动回落 C 路径） | ARMv8.0 基线（Cortex-A53 实测） |
+
+- **Docker 镜像不内置 FFmpeg，自动下载拉回的也是默认轨**：x86_64 宿主的 CPU 若早于 Haswell（无 AVX2），需在**首次启动前**把 `-legacy` 构建放进挂载的 `tools` 目录（compose 示例中即 `./data/tools`）——目录非空时程序不会触发自动下载：
+  - 宿主机解压 [ffmpeg-latest-linux-x86_64-legacy.tar.xz](https://github.com/ChanTrail/FFmpeg-Builds-Full/releases/latest/download/ffmpeg-latest-linux-x86_64-legacy.tar.xz)，把其中的 `ffmpeg`/`ffprobe`/`ffplay`（`chmod +x`）放入 `./data/tools/`；
+  - 不写 `ffmpeg-build.json` 标记 → 被视作手动放置，空闲自动更新不会替换它；
+  - 若已启动过且 `tools` 里已被自动下载了默认轨，删掉目录内全部文件再按上一步放置即可。
+- **非 Docker 部署的自动下载同样取默认轨**：老 x86-64 机器请手动把 `-legacy` 构建解压进 `tools/`（不写 `ffmpeg-build.json`，自动更新不会覆盖），或改用系统 PATH 中的 FFmpeg（如发行版仓库版本——选择 PATH 来源后自动更新自动停用）。
+- arm64 宿主机（树莓派、ARM VPS 等）两条轨均可运行，无需特别处理；Windows 与 macOS 不区分构建轨，同样无需关心本项。
 
 ---
 
@@ -257,7 +275,7 @@ docker build -t chantrail/stripchat-recorder .
 - **前端：** Vue 3, TypeScript, Vite, Tailwind CSS, Reka UI
 - **后端 / 桌面端：** Rust, Tauri 2
 - **后处理模块：** Rust（独立二进制）
-- **容器：** Debian, ffmpeg
+- **容器：** Debian（FFmpeg 由程序在容器内按需下载管理，非镜像内置）
 
 ---
 

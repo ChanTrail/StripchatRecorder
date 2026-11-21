@@ -11,6 +11,19 @@ use tokio::sync::{broadcast, mpsc};
 /// Pre-buffer ring buffer for TS data; retains the last ~N bytes for immediate push to new connections.
 const PREBUFFER_MAX_BYTES: usize = 512 * 1024; // 512 KB ≈ 2–3 秒黑屏或 1–2 秒直播
 
+/// FLV 头保留区：流开头的前 N 字节（FLV 签名 + onMetaData + 编码 sequence
+/// headers）不入 ring buffer 而单独留存，订阅时先发它们再发 ring 尾部——
+/// 否则流运行超过 ring 上限后，晚接入的连接拿到的是无 FLV 签名的中段字节，
+/// 播放器 probe 直接失败（ffplay/VLC 都放不了）。
+///
+/// FLV header region: the first N stream bytes (FLV signature + onMetaData +
+/// codec sequence headers) are kept separately from the ring and pushed to
+/// every new subscriber before the ring tail — otherwise once the stream has
+/// outgrown the ring, a late-joining connection receives mid-stream bytes
+/// with no FLV signature and the player's probe fails outright (ffplay and
+/// VLC alike).
+const HEADER_TARGET_BYTES: usize = 4096;
+
 /// 转发流的当前状态 / Current state of a relay stream
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -56,6 +69,13 @@ pub struct RelaySession {
     pub prebuffer: VecDeque<Arc<Vec<u8>>>,
     /// ring buffer 当前总字节数 / Total bytes currently in prebuffer
     pub prebuffer_bytes: usize,
+    /// 流起始块（FLV 签名 + 序列头等），累积满 `HEADER_TARGET_BYTES` 后不再追加；
+    /// 新订阅先收到它再接 ring 尾部。
+    /// Stream-leading chunks (FLV signature + sequence headers), accumulated
+    /// until `HEADER_TARGET_BYTES`; prepended to new subscriptions before the ring tail.
+    pub header_chunks: VecDeque<Arc<Vec<u8>>>,
+    /// 头保留区当前总字节数 / Total bytes currently held in the header region
+    pub header_bytes: usize,
 }
 
 /// 新会话需要启动的 worker 所持有的通道端。
@@ -109,10 +129,17 @@ impl RelayManager {
         if let Some(s) = sessions.get_mut(username) {
             s.active_connections += 1;
             s.last_active = Instant::now();
+            // 头保留区 + ring 尾部：保证新连接始终以 FLV 签名开头
+            // Header region + ring tail: new connections always start with the FLV signature
             return RelaySubscription {
                 session_id: s.id,
                 rx: s.ts_tx.subscribe(),
-                prebuffer: s.prebuffer.iter().cloned().collect(),
+                prebuffer: s
+                    .header_chunks
+                    .iter()
+                    .chain(s.prebuffer.iter())
+                    .cloned()
+                    .collect(),
                 new_worker: None,
             };
         }
@@ -142,6 +169,8 @@ impl RelayManager {
                 ts_tx: ts_tx.clone(),
                 prebuffer: VecDeque::new(),
                 prebuffer_bytes: 0,
+                header_chunks: VecDeque::new(),
+                header_bytes: 0,
             },
         );
         RelaySubscription {
@@ -169,6 +198,16 @@ impl RelayManager {
         let mut sessions = self.sessions.write();
         if let Some(s) = Self::current_mut(&mut sessions, username, session_id) {
             let len = chunk.len();
+            // 流起始块先填头保留区（不进 ring），凑够目标后才开始入 ring——
+            // 晚接入的连接必须先拿到 FLV 签名，否则 probe 失败
+            // Leading chunks fill the header region first (never the ring); the
+            // ring only starts after the target is reached — late joiners must
+            // receive the FLV signature or probing fails
+            if s.header_bytes < HEADER_TARGET_BYTES {
+                s.header_chunks.push_back(chunk);
+                s.header_bytes += len;
+                return;
+            }
             s.prebuffer.push_back(chunk);
             s.prebuffer_bytes += len;
             // 淘汰最旧的块直到总字节数不超过上限
@@ -191,6 +230,8 @@ impl RelayManager {
         if let Some(s) = Self::current_mut(&mut sessions, username, session_id) {
             s.prebuffer.clear();
             s.prebuffer_bytes = 0;
+            s.header_chunks.clear();
+            s.header_bytes = 0;
         }
     }
 

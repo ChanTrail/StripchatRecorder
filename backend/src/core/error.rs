@@ -123,6 +123,15 @@ impl From<reqwest::Error> for AppError {
     }
 }
 
+impl From<wreq::Error> for AppError {
+    fn from(e: wreq::Error) -> Self {
+        // 带完整 source 链——单独 `e.to_string()` 只剩顶层
+        // "error sending request" / keeps the full source chain — bare
+        // to_string() only yields the top-level "error sending request"
+        Self::Other(error_chain(&e))
+    }
+}
+
 impl From<serde_json::Error> for AppError {
     fn from(e: serde_json::Error) -> Self {
         Self::Json(e)

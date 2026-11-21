@@ -29,7 +29,7 @@ A self-hosted Stripchat live stream recorder with a web-based management UI. Sup
 - **ECH (Encrypted Client Hello)**: optional — encrypts the TLS ClientHello of StripChat API requests with a borrowed ECH config to hide the real SNI, which may mitigate HTTP 403 responses; automatically falls back to a plain connection when the host is unroutable or key resolution fails; CDN segment traffic only rides ECH legs in the fallback race after every direct attempt has failed
 - **Mouflon HLS decryption**: manage `pkey → pdkey` key pairs and `pkey → keystream` key streams for decrypting Stripchat's encrypted HLS segment filenames; supports automatic key sync from a configured URL
 - **Visual post-processing pipeline**: DAG node editor with fork and merge support; built-in modules:
-  - **ts_merge** — merge TS segment directories into a single video file (first node of an official pipeline)
+  - **segment_merge** — merge recorded segment directories (fMP4 .m4s) into a single video file (first node of an official pipeline)
   - **contact_sheet** — generate a tiled preview image with timestamps
   - **filter_short** — delete recordings below a minimum duration
   - **notify_discord** — send recording info and cover image to a Discord Webhook
@@ -67,11 +67,12 @@ services:
       - "${PORT:-3030}:${PORT:-3030}"
     volumes:
       - ./data/logs:/app/stripchat-recorder/logs           # Runtime logs
-      - ./data/ts_fragment:/app/stripchat-recorder/ts_fragment  # TS segments during recording (TS stream output dir)
-      - ./data/recordings:/app/stripchat-recorder/recordings  # Video output from ts_merge and other modules
+      - ./data/fragment:/app/stripchat-recorder/fragment  # Recorded segments during recording (segment output dir)
+      - ./data/recordings:/app/stripchat-recorder/recordings  # Video output from segment_merge and other modules
       - ./data/modules:/app/stripchat-recorder/modules     # Post-processing module executables
       - ./data/meta:/app/stripchat-recorder/meta           # Recording metadata
       - ./data/config:/app/stripchat-recorder/config       # Config files (including settings.json)
+      - ./data/tools:/app/stripchat-recorder/tools         # FFmpeg (auto-downloaded or bring-your-own)
 ```
 
 ```bash
@@ -80,7 +81,7 @@ docker compose up -d
 
 Then open `http://localhost:3030` in your browser. On first visit, the setup wizard will guide you through language selection, output directory, network proxy, an FFmpeg source check, and admin password setup.
 
-The Docker image runs in Server mode by default (port 3030). Configuration is written to the mounted `config/settings.json`. The image is built multi-arch (`linux/amd64`, `linux/arm64`), so both x86 and ARM64 hosts can pull and run it directly. Each tag is published to both **Docker Hub** (`chantrail/stripchat-recorder`) and **GHCR** (`ghcr.io/chantrail/stripchat-recorder`) with identical content — use whichever registry your network can reach.
+The Docker image runs in Server mode by default (port 3030). Configuration is written to the mounted `config/settings.json`. The image is built multi-arch (`linux/amd64`, `linux/arm64`), so both x86 and ARM64 hosts can pull and run it directly. Each tag is published to both **Docker Hub** (`chantrail/stripchat-recorder`) and **GHCR** (`ghcr.io/chantrail/stripchat-recorder`) with identical content — use whichever registry your network can reach. **FFmpeg is not baked into the image**: the setup wizard downloads it into the mounted `tools` dir on first start (requires access to GitHub Releases), or drop a self-provided build into `tools` beforehand — see "Hardware requirements & the `-legacy` track" below.
 
 ### docker run
 
@@ -93,11 +94,12 @@ docker run -d \
   -e PORT=3030 \
   -p 3030:3030 \
   -v ./data/logs:/app/stripchat-recorder/logs \
-  -v ./data/ts_fragment:/app/stripchat-recorder/ts_fragment \
+  -v ./data/fragment:/app/stripchat-recorder/fragment \
   -v ./data/recordings:/app/stripchat-recorder/recordings \
   -v ./data/modules:/app/stripchat-recorder/modules \
   -v ./data/meta:/app/stripchat-recorder/meta \
   -v ./data/config:/app/stripchat-recorder/config \
+  -v ./data/tools:/app/stripchat-recorder/tools \
   chantrail/stripchat-recorder:latest
 # For GHCR, replace the image name with ghcr.io/chantrail/stripchat-recorder:latest
 ```
@@ -110,11 +112,11 @@ The following options are available in the Web UI under Settings:
 
 | Setting                        | Description                                                                                                                                             |
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| TS stream output directory     | Path where TS segment streams from recordings are stored                                                                                                |
+| Segment output directory       | Path where recorded segment streams (fMP4 .m4s) are stored                                                                                                |
 | Max concurrent post-processing | Number of simultaneous post-processing tasks; `0` = auto (= logical CPU count); manual values are capped at the same logical CPU count — useful for deliberately lowering the ceiling. Actual concurrency is scaled down automatically under system load |
 | Poll interval (seconds)        | Base interval for checking whether a streamer is live; range 10–300. For streamers with historical online-schedule data, the interval stretches adaptively during low-activity periods (up to 200 s) to save bandwidth |
 | Preferred recording resolution | Target recording quality (0 = original/highest); configures fallback direction when unavailable                                                         |
-| Preferred video codec          | Sent as the `preferredVideoCodec` parameter when fetching playlists (H.264 / H.265 / AV1, default = server decides); H.265 / AV1 produces smaller files but requires player and post-processing support |
+| Preferred video codec          | Sent as the `preferredVideoCodec` parameter when fetching playlists (H.264 / H.265 / AV1, unset = server decides); falls back downward AV1→H.265→H.264 when the chosen codec is unavailable; H.265 / AV1 produces smaller files but requires player and post-processing support |
 | Recording file duration (s)    | Max duration per segment file; `0` = unlimited; useful for splitting long broadcasts                                                                    |
 | Max post-process tmp dir (GB)  | Size limit for temporary files created by post-processing modules; oldest files are deleted when exceeded; `0` = unlimited, default 50 GB               |
 | FFmpeg preference              | Choose between the FFmpeg on the system PATH and the one in the program's `tools` folder; when unset, a selection wizard pops up after launch            |
@@ -169,7 +171,7 @@ The post-processing pipeline is a **DAG (directed acyclic graph)**. Use the visu
 
 | Module            | Description                                                                              |
 | ----------------- | ---------------------------------------------------------------------------------------- |
-| `ts_merge`        | Merges a TS segment directory into a single video file; **first node in an official pipeline** |
+| `segment_merge`        | Merges a recorded segment directory into a single video file; **first node in an official pipeline** |
 | `contact_sheet`   | Extracts frames at a configurable interval and tiles them into a preview image           |
 | `filter_short`    | Deletes recordings shorter than a configurable minimum duration                          |
 | `notify_discord`  | Sends recording info and cover image to a Discord Webhook                                |
@@ -208,7 +210,23 @@ The program depends on ffmpeg and ffprobe, managed automatically — manual inst
 - **Auto-download**: if neither location has them, a prebuilt static build (~130–210 MB; 7z solid archive on Windows, tar.xz on Linux/macOS) is downloaded from [FFmpeg-Builds-Full](https://github.com/ChanTrail/FFmpeg-Builds-Full) into `tools`, with progress shown as a toast (supported: Windows x86_64/ARM64, Linux x86_64/ARM64, macOS ARM64).
 - **FFmpeg preference**: while no source has been chosen (`ffmpeg_preference` unset, e.g. after upgrading from an older version), a selection wizard pops up at launch showing detection results for each location so you can pick the system PATH or the `tools` copy — it can also be changed anytime in Settings; auto-update is disabled while the PATH source is selected.
 - **Idle auto-update**: the downloaded copy is kept up to date automatically while no recording or post-processing task is running (Settings → "Auto-update FFmpeg when idle", on by default; a check also runs at program start). An ffmpeg from PATH, or one placed in `tools` manually without the `ffmpeg-build.json` marker, is never replaced. Milestones (new version detected → install started → done/failed) are recorded to the in-app notification panel.
-- The **Docker image** ships a self-built FFmpeg-Builds-Full static bundle (under `tools/` with an `ffmpeg-build.json` install marker, so it participates in idle auto-update inside the container too; it is not added to the container PATH) — nothing extra to do.
+- The **Docker image** does not bundle FFmpeg: on first start the setup wizard guides you to download it in place into `tools` (a `VOLUME` in the image, so the downloaded copy persists with its `ffmpeg-build.json` marker and participates in idle auto-update inside the container too), or to pick a system-PATH ffmpeg; you can also drop a self-provided build into the mounted `tools` dir beforehand, which the program then prefers.
+
+### Hardware requirements & the `-legacy` track
+
+The auto-downloaded FFmpeg always comes from the FFmpeg-Builds-Full **default build track**, which targets a modern hardware baseline; a sibling `-legacy` track targets older hardware. Both tracks enable the same libraries and features — they differ only in CPU baseline generation:
+
+| Track                                                | x86_64                                                                                            | arm64                                  |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------- | -------------------------------------- |
+| Default (`linux-x86_64` / `linux-arm64`)              | **x86-64-v3+** (AVX2/BMI2/FMA3, ≈Haswell/2013 onward)                                             | Any ARMv8                              |
+| `-legacy` (`linux-x86_64-legacy` / `-arm64-legacy`)   | SSE2 baseline — any x86-64 CPU (AVX2+ SIMD uses cpuid runtime dispatch, old CPUs fall back to C) | ARMv8.0 baseline (tested on Cortex-A53) |
+
+- **The Docker image has no bundled FFmpeg, and its auto-download also fetches the default track**: if the x86_64 host CPU predates Haswell (no AVX2), place the `-legacy` build into the mounted `tools` dir (`./data/tools` in the compose examples) **before the first start** — a non-empty dir prevents the auto-download from firing:
+  - On the host, extract [ffmpeg-latest-linux-x86_64-legacy.tar.xz](https://github.com/ChanTrail/FFmpeg-Builds-Full/releases/latest/download/ffmpeg-latest-linux-x86_64-legacy.tar.xz) and copy `ffmpeg`/`ffprobe`/`ffplay` (`chmod +x`) into `./data/tools/`;
+  - No `ffmpeg-build.json` marker → treated as manually placed, idle auto-update never replaces it;
+  - If the container already started and auto-downloaded the default build, delete everything in the dir first, then place the files as above.
+- **Non-Docker auto-downloads also use the default track**: on an old x86-64 machine, either manually extract the `-legacy` build into `tools/` (without `ffmpeg-build.json`, so auto-update won't overwrite it) or use an FFmpeg from the system PATH (e.g. your distro's package — selecting the PATH source disables auto-update anyway).
+- arm64 hosts (Raspberry Pi, ARM VPS, etc.) can run either track; Windows and macOS have no track split — none of these need any special handling.
 
 ---
 
@@ -257,7 +275,7 @@ docker build -t chantrail/stripchat-recorder .
 - **Frontend:** Vue 3, TypeScript, Vite, Tailwind CSS, Reka UI
 - **Backend / Desktop:** Rust, Tauri 2
 - **Post-processing modules:** Rust (standalone binaries)
-- **Container:** Debian, ffmpeg
+- **Container:** Debian (FFmpeg downloaded and managed by the program at runtime, not baked in)
 
 ---
 

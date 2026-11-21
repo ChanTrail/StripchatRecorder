@@ -28,18 +28,36 @@ use std::process::{Command, Stdio};
 /// localized hint)
 pub const NO_PLAYER: &str = "no_player";
 
-/// 用系统媒体播放器打开转发流地址，返回所启动播放器的展示名。
-/// Open the relay stream URL in a system media player; returns the launched
-/// player's display name.
+/// 配置了自定义播放器但路径不存在时的错误标记 /
+/// Error marker when a custom player is configured but the path doesn't exist
+pub const PLAYER_MISSING: &str = "player_missing";
+
+/// 用媒体播放器打开媒体目标（HTTP-FLV 转发流地址或本地媒体文件路径），返回
+/// 所启动播放器的展示名。`custom` 非空时优先使用设置中配置的自定义播放器
+/// （路径不存在返回 [`PLAYER_MISSING`] 而不是静默回退自动探测——配置无效
+/// 应该让用户知道）；为空时按平台探测常见播放器。
+///
+/// Open a media target (HTTP-FLV relay stream URL or a local media file path)
+/// in a media player; returns the launched player's display name. A non-empty
+/// `custom` wins — a missing configured path returns [`PLAYER_MISSING`]
+/// rather than silently falling back to probing (a broken configuration
+/// should be visible to the user). Empty `custom` probes platform candidates.
 ///
 /// ## 参数 / Parameters
-/// - `url`：HTTP-FLV 转发流地址 / HTTP-FLV relay stream URL
+/// - `url`：转发流地址或媒体文件路径 / relay stream URL or media file path
+/// - `custom`：设置中的自定义播放器路径（可空）/ custom player path from settings (may be empty)
 ///
 /// ## 错误 / Errors
+/// - 自定义路径不存在 → [`AppError::Other`]`(PLAYER_MISSING)`
+///   Configured custom path missing → [`AppError::Other`]`(PLAYER_MISSING)`
 /// - 全部候选未命中 → [`AppError::Other`]`(NO_PLAYER)`
 ///   All candidates missed → [`AppError::Other`]`(NO_PLAYER)`
 /// - 拉起播放器进程失败 → IO 错误 / spawning the player failed → IO error
-pub fn open_in_media_player(url: &str) -> Result<String> {
+pub fn open_in_media_player(url: &str, custom: &str) -> Result<String> {
+    let custom = custom.trim();
+    if !custom.is_empty() {
+        return launch_custom_player(url, custom);
+    }
     for candidate in candidates() {
         if let Some((prog, mut argv)) = candidate.resolve() {
             let label = candidate.label.to_string();
@@ -60,6 +78,62 @@ pub fn open_in_media_player(url: &str) -> Result<String> {
         }
     }
     Err(AppError::Other(NO_PLAYER.to_string()))
+}
+
+/// 以设置中配置的自定义路径拉起播放器：macOS `.app` 包经 `open -a`，其余
+/// 直接以可执行文件 + 目标（流地址或文件路径）参数唤起。路径不存在返回
+/// [`PLAYER_MISSING`]。
+///
+/// Launch the custom player configured in settings: macOS `.app` bundles go
+/// through `open -a`, everything else is spawned directly with the target
+/// (stream URL or file path) as its sole argument. A missing path returns
+/// [`PLAYER_MISSING`].
+///
+/// ## 参数 / Parameters
+/// - `url`：转发流地址或媒体文件路径 / relay stream URL or media file path
+/// - `path`：自定义播放器路径（已 trim，非空）/ custom player path (trimmed, non-empty)
+fn launch_custom_player(url: &str, path: &str) -> Result<String> {
+    let p = PathBuf::from(path);
+
+    #[cfg(target_os = "macos")]
+    let (prog, argv): (PathBuf, Vec<String>) = if p.is_dir() && path.ends_with(".app") {
+        (
+            PathBuf::from("open"),
+            vec!["-a".to_string(), path.to_string()],
+        )
+    } else if p.is_file() {
+        (p.clone(), Vec::new())
+    } else {
+        return Err(AppError::Other(PLAYER_MISSING.to_string()));
+    };
+    #[cfg(not(target_os = "macos"))]
+    let (prog, argv): (PathBuf, Vec<String>) = if p.is_file() {
+        (p.clone(), Vec::new())
+    } else {
+        return Err(AppError::Other(PLAYER_MISSING.to_string()));
+    };
+
+    // 展示名取文件名（去扩展名）/ Display name = file name minus extension
+    let label = p
+        .file_stem()
+        .or_else(|| p.file_name())
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.to_string());
+    tracing::info!(
+        "{}",
+        crate::tl!("relay.openInPlayer", player = label, url = url)
+    );
+    let mut argv = argv;
+    argv.push(url.to_string());
+    Command::new(prog)
+        .args(&argv)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .no_window()
+        .spawn()
+        .map_err(|e| AppError::Other(format!("failed to launch player: {e}")))?;
+    Ok(label)
 }
 
 /// 播放器定位方式 / How a player is located

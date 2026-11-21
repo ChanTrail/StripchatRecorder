@@ -253,24 +253,24 @@ impl AppState {
 /// stack applies and the target host pins to CF anycast IPs (the same
 /// `crate::ech::apply_ech` as the API/CDN clients); otherwise a plain
 /// client. Both flavors share the original 15s timeout.
-fn mouflon_sync_client(ech: Option<&crate::ech::EchTarget>) -> Result<reqwest::Client> {
-    let mut builder = reqwest::Client::builder().timeout(std::time::Duration::from_secs(15));
+fn mouflon_sync_client(ech: Option<&crate::ech::EchTarget>) -> Result<wreq::Client> {
+    let mut builder = wreq::Client::builder().timeout(std::time::Duration::from_secs(15));
     if let Some(t) = ech {
         builder = crate::ech::apply_ech(builder, t);
     }
     builder.build().map_err(|e| AppError::Other(e.to_string()))
 }
 
-/// 发送一次密钥同步请求（可带 Bearer 授权头），原始 `reqwest` 结果留给
+/// 发送一次密钥同步请求（可带 Bearer 授权头），原始 `wreq` 结果留给
 /// 调用方区分传输错误与 HTTP 状态。
 /// Sends one key-sync request (optional Bearer Authorization header); the
-/// raw `reqwest` result is left for the caller to tell transport errors
+/// raw `wreq` result is left for the caller to tell transport errors
 /// apart from HTTP statuses.
 async fn send_worker_request(
-    client: &reqwest::Client,
+    client: &wreq::Client,
     worker_url: &str,
     auth_token: Option<&str>,
-) -> std::result::Result<reqwest::Response, reqwest::Error> {
+) -> std::result::Result<wreq::Response, wreq::Error> {
     let mut req = client.get(worker_url);
     if let Some(token) = auth_token {
         req = req.header("Authorization", format!("Bearer {}", token));

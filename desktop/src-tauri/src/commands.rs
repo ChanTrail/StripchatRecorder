@@ -285,8 +285,12 @@ pub async fn open_relay_stream(
         })
         .await?;
     let url = format!("http://127.0.0.1:{port}/stream/{username}");
-    let player = stripchat_recorder_lib::relay::player::open_in_media_player(&url)
-        .map_err(|e| e.to_string())?;
+    // 设置中的自定义播放器路径（空 = 平台自动探测）/ Custom player path
+    // from settings (empty = platform auto-probe)
+    let player_path = state.app_state.get_settings().player_path;
+    let player =
+        stripchat_recorder_lib::relay::player::open_in_media_player(&url, &player_path)
+            .map_err(|e| e.to_string())?;
     Ok(serde_json::json!({ "url": url, "player": player }))
 }
 
@@ -319,11 +323,14 @@ pub async fn get_disk_space(state: State<'_, DesktopState>) -> CmdResult<serde_j
     let settings = state.app_state.get_settings();
     let output_dir = settings.output_dir.clone();
 
-    // 取 ts_merge 节点的自定义输出目录（若已配置）
-    let ts_merge_dir = {
+    // 取 segment_merge 节点的自定义输出目录（若已配置）
+    let merge_dir = {
         let pipeline = state.app_state.get_pipeline();
         pipeline.nodes.iter()
-            .find(|n| n.module_id == "ts_merge" && n.enabled)
+            .find(|n| {
+                (n.module_id == stripchat_recorder_lib::postprocess::pipeline::SEGMENT_MERGE_MODULE_ID)
+                    && n.enabled
+            })
             .and_then(|n| n.params.get("output_dir"))
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
@@ -331,7 +338,7 @@ pub async fn get_disk_space(state: State<'_, DesktopState>) -> CmdResult<serde_j
     };
 
     let result = tokio::task::spawn_blocking(move || {
-        get_disk_space_entries(&output_dir, ts_merge_dir.as_deref())
+        get_disk_space_entries(&output_dir, merge_dir.as_deref())
     })
     .await
     .map_err(|e| e.to_string())?;
@@ -423,14 +430,16 @@ pub async fn list_recordings(state: State<'_, DesktopState>) -> CmdResult<serde_
 #[tauri::command]
 pub async fn get_merging_dirs(state: State<'_, DesktopState>) -> CmdResult<serde_json::Value> {
     let settings = state.app_state.get_settings();
-    // merge_format 字段现在通过 ts_merge pipeline 节点控制，默认 mp4
+    // merge_format 字段现在通过 segment_merge pipeline 节点控制，默认 mp4
     let merge_format = {
         let pipeline = state.app_state.get_pipeline();
         pipeline.nodes.iter()
-            .find(|n| n.module_id == "ts_merge")
+            .find(|n| {
+                n.module_id == stripchat_recorder_lib::postprocess::pipeline::SEGMENT_MERGE_MODULE_ID
+            })
             .and_then(|n| n.params.get("format"))
             .and_then(|v| v.as_str())
-            .unwrap_or("mp4")
+            .unwrap_or("mkv")
             .to_string()
     };
 
@@ -771,14 +780,26 @@ pub async fn remove_missing_pp_results(
 
 // ─── File Ops ─────────────────────────────────────────────────────────────────
 
-/// 打开录制文件（用系统默认播放器）/ Open a recording file with the system default player
+/// 打开录制文件：设置中配置了自定义播放器时优先用它（路径失效返回
+/// player_missing 标记），否则回落系统默认打开方式。
+///
+/// Open a recording file: the configured custom player wins when set
+/// (a stale path returns the player_missing marker); otherwise falls back
+/// to the system default handler.
 #[tauri::command]
 pub async fn open_recording(
     path: String,
     app: tauri::AppHandle,
+    state: State<'_, DesktopState>,
 ) -> CmdResult<serde_json::Value> {
-    use tauri_plugin_opener::OpenerExt;
-    app.opener().open_path(&path, None::<&str>).map_err(|e| e.to_string())?;
+    let player_path = state.app_state.get_settings().player_path;
+    if !player_path.trim().is_empty() {
+        stripchat_recorder_lib::relay::player::open_in_media_player(&path, &player_path)
+            .map_err(|e| e.to_string())?;
+    } else {
+        use tauri_plugin_opener::OpenerExt;
+        app.opener().open_path(&path, None::<&str>).map_err(|e| e.to_string())?;
+    }
     Ok(serde_json::json!({ "ok": true }))
 }
 
@@ -795,11 +816,11 @@ pub async fn open_output_dir(
 }
 
 /// 在文件管理器中打开合并后视频文件夹。
-/// - ts_merge 节点配置了 output_dir → 打开该目录
+/// - segment_merge 节点配置了 output_dir → 打开该目录
 /// - 未配置 → 打开 settings.output_dir（分片目录，合并文件存放于此）
 ///
 /// Open the merged video directory in the file manager.
-/// - If ts_merge has an output_dir param → open that directory
+/// - If segment_merge has an output_dir param → open that directory
 /// - Otherwise → open settings.output_dir (the fragment dir, where merged files also live)
 #[tauri::command]
 pub async fn open_merged_dir(
@@ -811,7 +832,10 @@ pub async fn open_merged_dir(
     let dir = {
         let pipeline = state.app_state.get_pipeline();
         pipeline.nodes.iter()
-            .find(|n| n.module_id == "ts_merge" && n.enabled)
+            .find(|n| {
+                (n.module_id == stripchat_recorder_lib::postprocess::pipeline::SEGMENT_MERGE_MODULE_ID)
+                    && n.enabled
+            })
             .and_then(|n| n.params.get("output_dir"))
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
@@ -842,6 +866,7 @@ pub async fn open_output_file(
     video_path: String,
     module_id: String,
     app: tauri::AppHandle,
+    state: State<'_, DesktopState>,
 ) -> CmdResult<serde_json::Value> {
     let vp = std::path::PathBuf::from(&video_path);
     let mid = module_id;
@@ -859,12 +884,40 @@ pub async fn open_output_file(
     .map_err(|e| e.to_string())?
     .ok_or_else(|| "模块输出不存在或文件已被删除".to_string())?;
 
-    use tauri_plugin_opener::OpenerExt;
-    app.opener()
-        .open_path(&real_path_str, None::<&str>)
+    // 自定义播放器只接管媒体文件（视频/音频）；图片等其余输出仍走系统默认程序——
+    // 把 contact_sheet 预览图丢给 mpv 没有意义
+    // The custom player only takes over media files (video/audio); images and
+    // other outputs keep the system default handler — feeding a contact_sheet
+    // preview to mpv makes no sense
+    let player_path = state.app_state.get_settings().player_path;
+    if !player_path.trim().is_empty() && is_media_file(&real_path_str) {
+        stripchat_recorder_lib::relay::player::open_in_media_player(
+            &real_path_str,
+            &player_path,
+        )
         .map_err(|e| e.to_string())?;
+    } else {
+        use tauri_plugin_opener::OpenerExt;
+        app.opener()
+            .open_path(&real_path_str, None::<&str>)
+            .map_err(|e| e.to_string())?;
+    }
 
     Ok(serde_json::json!({ "ok": true }))
+}
+
+/// 按扩展名判断是否为媒体文件（决定自定义播放器是否接管）/
+/// Extension check deciding whether the custom player takes over a file
+fn is_media_file(path: &str) -> bool {
+    const MEDIA_EXTS: &[&str] = &[
+        "mkv", "mp4", "m4v", "ts", "m2ts", "flv", "avi", "mov", "wmv", "webm", "mpg", "mpeg",
+        "3gp", "mp3", "aac", "flac", "m4a", "wav", "ogg", "opus",
+    ];
+    std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| MEDIA_EXTS.contains(&e.to_ascii_lowercase().as_str()))
+        .unwrap_or(false)
 }
 
 /// 获取模块输出路径 / Get module output paths
@@ -891,11 +944,24 @@ pub async fn get_module_outputs(
 
 // ─── File System (Directory Browser) ─────────────────────────────────────────
 
-/// 列出目录内容 / List directory contents
+/// 列出目录内容；`include_files` 为 true 时同时返回文件条目（文件选择模式），
+/// `exec_only` 时文件条目仅保留可执行程序 /
+/// List directory contents; `include_files` also returns file entries
+/// (file-picking mode), `exec_only` restricts files to executables
 #[tauri::command]
-pub async fn list_dir(path: String) -> CmdResult<serde_json::Value> {
+pub async fn list_dir(
+    path: String,
+    include_files: Option<bool>,
+    exec_only: Option<bool>,
+) -> CmdResult<serde_json::Value> {
+    let include_files = include_files.unwrap_or(false);
+    let exec_only = exec_only.unwrap_or(false);
     let result = tokio::task::spawn_blocking(move || {
-        stripchat_recorder_lib::system::fs_browser::list_dir_inner(&path)
+        stripchat_recorder_lib::system::fs_browser::list_dir_inner(
+            &path,
+            include_files,
+            exec_only,
+        )
     })
     .await
     .map_err(|e| e.to_string())?

@@ -254,10 +254,10 @@ function onNodePortMouseup(e: MouseEvent, nodeId: string, portIndex: number, typ
 	onPortMouseup(e, { nodeId, portIndex, isOutput, type });
 }
 function onInputPortMousedown(e: MouseEvent) {
-	onPortMousedown(e, { nodeId: INPUT_NODE_ID, portIndex: 0, isOutput: true, type: "ts_session_dir" });
+	onPortMousedown(e, { nodeId: INPUT_NODE_ID, portIndex: 0, isOutput: true, type: "session_dir" });
 }
 function onInputPortMouseup(e: MouseEvent) {
-	onPortMouseup(e, { nodeId: INPUT_NODE_ID, portIndex: 0, isOutput: true, type: "ts_session_dir" });
+	onPortMouseup(e, { nodeId: INPUT_NODE_ID, portIndex: 0, isOutput: true, type: "session_dir" });
 }
 
 const inputPortConnected = computed(() =>

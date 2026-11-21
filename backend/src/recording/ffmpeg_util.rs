@@ -1,12 +1,13 @@
 //! ffmpeg/ffprobe 底层工具函数 / Low-level ffmpeg/ffprobe Utility Functions
 //!
-//! 提供分片转码（fMP4→TS）、m3u8 维护、目录大小计算、视频时长/分辨率探测等
-//! 纯 ffmpeg/ffprobe 操作，不涉及录制会话生命周期管理
-//! （会话生命周期见 `recording::recorder`）。
+//! 提供分片 remux（fMP4→fMP4/.m4s，含 tfdt 补丁）、m3u8 维护、目录大小
+//! 计算、视频时长/分辨率探测等纯 ffmpeg/ffprobe 操作，不涉及录制会话
+//! 生命周期管理（会话生命周期见 `recording::recorder`）。
 //!
-//! Provides low-level ffmpeg/ffprobe operations: segment transcoding (fMP4→TS),
-//! m3u8 maintenance, directory size calculation, and video duration/resolution probing.
-//! Does not manage recording session lifecycle (see `recording::recorder` for that).
+//! Provides low-level ffmpeg/ffprobe operations: segment remuxing
+//! (fMP4→fMP4/.m4s with tfdt patching), m3u8 maintenance, directory size
+//! calculation, and video duration/resolution probing. Does not manage
+//! recording session lifecycle (see `recording::recorder` for that).
 
 use crate::core::error::{AppError, Result};
 use crate::core::no_window::NoWindowExt;
@@ -24,18 +25,38 @@ pub fn ffmpeg_available() -> bool {
     crate::ffmpeg::ffmpeg_available()
 }
 
-/// 使用 ffmpeg 将 fMP4 数据转换为 MPEG-TS 格式（通过 stdin 管道传入）。
+/// 使用 ffmpeg 将 fMP4 数据 remux 为 fragmented-MP4 分片（通过 stdin 管道传入）。
+///
+/// 历史沿革：早期产物是 MPEG-TS（`-f mpegts`），但 TS 没有官方 AV1 codec
+/// 注册、AV1 变体流直接无法封装，故改存原生 fMP4——mp4 对
+/// h264/H.265/AV1 全兼容。真正修复"时间码错乱"的并不是换容器，而是
+/// ffmpeg 非 copyts 默认重基线（每分片归零）；fMP4 分片的时间轴由 tfdt
+/// 承载，remux 后由 [`patch_m4s_tfdt`] 改写为该分片在清单里的累计位置，
+/// 合并端获得确定性连续时间轴。
 ///
 /// 录制分片转码是实时路径，不受后处理并发许可约束——后处理任务的并发由
 /// `PpQueue` 的任务级许可统一控制，录制完整性优先，不与排队任务竞争。
 ///
-/// Convert fMP4 data to MPEG-TS format using ffmpeg (piped via stdin).
+/// Remux fMP4 data into a fragmented-MP4 segment via ffmpeg (piped via stdin).
 ///
-/// Segment transcoding is on the real-time recording path and is not subject
+/// History: segments used to be converted to MPEG-TS (`-f mpegts`), but TS
+/// has no official AV1 codec registration — AV1 variant streams cannot be
+/// muxed at all, so we now store native fMP4 (h264/H.265/AV1 all fit).
+/// What actually fixed the "timestamp disorder" was never the container
+/// swap but ffmpeg's default non-copyts rebase (zeroing each segment);
+/// an fMP4 segment's timeline rides on tfdt, which [`patch_m4s_tfdt`]
+/// rewrites to the segment's cumulative playlist position after remux,
+/// giving the merge side a deterministic continuous timeline.
+///
+/// Segment remuxing is on the real-time recording path and is not subject
 /// to post-processing concurrency permits — PP concurrency is controlled at
 /// the task level by `PpQueue`; recording integrity takes priority and never
 /// competes with queued tasks.
-pub(crate) async fn convert_to_ts(fmp4_data: Vec<u8>, ts_path: &PathBuf) -> Result<()> {
+pub(crate) async fn convert_to_m4s(
+    fmp4_data: Vec<u8>,
+    m4s_path: &PathBuf,
+    tfdt_offset_secs: f64,
+) -> Result<()> {
     // 标记 ffmpeg 使用中，阻止自动更新在转码期间替换二进制
     // Mark ffmpeg in use so auto-update won't swap the binary mid-transcode
     let _ffmpeg_guard = crate::ffmpeg::in_use();
@@ -45,8 +66,20 @@ pub(crate) async fn convert_to_ts(fmp4_data: Vec<u8>, ts_path: &PathBuf) -> Resu
         // -hide_banner -v warning keeps stderr to warnings/errors only —
         // drops the version banner and the Input #0 probe dump so failure
         // logs aren't drowned in pages of banner/config noise.
-        .args(["-hide_banner", "-v", "warning", "-y", "-i", "pipe:0", "-c", "copy", "-f", "mpegts"])
-        .arg(ts_path)
+        //
+        // 输出为自初始化 fMP4 分片：ftyp+moov(empty)+moof+mdat，每文件自带
+        // 完整 trak 定义，HLS 清单无需 EXT-X-MAP 即可被 ffmpeg demuxer /
+        // 浏览器 MSE 消费。
+        // Output is a self-initializing fMP4 segment:
+        // ftyp+moov(empty)+moof+mdat — each file carries full track
+        // definitions so the playlist needs no EXT-X-MAP for the ffmpeg
+        // demuxer or browser MSE to consume it.
+        .args([
+            "-hide_banner", "-v", "warning", "-y", "-i", "pipe:0", "-c", "copy",
+            "-f", "mp4",
+            "-movflags", "frag_keyframe+empty_moov+default_base_moof",
+        ])
+        .arg(m4s_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::piped()) // 捕获 stderr，失败时记录原因 / Capture stderr for failure diagnostics
@@ -104,7 +137,263 @@ pub(crate) async fn convert_to_ts(fmp4_data: Vec<u8>, ts_path: &PathBuf) -> Resu
         tracing::warn!("{}", crate::tl!("ffmpegUtil.stdinWriteIgnored", error = e));
     }
 
+    // 把 moof/traf/tfdt 改写为清单累计位置：remux 的非 copyts 重基线只负责
+    // 把分片归零，段间连续时间轴必须由我们显式写入——否则 fmp4 合并端按
+    // tfdt 排时间轴，全 0 的分片会塌缩叠在同一位置。
+    // Rewrite moof/traf/tfdt to the cumulative playlist position: remux's
+    // non-copyts rebase only zeroes each segment — the cross-segment
+    // continuous timeline must be written explicitly, otherwise the fmp4
+    // merge demuxer lays segments by tfdt and all-zero segments collapse
+    // onto one spot.
+    if let Err(e) = patch_m4s_tfdt(m4s_path, tfdt_offset_secs) {
+        // 补丁失败不致命：文件本身仍是合法 fMP4，只是合并时间轴可能偏移
+        // Patching failure is non-fatal: the file is still valid fMP4,
+        // only the merged timeline may be off
+        tracing::warn!("{}", crate::tl!("ffmpegUtil.tfdtPatchFailed", error = e));
+    }
+
     Ok(())
+}
+
+// ─── fMP4 tfdt 补丁 / fMP4 tfdt patching ────────────────────────────────────
+
+/// 就地重写 .m4s 文件内每个 `moof/traf/tfdt` 的 `base_media_decode_time`。
+///
+/// `offset_secs` 为该分片在会话清单中的累计时间轴位置（秒）。每个轨道的
+/// tfdt 按自身 `mdhd` timescale 换算；多 moof（一片多关键帧）时按 trun
+/// 样本时长累计推进，保证 fragment 内时间轴连续。
+///
+/// Rewrite `base_media_decode_time` of every `moof/traf/tfdt` in a .m4s
+/// file in place.
+///
+/// `offset_secs` is the segment's cumulative timeline position within the
+/// session playlist (seconds). Each track's tfdt is scaled by its own
+/// `mdhd` timescale; for multi-moof files (several keyframes in one
+/// segment) the base advances by summed trun sample durations so the
+/// in-fragment timeline stays continuous.
+fn patch_m4s_tfdt(path: &PathBuf, offset_secs: f64) -> Result<()> {
+    let mut data = fs::read(path)
+        .map_err(|e| AppError::Other(format!("read m4s: {}", e)))?;
+
+    // ISO-BMFF 顶层盒子迭代：size(4)+type(4)，size==1 用 64 位 largesize，
+    // size==0 表示延伸到文件尾。
+    // Top-level ISO-BMFF box iteration: size(4)+type(4); size==1 uses the
+    // 64-bit largesize, size==0 extends to EOF.
+    fn each_box(buf: &[u8], mut i: usize, end: usize) -> Vec<(usize, usize, [u8; 4], usize)> {
+        let mut out = Vec::new();
+        while i + 8 <= end {
+            let mut size = u32::from_be_bytes(buf[i..i + 4].try_into().unwrap()) as usize;
+            let typ: [u8; 4] = buf[i + 4..i + 8].try_into().unwrap();
+            let mut hdr = 8usize;
+            if size == 1 {
+                if i + 16 > end {
+                    break;
+                }
+                size = u64::from_be_bytes(buf[i + 8..i + 16].try_into().unwrap()) as usize;
+                hdr = 16;
+            } else if size == 0 {
+                size = end - i;
+            }
+            if size == 0 {
+                break;
+            }
+            out.push((i, size, typ, hdr));
+            i += size;
+        }
+        out
+    }
+    let u32be = |buf: &[u8], p: usize| -> u32 {
+        u32::from_be_bytes(buf[p..p + 4].try_into().unwrap())
+    };
+
+    // 第一遍：moov 里收集 track_id → mdhd timescale。
+    // Pass 1: collect track_id → mdhd timescale from the moov.
+    let mut timescales: std::collections::HashMap<u32, u64> = std::collections::HashMap::new();
+    for (off, size, typ, hdr) in each_box(&data, 0, data.len()) {
+        if &typ != b"moov" {
+            continue;
+        }
+        for (toff, tsize, ttyp, thdr) in each_box(&data, off + hdr, off + size) {
+            if &ttyp != b"trak" {
+                continue;
+            }
+            let mut track_id = None;
+            let mut tscale = None;
+            for (coff, csize, ctyp, chdr) in each_box(&data, toff + thdr, toff + tsize) {
+                match &ctyp {
+                    b"tkhd" => {
+                        // tkhd: version(1)+flags(3) 后，v0 track_id 在 +12 /
+                        // after version+flags, v0 track_id sits at +12
+                        track_id = Some(u32be(&data, coff + chdr + 12));
+                    }
+                    b"mdia" => {
+                        for (doff, _dsize, dtyp, dhdr) in
+                            each_box(&data, coff + chdr, coff + csize)
+                        {
+                            if &dtyp != b"mdhd" {
+                                continue;
+                            }
+                            // mdhd v0: timescale 在 version+flags 后 +12；
+                            // v1（64位时间）在 +20
+                            // mdhd v0: timescale at +12 after version+flags;
+                            // v1 (64-bit times) at +20
+                            let ver = data[doff + dhdr];
+                            tscale = Some(if ver == 1 {
+                                u32be(&data, doff + dhdr + 20)
+                            } else {
+                                u32be(&data, doff + dhdr + 12)
+                            } as u64);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if let (Some(id), Some(ts)) = (track_id, tscale) {
+                timescales.insert(id, ts);
+            }
+        }
+    }
+    if timescales.is_empty() {
+        return Err(AppError::Other("no track timescale found in moov".into()));
+    }
+
+    // 第二遍：按序遍历 moof→traf，改写 tfdt 并按 trun 时长推进 elapsed。
+    // Pass 2: walk moof→traf in order, rewrite tfdt and advance the
+    // per-track elapsed base by summed trun durations.
+    let mut elapsed: std::collections::HashMap<u32, u64> = std::collections::HashMap::new();
+    let mut patched = 0usize;
+    for (off, size, typ, hdr) in each_box(&data, 0, data.len()) {
+        if &typ != b"moof" {
+            continue;
+        }
+        for (toff, tsize, ttyp, thdr) in each_box(&data, off + hdr, off + size) {
+            if &ttyp != b"traf" {
+                continue;
+            }
+            let mut track_id = None;
+            let mut tfdt_pos: Option<(usize, u8)> = None;
+            let mut frag_duration: u64 = 0;
+            // tfhd 的 default_sample_duration：trun 缺逐样本时长字段时的兜底
+            // tfhd's default_sample_duration: fallback when trun omits
+            // per-sample durations
+            let mut default_dur: Option<u64> = None;
+            for (boff, _bsize, btyp, bhdr) in each_box(&data, toff + thdr, toff + tsize) {
+                match &btyp {
+                    b"tfhd" => {
+                        let flags = u32be(&data, boff + bhdr) & 0x00FF_FFFF;
+                        track_id = Some(u32be(&data, boff + bhdr + 4));
+                        // 可选字段按 flag 位顺排：base_data_offset(0x1,8B)、
+                        // sample_desc_index(0x2,4B)、default_duration(0x8,4B)
+                        // Optional fields in flag order: base_data_offset
+                        // (0x1, 8B), sample_desc_index (0x2, 4B),
+                        // default_sample_duration (0x8, 4B)
+                        let mut p = boff + bhdr + 8;
+                        if flags & 0x1 != 0 {
+                            p += 8;
+                        }
+                        if flags & 0x2 != 0 {
+                            p += 4;
+                        }
+                        if flags & 0x8 != 0 && p + 4 <= data.len() {
+                            default_dur = Some(u32be(&data, p) as u64);
+                        }
+                    }
+                    b"tfdt" => {
+                        tfdt_pos = Some((boff + bhdr + 4, data[boff + bhdr]));
+                    }
+                    b"trun" => {
+                        frag_duration +=
+                            trun_duration(&data, boff + bhdr, &u32be, default_dur)
+                                .unwrap_or(0);
+                    }
+                    _ => {}
+                }
+            }
+            let Some(id) = track_id else { continue };
+            let Some(&scale) = timescales.get(&id) else { continue };
+            // 本轨道累计起点 = offset + 该轨道已走过的 fragment 时长；
+            // 同 moof 内不同轨道各自独立推进。
+            // This track's base = offset + media already consumed by its
+            // earlier fragments; tracks inside one moof advance
+            // independently.
+            let base = elapsed.entry(id).or_insert_with(|| {
+                (offset_secs.max(0.0) * scale as f64).round() as u64
+            });
+            if let Some((pos, ver)) = tfdt_pos {
+                if ver == 1 {
+                    data[pos..pos + 8].copy_from_slice(&base.to_be_bytes());
+                } else {
+                    data[pos..pos + 4].copy_from_slice(&(*base as u32).to_be_bytes());
+                }
+                patched += 1;
+            }
+            *base += frag_duration;
+        }
+    }
+    if patched == 0 {
+        return Err(AppError::Other("no tfdt box found in m4s".into()));
+    }
+
+    fs::write(path, &data).map_err(|e| AppError::Other(format!("write m4s: {}", e)))?;
+    Ok(())
+}
+
+/// 求 trun 的样本总时长（轨道 timescale 单位）。
+///
+/// trun 布局：version+flags(4)、sample_count(4)、可选 data_offset(4,
+/// flag 0x1)、可选 first_sample_flags(4, flag 0x4)，其后每样本条目按
+/// flag 位含 duration(0x100)/size(0x200)/flags(0x400)/cts(0x800)。
+/// `tfhd_default` 未携带时退化为 `sample_count × default_sample_duration`
+/// 的调用方兜底——此处在 trun 内自足解析，条目不完整则返回 None。
+///
+/// Total sample duration of a trun box in track-timescale units.
+///
+/// Layout: version+flags(4), sample_count(4), optional data_offset(4,
+/// flag 0x1), optional first_sample_flags(4, flag 0x4), then per-sample
+/// entries with duration(0x100)/size(0x200)/flags(0x400)/cts(0x800) by
+/// flag bits. Falls back to `sample_count × default_sample_duration` when
+/// durations are absent — the caller supplies tfhd's default; returns
+/// None on a structurally unreadable box.
+fn trun_duration(
+    buf: &[u8],
+    body: usize,
+    u32be: &impl Fn(&[u8], usize) -> u32,
+    tfhd_default: Option<u64>,
+) -> Option<u64> {
+    if body + 8 > buf.len() {
+        return None;
+    }
+    let flags = u32be(buf, body) & 0x00FF_FFFF;
+    let count = u32be(buf, body + 4) as usize;
+    if flags & 0x100 == 0 {
+        // 无逐样本时长：sample_count × tfhd 默认值兜底
+        // No per-sample durations: fall back to sample_count × tfhd default
+        return tfhd_default.map(|d| d * count as u64);
+    }
+    let mut p = body + 8;
+    if flags & 0x1 != 0 {
+        p += 4; // data_offset
+    }
+    if flags & 0x4 != 0 {
+        p += 4; // first_sample_flags
+    }
+    // 逐样本条目按 flag 位含 duration(0x100)/size(0x200)/flags(0x400)/
+    // cts(0x800)，duration 恒为首字段
+    // Per-sample entries carry duration(0x100)/size(0x200)/flags(0x400)/
+    // cts(0x800) by flag bits; duration is always the first field
+    let per_sample = ((flags & 0x100 != 0) as usize)
+        + ((flags & 0x200 != 0) as usize)
+        + ((flags & 0x400 != 0) as usize)
+        + ((flags & 0x800 != 0) as usize);
+    let mut total = 0u64;
+    for _ in 0..count {
+        if p + per_sample * 4 > buf.len() {
+            return None;
+        }
+        total += u32be(buf, p) as u64;
+        p += per_sample * 4;
+    }
+    Some(total)
 }
 
 /// 失败日志保留的 stderr 末尾行数。ffmpeg 的有效错误信息总在尾部；
@@ -153,11 +442,17 @@ fn m3u8_lock() -> std::sync::MutexGuard<'static, ()> {
     M3U8_LOCK.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// 从 `{username}_segment{seq:06}.ts` 文件名解析分片序号。
-/// Parse the segment sequence out of a `{username}_segment{seq:06}.ts` filename.
-fn seq_from_ts_name(name: &str) -> Option<u32> {
+/// 从 `{username}_segment{seq:06}.{m4s|ts}` 文件名解析分片序号。
+/// 兼容旧会话残留的 .ts 文件名（只影响插入定位，不区分容器）。
+/// Parse the segment sequence out of a `{username}_segment{seq:06}.{m4s|ts}`
+/// filename. Legacy .ts names are accepted too — it only affects insert
+/// positioning, not container handling.
+fn seq_from_seg_name(name: &str) -> Option<u32> {
     let pos = name.rfind("_segment")?;
-    let digits = name[pos + "_segment".len()..].strip_suffix(".ts")?;
+    let stem = &name[pos + "_segment".len()..];
+    let digits = stem
+        .strip_suffix(".m4s")
+        .or_else(|| stem.strip_suffix(".ts"))?;
     digits.parse().ok()
 }
 
@@ -180,7 +475,7 @@ fn seq_from_ts_name(name: &str) -> Option<u32> {
 ///   greater — files don't support in-place insertion, so this rewrites the
 ///   bytes from the insert point onward (trivial for a small m3u8)
 /// - Idempotent: skips when the filename is already present
-/// - Automatically writes the M3U8 header (`#EXTM3U` and `#EXT-X-VERSION:3`)
+/// - Automatically writes the M3U8 header (`#EXTM3U` and `#EXT-X-VERSION:7`)
 ///   on first write
 ///
 /// All concurrent segment jobs write the playlist via this function, sharing
@@ -197,13 +492,13 @@ fn seq_from_ts_name(name: &str) -> Option<u32> {
 /// divide-by-zero paths.
 pub(crate) fn insert_to_m3u8_sorted(
     session_dir: &std::path::Path,
-    ts_path: &std::path::Path,
+    seg_path: &std::path::Path,
     seq: u32,
     duration_secs: f64,
 ) {
     let _guard = m3u8_lock();
     let m3u8_path = session_dir.join("playlist.m3u8");
-    let Some(filename) = ts_path.file_name().and_then(|n| n.to_str()) else {
+    let Some(filename) = seg_path.file_name().and_then(|n| n.to_str()) else {
         return;
     };
 
@@ -215,11 +510,16 @@ pub(crate) fn insert_to_m3u8_sorted(
 
     let entry = format!("#EXTINF:{:.3},\n{}\n", duration_secs.max(0.0), filename);
 
-    // 尚无清单（首个分片即由重试写回的边界）：写头部 + 条目
-    // No playlist yet (edge: the very first segment lands via retry): header + entry
+    // 尚无清单（首个分片即由重试写回的边界）：写头部 + 条目。
+    // VERSION 7：fMP4 自初始化分片建议 ≥6（EXT-X-MAP 时代的要求），
+    // ffmpeg demuxer 对版本号不挑剔，按规范写 7。
+    // No playlist yet (edge: the very first segment lands via retry): header
+    // + entry. VERSION 7: fMP4 self-initializing segments want ≥6 per spec
+    // (an EXT-X-MAP-era requirement); the ffmpeg demuxer doesn't care but
+    // we stay spec-faithful.
     if existing.is_empty() {
         let content = format!(
-            "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-MEDIA-SEQUENCE:0\n{}",
+            "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-MEDIA-SEQUENCE:0\n{}",
             entry
         );
         if let Err(e) = fs::write(&m3u8_path, content) {
@@ -229,17 +529,17 @@ pub(crate) fn insert_to_m3u8_sorted(
     }
 
     // 扫描条目行，找第一个 seq 更大的分片；其 `#EXTINF` 行起点即插入位置。
-    // prev_start 始终指向前一行起点——条目结构固定为 "#EXTINF:0,\n{file}\n"。
+    // prev_start 始终指向前一行起点——条目结构固定为 "#EXTINF:{dur},\n{file}\n"。
     // Scan entry lines for the first segment with a greater seq; the start of
     // its `#EXTINF` line is the insert point. `prev_start` always points at the
-    // previous line's start — entries are fixed "#EXTINF:0,\n{file}\n" pairs.
+    // previous line's start — entries are fixed "#EXTINF:{dur},\n{file}\n" pairs.
     let mut insert_at: Option<usize> = None;
     let mut line_start = 0usize;
     let mut prev_start = 0usize;
     for line in existing.split_inclusive('\n') {
         let text = line.trim_end_matches(['\r', '\n']);
         if !text.starts_with('#')
-            && let Some(other_seq) = seq_from_ts_name(text)
+            && let Some(other_seq) = seq_from_seg_name(text)
             && other_seq > seq
         {
             insert_at = Some(prev_start);
