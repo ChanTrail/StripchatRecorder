@@ -18,5 +18,5 @@ use axum::Json;
 
 /// `GET /api/process-usage` handler / `GET /api/process-usage` handler
 pub async fn get_process_usage() -> ApiResult<ProcessUsageSnapshot> {
-    Ok(Json(collect_process_usage().await))
+	Ok(Json(collect_process_usage().await))
 }

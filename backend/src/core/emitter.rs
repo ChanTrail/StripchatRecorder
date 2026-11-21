@@ -12,35 +12,35 @@ use tokio::sync::broadcast;
 /// Raw event data (event name + JSON payload string).
 #[derive(Debug, Clone)]
 pub struct Event {
-    /// 事件名称 / Event name
-    pub name: String,
-    /// JSON 序列化后的载荷字符串 / JSON-serialized payload string
-    pub payload: String,
+	/// 事件名称 / Event name
+	pub name: String,
+	/// JSON 序列化后的载荷字符串 / JSON-serialized payload string
+	pub payload: String,
 }
 
 /// 事件发射器 trait：将事件广播给所有订阅者。
 /// Event emitter trait: broadcasts events to all subscribers.
 pub trait Emitter: Send + Sync + 'static {
-    /// 发送原始 JSON 字符串载荷的事件。
-    /// Emit an event with a raw JSON string payload.
-    fn emit_raw(&self, event: &str, payload: &str);
+	/// 发送原始 JSON 字符串载荷的事件。
+	/// Emit an event with a raw JSON string payload.
+	fn emit_raw(&self, event: &str, payload: &str);
 }
 
 /// 为所有实现了 `Emitter` 的类型提供泛型 `emit` 方法的扩展 trait。
 /// Extension trait providing a generic `emit` method for all `Emitter` implementors.
 pub trait EmitterExt {
-    /// 将载荷序列化为 JSON 并发送事件。
-    /// Serialize the payload to JSON and emit the event.
-    fn emit<T: Serialize>(&self, event: &str, payload: &T);
+	/// 将载荷序列化为 JSON 并发送事件。
+	/// Serialize the payload to JSON and emit the event.
+	fn emit<T: Serialize>(&self, event: &str, payload: &T);
 }
 
 impl<E: Emitter + ?Sized> EmitterExt for E {
-    fn emit<T: Serialize>(&self, event: &str, payload: &T) {
-        match serde_json::to_string(payload) {
-            Ok(s) => self.emit_raw(event, &s),
-            Err(e) => tracing::error!("{}", crate::tl!("emitter.serializeError", error = e)),
-        }
-    }
+	fn emit<T: Serialize>(&self, event: &str, payload: &T) {
+		match serde_json::to_string(payload) {
+			Ok(s) => self.emit_raw(event, &s),
+			Err(e) => tracing::error!("{}", crate::tl!("emitter.serializeError", error = e)),
+		}
+	}
 }
 
 /// HTTP 服务器模式的事件发射器，通过 `broadcast::Sender` 将事件推送到 SSE 流。
@@ -49,18 +49,18 @@ impl<E: Emitter + ?Sized> EmitterExt for E {
 pub struct BroadcastEmitter(pub broadcast::Sender<Event>);
 
 impl Emitter for BroadcastEmitter {
-    fn emit_raw(&self, event: &str, payload: &str) {
-        let _ = self.0.send(Event {
-            name: event.to_string(),
-            payload: payload.to_string(),
-        });
-    }
+	fn emit_raw(&self, event: &str, payload: &str) {
+		let _ = self.0.send(Event {
+			name: event.to_string(),
+			payload: payload.to_string(),
+		});
+	}
 }
 
 /// 允许将 `Arc<dyn Emitter>` 直接作为 `Emitter` 使用。
 /// Allows `Arc<dyn Emitter>` to be used directly as an `Emitter`.
 impl Emitter for Arc<dyn Emitter> {
-    fn emit_raw(&self, event: &str, payload: &str) {
-        (**self).emit_raw(event, payload)
-    }
+	fn emit_raw(&self, event: &str, payload: &str) {
+		(**self).emit_raw(event, payload)
+	}
 }

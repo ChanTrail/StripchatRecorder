@@ -1,7 +1,7 @@
 {
 	"name": "stripchat-recorder-workspace",
 	"private": true,
-	"version": "0.5.0-beta",
+	"version": "0.5.1-beta",
 	"scripts": {
 		"dev": "node scripts/dev.js",
 		"build": "node scripts/release.js",
@@ -10,5 +10,8 @@
 		"build:desktop": "node scripts/release.desktop.js",
 		"check:desktop": "node scripts/check.desktop.js",
 		"bump-version": "node scripts/bump-version.js"
+	},
+	"devDependencies": {
+		"prettier": "3.10.1"
 	}
 }

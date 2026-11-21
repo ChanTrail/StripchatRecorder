@@ -18,7 +18,11 @@ let _currentBlobUrl: string | null = null;
 async function fetchAuthImage(url: string): Promise<string> {
 	const token = localStorage.getItem("admin_token");
 	const headers: Record<string, string> = {};
-	if (token) headers["Authorization"] = `Bearer ${token}`;
+	// 仅同源请求附带认证头，避免把后台 token 泄露给第三方域
+	// Only attach the token to same-origin requests — never leak it to third-party hosts
+	if (token && (url.startsWith("/") || url.startsWith(window.location.origin))) {
+		headers["Authorization"] = `Bearer ${token}`;
+	}
 	const res = await fetch(url, { headers });
 	if (!res.ok) throw new Error(`Failed to load image: ${res.status}`);
 	const blob = await res.blob();
@@ -199,10 +203,7 @@ export function useImagePreview() {
 		const prevScale = previewScale.value;
 		const delta = e.deltaY > 0 ? -0.1 : 0.1;
 		// 缩放范围限制在 [1, 10] / Clamp scale to [1, 10]
-		const nextScale = Math.min(
-			10,
-			Math.max(1, Math.round((prevScale + delta) * 100) / 100),
-		);
+		const nextScale = Math.min(10, Math.max(1, Math.round((prevScale + delta) * 100) / 100));
 		if (nextScale === prevScale) return;
 
 		// 以光标为锚点计算新的平移偏移，保持光标下的图片内容不变
@@ -219,12 +220,7 @@ export function useImagePreview() {
 		const localY = (anchorY - curCenterY) / prevScale;
 		let nextX = anchorX - metrics.viewportWidth / 2 - localX * nextScale;
 		let nextY = anchorY - metrics.viewportHeight / 2 - localY * nextScale;
-		({ x: nextX, y: nextY } = clampPreviewTranslate(
-			nextX,
-			nextY,
-			nextScale,
-			metrics,
-		));
+		({ x: nextX, y: nextY } = clampPreviewTranslate(nextX, nextY, nextScale, metrics));
 		previewScale.value = nextScale;
 		previewTranslate.value = { x: nextX, y: nextY };
 	}
@@ -386,9 +382,10 @@ export function useImagePreview() {
 			_currentBlobUrl = blobUrl;
 			previewUrl.value = blobUrl;
 		} catch {
-			// 加载失败时清空 URL，<img> 会显示 broken 图标
-			// Clear URL on failure; <img> will show broken image icon
-			previewUrl.value = "";
+			// fetch 失败（如外部 CDN 无 CORS 头）时退回原始 URL——<img> 直接显示不受 CORS 限制
+			// On fetch failure (e.g. external CDN without CORS) fall back to the raw
+			// URL — <img> rendering isn't subject to CORS
+			previewUrl.value = url;
 		} finally {
 			isLoadingPreview.value = false;
 		}

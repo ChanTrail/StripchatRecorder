@@ -56,10 +56,10 @@ mod tasks;
 // ─── 统一再导出（外部 API 路径保持 crate::ffmpeg::download::* 不变）──────────
 // ─── Unified re-exports (external API paths stay `crate::ffmpeg::download::*`) ──
 
-pub use release::build_platform;
+pub use release::{FFmpegDownloadChoice, FFmpegDownloadOptions, build_platform, download_options};
 pub use tasks::{
-    auto_update_loop, cleanup_leftovers, current_progress, spawn_manual_install,
-    spawn_startup_install,
+	auto_update_loop, cleanup_leftovers, current_progress, spawn_manual_install,
+	spawn_startup_install,
 };
 
 // ─── 共享常量 / Shared constants ─────────────────────────────────────────────
@@ -67,7 +67,7 @@ pub use tasks::{
 /// FFmpeg-Builds-Full 浮动 latest Release 的下载基址。
 /// Base URL of the FFmpeg-Builds-Full floating `latest` release.
 const RELEASE_BASE: &str =
-    "https://github.com/ChanTrail/FFmpeg-Builds-Full/releases/download/latest";
+	"https://github.com/ChanTrail/FFmpeg-Builds-Full/releases/download/latest";
 
 /// 下载中的临时目录名（tools 之下）。
 /// In-flight download temp dir name (under tools).

@@ -1,14 +1,14 @@
 <script setup lang="ts">
-import type { HTMLAttributes } from "vue"
-import { NumberFieldInput, injectNumberFieldRootContext } from "reka-ui"
-import { cn } from "@/lib/utils"
-import { onBeforeUnmount } from "vue"
+import type { HTMLAttributes } from "vue";
+import { NumberFieldInput, injectNumberFieldRootContext } from "reka-ui";
+import { cn } from "@/lib/utils";
+import { onBeforeUnmount } from "vue";
 
 const props = defineProps<{
-  class?: HTMLAttributes["class"]
-}>()
+	class?: HTMLAttributes["class"];
+}>();
 
-const ctx = injectNumberFieldRootContext()
+const ctx = injectNumberFieldRootContext();
 
 /**
  * reka-ui 内部已有 wheel handler，但它通过 Vue 的 onWheel 注册，Vue 默认注册为
@@ -31,36 +31,41 @@ const ctx = injectNumberFieldRootContext()
  * - we manually replicate reka-ui's value-change logic
  */
 function handleWheel(e: WheelEvent) {
-  if (document.activeElement !== e.currentTarget) return
-  if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return
-  e.preventDefault()
-  e.stopPropagation()
-  if (e.deltaY > 0) {
-    ctx.invertWheelChange?.value ? ctx.handleIncrease() : ctx.handleDecrease()
-  } else {
-    ctx.invertWheelChange?.value ? ctx.handleDecrease() : ctx.handleIncrease()
-  }
+	if (document.activeElement !== e.currentTarget) return;
+	if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+	e.preventDefault();
+	e.stopPropagation();
+	if (e.deltaY > 0) {
+		ctx.invertWheelChange?.value ? ctx.handleIncrease() : ctx.handleDecrease();
+	} else {
+		ctx.invertWheelChange?.value ? ctx.handleDecrease() : ctx.handleIncrease();
+	}
 }
 
-let inputEl: HTMLElement | null = null
+let inputEl: HTMLElement | null = null;
 
 function onRef(vnode: any) {
-  const el: HTMLElement | null = vnode?.$el ?? null
-  if (el === inputEl) return
-  inputEl?.removeEventListener("wheel", handleWheel, { capture: true })
-  inputEl = el
-  el?.addEventListener("wheel", handleWheel, { passive: false, capture: true })
+	const el: HTMLElement | null = vnode?.$el ?? null;
+	if (el === inputEl) return;
+	inputEl?.removeEventListener("wheel", handleWheel, { capture: true });
+	inputEl = el;
+	el?.addEventListener("wheel", handleWheel, { passive: false, capture: true });
 }
 
 onBeforeUnmount(() => {
-  inputEl?.removeEventListener("wheel", handleWheel, { capture: true })
-})
+	inputEl?.removeEventListener("wheel", handleWheel, { capture: true });
+});
 </script>
 
 <template>
-  <NumberFieldInput
-    data-slot="input"
-    :ref="onRef"
-    :class="cn('flex h-9 w-full rounded-md border border-input bg-transparent py-1 text-sm text-center shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50', props.class)"
-  />
+	<NumberFieldInput
+		data-slot="input"
+		:ref="onRef"
+		:class="
+			cn(
+				'flex h-9 w-full rounded-md border border-input bg-transparent py-1 text-sm text-center shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50',
+				props.class,
+			)
+		"
+	/>
 </template>

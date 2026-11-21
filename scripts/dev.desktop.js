@@ -17,8 +17,14 @@
 const path = require("path");
 
 const {
-  DESKTOP, DESKTOP_TARGET,
-  step, header, run, buildModules, installDesktop, desktopAppDataDir,
+	DESKTOP,
+	DESKTOP_TARGET,
+	step,
+	header,
+	run,
+	buildModules,
+	installDesktop,
+	desktopAppDataDir,
 } = require("./common");
 
 /**
@@ -49,10 +55,10 @@ const MODULES_OUT = path.join(desktopAppDataDir(), "modules");
 // {name}-{version} two segments, which get filtered out by the backend's
 // has_valid_module_filename (requires ≥3 segments), resulting in an empty module list.
 function detectPlatform() {
-  const archStr = process.arch === "arm64" ? "aarch64" : "x86_64";
-  if (process.platform === "win32")  return `windows-${archStr}`;
-  if (process.platform === "darwin") return `darwin-${archStr}`;
-  return `linux-${archStr}`;
+	const archStr = process.arch === "arm64" ? "aarch64" : "x86_64";
+	if (process.platform === "win32") return `windows-${archStr}`;
+	if (process.platform === "darwin") return `darwin-${archStr}`;
+	return `linux-${archStr}`;
 }
 const platform = detectPlatform();
 
@@ -70,6 +76,6 @@ buildModules("debug", MODULES_OUT, null, platform);
 // ── Step 3: 启动 Tauri 开发服务器 / Start Tauri dev ──────────────────────────
 step(3, TOTAL, "Starting Tauri dev (build_tmp/desktop/target/)");
 run("npx tauri dev", {
-  cwd: DESKTOP,
-  env: { ...process.env, CARGO_TARGET_DIR: DESKTOP_TARGET },
+	cwd: DESKTOP,
+	env: { ...process.env, CARGO_TARGET_DIR: DESKTOP_TARGET },
 });

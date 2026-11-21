@@ -112,23 +112,16 @@ export function makePpProgress(
 	labels: PpProgressLabels = DEFAULT_LABELS,
 ): PpProgress {
 	const hasModuleProgress = moduleTotal > 0;
-	const rawModulePct = hasModuleProgress
-		? clampPct2((moduleDone * 100) / moduleTotal)
-		: 0;
+	const rawModulePct = hasModuleProgress ? clampPct2((moduleDone * 100) / moduleTotal) : 0;
 	// 同一模块内防止进度倒退；模块切换时允许从 0 重新开始
 	// Prevent regression within the same module; allow reset to 0 on module switch
-	const isSameModule =
-		moduleName.trim() === prevModuleName.trim() && moduleName.trim() !== "";
-	const modulePct = isSameModule
-		? Math.max(rawModulePct, prevModulePct)
-		: rawModulePct;
+	const isSameModule = moduleName.trim() === prevModuleName.trim() && moduleName.trim() !== "";
+	const modulePct = isSameModule ? Math.max(rawModulePct, prevModulePct) : rawModulePct;
 
 	// 计算总进度：已完成节点 + 当前模块的进度（作为分数）
 	// Calculate overall progress: completed nodes + current module progress (as a fraction)
 	const overallPctByNode =
-		overallTotal > 0
-			? clampPct2(((overallDone + modulePct / 100) * 100) / overallTotal)
-			: 0;
+		overallTotal > 0 ? clampPct2(((overallDone + modulePct / 100) * 100) / overallTotal) : 0;
 	// 取节点计算值和后端上报值中的较大值，避免进度倒退
 	// Take the larger of node-calculated and backend-reported values to prevent progress regression
 	const overallPct =
@@ -433,7 +426,9 @@ export function usePostprocess() {
 			// match the actual params).
 		} else {
 			if (!deleted) {
-				const failedModules = ppProgress.value[payload.path]?.moduleResults?.filter((r) => !r.success);
+				const failedModules = ppProgress.value[payload.path]?.moduleResults?.filter(
+					(r) => !r.success,
+				);
 				const detail = failedModules?.length
 					? failedModules.map((r) => `${r.moduleId}: ${r.message}`).join("; ")
 					: payload.message;

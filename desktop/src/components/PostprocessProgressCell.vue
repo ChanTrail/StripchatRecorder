@@ -6,61 +6,60 @@
     桌面端：hover tooltip。
 -->
 <script setup lang="ts">
-	import { computed, ref, onMounted, onUnmounted } from "vue";
-	import { Loader2, Check, X, CheckCheck, AlertCircle } from "@lucide/vue";
-	import { Progress } from "@/components/ui/progress";
-	import {
-		TooltipProvider,
-		TooltipRoot,
-		TooltipTrigger,
-		TooltipContent,
-		TooltipArrow,
-	} from "reka-ui";
-	import { useMobileLayout } from "@/composables/useMobileLayout";
-	import type { PpProgress, PpStatus } from "@/composables/usePostprocess";
-	import { useI18n } from "vue-i18n";
+import { computed, ref, onMounted, onUnmounted } from "vue";
+import { Loader2, Check, X, CheckCheck, AlertCircle } from "@lucide/vue";
+import { Progress } from "@/components/ui/progress";
+import {
+	TooltipProvider,
+	TooltipRoot,
+	TooltipTrigger,
+	TooltipContent,
+	TooltipArrow,
+} from "reka-ui";
+import { useMobileLayout } from "@/composables/useMobileLayout";
+import type { PpProgress, PpStatus } from "@/composables/usePostprocess";
+import { useI18n } from "vue-i18n";
 
-	const props = defineProps<{
-		status?: PpStatus;
-		progress?: PpProgress;
-	}>();
+const props = defineProps<{
+	status?: PpStatus;
+	progress?: PpProgress;
+}>();
 
-	const { t } = useI18n();
-	const { isMobile } = useMobileLayout();
+const { t } = useI18n();
+const { isMobile } = useMobileLayout();
 
-	const mobileDetailOpen = ref(false);
-	const triggerRef = ref<HTMLElement | null>(null);
+const mobileDetailOpen = ref(false);
+const triggerRef = ref<HTMLElement | null>(null);
 
-	function onDocClick(e: MouseEvent) {
-		if (!mobileDetailOpen.value) return;
-		if (triggerRef.value && triggerRef.value.contains(e.target as Node)) return;
-		mobileDetailOpen.value = false;
-	}
+function onDocClick(e: MouseEvent) {
+	if (!mobileDetailOpen.value) return;
+	if (triggerRef.value && triggerRef.value.contains(e.target as Node)) return;
+	mobileDetailOpen.value = false;
+}
 
-	onMounted(() => document.addEventListener("click", onDocClick, true));
-	onUnmounted(() => document.removeEventListener("click", onDocClick, true));
+onMounted(() => document.addEventListener("click", onDocClick, true));
+onUnmounted(() => document.removeEventListener("click", onDocClick, true));
 
-	const allSuccess = computed(
-		() =>
-			props.progress?.moduleResults?.length &&
-			props.progress.moduleResults.every((r) => r.success),
-	);
+const allSuccess = computed(
+	() =>
+		props.progress?.moduleResults?.length &&
+		props.progress.moduleResults.every((r) => r.success),
+);
 
-	const failCount = computed(
-		() => props.progress?.moduleResults?.filter((r) => !r.success).length ?? 0,
-	);
-	void failCount;
+const failCount = computed(
+	() => props.progress?.moduleResults?.filter((r) => !r.success).length ?? 0,
+);
+void failCount;
 </script>
 
 <template>
-	<div
-		v-if="status === 'running' && progress"
-		class="flex flex-col gap-1.5"
-	>
+	<div v-if="status === 'running' && progress" class="flex flex-col gap-1.5">
 		<div class="flex items-center justify-between text-xs text-muted-foreground">
 			<span>{{
 				progress.moduleExecLabel
-					? t("recordings.status.overallProgressWithLabel", { label: progress.moduleExecLabel })
+					? t("recordings.status.overallProgressWithLabel", {
+							label: progress.moduleExecLabel,
+						})
 					: t("recordings.status.overallProgress")
 			}}</span>
 			<span class="tabular-nums shrink-0">{{ progress.overallLabel }}</span>
@@ -68,10 +67,14 @@
 		<Progress :model-value="progress.overallPct" :animated="false" class="h-1.5" />
 		<div class="flex items-center justify-between text-xs text-muted-foreground">
 			<span class="truncate max-w-50">{{
-				progress.moduleName === "processing" ? t("usePostprocess.processing") : progress.moduleName
+				progress.moduleName === "processing"
+					? t("usePostprocess.processing")
+					: progress.moduleName
 			}}</span>
 			<span class="tabular-nums shrink-0">{{
-				progress.moduleLabel === "waiting" ? t("usePostprocess.waitingProgress") : progress.moduleLabel
+				progress.moduleLabel === "waiting"
+					? t("usePostprocess.waitingProgress")
+					: progress.moduleLabel
 			}}</span>
 		</div>
 		<Progress :model-value="progress.modulePct" :animated="false" class="h-1.5" />
@@ -88,7 +91,6 @@
 	<!-- done / error -->
 	<div v-else-if="status === 'done' || status === 'error'">
 		<template v-if="progress?.moduleResults?.length">
-
 			<!-- ── 移动端：点击展开内联详情 / Mobile: tap to expand inline detail ── -->
 			<div v-if="isMobile" ref="triggerRef" class="relative">
 				<button
@@ -99,7 +101,9 @@
 					<CheckCheck v-if="allSuccess" class="size-3.5 shrink-0" />
 					<AlertCircle v-else class="size-3.5 shrink-0" />
 					<span>
-						{{ progress.moduleResults.filter((r) => r.success).length }}/{{ progress.moduleResults.length }}
+						{{ progress.moduleResults.filter((r) => r.success).length }}/{{
+							progress.moduleResults.length
+						}}
 					</span>
 				</button>
 
@@ -126,7 +130,11 @@
 								<X v-else class="size-3 shrink-0 mt-0.5" />
 								<span class="break-all">
 									{{ r.moduleId }}
-									<span v-if="!r.success && r.message" class="text-muted-foreground ml-1">{{ r.message }}</span>
+									<span
+										v-if="!r.success && r.message"
+										class="text-muted-foreground ml-1"
+										>{{ r.message }}</span
+									>
 								</span>
 							</div>
 						</div>
@@ -145,7 +153,9 @@
 							<CheckCheck v-if="allSuccess" class="size-3.5 shrink-0" />
 							<AlertCircle v-else class="size-3.5 shrink-0" />
 							<span>
-								{{ progress.moduleResults.filter((r) => r.success).length }}/{{ progress.moduleResults.length }}
+								{{ progress.moduleResults.filter((r) => r.success).length }}/{{
+									progress.moduleResults.length
+								}}
 							</span>
 						</span>
 					</TooltipTrigger>
@@ -165,7 +175,11 @@
 								<X v-else class="size-3 shrink-0 mt-0.5" />
 								<span class="break-all">
 									{{ r.moduleId }}
-									<span v-if="!r.success && r.message" class="text-muted-foreground ml-1">{{ r.message }}</span>
+									<span
+										v-if="!r.success && r.message"
+										class="text-muted-foreground ml-1"
+										>{{ r.message }}</span
+									>
 								</span>
 							</div>
 						</div>

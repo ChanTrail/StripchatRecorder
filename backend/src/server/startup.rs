@@ -65,13 +65,13 @@ use std::sync::Arc;
 /// logs inside `AppState::new` and the later startup migration logs are translated instead of
 /// raw keys.
 pub fn init_logging_and_locale() {
-    let locale_code = AppState::load_settings_from_disk().language;
-    crate::locale::manager::load_log_translations(&locale_code);
-    if let Err(e) = crate::core::logging::init_logging(&AppState::log_dir()) {
-        eprintln!("Failed to initialize logging: {}", e);
-    }
-    crate::locale::manager::init_locale_dirs();
-    crate::locale::manager::load_log_translations(&locale_code);
+	let locale_code = AppState::load_settings_from_disk().language;
+	crate::locale::manager::load_log_translations(&locale_code);
+	if let Err(e) = crate::core::logging::init_logging(&AppState::log_dir()) {
+		eprintln!("Failed to initialize logging: {}", e);
+	}
+	crate::locale::manager::init_locale_dirs();
+	crate::locale::manager::load_log_translations(&locale_code);
 }
 
 /// 启动 FFmpeg 检查入口：实际工作在 `ffmpeg::download::spawn_startup_install`
@@ -93,7 +93,7 @@ pub fn init_logging_and_locale() {
 /// 4. unusable on a supported platform → up to 3 auto-install attempts (5s/15s
 ///    backoff); on final failure push the `ffmpegDownloadFailed` error notification
 pub fn check_ffmpeg(app_state: &Arc<AppState>, emitter: &Arc<dyn Emitter>) {
-    crate::ffmpeg::download::spawn_startup_install(Arc::clone(app_state), Arc::clone(emitter));
+	crate::ffmpeg::download::spawn_startup_install(Arc::clone(app_state), Arc::clone(emitter));
 }
 
 /// 扫描用户自定义语言文件，将校验警告通过 SSE 推送给前端。
@@ -102,37 +102,37 @@ pub fn check_ffmpeg(app_state: &Arc<AppState>, emitter: &Arc<dyn Emitter>) {
 /// Scan user-defined locale files and push validation warnings to the frontend via SSE.
 /// Runs inside `spawn_blocking` after the emitter is ready to avoid blocking the async runtime.
 pub fn check_locale_files(emitter: Arc<dyn Emitter>) {
-    tokio::task::spawn_blocking(move || {
-        use crate::core::emitter::EmitterExt;
-        let warnings = crate::locale::manager::check_custom_locale_files();
-        if warnings.is_empty() {
-            return;
-        }
-        let payload: Vec<serde_json::Value> = warnings
-            .into_iter()
-            .map(|(path, reason)| serde_json::json!({ "path": path, "reason": reason }))
-            .collect();
-        tracing::warn!(
-            "{}",
-            crate::tl!(
-                "startup.localeFileWarning",
-                payload = format!("{:?}", payload)
-            )
-        );
-        emitter.emit("locale-warnings", &payload);
-    });
+	tokio::task::spawn_blocking(move || {
+		use crate::core::emitter::EmitterExt;
+		let warnings = crate::locale::manager::check_custom_locale_files();
+		if warnings.is_empty() {
+			return;
+		}
+		let payload: Vec<serde_json::Value> = warnings
+			.into_iter()
+			.map(|(path, reason)| serde_json::json!({ "path": path, "reason": reason }))
+			.collect();
+		tracing::warn!(
+			"{}",
+			crate::tl!(
+				"startup.localeFileWarning",
+				payload = format!("{:?}", payload)
+			)
+		);
+		emitter.emit("locale-warnings", &payload);
+	});
 }
 
 /// 启动所有文件系统监控器（录制目录、模块目录、locale 目录）。
 ///
 /// Start all file system watchers (recordings dir, modules dir, locale dir).
 pub fn start_fs_watchers(app_state: Arc<AppState>, emitter: Arc<dyn Emitter>) {
-    crate::watcher::fs_watch::start_recordings_dir_watcher(
-        Arc::clone(&app_state),
-        Arc::clone(&emitter),
-    );
-    crate::watcher::fs_watch::start_modules_dir_watcher(Arc::clone(&emitter));
-    crate::watcher::fs_watch::start_locale_dir_watcher(emitter);
+	crate::watcher::fs_watch::start_recordings_dir_watcher(
+		Arc::clone(&app_state),
+		Arc::clone(&emitter),
+	);
+	crate::watcher::fs_watch::start_modules_dir_watcher(Arc::clone(&emitter));
+	crate::watcher::fs_watch::start_locale_dir_watcher(emitter);
 }
 
 /// 一次性迁移旧版扁平 meta 文件（升级前生成、直接平铺于 meta 根目录下）到按主播
@@ -141,28 +141,28 @@ pub fn start_fs_watchers(app_state: Arc<AppState>, emitter: Arc<dyn Emitter>) {
 /// One-shot migration of legacy flat meta files into the new per-streamer subdirectory layout.
 /// Pushes an Info notification if any files were migrated.
 pub fn migrate_flat_meta_files(app_state: &Arc<AppState>, emitter: &Arc<dyn Emitter>) {
-    let count = crate::recording::meta::migrate_flat_meta_files();
-    if count > 0 {
-        use std::collections::HashMap;
-        let mut args = HashMap::new();
-        args.insert("count".to_string(), serde_json::json!(count));
-        app_state.notification_store.emit_i18n(
-            emitter.as_ref(),
-            crate::core::notifications::NotificationLevel::Info,
-            "startup",
-            format!(
-                "Migrated {} legacy meta file(s) to per-streamer subdirectory layout.",
-                count
-            ),
-            "notifications.backend.metaMigrated",
-            Some(args),
-        );
-    }
-    // 修正旧 stem 规则截断文件名的 meta（含 '.' 用户名，B16），只记日志不发通知；
-    // 必须在首次扫描前执行
-    // Fix meta files whose names were truncated by the old stem rule (usernames with '.',
-    // B16); logs only, no notification; must run before the first scan
-    crate::recording::meta::migrate_truncated_stem_meta_files();
+	let count = crate::recording::meta::migrate_flat_meta_files();
+	if count > 0 {
+		use std::collections::HashMap;
+		let mut args = HashMap::new();
+		args.insert("count".to_string(), serde_json::json!(count));
+		app_state.notification_store.emit_i18n(
+			emitter.as_ref(),
+			crate::core::notifications::NotificationLevel::Info,
+			"startup",
+			format!(
+				"Migrated {} legacy meta file(s) to per-streamer subdirectory layout.",
+				count
+			),
+			"notifications.backend.metaMigrated",
+			Some(args),
+		);
+	}
+	// 修正旧 stem 规则截断文件名的 meta（含 '.' 用户名，B16），只记日志不发通知；
+	// 必须在首次扫描前执行
+	// Fix meta files whose names were truncated by the old stem rule (usernames with '.',
+	// B16); logs only, no notification; must run before the first scan
+	crate::recording::meta::migrate_truncated_stem_meta_files();
 }
 
 /// 应用 Docker 环境变量 `LANGUAGE` / `PORT` 对 settings.json 的覆盖（仅 Server，且只在
@@ -188,41 +188,41 @@ pub fn migrate_flat_meta_files(app_state: &Arc<AppState>, emitter: &Arc<dyn Emit
 /// `lib::run`); this only persists it into the config file. Log translations are reloaded when
 /// the language changes.
 pub fn apply_docker_env_overrides() {
-    if !crate::update::is_docker() {
-        return;
-    }
-    let env_value = |name: &str| {
-        std::env::var(name)
-            .ok()
-            .map(|v| v.trim().to_string())
-            .filter(|v| !v.is_empty())
-    };
+	if !crate::update::is_docker() {
+		return;
+	}
+	let env_value = |name: &str| {
+		std::env::var(name)
+			.ok()
+			.map(|v| v.trim().to_string())
+			.filter(|v| !v.is_empty())
+	};
 
-    let language = env_value("LANGUAGE").filter(|lang| {
-        let known = crate::locale::manager::list_available_locales()
-            .iter()
-            .any(|l| l.code == *lang);
-        if !known {
-            tracing::warn!("{}", crate::tl!("startup.envLanguageUnknown", value = lang));
-        }
-        known
-    });
-    let port = env_value("PORT").and_then(|v| match v.parse::<u16>() {
-        Ok(p) if p > 0 => Some(p),
-        _ => {
-            tracing::warn!("{}", crate::tl!("startup.envPortInvalid", value = v));
-            None
-        }
-    });
-    if language.is_none() && port.is_none() {
-        return;
-    }
+	let language = env_value("LANGUAGE").filter(|lang| {
+		let known = crate::locale::manager::list_available_locales()
+			.iter()
+			.any(|l| l.code == *lang);
+		if !known {
+			tracing::warn!("{}", crate::tl!("startup.envLanguageUnknown", value = lang));
+		}
+		known
+	});
+	let port = env_value("PORT").and_then(|v| match v.parse::<u16>() {
+		Ok(p) if p > 0 => Some(p),
+		_ => {
+			tracing::warn!("{}", crate::tl!("startup.envPortInvalid", value = v));
+			None
+		}
+	});
+	if language.is_none() && port.is_none() {
+		return;
+	}
 
-    if AppState::apply_settings_overrides(language.as_deref(), port)
-        && let Some(lang) = &language
-    {
-        crate::locale::manager::load_log_translations(lang);
-    }
+	if AppState::apply_settings_overrides(language.as_deref(), port)
+		&& let Some(lang) = &language
+	{
+		crate::locale::manager::load_log_translations(lang);
+	}
 }
 
 /// 统一执行所有启动时一次性任务，Server 与 Desktop 都调用本函数（在
@@ -260,9 +260,9 @@ pub fn apply_docker_env_overrides() {
 /// at launch and then every 5 minutes, so the startup pass and periodic
 /// maintenance share identical logic.
 pub fn run_all(app_state: Arc<AppState>, emitter: Arc<dyn Emitter>) {
-    crate::recording::meta::cleanup_tmp_on_startup();
-    migrate_flat_meta_files(&app_state, &emitter);
-    check_ffmpeg(&app_state, &emitter);
-    check_locale_files(Arc::clone(&emitter));
-    start_fs_watchers(app_state, emitter);
+	crate::recording::meta::cleanup_tmp_on_startup();
+	migrate_flat_meta_files(&app_state, &emitter);
+	check_ffmpeg(&app_state, &emitter);
+	check_locale_files(Arc::clone(&emitter));
+	start_fs_watchers(app_state, emitter);
 }

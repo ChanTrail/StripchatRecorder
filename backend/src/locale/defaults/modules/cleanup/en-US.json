@@ -1,9 +1,13 @@
 {
-  "name": "Final Cleanup",
-  "description": "Deletes data related to the currently processed video: recording data (video file, preview image, and meta record — deleted together as a single unit) and cache files (leftover same-named temp files left by other modules, deleted by default)",
-  "params": {
-    "delete_recording_data": { "label": "Delete recording data (video file + preview image + meta record)" },
-    "delete_tmp_files": { "label": "Delete cache files (leftover temp files from other modules)" },
-    "dry_run": { "label": "Dry run (preview only, no deletion)" }
-  }
+	"name": "Final Cleanup",
+	"description": "Deletes data related to the currently processed video: recording data (video file, preview image, and meta record — deleted together as a single unit) and cache files (leftover same-named temp files left by other modules, deleted by default)",
+	"params": {
+		"delete_recording_data": {
+			"label": "Delete recording data (video file + preview image + meta record)"
+		},
+		"delete_tmp_files": {
+			"label": "Delete cache files (leftover temp files from other modules)"
+		},
+		"dry_run": { "label": "Dry run (preview only, no deletion)" }
+	}
 }

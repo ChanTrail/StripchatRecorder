@@ -69,9 +69,7 @@ export interface LoadLocaleResult {
  * @param localeCode - BCP 47 语言标签 / BCP 47 language tag
  * @returns LoadLocaleResult，失败时 modules 为空对象 / modules is {} on failure
  */
-export async function loadLocaleFromServer(
-	localeCode: string,
-): Promise<LoadLocaleResult> {
+export async function loadLocaleFromServer(localeCode: string): Promise<LoadLocaleResult> {
 	try {
 		const res = await fetch(`/api/locale/${encodeURIComponent(localeCode)}`);
 		if (!res.ok) return { modules: {} };
@@ -131,7 +129,7 @@ export async function initI18n(): Promise<void> {
 	try {
 		const res = await fetch("/api/settings");
 		if (res.ok) {
-			const data = await res.json() as { language?: string };
+			const data = (await res.json()) as { language?: string };
 			if (data.language && typeof data.language === "string") {
 				resolvedLocale = data.language;
 				// 同步写回 localStorage，后续切换语言时仍能读到正确值

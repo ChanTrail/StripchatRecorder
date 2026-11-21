@@ -1,0 +1,17 @@
+# 编辑器层基线：缩进统一 tab（格式化细节由 .prettierrc.json / rustfmt.toml 管理）
+# Editor baseline: tab indentation repo-wide (format details live in
+# .prettierrc.json / rustfmt.toml)
+root = true
+
+[*]
+indent_style = tab
+indent_size = 4
+end_of_line = lf
+charset = utf-8
+trim_trailing_whitespace = true
+insert_final_newline = true
+
+# YAML 语法不允许 tab 缩进 / YAML forbids tab indentation
+[*.{yml,yaml}]
+indent_style = space
+indent_size = 2

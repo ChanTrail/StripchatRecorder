@@ -27,92 +27,97 @@
         port-mouseup      - 在端口释放鼠标 / Mouse up on a port
 -->
 <script setup lang="ts">
-	import type { PipelineNode, ModuleInfo, PortType } from "@/stores/postprocess";
-	import { nodeEffectiveId, usePostprocessStore } from "@/stores/postprocess";
-	import { PORT_TYPE_COLORS } from "@/stores/postprocess";
-	import { useSystemStore } from "@/stores/system";
-	import { Switch } from "@/components/ui/switch";
-	import { Input } from "@/components/ui/input";
-	import { Label } from "@/components/ui/label";
-	import { Badge } from "@/components/ui/badge";
-	import { Button } from "@/components/ui/button";
-	import {
-		Select,
-		SelectContent,
-		SelectItem,
-		SelectTrigger,
-		SelectValue,
-	} from "@/components/ui/select";
-	import {
-		NumberField,
-		NumberFieldContent,
-		NumberFieldDecrement,
-		NumberFieldIncrement,
-		NumberFieldInput,
-	} from "@/components/ui/number-field";
-	import { useDirectoryBrowser } from "@/composables/useDirectoryBrowser";
-	import { FolderOpen } from "@lucide/vue";
-	import { useI18n } from "vue-i18n";
+import type { PipelineNode, ModuleInfo, PortType } from "@/stores/postprocess";
+import { nodeEffectiveId, usePostprocessStore } from "@/stores/postprocess";
+import { PORT_TYPE_COLORS } from "@/stores/postprocess";
+import { useSystemStore } from "@/stores/system";
+import { Switch } from "@/components/ui/switch";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "@/components/ui/select";
+import {
+	NumberField,
+	NumberFieldContent,
+	NumberFieldDecrement,
+	NumberFieldIncrement,
+	NumberFieldInput,
+} from "@/components/ui/number-field";
+import { useDirectoryBrowser } from "@/composables/useDirectoryBrowser";
+import { FolderOpen } from "@lucide/vue";
+import { useI18n } from "vue-i18n";
 
-	const props = defineProps<{
-		node: PipelineNode;
-		moduleInfo: ModuleInfo | undefined;
-		inputTypes: PortType[];
-		outputTypes: PortType[];
-		selected: boolean;
-		registerPortEl: (el: HTMLElement | null, nodeId: string, isOutput: boolean, portIndex: number) => void;
-	}>();
+const props = defineProps<{
+	node: PipelineNode;
+	moduleInfo: ModuleInfo | undefined;
+	inputTypes: PortType[];
+	outputTypes: PortType[];
+	selected: boolean;
+	registerPortEl: (
+		el: HTMLElement | null,
+		nodeId: string,
+		isOutput: boolean,
+		portIndex: number,
+	) => void;
+}>();
 
-	const emit = defineEmits<{
-		select: [];
-		"header-mousedown": [e: MouseEvent];
-		"toggle-enabled": [enabled: boolean];
-		"update-param": [key: string, value: string | number | boolean];
-		"port-mousedown": [e: MouseEvent, portIndex: number, type: PortType, isOutput: boolean];
-		"port-mouseup": [e: MouseEvent, portIndex: number, type: PortType, isOutput: boolean];
-	}>();
+const emit = defineEmits<{
+	select: [];
+	"header-mousedown": [e: MouseEvent];
+	"toggle-enabled": [enabled: boolean];
+	"update-param": [key: string, value: string | number | boolean];
+	"port-mousedown": [e: MouseEvent, portIndex: number, type: PortType, isOutput: boolean];
+	"port-mouseup": [e: MouseEvent, portIndex: number, type: PortType, isOutput: boolean];
+}>();
 
-	const { t } = useI18n();
-	const store = usePostprocessStore();
-	const systemStore = useSystemStore();
+const { t } = useI18n();
+const store = usePostprocessStore();
+const systemStore = useSystemStore();
 
-	function eid() {
-		return nodeEffectiveId(props.node);
-	}
+function eid() {
+	return nodeEffectiveId(props.node);
+}
 
-	/** 输入端口 i 是否已有连线（来自本节点的 inputs 映射）/ Whether input port i has a wire (from this node's inputs map) */
-	function isInputConnected(portIndex: number): boolean {
-		return props.node.inputs?.[String(portIndex)] !== undefined;
-	}
+/** 输入端口 i 是否已有连线（来自本节点的 inputs 映射）/ Whether input port i has a wire (from this node's inputs map) */
+function isInputConnected(portIndex: number): boolean {
+	return props.node.inputs?.[String(portIndex)] !== undefined;
+}
 
-	/**
-	 * 输出端口 i 是否已有连线：需要遍历流水线所有节点的 inputs，
-	 * 查找是否有节点的某个输入端口指向"本节点 + 该输出端口"。
-	 *
-	 * Whether output port i has a wire: requires scanning every node's inputs in the
-	 * pipeline to find whether any input port points at "this node + this output port".
-	 */
-	function isOutputConnected(portIndex: number): boolean {
-		const selfId = eid();
-		return store.pipeline.nodes.some((n) =>
-			Object.values(n.inputs ?? {}).some(
-				(ref) => ref.nodeId === selfId && ref.port === portIndex,
-			),
-		);
-	}
+/**
+ * 输出端口 i 是否已有连线：需要遍历流水线所有节点的 inputs，
+ * 查找是否有节点的某个输入端口指向"本节点 + 该输出端口"。
+ *
+ * Whether output port i has a wire: requires scanning every node's inputs in the
+ * pipeline to find whether any input port points at "this node + this output port".
+ */
+function isOutputConnected(portIndex: number): boolean {
+	const selfId = eid();
+	return store.pipeline.nodes.some((n) =>
+		Object.values(n.inputs ?? {}).some(
+			(ref) => ref.nodeId === selfId && ref.port === portIndex,
+		),
+	);
+}
 
-	const { open: openDirectoryBrowser } = useDirectoryBrowser();
+const { open: openDirectoryBrowser } = useDirectoryBrowser();
 
-	/**
-	 * 打开全局目录浏览器，选择结果写回指定参数。
-	 * Open the global directory browser; the chosen path is written back to the given parameter.
-	 */
-	function browseDirParam(key: string) {
-		const current = String(props.node.params[key] ?? "");
-		openDirectoryBrowser(current, (picked) => {
-			emit("update-param", key, picked);
-		});
-	}
+/**
+ * 打开全局目录浏览器，选择结果写回指定参数。
+ * Open the global directory browser; the chosen path is written back to the given parameter.
+ */
+function browseDirParam(key: string) {
+	const current = String(props.node.params[key] ?? "");
+	openDirectoryBrowser(current, (picked) => {
+		emit("update-param", key, picked);
+	});
+}
 </script>
 
 <template>
@@ -146,21 +151,25 @@
 						<span
 							v-if="moduleInfo?.version"
 							class="text-[9px] text-muted-foreground font-mono leading-none shrink-0"
-						>v{{ moduleInfo.version }}</span>
+							>v{{ moduleInfo.version }}</span
+						>
 						<Badge
 							v-if="moduleInfo?.official"
 							class="text-[9px] px-1 py-0 h-4 bg-amber-500/20 text-amber-400 border-amber-500/30"
-						>official</Badge>
+							>official</Badge
+						>
 						<Badge
 							v-if="!moduleInfo"
 							variant="destructive"
 							class="text-[9px] px-1 py-0 h-4"
-						>{{ t("postprocess.node.missing") }}</Badge>
+							>{{ t("postprocess.node.missing") }}</Badge
+						>
 						<Badge
 							v-else-if="!node.enabled"
 							variant="secondary"
 							class="text-[9px] px-1 py-0 h-4"
-						>{{ t("postprocess.node.skipped") }}</Badge>
+							>{{ t("postprocess.node.skipped") }}</Badge
+						>
 					</div>
 					<p
 						class="text-[10px] text-muted-foreground leading-none mt-0.5 truncate"
@@ -194,13 +203,17 @@
 							class="w-3 h-3 rounded-full border-2 cursor-crosshair -ml-4.5 shrink-0 transition-transform hover:scale-125"
 							:style="{
 								borderColor: PORT_TYPE_COLORS[type],
-								backgroundColor: isInputConnected(i) ? PORT_TYPE_COLORS[type] : PORT_TYPE_COLORS[type] + '40',
+								backgroundColor: isInputConnected(i)
+									? PORT_TYPE_COLORS[type]
+									: PORT_TYPE_COLORS[type] + '40',
 							}"
 							:title="type"
 							@mousedown.stop="emit('port-mousedown', $event, i, type, false)"
 							@mouseup.stop="emit('port-mouseup', $event, i, type, false)"
 						/>
-						<span class="text-[9px] text-muted-foreground whitespace-nowrap">{{ type.replace(/_/g, ' ') }}</span>
+						<span class="text-[9px] text-muted-foreground whitespace-nowrap">{{
+							type.replace(/_/g, " ")
+						}}</span>
 					</div>
 				</div>
 
@@ -212,10 +225,15 @@
 							:key="`${eid()}__${param.key}`"
 							class="flex flex-col gap-1"
 						>
-							<Label class="text-[10px] text-muted-foreground leading-tight">{{ param.label }}</Label>
+							<Label class="text-[10px] text-muted-foreground leading-tight">{{
+								param.label
+							}}</Label>
 							<Switch
 								v-if="param.type === 'boolean'"
-								:model-value="node.params[param.key] === true || node.params[param.key] === 'true'"
+								:model-value="
+									node.params[param.key] === true ||
+									node.params[param.key] === 'true'
+								"
 								class="scale-75 origin-left"
 								@update:model-value="emit('update-param', param.key, !!$event)"
 								@click.stop
@@ -223,13 +241,20 @@
 							<Select
 								v-else-if="param.type === 'select'"
 								:model-value="String(node.params[param.key] ?? param.default)"
-								@update:model-value="emit('update-param', param.key, String($event ?? param.default))"
+								@update:model-value="
+									emit('update-param', param.key, String($event ?? param.default))
+								"
 							>
 								<SelectTrigger size="sm" class="h-7 text-xs w-full" @click.stop>
 									<SelectValue />
 								</SelectTrigger>
 								<SelectContent>
-									<SelectItem v-for="opt in param.options" :key="opt" :value="opt" class="text-xs">
+									<SelectItem
+										v-for="opt in param.options"
+										:key="opt"
+										:value="opt"
+										class="text-xs"
+									>
 										{{ opt }}
 									</SelectItem>
 								</SelectContent>
@@ -238,7 +263,13 @@
 								v-else-if="param.type === 'number'"
 								:model-value="Number(node.params[param.key] ?? param.default)"
 								:min="param.min ?? 0"
-								:max="param.max === -1 ? (systemStore.maxPpConcurrentCap > 0 ? systemStore.maxPpConcurrentCap : undefined) : (param.max ?? undefined)"
+								:max="
+									param.max === -1
+										? systemStore.maxPpConcurrentCap > 0
+											? systemStore.maxPpConcurrentCap
+											: undefined
+										: (param.max ?? undefined)
+								"
 								@update:model-value="emit('update-param', param.key, $event ?? 0)"
 							>
 								<NumberFieldContent>
@@ -253,7 +284,9 @@
 								<Input
 									:model-value="String(node.params[param.key] ?? param.default)"
 									class="h-7 text-xs flex-1 min-w-0"
-									@update:model-value="emit('update-param', param.key, String($event))"
+									@update:model-value="
+										emit('update-param', param.key, String($event))
+									"
 									@click.stop
 								/>
 								<Button
@@ -270,7 +303,9 @@
 								v-else
 								:model-value="String(node.params[param.key] ?? param.default)"
 								class="h-7 text-xs w-full"
-								@update:model-value="emit('update-param', param.key, String($event))"
+								@update:model-value="
+									emit('update-param', param.key, String($event))
+								"
 								@click.stop
 							/>
 						</div>
@@ -284,13 +319,17 @@
 						:key="`out-${i}`"
 						class="flex items-center gap-1.5"
 					>
-						<span class="text-[9px] text-muted-foreground whitespace-nowrap">{{ type.replace(/_/g, ' ') }}</span>
+						<span class="text-[9px] text-muted-foreground whitespace-nowrap">{{
+							type.replace(/_/g, " ")
+						}}</span>
 						<div
 							:ref="(el) => registerPortEl(el as HTMLElement | null, eid(), true, i)"
 							class="w-3 h-3 rounded-full border-2 cursor-crosshair -mr-4.5 shrink-0 transition-transform hover:scale-125"
 							:style="{
 								borderColor: PORT_TYPE_COLORS[type],
-								backgroundColor: isOutputConnected(i) ? PORT_TYPE_COLORS[type] : PORT_TYPE_COLORS[type] + '40',
+								backgroundColor: isOutputConnected(i)
+									? PORT_TYPE_COLORS[type]
+									: PORT_TYPE_COLORS[type] + '40',
 							}"
 							:title="type"
 							@mousedown.stop="emit('port-mousedown', $event, i, type, true)"

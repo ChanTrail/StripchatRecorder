@@ -31,10 +31,10 @@ registry.json                      registry.json（由 CI 自动维护）
 1. 在 GitHub 创建**公开仓库**，建议命名 `stripchat-pp-<your-module-id>`
 2. 复制 [module-template/](https://github.com/ChanTrail/StripchatRecorderCommunity/tree/master/module-template) 的内容到你的仓库
 3. 修改以下文件（只需改一次）：
-   - `Cargo.toml`：改 `name`（与模块 ID 保持一致）和 `version`
-   - `src/main.rs`：将 `my_module` 替换为你的模块 ID，实现 `run()` 函数
-   - `registry.json`：填写 `id`、`name`、`description`、`author`、`tags`（其余字段由 CI 自动填写）
-   - 两个 workflow 文件顶部的 `MODULE_NAME`
+    - `Cargo.toml`：改 `name`（与模块 ID 保持一致）和 `version`
+    - `src/main.rs`：将 `my_module` 替换为你的模块 ID，实现 `run()` 函数
+    - `registry.json`：填写 `id`、`name`、`description`、`author`、`tags`（其余字段由 CI 自动填写）
+    - 两个 workflow 文件顶部的 `MODULE_NAME`
 
 参考[模块开发文档](module-development.md)了解完整的 JSON stdin/stdout 协议、端口类型系统和 DAG 流水线机制。
 
@@ -62,33 +62,33 @@ registry.json                      registry.json（由 CI 自动维护）
 
 ```json
 {
-  "description": "你的模块功能描述",
-  "tags": ["notify", "upload"],
-  "license": "MIT"
+	"description": "你的模块功能描述",
+	"tags": ["notify", "upload"],
+	"license": "MIT"
 }
 ```
 
 Release workflow 会自动推导并写入：
 
-| 字段            | 来源 |
-|-----------------|------|
-| `id`            | `Cargo.toml` 的 `name` |
+| 字段            | 来源                                                 |
+| --------------- | ---------------------------------------------------- |
+| `id`            | `Cargo.toml` 的 `name`                               |
 | `name`          | `id` 的 Title Case 形式（`my_module` → `My Module`） |
-| `author`        | 仓库 owner（`owner/repo` 中的 `owner`） |
-| `latestVersion` | `Cargo.toml` 的 `version` |
-| `downloads`     | 根据 tag 和平台名称自动构造 |
-| `sha256`        | 从构建产物的 `.sha256` 文件读取 |
+| `author`        | 仓库 owner（`owner/repo` 中的 `owner`）              |
+| `latestVersion` | `Cargo.toml` 的 `version`                            |
+| `downloads`     | 根据 tag 和平台名称自动构造                          |
+| `sha256`        | 从构建产物的 `.sha256` 文件读取                      |
 
 ### 支持的平台标识符
 
-| 标识符           | 说明                      |
-|------------------|---------------------------|
-| `windows-x86_64` | Windows 64 位             |
-| `windows-aarch64`| Windows ARM64             |
-| `linux-x86_64`   | Linux x86_64              |
-| `linux-aarch64`  | Linux ARM64               |
-| `darwin-x86_64`  | macOS Intel               |
-| `darwin-aarch64` | macOS Apple Silicon       |
+| 标识符            | 说明                |
+| ----------------- | ------------------- |
+| `windows-x86_64`  | Windows 64 位       |
+| `windows-aarch64` | Windows ARM64       |
+| `linux-x86_64`    | Linux x86_64        |
+| `linux-aarch64`   | Linux ARM64         |
+| `darwin-x86_64`   | macOS Intel         |
+| `darwin-aarch64`  | macOS Apple Silicon |
 
 ---
 

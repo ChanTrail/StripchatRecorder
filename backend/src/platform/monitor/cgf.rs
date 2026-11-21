@@ -17,103 +17,103 @@
 /// camgirlfinder.net. Returns `None` on network failure or if the account
 /// is not found in CGF — caller should treat this as "no schedule data".
 pub async fn cgf_fetch_schedule(username: &str, proxy: Option<&str>) -> Option<Vec<Vec<f32>>> {
-    // 用户名已经过 Stripchat API 验证，只含字母数字和下划线，无需额外 URL 编码
-    // Username was already validated by Stripchat API and only contains
-    // alphanumeric characters and underscores — no URL encoding needed.
-    let url = format!("https://api.camgirlfinder.net/models/sc/{}", username);
+	// 用户名已经过 Stripchat API 验证，只含字母数字和下划线，无需额外 URL 编码
+	// Username was already validated by Stripchat API and only contains
+	// alphanumeric characters and underscores — no URL encoding needed.
+	let url = format!("https://api.camgirlfinder.net/models/sc/{}", username);
 
-    let mut builder = reqwest::Client::builder()
-        .user_agent("StripchatRecorder/1.0")
-        .timeout(std::time::Duration::from_secs(20));
+	let mut builder = reqwest::Client::builder()
+		.user_agent("StripchatRecorder/1.0")
+		.timeout(std::time::Duration::from_secs(20));
 
-    if let Some(proxy_url) = proxy.filter(|s| !s.is_empty()) {
-        match reqwest::Proxy::all(proxy_url) {
-            Ok(p) => {
-                builder = builder.proxy(p);
-            }
-            Err(e) => {
-                tracing::warn!("{}", crate::tl!("monitor.cgfProxyInvalid", error = e));
-            }
-        }
-    }
+	if let Some(proxy_url) = proxy.filter(|s| !s.is_empty()) {
+		match reqwest::Proxy::all(proxy_url) {
+			Ok(p) => {
+				builder = builder.proxy(p);
+			}
+			Err(e) => {
+				tracing::warn!("{}", crate::tl!("monitor.cgfProxyInvalid", error = e));
+			}
+		}
+	}
 
-    let client = match builder.build() {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!(
-                "{}",
-                crate::tl!("monitor.cgfClientFailed", username = username, error = e)
-            );
-            return None;
-        }
-    };
+	let client = match builder.build() {
+		Ok(c) => c,
+		Err(e) => {
+			tracing::warn!(
+				"{}",
+				crate::tl!("monitor.cgfClientFailed", username = username, error = e)
+			);
+			return None;
+		}
+	};
 
-    let resp = match client.get(&url).send().await {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::warn!(
-                "{}",
-                crate::tl!("monitor.cgfRequestFailed", username = username, error = e)
-            );
-            return None;
-        }
-    };
+	let resp = match client.get(&url).send().await {
+		Ok(r) => r,
+		Err(e) => {
+			tracing::warn!(
+				"{}",
+				crate::tl!("monitor.cgfRequestFailed", username = username, error = e)
+			);
+			return None;
+		}
+	};
 
-    if !resp.status().is_success() {
-        tracing::debug!(
-            "{}",
-            crate::tl!(
-                "monitor.cgfHttpError",
-                status = resp.status().as_u16(),
-                username = username
-            )
-        );
-        return None;
-    }
+	if !resp.status().is_success() {
+		tracing::debug!(
+			"{}",
+			crate::tl!(
+				"monitor.cgfHttpError",
+				status = resp.status().as_u16(),
+				username = username
+			)
+		);
+		return None;
+	}
 
-    // 只取 schedule 字段，避免反序列化整个响应体
-    // Only extract the schedule field to avoid deserializing the full response body
-    #[derive(serde::Deserialize)]
-    struct CgfProfile {
-        schedule: Option<Vec<Vec<f32>>>,
-    }
+	// 只取 schedule 字段，避免反序列化整个响应体
+	// Only extract the schedule field to avoid deserializing the full response body
+	#[derive(serde::Deserialize)]
+	struct CgfProfile {
+		schedule: Option<Vec<Vec<f32>>>,
+	}
 
-    let profile: CgfProfile = match resp.json().await {
-        Ok(p) => p,
-        Err(e) => {
-            tracing::warn!(
-                "{}",
-                crate::tl!("monitor.cgfParseFailed", username = username, error = e)
-            );
-            return None;
-        }
-    };
+	let profile: CgfProfile = match resp.json().await {
+		Ok(p) => p,
+		Err(e) => {
+			tracing::warn!(
+				"{}",
+				crate::tl!("monitor.cgfParseFailed", username = username, error = e)
+			);
+			return None;
+		}
+	};
 
-    let raw = match profile.schedule {
-        Some(s) => s,
-        None => {
-            tracing::debug!(
-                "{}",
-                crate::tl!("monitor.cgfScheduleNull", username = username)
-            );
-            return None;
-        }
-    };
+	let raw = match profile.schedule {
+		Some(s) => s,
+		None => {
+			tracing::debug!(
+				"{}",
+				crate::tl!("monitor.cgfScheduleNull", username = username)
+			);
+			return None;
+		}
+	};
 
-    // 必须恰好 7 行（7 天）；每行截断或补零到 48 个时段以容错边界情况
-    // Must be exactly 7 rows (days); each row is truncated or zero-padded to 48 slots
-    if raw.len() != 7 {
-        return None;
-    }
-    let normalized: Vec<Vec<f32>> = raw
-        .into_iter()
-        .map(|mut row| {
-            row.resize(48, 0.0); // 不足48补零；超出48截断
-            row.truncate(48);
-            row
-        })
-        .collect();
-    Some(normalized)
+	// 必须恰好 7 行（7 天）；每行截断或补零到 48 个时段以容错边界情况
+	// Must be exactly 7 rows (days); each row is truncated or zero-padded to 48 slots
+	if raw.len() != 7 {
+		return None;
+	}
+	let normalized: Vec<Vec<f32>> = raw
+		.into_iter()
+		.map(|mut row| {
+			row.resize(48, 0.0); // 不足48补零；超出48截断
+			row.truncate(48);
+			row
+		})
+		.collect();
+	Some(normalized)
 }
 
 /// 根据 schedule 矩阵和当前本地时间，计算该主播本轮使用的自适应轮询间隔。
@@ -153,31 +153,31 @@ pub async fn cgf_fetch_schedule(username: &str, proxy: Option<&str>) -> Option<V
 /// interval allowed in low-activity buckets; the caller always passes 200
 /// (`SCHEDULE_MAX_SECS`). See inline comments for the formula.
 pub fn schedule_poll_interval(schedule: Option<&[Vec<f32>]>, base_secs: u64, max_secs: u64) -> u64 {
-    use chrono::{Datelike as _, Timelike as _};
+	use chrono::{Datelike as _, Timelike as _};
 
-    let sched = match schedule {
-        Some(s) => s,
-        None => return base_secs, // 无数据：不节流
-    };
+	let sched = match schedule {
+		Some(s) => s,
+		None => return base_secs, // 无数据：不节流
+	};
 
-    let now = chrono::Local::now();
-    // chrono weekday: Mon=0…Sun=6;  CGF convention: Sun=0…Sat=6
-    let cgf_day = now.weekday().num_days_from_sunday() as usize;
-    let bucket = (now.hour() * 2 + now.minute() / 30) as usize;
-    let activity = sched
-        .get(cgf_day)
-        .and_then(|row| row.get(bucket))
-        .copied()
-        .unwrap_or(1.0);
+	let now = chrono::Local::now();
+	// chrono weekday: Mon=0…Sun=6;  CGF convention: Sun=0…Sat=6
+	let cgf_day = now.weekday().num_days_from_sunday() as usize;
+	let bucket = (now.hour() * 2 + now.minute() / 30) as usize;
+	let activity = sched
+		.get(cgf_day)
+		.and_then(|row| row.get(bucket))
+		.copied()
+		.unwrap_or(1.0);
 
-    // 活跃度 ≥ 0.8 直接用用户设置值，不节流
-    if activity >= 0.8 {
-        return base_secs;
-    }
+	// 活跃度 ≥ 0.8 直接用用户设置值，不节流
+	if activity >= 0.8 {
+		return base_secs;
+	}
 
-    // 平方根曲线映射：√(a / 0.8) ∈ [0, 1)
-    let t = (activity / 0.8).sqrt();
-    // interval = max - (max - base) × t，随 t 增大从 max 收敛到 base
-    let interval = max_secs as f64 - (max_secs as f64 - base_secs as f64) * t as f64;
-    interval.round() as u64
+	// 平方根曲线映射：√(a / 0.8) ∈ [0, 1)
+	let t = (activity / 0.8).sqrt();
+	// interval = max - (max - base) × t，随 t 增大从 max 收敛到 base
+	let interval = max_secs as f64 - (max_secs as f64 - base_secs as f64) * t as f64;
+	interval.round() as u64
 }

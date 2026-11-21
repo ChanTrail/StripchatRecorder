@@ -163,8 +163,12 @@ export function useNodeDragging(
 		}
 		const canvasPos = screenToCanvas(e.clientX, e.clientY);
 		dragOffset = {
-			x: canvasPos.x - (store.pipeline.nodes.find((n) => nodeEffectiveId(n) === nodeId)?.position?.x ?? 0),
-			y: canvasPos.y - (store.pipeline.nodes.find((n) => nodeEffectiveId(n) === nodeId)?.position?.y ?? 0),
+			x:
+				canvasPos.x -
+				(store.pipeline.nodes.find((n) => nodeEffectiveId(n) === nodeId)?.position?.x ?? 0),
+			y:
+				canvasPos.y -
+				(store.pipeline.nodes.find((n) => nodeEffectiveId(n) === nodeId)?.position?.y ?? 0),
 		};
 		lastDragCanvasPos = canvasPos;
 	}

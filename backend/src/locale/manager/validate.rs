@@ -15,16 +15,16 @@ use std::path::{Path, PathBuf};
 /// Validate a backend log locale file: must be a JSON object with at least one sub-object
 /// (corresponding to a log module group). Only checks top-level structure.
 pub(super) fn validate_log_locale(
-    value: &serde_json::Value,
-    _default_content: &str,
+	value: &serde_json::Value,
+	_default_content: &str,
 ) -> Result<(), String> {
-    let obj = value
-        .as_object()
-        .ok_or_else(|| "not a JSON object".to_string())?;
-    if obj.is_empty() {
-        return Err("must contain at least one log group entry".to_string());
-    }
-    Ok(())
+	let obj = value
+		.as_object()
+		.ok_or_else(|| "not a JSON object".to_string())?;
+	if obj.is_empty() {
+		return Err("must contain at least one log group entry".to_string());
+	}
+	Ok(())
 }
 
 /// 校验主程序语言文件：
@@ -35,41 +35,41 @@ pub(super) fn validate_log_locale(
 /// Must be a JSON object, contain `languageName` (string),
 /// and contain all top-level keys present in the corresponding default file.
 pub(super) fn validate_app_locale(
-    value: &serde_json::Value,
-    default_content: &str,
+	value: &serde_json::Value,
+	default_content: &str,
 ) -> Result<(), String> {
-    let obj = value
-        .as_object()
-        .ok_or_else(|| "not a JSON object".to_string())?;
+	let obj = value
+		.as_object()
+		.ok_or_else(|| "not a JSON object".to_string())?;
 
-    // 必须有 languageName 字符串 / Must have languageName string
-    match obj.get("languageName") {
-        Some(serde_json::Value::String(s)) if !s.is_empty() => {}
-        Some(_) => return Err("languageName must be a non-empty string".to_string()),
-        None => return Err("missing required key: languageName".to_string()),
-    }
+	// 必须有 languageName 字符串 / Must have languageName string
+	match obj.get("languageName") {
+		Some(serde_json::Value::String(s)) if !s.is_empty() => {}
+		Some(_) => return Err("languageName must be a non-empty string".to_string()),
+		None => return Err("missing required key: languageName".to_string()),
+	}
 
-    // 必须包含默认文件中的所有顶层 key / Must contain all top-level keys from the default
-    let default_val: serde_json::Value = serde_json::from_str(default_content)
-        .map_err(|e| format!("failed to parse default: {}", e))?;
-    let default_obj = default_val
-        .as_object()
-        .ok_or_else(|| "default is not a JSON object".to_string())?;
+	// 必须包含默认文件中的所有顶层 key / Must contain all top-level keys from the default
+	let default_val: serde_json::Value = serde_json::from_str(default_content)
+		.map_err(|e| format!("failed to parse default: {}", e))?;
+	let default_obj = default_val
+		.as_object()
+		.ok_or_else(|| "default is not a JSON object".to_string())?;
 
-    let missing: Vec<&str> = default_obj
-        .keys()
-        .filter(|k| !obj.contains_key(k.as_str()))
-        .map(|k| k.as_str())
-        .collect();
+	let missing: Vec<&str> = default_obj
+		.keys()
+		.filter(|k| !obj.contains_key(k.as_str()))
+		.map(|k| k.as_str())
+		.collect();
 
-    if !missing.is_empty() {
-        return Err(format!(
-            "missing required top-level keys: {}",
-            missing.join(", ")
-        ));
-    }
+	if !missing.is_empty() {
+		return Err(format!(
+			"missing required top-level keys: {}",
+			missing.join(", ")
+		));
+	}
 
-    Ok(())
+	Ok(())
 }
 
 /// 校验模块语言文件：必须是 JSON object，且包含 `name`、`description`、`params`
@@ -88,20 +88,20 @@ pub(super) fn validate_app_locale(
 /// `ModuleInfo`). `__builtin__` covers multiple built-in nodes and has a different
 /// top-level shape — see [`validate_builtin_locale`].
 pub(super) fn validate_module_locale(
-    value: &serde_json::Value,
-    _default_content: &str,
+	value: &serde_json::Value,
+	_default_content: &str,
 ) -> Result<(), String> {
-    let obj = value
-        .as_object()
-        .ok_or_else(|| "not a JSON object".to_string())?;
+	let obj = value
+		.as_object()
+		.ok_or_else(|| "not a JSON object".to_string())?;
 
-    for required in ["name", "description", "params"] {
-        if !obj.contains_key(required) {
-            return Err(format!("missing required key: {}", required));
-        }
-    }
+	for required in ["name", "description", "params"] {
+		if !obj.contains_key(required) {
+			return Err(format!("missing required key: {}", required));
+		}
+	}
 
-    Ok(())
+	Ok(())
 }
 
 /// 校验 `__builtin__` locale 文件：与常规模块 locale 文件（单节点，顶层直接是
@@ -134,32 +134,32 @@ pub(super) fn validate_module_locale(
 /// Only checks key completeness, not value content, consistent with
 /// [`validate_module_locale`]'s validation philosophy.
 pub(super) fn validate_builtin_locale(
-    value: &serde_json::Value,
-    _default_content: &str,
+	value: &serde_json::Value,
+	_default_content: &str,
 ) -> Result<(), String> {
-    let obj = value
-        .as_object()
-        .ok_or_else(|| "not a JSON object".to_string())?;
+	let obj = value
+		.as_object()
+		.ok_or_else(|| "not a JSON object".to_string())?;
 
-    if obj.is_empty() {
-        return Err("must contain at least one built-in node entry".to_string());
-    }
+	if obj.is_empty() {
+		return Err("must contain at least one built-in node entry".to_string());
+	}
 
-    for (node_key, node_value) in obj {
-        let node_obj = node_value
-            .as_object()
-            .ok_or_else(|| format!("node \"{}\" must be a JSON object", node_key))?;
-        for required in ["name", "description", "params"] {
-            if !node_obj.contains_key(required) {
-                return Err(format!(
-                    "node \"{}\" missing required key: {}",
-                    node_key, required
-                ));
-            }
-        }
-    }
+	for (node_key, node_value) in obj {
+		let node_obj = node_value
+			.as_object()
+			.ok_or_else(|| format!("node \"{}\" must be a JSON object", node_key))?;
+		for required in ["name", "description", "params"] {
+			if !node_obj.contains_key(required) {
+				return Err(format!(
+					"node \"{}\" missing required key: {}",
+					node_key, required
+				));
+			}
+		}
+	}
 
-    Ok(())
+	Ok(())
 }
 
 /// 内置 locale 文件的托管状态：记录我们上次写出的内容指纹（SHA-256），
@@ -176,16 +176,16 @@ pub(super) fn validate_builtin_locale(
 /// Persisted at `<locale>/.builtin-state.json`.
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 pub(super) struct BuiltinState {
-    /// `<相对键> -> "sha256:<hex>" | "custom"` / `<rel key> -> "sha256:<hex>" | "custom"`
-    #[serde(default)]
-    files: BTreeMap<String, String>,
+	/// `<相对键> -> "sha256:<hex>" | "custom"` / `<rel key> -> "sha256:<hex>" | "custom"`
+	#[serde(default)]
+	files: BTreeMap<String, String>,
 }
 
 /// 托管状态文件路径（locale 根目录下的点文件，不参与语言文件扫描）。
 /// Managed-state file path (a dotfile at the locale root, excluded from
 /// locale-file scans).
 fn builtin_state_path() -> PathBuf {
-    locale_dir().join(".builtin-state.json")
+	locale_dir().join(".builtin-state.json")
 }
 
 /// 内容指纹：SHA-256。特意不用 `DefaultHasher`——其算法不保证跨版本稳定，
@@ -195,12 +195,12 @@ fn builtin_state_path() -> PathBuf {
 /// its algorithm isn't guaranteed stable across versions, and a drifting
 /// fingerprint would misclassify our managed files as "custom" forever.
 fn fingerprint(content: &str) -> String {
-    let mut s = String::with_capacity(7 + 64);
-    s.push_str("sha256:");
-    for b in Sha256::digest(content.as_bytes()) {
-        let _ = write!(s, "{b:02x}");
-    }
-    s
+	let mut s = String::with_capacity(7 + 64);
+	s.push_str("sha256:");
+	for b in Sha256::digest(content.as_bytes()) {
+		let _ = write!(s, "{b:02x}");
+	}
+	s
 }
 
 /// 读取托管状态；文件不存在（新装 / 旧版本首次运行此机制）返回空状态，
@@ -211,33 +211,33 @@ fn fingerprint(content: &str) -> String {
 /// one logs a warning and does the same (worst case: files take the
 /// "no record" claim/refresh path once more).
 pub(super) fn load_builtin_state() -> BuiltinState {
-    let path = builtin_state_path();
-    match std::fs::read_to_string(&path) {
-        Ok(content) => serde_json::from_str(&content).unwrap_or_else(|e| {
-            tracing::warn!(
-                "{}",
-                crate::tl!("locale.parseFileFailed", path = path.display(), error = e)
-            );
-            BuiltinState::default()
-        }),
-        // 不存在或不可读 → 空状态 / Missing or unreadable → empty state
-        Err(_) => BuiltinState::default(),
-    }
+	let path = builtin_state_path();
+	match std::fs::read_to_string(&path) {
+		Ok(content) => serde_json::from_str(&content).unwrap_or_else(|e| {
+			tracing::warn!(
+				"{}",
+				crate::tl!("locale.parseFileFailed", path = path.display(), error = e)
+			);
+			BuiltinState::default()
+		}),
+		// 不存在或不可读 → 空状态 / Missing or unreadable → empty state
+		Err(_) => BuiltinState::default(),
+	}
 }
 
 /// 把托管状态写回磁盘（init 末尾调用一次）。
 /// Persist the managed state (called once at the end of init).
 pub(super) fn save_builtin_state(state: &BuiltinState) {
-    let path = builtin_state_path();
-    let result = serde_json::to_string_pretty(state)
-        .map_err(|e| e.to_string())
-        .and_then(|json| std::fs::write(&path, json).map_err(|e| e.to_string()));
-    if let Err(e) = result {
-        tracing::warn!(
-            "{}",
-            crate::tl!("locale.writeFileFailed", path = path.display(), error = e)
-        );
-    }
+	let path = builtin_state_path();
+	let result = serde_json::to_string_pretty(state)
+		.map_err(|e| e.to_string())
+		.and_then(|json| std::fs::write(&path, json).map_err(|e| e.to_string()));
+	if let Err(e) = result {
+		tracing::warn!(
+			"{}",
+			crate::tl!("locale.writeFileFailed", path = path.display(), error = e)
+		);
+	}
 }
 
 /// 覆盖前备份：`xxx.json.bak`；该名字已被占用时改用带时间戳的
@@ -247,22 +247,22 @@ pub(super) fn save_builtin_state(state: &BuiltinState) {
 /// `xxx.json.bak-YYYYMMDD_HHMMSS` when that name is already taken.
 /// Returns the backup path; None on failure (a warn is logged).
 fn backup_file(path: &Path) -> Option<PathBuf> {
-    let file_name = path.file_name()?.to_str()?;
-    let mut bak = path.with_file_name(format!("{file_name}.bak"));
-    if bak.exists() {
-        let stamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-        bak = path.with_file_name(format!("{file_name}.bak-{stamp}"));
-    }
-    match std::fs::copy(path, &bak) {
-        Ok(_) => Some(bak),
-        Err(e) => {
-            tracing::warn!(
-                "{}",
-                crate::tl!("locale.backupFailed", path = path.display(), error = e)
-            );
-            None
-        }
-    }
+	let file_name = path.file_name()?.to_str()?;
+	let mut bak = path.with_file_name(format!("{file_name}.bak"));
+	if bak.exists() {
+		let stamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+		bak = path.with_file_name(format!("{file_name}.bak-{stamp}"));
+	}
+	match std::fs::copy(path, &bak) {
+		Ok(_) => Some(bak),
+		Err(e) => {
+			tracing::warn!(
+				"{}",
+				crate::tl!("locale.backupFailed", path = path.display(), error = e)
+			);
+			None
+		}
+	}
 }
 
 /// 写入或重建内置 locale 文件，文件有效时再执行「随版本刷新」判定：
@@ -286,147 +286,147 @@ fn backup_file(path: &Path) -> Option<PathBuf> {
 ///   otherwise stale-default vs user-edited is ambiguous: back it up and
 ///   refresh to the new default anyway
 pub(super) fn write_or_rebuild_if_invalid(
-    path: &Path,
-    default_content: &str,
-    validator: fn(&serde_json::Value, &str) -> Result<(), String>,
-    label: &str,
-    state_key: &str,
-    state: &mut BuiltinState,
+	path: &Path,
+	default_content: &str,
+	validator: fn(&serde_json::Value, &str) -> Result<(), String>,
+	label: &str,
+	state_key: &str,
+	state: &mut BuiltinState,
 ) {
-    if !path.exists() {
-        // 文件不存在，直接写入并记录指纹 / File missing, write it and record the fingerprint
-        if let Err(e) = std::fs::write(path, default_content) {
-            tracing::warn!(
-                "{}",
-                crate::tl!("locale.writeFileFailed", path = path.display(), error = e)
-            );
-        } else {
-            state
-                .files
-                .insert(state_key.to_string(), fingerprint(default_content));
-        }
-        return;
-    }
+	if !path.exists() {
+		// 文件不存在，直接写入并记录指纹 / File missing, write it and record the fingerprint
+		if let Err(e) = std::fs::write(path, default_content) {
+			tracing::warn!(
+				"{}",
+				crate::tl!("locale.writeFileFailed", path = path.display(), error = e)
+			);
+		} else {
+			state
+				.files
+				.insert(state_key.to_string(), fingerprint(default_content));
+		}
+		return;
+	}
 
-    // 文件存在，读取并校验（保留原文供指纹计算）
-    // File exists, read and validate (keep the raw text for fingerprinting)
-    let raw = std::fs::read_to_string(path)
-        .map_err(|e| format!("read error: {}", e))
-        .and_then(|content| {
-            // 去掉 BOM，避免用户用记事本编辑过的文件被误判为损坏并重建
-            // Strip the BOM so a file edited in Notepad isn't misjudged as corrupt and rebuilt
-            serde_json::from_str::<serde_json::Value>(strip_utf8_bom(&content))
-                .map_err(|e| format!("JSON parse error: {}", e))
-                .map(|value| (content, value))
-        })
-        .and_then(|(content, value)| validator(&value, default_content).map(|_| content));
+	// 文件存在，读取并校验（保留原文供指纹计算）
+	// File exists, read and validate (keep the raw text for fingerprinting)
+	let raw = std::fs::read_to_string(path)
+		.map_err(|e| format!("read error: {}", e))
+		.and_then(|content| {
+			// 去掉 BOM，避免用户用记事本编辑过的文件被误判为损坏并重建
+			// Strip the BOM so a file edited in Notepad isn't misjudged as corrupt and rebuilt
+			serde_json::from_str::<serde_json::Value>(strip_utf8_bom(&content))
+				.map_err(|e| format!("JSON parse error: {}", e))
+				.map(|value| (content, value))
+		})
+		.and_then(|(content, value)| validator(&value, default_content).map(|_| content));
 
-    let raw = match raw {
-        Ok(raw) => raw,
-        Err(reason) => {
-            // 校验失败：先备份再重建，避免静默吞掉文件原内容
-            // Validation failed: back up before rebuilding so the original
-            // content isn't silently swallowed
-            tracing::warn!(
-                "{}",
-                crate::tl!(
-                    "locale.validationFailed",
-                    path = path.display(),
-                    label = label,
-                    reason = reason
-                )
-            );
-            backup_file(path);
-            if let Err(e) = std::fs::write(path, default_content) {
-                tracing::warn!(
-                    "{}",
-                    crate::tl!("locale.rebuildFailed", path = path.display(), error = e)
-                );
-            } else {
-                tracing::info!(
-                    "{}",
-                    crate::tl!("locale.rebuiltFile", path = path.display())
-                );
-                state
-                    .files
-                    .insert(state_key.to_string(), fingerprint(default_content));
-            }
-            return;
-        }
-    };
+	let raw = match raw {
+		Ok(raw) => raw,
+		Err(reason) => {
+			// 校验失败：先备份再重建，避免静默吞掉文件原内容
+			// Validation failed: back up before rebuilding so the original
+			// content isn't silently swallowed
+			tracing::warn!(
+				"{}",
+				crate::tl!(
+					"locale.validationFailed",
+					path = path.display(),
+					label = label,
+					reason = reason
+				)
+			);
+			backup_file(path);
+			if let Err(e) = std::fs::write(path, default_content) {
+				tracing::warn!(
+					"{}",
+					crate::tl!("locale.rebuildFailed", path = path.display(), error = e)
+				);
+			} else {
+				tracing::info!(
+					"{}",
+					crate::tl!("locale.rebuiltFile", path = path.display())
+				);
+				state
+					.files
+					.insert(state_key.to_string(), fingerprint(default_content));
+			}
+			return;
+		}
+	};
 
-    // 校验通过：按指纹判断文件归属，决定能否随版本刷新
-    // Validation passed: the fingerprint decides file ownership and
-    // whether a version refresh is allowed
-    let disk_fp = fingerprint(&raw);
-    match state.files.get(state_key).map(String::as_str) {
-        // 已标记为用户自定义，保持现状 / Already marked user-modified, keep as-is
-        Some("custom") => {}
-        // 指纹一致：是我们上次写出的内容，与默认不同即可安全重写
-        // Fingerprint match: we wrote this file — safe to rewrite on drift
-        Some(recorded) if recorded == disk_fp => {
-            if raw != default_content {
-                if let Err(e) = std::fs::write(path, default_content) {
-                    tracing::warn!(
-                        "{}",
-                        crate::tl!("locale.writeFileFailed", path = path.display(), error = e)
-                    );
-                } else {
-                    tracing::info!(
-                        "{}",
-                        crate::tl!("locale.refreshedFile", path = path.display())
-                    );
-                    state
-                        .files
-                        .insert(state_key.to_string(), fingerprint(default_content));
-                }
-            }
-        }
-        // 指纹不一致：写出后被用户改过，标记自定义并永久保留
-        // Fingerprint mismatch: edited after our write — mark custom, keep forever
-        Some(_) => {
-            state
-                .files
-                .insert(state_key.to_string(), "custom".to_string());
-            tracing::info!(
-                "{}",
-                crate::tl!("locale.customFileKept", path = path.display())
-            );
-        }
-        // 无记录：旧版本安装首次运行此机制。与默认一致 → 认领；
-        // 不一致则无法区分旧默认与自定义 —— 备份后按「随版本刷新」重写，
-        // 自定义可从 .bak 找回
-        // No record: first boot of this mechanism on a pre-mechanism
-        // install. Identical to default → claim it; otherwise stale vs
-        // customized is ambiguous — back it up and refresh like a version
-        // bump (customizations remain recoverable from the .bak)
-        None => {
-            if raw == default_content {
-                state.files.insert(state_key.to_string(), disk_fp);
-            } else {
-                if let Some(bak) = backup_file(path) {
-                    tracing::info!(
-                        "{}",
-                        crate::tl!("locale.backupCreated", path = bak.display())
-                    );
-                }
-                if let Err(e) = std::fs::write(path, default_content) {
-                    tracing::warn!(
-                        "{}",
-                        crate::tl!("locale.writeFileFailed", path = path.display(), error = e)
-                    );
-                } else {
-                    tracing::info!(
-                        "{}",
-                        crate::tl!("locale.refreshedFile", path = path.display())
-                    );
-                    state
-                        .files
-                        .insert(state_key.to_string(), fingerprint(default_content));
-                }
-            }
-        }
-    }
+	// 校验通过：按指纹判断文件归属，决定能否随版本刷新
+	// Validation passed: the fingerprint decides file ownership and
+	// whether a version refresh is allowed
+	let disk_fp = fingerprint(&raw);
+	match state.files.get(state_key).map(String::as_str) {
+		// 已标记为用户自定义，保持现状 / Already marked user-modified, keep as-is
+		Some("custom") => {}
+		// 指纹一致：是我们上次写出的内容，与默认不同即可安全重写
+		// Fingerprint match: we wrote this file — safe to rewrite on drift
+		Some(recorded) if recorded == disk_fp => {
+			if raw != default_content {
+				if let Err(e) = std::fs::write(path, default_content) {
+					tracing::warn!(
+						"{}",
+						crate::tl!("locale.writeFileFailed", path = path.display(), error = e)
+					);
+				} else {
+					tracing::info!(
+						"{}",
+						crate::tl!("locale.refreshedFile", path = path.display())
+					);
+					state
+						.files
+						.insert(state_key.to_string(), fingerprint(default_content));
+				}
+			}
+		}
+		// 指纹不一致：写出后被用户改过，标记自定义并永久保留
+		// Fingerprint mismatch: edited after our write — mark custom, keep forever
+		Some(_) => {
+			state
+				.files
+				.insert(state_key.to_string(), "custom".to_string());
+			tracing::info!(
+				"{}",
+				crate::tl!("locale.customFileKept", path = path.display())
+			);
+		}
+		// 无记录：旧版本安装首次运行此机制。与默认一致 → 认领；
+		// 不一致则无法区分旧默认与自定义 —— 备份后按「随版本刷新」重写，
+		// 自定义可从 .bak 找回
+		// No record: first boot of this mechanism on a pre-mechanism
+		// install. Identical to default → claim it; otherwise stale vs
+		// customized is ambiguous — back it up and refresh like a version
+		// bump (customizations remain recoverable from the .bak)
+		None => {
+			if raw == default_content {
+				state.files.insert(state_key.to_string(), disk_fp);
+			} else {
+				if let Some(bak) = backup_file(path) {
+					tracing::info!(
+						"{}",
+						crate::tl!("locale.backupCreated", path = bak.display())
+					);
+				}
+				if let Err(e) = std::fs::write(path, default_content) {
+					tracing::warn!(
+						"{}",
+						crate::tl!("locale.writeFileFailed", path = path.display(), error = e)
+					);
+				} else {
+					tracing::info!(
+						"{}",
+						crate::tl!("locale.refreshedFile", path = path.display())
+					);
+					state
+						.files
+						.insert(state_key.to_string(), fingerprint(default_content));
+				}
+			}
+		}
+	}
 }
 
 /// 校验单个 locale 文件并返回错误原因列表（每项对应一个问题）。
@@ -440,24 +440,24 @@ pub(super) fn write_or_rebuild_if_invalid(
 /// - `"module"` → 校验常规单节点 module 文件（name + description + params）
 /// - `"builtin"` → 校验 `__builtin__` 的按节点分组嵌套结构（见 [`validate_builtin_locale`]）
 fn validate_file_at_path(path: &std::path::Path, file_type: &str) -> Result<(), String> {
-    let content = std::fs::read_to_string(path).map_err(|e| format!("read error: {}", e))?;
-    let value: serde_json::Value = serde_json::from_str(strip_utf8_bom(&content))
-        .map_err(|e| format!("JSON parse error: {}", e))?;
+	let content = std::fs::read_to_string(path).map_err(|e| format!("read error: {}", e))?;
+	let value: serde_json::Value = serde_json::from_str(strip_utf8_bom(&content))
+		.map_err(|e| format!("JSON parse error: {}", e))?;
 
-    match file_type {
-        "module" => validate_module_locale(&value, ""),
-        "builtin" => validate_builtin_locale(&value, ""),
-        _ => {
-            // app 文件：用对应代码的默认内容做 key 校验
-            // App file: use the default content for the corresponding code as the key reference
-            let code = path.file_stem().and_then(|s| s.to_str()).unwrap_or("zh-CN");
-            let default_content = match code {
-                "en-US" => APP_EN_US,
-                _ => APP_ZH_CN,
-            };
-            validate_app_locale(&value, default_content)
-        }
-    }
+	match file_type {
+		"module" => validate_module_locale(&value, ""),
+		"builtin" => validate_builtin_locale(&value, ""),
+		_ => {
+			// app 文件：用对应代码的默认内容做 key 校验
+			// App file: use the default content for the corresponding code as the key reference
+			let code = path.file_stem().and_then(|s| s.to_str()).unwrap_or("zh-CN");
+			let default_content = match code {
+				"en-US" => APP_EN_US,
+				_ => APP_ZH_CN,
+			};
+			validate_app_locale(&value, default_content)
+		}
+	}
 }
 
 /// 扫描所有用户自定义语言文件（不在内置列表中的文件）并返回校验失败的项。
@@ -468,87 +468,87 @@ fn validate_file_at_path(path: &std::path::Path, file_type: &str) -> Result<(), 
 ///
 /// 返回：`Vec<(文件路径字符串, 错误原因)>` / Returns: `Vec<(file path string, error reason)>`
 pub fn check_custom_locale_files() -> Vec<(String, String)> {
-    let mut warnings: Vec<(String, String)> = Vec::new();
+	let mut warnings: Vec<(String, String)> = Vec::new();
 
-    // 检查 app 自定义语言文件 / Check custom app locale files
-    let builtin_app_codes: &[&str] = &["zh-CN", "en-US"];
-    if let Ok(dir) = std::fs::read_dir(app_locale_dir()) {
-        for entry in dir.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("json") {
-                continue;
-            }
-            let code = match path.file_stem().and_then(|s| s.to_str()) {
-                Some(s) => s.to_string(),
-                None => continue,
-            };
-            if builtin_app_codes.contains(&code.as_str()) {
-                continue; // 内置文件由 init_locale_dirs 负责 / Built-in handled by init_locale_dirs
-            }
-            if let Err(reason) = validate_file_at_path(&path, "app") {
-                warnings.push((path.to_string_lossy().to_string(), reason));
-            }
-        }
-    }
+	// 检查 app 自定义语言文件 / Check custom app locale files
+	let builtin_app_codes: &[&str] = &["zh-CN", "en-US"];
+	if let Ok(dir) = std::fs::read_dir(app_locale_dir()) {
+		for entry in dir.flatten() {
+			let path = entry.path();
+			if path.extension().and_then(|e| e.to_str()) != Some("json") {
+				continue;
+			}
+			let code = match path.file_stem().and_then(|s| s.to_str()) {
+				Some(s) => s.to_string(),
+				None => continue,
+			};
+			if builtin_app_codes.contains(&code.as_str()) {
+				continue; // 内置文件由 init_locale_dirs 负责 / Built-in handled by init_locale_dirs
+			}
+			if let Err(reason) = validate_file_at_path(&path, "app") {
+				warnings.push((path.to_string_lossy().to_string(), reason));
+			}
+		}
+	}
 
-    // 检查模块自定义语言文件 / Check custom module locale files
-    let builtin_module_ids: &[&str] = &[
-        "filter_short",
-        "contact_sheet",
-        "notify_discord",
-        "notify_telegram",
-        "cleanup",
-        "__builtin__",
-    ];
-    let builtin_locale_codes: &[&str] = &["zh-CN", "en-US"];
-    if let Ok(mod_dir) = std::fs::read_dir(modules_locale_dir()) {
-        for module_entry in mod_dir.flatten() {
-            let module_path = module_entry.path();
-            if !module_path.is_dir() {
-                continue;
-            }
-            let module_id = match module_path.file_name().and_then(|n| n.to_str()) {
-                Some(s) => s.to_string(),
-                None => continue,
-            };
-            let is_builtin_module = builtin_module_ids.contains(&module_id.as_str());
-            if let Ok(locale_files) = std::fs::read_dir(&module_path) {
-                for locale_entry in locale_files.flatten() {
-                    let file_path = locale_entry.path();
-                    if file_path.extension().and_then(|e| e.to_str()) != Some("json") {
-                        continue;
-                    }
-                    let locale_code = match file_path.file_stem().and_then(|s| s.to_str()) {
-                        Some(s) => s.to_string(),
-                        None => continue,
-                    };
-                    // 内置模块的内置语言由 init_locale_dirs 负责
-                    // Built-in module + built-in locale handled by init_locale_dirs
-                    if is_builtin_module && builtin_locale_codes.contains(&locale_code.as_str()) {
-                        continue;
-                    }
-                    // __builtin__ 的自定义语言文件（如用户新增了 __builtin__ 目录下
-                    // 未内置的语言代码）沿用按节点分组的嵌套结构校验；其余模块用常规
-                    // 单节点结构校验。
-                    //
-                    // Custom locale files for __builtin__ (e.g. the user added a locale
-                    // code not covered by the built-in defaults, still under the
-                    // __builtin__ directory) use the nested per-node structure
-                    // validator; all other modules use the regular single-node validator.
-                    let file_type = if module_id == "__builtin__" {
-                        "builtin"
-                    } else {
-                        "module"
-                    };
-                    if let Err(reason) = validate_file_at_path(&file_path, file_type) {
-                        warnings.push((file_path.to_string_lossy().to_string(), reason));
-                    }
-                }
-            }
-        }
-    }
+	// 检查模块自定义语言文件 / Check custom module locale files
+	let builtin_module_ids: &[&str] = &[
+		"filter_short",
+		"contact_sheet",
+		"notify_discord",
+		"notify_telegram",
+		"cleanup",
+		"__builtin__",
+	];
+	let builtin_locale_codes: &[&str] = &["zh-CN", "en-US"];
+	if let Ok(mod_dir) = std::fs::read_dir(modules_locale_dir()) {
+		for module_entry in mod_dir.flatten() {
+			let module_path = module_entry.path();
+			if !module_path.is_dir() {
+				continue;
+			}
+			let module_id = match module_path.file_name().and_then(|n| n.to_str()) {
+				Some(s) => s.to_string(),
+				None => continue,
+			};
+			let is_builtin_module = builtin_module_ids.contains(&module_id.as_str());
+			if let Ok(locale_files) = std::fs::read_dir(&module_path) {
+				for locale_entry in locale_files.flatten() {
+					let file_path = locale_entry.path();
+					if file_path.extension().and_then(|e| e.to_str()) != Some("json") {
+						continue;
+					}
+					let locale_code = match file_path.file_stem().and_then(|s| s.to_str()) {
+						Some(s) => s.to_string(),
+						None => continue,
+					};
+					// 内置模块的内置语言由 init_locale_dirs 负责
+					// Built-in module + built-in locale handled by init_locale_dirs
+					if is_builtin_module && builtin_locale_codes.contains(&locale_code.as_str()) {
+						continue;
+					}
+					// __builtin__ 的自定义语言文件（如用户新增了 __builtin__ 目录下
+					// 未内置的语言代码）沿用按节点分组的嵌套结构校验；其余模块用常规
+					// 单节点结构校验。
+					//
+					// Custom locale files for __builtin__ (e.g. the user added a locale
+					// code not covered by the built-in defaults, still under the
+					// __builtin__ directory) use the nested per-node structure
+					// validator; all other modules use the regular single-node validator.
+					let file_type = if module_id == "__builtin__" {
+						"builtin"
+					} else {
+						"module"
+					};
+					if let Err(reason) = validate_file_at_path(&file_path, file_type) {
+						warnings.push((file_path.to_string_lossy().to_string(), reason));
+					}
+				}
+			}
+		}
+	}
 
-    warnings
+	warnings
 }
 
 /// 校验指定语言文件，返回错误原因（供切换语言时使用）。
@@ -556,9 +556,9 @@ pub fn check_custom_locale_files() -> Vec<(String, String)> {
 ///
 /// Validate the specified locale file and return an error reason if invalid (used on language switch).
 pub fn validate_locale_file(locale_code: &str) -> Option<String> {
-    let path = app_locale_dir().join(format!("{}.json", locale_code));
-    if !path.exists() {
-        return None; // 不存在则用内置 fallback，无需警告 / Missing = use built-in fallback, no warning
-    }
-    validate_file_at_path(&path, "app").err()
+	let path = app_locale_dir().join(format!("{}.json", locale_code));
+	if !path.exists() {
+		return None; // 不存在则用内置 fallback，无需警告 / Missing = use built-in fallback, no warning
+	}
+	validate_file_at_path(&path, "app").err()
 }

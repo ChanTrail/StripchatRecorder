@@ -120,9 +120,7 @@ export const useNotificationsStore = defineStore("notifications", () => {
 			if (ids.length === 0) {
 				notifications.value = [];
 			} else {
-				notifications.value = notifications.value.filter(
-					(n) => !ids.includes(n.id),
-				);
+				notifications.value = notifications.value.filter((n) => !ids.includes(n.id));
 			}
 		} catch {
 			// 静默失败

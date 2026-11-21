@@ -86,8 +86,8 @@ const scBrowseMirror = ref<string | null>(null);
 const echEnabled = ref(false);
 
 // ── FFmpeg 检查 / FFmpeg check ───────────────────────────────────────────────
-/** 单个位置的探测结果（与后端 `FfmpegLocationProbe` 一致）/ Probe result for one location (matches backend `FfmpegLocationProbe`) */
-interface FfmpegLocationProbe {
+/** 单个位置的探测结果（与后端 `FFmpegLocationProbe` 一致）/ Probe result for one location (matches backend `FFmpegLocationProbe`) */
+interface FFmpegLocationProbe {
 	/** 是否找到 ffmpeg / Whether ffmpeg was found */
 	ffmpeg: boolean;
 	/** 是否找到 ffprobe / Whether ffprobe was found */
@@ -107,16 +107,16 @@ interface FfmpegLocationProbe {
 	/** ffplay -version 的版本号字段 / Version token from `ffplay -version` */
 	ffplay_version: string | null;
 }
-/** 两个位置的探测结果汇总（与后端 `FfmpegLocations` 一致）/ Combined probe results (matches backend `FfmpegLocations`) */
-interface FfmpegLocations {
+/** 两个位置的探测结果汇总（与后端 `FFmpegLocations` 一致）/ Combined probe results (matches backend `FFmpegLocations`) */
+interface FFmpegLocations {
 	/** tools 目录的绝对路径 / Absolute tools directory path */
 	tools_dir: string;
 	/** 系统环境变量 / System PATH */
-	system: FfmpegLocationProbe;
+	system: FFmpegLocationProbe;
 	/** 程序目录下 tools/ / tools dir next to the binary */
-	tools: FfmpegLocationProbe;
+	tools: FFmpegLocationProbe;
 }
-const ffmpegLocations = ref<FfmpegLocations | null>(null);
+const ffmpegLocations = ref<FFmpegLocations | null>(null);
 const ffmpegChecking = ref(false);
 const ffmpegCheckFailed = ref(false);
 /** 用户选择的来源："0" = 系统 PATH，"1" = tools，"" = 未选择 / User's pick: "0" = system PATH, "1" = tools, "" = unselected */
@@ -124,11 +124,13 @@ const ffmpegSelected = ref<"0" | "1" | "">("");
 const ffmpegSaving = ref(false);
 
 /** 某位置的三个组件是否齐全 / Whether a location has all three components */
-const locationComplete = (p: FfmpegLocationProbe) => p.ffmpeg && p.ffprobe && p.ffplay;
+const locationComplete = (p: FFmpegLocationProbe) => p.ffmpeg && p.ffprobe && p.ffplay;
 /** 所选位置的探测结果 / Probe result of the selected location */
-const ffmpegSelectedLoc = computed<FfmpegLocationProbe | null>(() => {
+const ffmpegSelectedLoc = computed<FFmpegLocationProbe | null>(() => {
 	if (!ffmpegLocations.value || ffmpegSelected.value === "") return null;
-	return ffmpegSelected.value === "0" ? ffmpegLocations.value.system : ffmpegLocations.value.tools;
+	return ffmpegSelected.value === "0"
+		? ffmpegLocations.value.system
+		: ffmpegLocations.value.tools;
 });
 /** 所选位置是否齐全 / Whether the selected location is complete */
 const ffmpegSelectedComplete = computed(() =>
@@ -136,7 +138,10 @@ const ffmpegSelectedComplete = computed(() =>
 );
 /** 选中 tools 但组件不齐：按钮变「下载」/ tools selected but incomplete: the finish button morphs into Download */
 const ffmpegNeedsDownload = computed(
-	() => ffmpegSelected.value === "1" && !!ffmpegLocations.value && !locationComplete(ffmpegLocations.value.tools),
+	() =>
+		ffmpegSelected.value === "1" &&
+		!!ffmpegLocations.value &&
+		!locationComplete(ffmpegLocations.value.tools),
 );
 /** 取路径的父目录部分（同时兼容 \ 与 / 分隔符）/ Parent-dir part of a path (handles both \ and / separators) */
 const dirname = (p: string | null | undefined) => p?.replace(/[\\/][^\\/]*$/, "") ?? null;
@@ -147,8 +152,8 @@ const ffmpegSystemDir = computed(() => {
 	if (!s) return null;
 	return dirname(s.ffmpeg_path) ?? dirname(s.ffprobe_path) ?? dirname(s.ffplay_path);
 });
-/** ffmpeg-progress 事件载荷（与后端 `FfmpegProgress` 的 serde 输出一致）/ `ffmpeg-progress` payload (matches backend `FfmpegProgress` serde output) */
-interface FfmpegProgressPayload {
+/** ffmpeg-progress 事件载荷（与后端 `FFmpegProgress` 的 serde 输出一致）/ `ffmpeg-progress` payload (matches backend `FFmpegProgress` serde output) */
+interface FFmpegProgressPayload {
 	state: "idle" | "downloading" | "installing" | "done" | "error";
 	kind?: "install" | "update";
 	downloaded?: number;
@@ -157,14 +162,16 @@ interface FfmpegProgressPayload {
 	message?: string;
 }
 /** 当前 install 类进度（非 null 时步骤内联显示进度条）/ Current install progress (rendered inline in the step while non-null) */
-const ffmpegProgress = ref<FfmpegProgressPayload | null>(null);
+const ffmpegProgress = ref<FFmpegProgressPayload | null>(null);
 /** 下载速度文本（相邻事件字节差/时间差）/ Download speed text (byte/time delta between events) */
 const ffmpegSpeed = ref("");
 /** 速度采样点 / Speed sample point */
 let ffmpegLastSample: { bytes: number; at: number } | null = null;
 /** 下载/安装进行中 / Whether a download/install is in flight */
 const ffmpegInFlight = computed(
-	() => ffmpegProgress.value?.state === "downloading" || ffmpegProgress.value?.state === "installing",
+	() =>
+		ffmpegProgress.value?.state === "downloading" ||
+		ffmpegProgress.value?.state === "installing",
 );
 /** 下载进度条数据：`pct` 驱动宽度；total 未知且有数据时 1/3 宽脉冲 /
  * Download bar data: `pct` drives the width; 1/3-wide pulse while bytes flow with an unknown total */
@@ -176,12 +183,17 @@ const ffmpegDownloadBar = computed(() => {
 	const total = p.total ?? 0;
 	if (total > 0) {
 		const pct = p.pct ?? 0;
-		return { pct, indeterminate: false, size: `${formatSize(downloaded)} / ${formatSize(total)}`, pctText: `${pct}%` };
+		return {
+			pct,
+			indeterminate: false,
+			size: `${formatSize(downloaded)} / ${formatSize(total)}`,
+			pctText: `${pct}%`,
+		};
 	}
 	if (downloaded === 0) return empty;
 	return { pct: null, indeterminate: true, size: formatSize(downloaded), pctText: "" };
 });
-let unlistenFfmpegProgress: (() => void) | null = null;
+let unlistenFFmpegProgress: (() => void) | null = null;
 
 /**
  * 探测两个位置的 ffmpeg 组件并预选：完整位置优先（tools 优先），都不完整
@@ -190,14 +202,15 @@ let unlistenFfmpegProgress: (() => void) | null = null;
  * preferred); otherwise the side with more components (ties go to tools —
  * missing pieces can be filled by the download).
  */
-async function probeFfmpeg() {
+async function probeFFmpeg() {
 	ffmpegChecking.value = true;
 	ffmpegCheckFailed.value = false;
 	try {
-		const res = await call<FfmpegLocations>("get_ffmpeg_locations");
+		const res = await call<FFmpegLocations>("get_ffmpeg_locations");
 		ffmpegLocations.value = res;
 		if (ffmpegSelected.value === "") {
-			const count = (p: FfmpegLocationProbe) => [p.ffmpeg, p.ffprobe, p.ffplay].filter(Boolean).length;
+			const count = (p: FFmpegLocationProbe) =>
+				[p.ffmpeg, p.ffprobe, p.ffplay].filter(Boolean).length;
 			if (locationComplete(res.tools)) ffmpegSelected.value = "1";
 			else if (locationComplete(res.system)) ffmpegSelected.value = "0";
 			else ffmpegSelected.value = count(res.tools) >= count(res.system) ? "1" : "0";
@@ -213,14 +226,14 @@ async function probeFfmpeg() {
 /**
  * 触发后台下载，进度在步骤内联展示（setup 期间全局强制窗口被抑制）。
  * 首选项不落盘——install `done` 事件里才持久化所选位置（见
- * `applyFfmpegProgress`）；手动下载不按 PATH 首选项拦截（明确意图）。
+ * `applyFFmpegProgress`）；手动下载不按 PATH 首选项拦截（明确意图）。
  * Trigger the background download; progress renders inline in the step
  * (the global forced window is suppressed during setup). The preference is
  * NOT persisted here — the install `done` event persists the selected
- * location (see `applyFfmpegProgress`); a manual download is not gated on
+ * location (see `applyFFmpegProgress`); a manual download is not gated on
  * the PATH preference (explicit intent).
  */
-async function startFfmpegDownload() {
+async function startFFmpegDownload() {
 	if (ffmpegSaving.value) return;
 	ffmpegSaving.value = true;
 	error.value = "";
@@ -310,7 +323,7 @@ async function persistDraft() {
  * + the linked `ffmpeg_auto_update`); a failure only shows an error — the
  * final finish() payload still carries the choice.
  */
-async function persistFfmpegChoice() {
+async function persistFFmpegChoice() {
 	if (ffmpegSelected.value === "") return;
 	await enqueueSave(async () => {
 		try {
@@ -336,7 +349,7 @@ async function persistFfmpegChoice() {
  *
  * @param p - 事件载荷 / Event payload
  */
-function applyFfmpegProgress(p: FfmpegProgressPayload) {
+function applyFFmpegProgress(p: FFmpegProgressPayload) {
 	if (p.kind !== "install") return;
 	switch (p.state) {
 		case "downloading": {
@@ -346,7 +359,8 @@ function applyFfmpegProgress(p: FfmpegProgressPayload) {
 			const now = Date.now();
 			if (ffmpegLastSample && bytes > ffmpegLastSample.bytes) {
 				const dt = (now - ffmpegLastSample.at) / 1000;
-				if (dt > 0.05) ffmpegSpeed.value = `${formatSize((bytes - ffmpegLastSample.bytes) / dt)}/s`;
+				if (dt > 0.05)
+					ffmpegSpeed.value = `${formatSize((bytes - ffmpegLastSample.bytes) / dt)}/s`;
 			}
 			ffmpegLastSample = { bytes, at: now };
 			ffmpegProgress.value = p;
@@ -365,8 +379,8 @@ function applyFfmpegProgress(p: FfmpegProgressPayload) {
 			// 安装落地后才把所选来源写入配置（失败路径不会留下 tools 首选项）
 			// Persist the selected source only now that the install landed —
 			// failed paths never leave a tools preference behind
-			void persistFfmpegChoice();
-			void probeFfmpeg();
+			void persistFFmpegChoice();
+			void probeFFmpeg();
 			break;
 		case "idle":
 			ffmpegProgress.value = null;
@@ -379,11 +393,11 @@ function applyFfmpegProgress(p: FfmpegProgressPayload) {
  * Fetch the current progress to restore an in-flight install display (page
  * refresh mid-download).
  */
-async function restoreFfmpegStatus() {
+async function restoreFFmpegStatus() {
 	try {
-		const cur = await call<FfmpegProgressPayload>("get_ffmpeg_status");
+		const cur = await call<FFmpegProgressPayload>("get_ffmpeg_status");
 		if (cur.state === "downloading" || cur.state === "installing") {
-			applyFfmpegProgress(cur);
+			applyFFmpegProgress(cur);
 		}
 	} catch {
 		// 状态接口失败忽略：等下一个 SSE 事件 / Ignore: wait for the next SSE event
@@ -423,15 +437,15 @@ onMounted(async () => {
 	// Probe FFmpeg locations (for the Step 4 cards); subscribe to install-kind
 	// progress events: downloading/installing render an inline bar, `done`
 	// re-probes so the tools card turns complete
-	void probeFfmpeg();
-	void restoreFfmpegStatus();
-	unlistenFfmpegProgress = await on("ffmpeg-progress", (payload) =>
-		applyFfmpegProgress(payload as FfmpegProgressPayload),
+	void probeFFmpeg();
+	void restoreFFmpegStatus();
+	unlistenFFmpegProgress = await on("ffmpeg-progress", (payload) =>
+		applyFFmpegProgress(payload as FFmpegProgressPayload),
 	);
 });
 
 onUnmounted(() => {
-	unlistenFfmpegProgress?.();
+	unlistenFFmpegProgress?.();
 });
 
 // ── 目录浏览器 / Directory browser ───────────────────────────────────────────
@@ -462,12 +476,12 @@ async function setLanguage(lang: string) {
 }
 
 // 选择来源即持久化——但仅限组件齐全的位置：tools 缺件时等安装落地
-// （persistFfmpegChoice 在 done 分支负责），失败路径不留 tools 首选项。
+// （persistFFmpegChoice 在 done 分支负责），失败路径不留 tools 首选项。
 // Persist the source choice on select — only when the location is complete:
-// incomplete tools waits for the install to land (persistFfmpegChoice runs on
+// incomplete tools waits for the install to land (persistFFmpegChoice runs on
 // `done`), so failed paths never leave a tools preference behind.
 watch(ffmpegSelected, (v) => {
-	if (v !== "" && ffmpegSelectedComplete.value) void persistFfmpegChoice();
+	if (v !== "" && ffmpegSelectedComplete.value) void persistFFmpegChoice();
 });
 
 // ── 步骤校验 / Step validation ───────────────────────────────────────────────
@@ -496,7 +510,7 @@ async function next() {
 		step.value++;
 		// 进入 FFmpeg 步骤时刷新探测（用户可能刚装好组件）/ Refresh the probe
 		// when entering the FFmpeg step (components may have been installed since)
-		if (step.value === FFMPEG_STEP) void probeFfmpeg();
+		if (step.value === FFMPEG_STEP) void probeFFmpeg();
 	}
 }
 
@@ -544,7 +558,8 @@ async function finish() {
 					ech_enabled: echEnabled.value,
 					// FFmpeg 来源选择（Step 4）；自动更新随首选项联动：PATH 关、tools 开 /
 					// FFmpeg source choice (Step 4); auto-update follows it: off for PATH, on for tools
-					ffmpeg_preference: ffmpegSelected.value === "" ? null : Number(ffmpegSelected.value),
+					ffmpeg_preference:
+						ffmpegSelected.value === "" ? null : Number(ffmpegSelected.value),
 					ffmpeg_auto_update: ffmpegSelected.value === "1",
 					setup_done: true,
 				});
@@ -568,8 +583,9 @@ async function finish() {
 		area scrolls internally while the error line and nav buttons stay
 		pinned at the bottom — tall steps can no longer push them off-screen -->
 	<div class="flex h-dvh justify-center overflow-hidden bg-background p-6">
-		<div class="m-auto flex h-[min(780px,100%)] w-full max-w-4xl flex-col gap-10 lg:flex-row lg:gap-14">
-
+		<div
+			class="m-auto flex h-[min(780px,100%)] w-full max-w-4xl flex-col gap-10 lg:flex-row lg:gap-14"
+		>
 			<!-- 左栏：品牌、标题与纵向步骤指示 / Left column: brand, title and vertical step indicator -->
 			<div class="flex shrink-0 flex-col gap-8 lg:w-60">
 				<div class="flex flex-col gap-1.5">
@@ -595,7 +611,14 @@ async function finish() {
 											: 'bg-muted text-muted-foreground'
 								"
 							>
-								<svg v-if="i < step" class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+								<svg
+									v-if="i < step"
+									class="w-3.5 h-3.5"
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="3"
+								>
 									<polyline points="20 6 9 17 4 12" />
 								</svg>
 								<span v-else>{{ i }}</span>
@@ -624,8 +647,7 @@ async function finish() {
 
 			<!-- 右栏：步骤内容、错误提示与导航按钮 / Right column: step content, error and navigation -->
 			<div class="flex-1 flex flex-col gap-6 min-w-0 min-h-0">
-
-			<!-- 步骤内容（带方向感知的滑动过渡）：高度被外层卡片固定，内容
+				<!-- 步骤内容（带方向感知的滑动过渡）：高度被外层卡片固定，内容
 				超高时内部纵向滚动，导航按钮始终可见；scrollbar-gutter 预留
 				滚动条槽位避免切换步骤时横向跳动；x 向隐藏防止滑动过渡露边 /
 				Step content (directional slide transition): bounded by the
@@ -633,338 +655,585 @@ async function finish() {
 				nav buttons stay visible; scrollbar-gutter reserves the scrollbar
 				lane to avoid width jitter between steps; x is hidden so the
 				slide transition never bleeds -->
-			<div ref="stepScrollEl" class="min-h-0 flex-1 overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable] scrollbar-overlay">
-				<Transition :name="stepTransition" mode="out-in">
-					<div :key="step" class="flex flex-col gap-6">
-
-						<!-- Step 1: 语言 / Language -->
-						<template v-if="step === 1">
-							<div class="flex flex-col gap-1.5">
-								<h2 class="text-base font-semibold">{{ t("setup.step1.title") }}</h2>
-								<p class="text-sm text-muted-foreground">{{ t("setup.step1.desc") }}</p>
-							</div>
-							<RadioGroup
-								:model-value="language"
-								class="flex flex-col gap-3"
-								@update:model-value="(v) => v && setLanguage(String(v))"
-							>
-								<label
-									v-for="loc in localesStore.locales"
-									:key="loc.code"
-									class="flex items-center gap-3 rounded-lg border p-4 cursor-pointer transition-colors"
-									:class="language === loc.code ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50'"
+				<div
+					ref="stepScrollEl"
+					class="min-h-0 flex-1 overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable] scrollbar-overlay"
+				>
+					<Transition :name="stepTransition" mode="out-in">
+						<div :key="step" class="flex flex-col gap-6">
+							<!-- Step 1: 语言 / Language -->
+							<template v-if="step === 1">
+								<div class="flex flex-col gap-1.5">
+									<h2 class="text-base font-semibold">
+										{{ t("setup.step1.title") }}
+									</h2>
+									<p class="text-sm text-muted-foreground">
+										{{ t("setup.step1.desc") }}
+									</p>
+								</div>
+								<RadioGroup
+									:model-value="language"
+									class="flex flex-col gap-3"
+									@update:model-value="(v) => v && setLanguage(String(v))"
 								>
-									<RadioGroupItem :value="loc.code" />
-									<span class="font-medium">{{ loc.name }}</span>
-								</label>
-							</RadioGroup>
-						</template>
-
-						<!-- Step 2: 输出目录 / Output directory -->
-						<template v-if="step === 2">
-							<div class="flex flex-col gap-1.5">
-								<h2 class="text-base font-semibold">{{ t("setup.step2.title") }}</h2>
-								<p class="text-sm text-muted-foreground">{{ t("setup.step2.desc") }}</p>
-							</div>
-							<div class="flex flex-col gap-2">
-								<Label>{{ t("settings.outputDir.label") }}</Label>
-								<div class="flex items-center gap-1.5">
-									<Input
-										v-model="outputDir"
-										:placeholder="t('setup.step2.placeholder')"
-										autocomplete="off"
-										autofocus
-										class="flex-1"
-										@keyup.enter="persistDraft"
-										@blur="persistDraft"
-									/>
-									<Button
-										type="button"
-										variant="outline"
-										size="icon"
-										:title="t('settings.outputDir.pick')"
-										@click="browseOutputDir"
+									<label
+										v-for="loc in localesStore.locales"
+										:key="loc.code"
+										class="flex items-center gap-3 rounded-lg border p-4 cursor-pointer transition-colors"
+										:class="
+											language === loc.code
+												? 'border-primary bg-primary/5'
+												: 'border-border hover:border-primary/50'
+										"
 									>
-										<FolderOpen class="size-4" />
-									</Button>
-								</div>
-								<p class="text-xs text-muted-foreground">{{ t("setup.step2.hint") }}</p>
-							</div>
-						</template>
+										<RadioGroupItem :value="loc.code" />
+										<span class="font-medium">{{ loc.name }}</span>
+									</label>
+								</RadioGroup>
+							</template>
 
-						<!-- Step 3: 网络代理（可选）/ Network proxies (optional) -->
-						<template v-if="step === 3">
-							<div class="flex flex-col gap-1.5">
-								<h2 class="text-base font-semibold">{{ t("setup.step3.title") }}</h2>
-								<p class="text-sm text-muted-foreground">{{ t("setup.step3.desc") }}</p>
-							</div>
-							<div class="flex flex-col gap-4">
+							<!-- Step 2: 输出目录 / Output directory -->
+							<template v-if="step === 2">
 								<div class="flex flex-col gap-1.5">
-									<Label>{{ t("settings.apiProxy.label") }}</Label>
-									<SchemeUrlInput v-model="apiProxy" kind="proxy" :placeholder="t('settings.apiProxy.placeholder')" @commit="persistDraft" />
+									<h2 class="text-base font-semibold">
+										{{ t("setup.step2.title") }}
+									</h2>
+									<p class="text-sm text-muted-foreground">
+										{{ t("setup.step2.desc") }}
+									</p>
 								</div>
-								<div class="flex flex-col gap-1.5">
-									<Label>{{ t("settings.scMirror.label") }}</Label>
+								<div class="flex flex-col gap-2">
+									<Label>{{ t("settings.outputDir.label") }}</Label>
 									<div class="flex items-center gap-1.5">
-										<Select
-											:model-value="scMirrorScheme"
-											@update:model-value="(v) => { if (v) { scMirrorScheme = String(v); void persistDraft(); } }"
+										<Input
+											v-model="outputDir"
+											:placeholder="t('setup.step2.placeholder')"
+											autocomplete="off"
+											autofocus
+											class="flex-1"
+											@keyup.enter="persistDraft"
+											@blur="persistDraft"
+										/>
+										<Button
+											type="button"
+											variant="outline"
+											size="icon"
+											:title="t('settings.outputDir.pick')"
+											@click="browseOutputDir"
 										>
-											<SelectTrigger class="w-28 shrink-0"><SelectValue /></SelectTrigger>
-											<SelectContent>
-												<SelectItem value="https">https</SelectItem>
-												<SelectItem value="http">http</SelectItem>
-											</SelectContent>
-										</Select>
-										<Input v-model="scMirror" :placeholder="t('settings.scMirror.placeholder')" autocomplete="off" class="flex-1" @keyup.enter="persistDraft" @blur="persistDraft" />
+											<FolderOpen class="size-4" />
+										</Button>
 									</div>
+									<p class="text-xs text-muted-foreground">
+										{{ t("setup.step2.hint") }}
+									</p>
 								</div>
+							</template>
+
+							<!-- Step 3: 网络代理（可选）/ Network proxies (optional) -->
+							<template v-if="step === 3">
 								<div class="flex flex-col gap-1.5">
-									<Label>{{ t("settings.scBrowseProxy.label") }}</Label>
-									<SchemeUrlInput v-model="scBrowseProxy" kind="proxy" :placeholder="t('settings.scBrowseProxy.placeholder')" @commit="persistDraft" />
-									<p class="text-xs text-muted-foreground">{{ t("settings.scBrowseProxy.hint") }}</p>
+									<h2 class="text-base font-semibold">
+										{{ t("setup.step3.title") }}
+									</h2>
+									<p class="text-sm text-muted-foreground">
+										{{ t("setup.step3.desc") }}
+									</p>
 								</div>
-								<div class="flex flex-col gap-1.5">
-									<Label>{{ t("settings.scBrowseMirror.label") }}</Label>
-									<SchemeUrlInput v-model="scBrowseMirror" kind="mirror" :placeholder="t('settings.scBrowseMirror.placeholder')" @commit="persistDraft" />
-									<p class="text-xs text-muted-foreground">{{ t("settings.scBrowseMirror.hint") }}</p>
-								</div>
-								<div class="flex flex-col gap-1.5">
-									<Label>{{ t("settings.cdnProxy.label") }}</Label>
-									<SchemeUrlInput v-model="cdnProxy" kind="proxy" :placeholder="t('settings.cdnProxy.placeholder')" @commit="persistDraft" />
-								</div>
-								<div class="flex flex-col gap-1.5">
-									<Label>{{ t("settings.communityProxy.label") }}</Label>
-									<SchemeUrlInput v-model="communityProxy" kind="proxy" :placeholder="t('settings.communityProxy.placeholder')" @commit="persistDraft" />
-								</div>
-								<div class="flex flex-col gap-1.5">
-									<Label>{{ t("settings.communityMirror.label") }}</Label>
-									<SchemeUrlInput v-model="communityMirror" kind="mirror" :placeholder="t('settings.communityMirror.placeholder')" @commit="persistDraft" />
-									<p class="text-xs text-muted-foreground">{{ t("settings.communityMirror.hint") }}</p>
-								</div>
-								<div class="flex flex-col gap-1.5">
-									<Label>{{ t("settings.cgfProxy.label") }}</Label>
-									<SchemeUrlInput v-model="cgfProxy" kind="proxy" :placeholder="t('settings.cgfProxy.placeholder')" @commit="persistDraft" />
-									<p class="text-xs text-muted-foreground">{{ t("settings.cgfProxy.hint") }}</p>
-								</div>
-								<!-- ECH 全局开关：立即落盘，浏览页/录制的 SC API 请求统一生效 /
+								<div class="flex flex-col gap-4">
+									<div class="flex flex-col gap-1.5">
+										<Label>{{ t("settings.apiProxy.label") }}</Label>
+										<SchemeUrlInput
+											v-model="apiProxy"
+											kind="proxy"
+											:placeholder="t('settings.apiProxy.placeholder')"
+											@commit="persistDraft"
+										/>
+									</div>
+									<div class="flex flex-col gap-1.5">
+										<Label>{{ t("settings.scMirror.label") }}</Label>
+										<div class="flex items-center gap-1.5">
+											<Select
+												:model-value="scMirrorScheme"
+												@update:model-value="
+													(v) => {
+														if (v) {
+															scMirrorScheme = String(v);
+															void persistDraft();
+														}
+													}
+												"
+											>
+												<SelectTrigger class="w-28 shrink-0"
+													><SelectValue
+												/></SelectTrigger>
+												<SelectContent>
+													<SelectItem value="https">https</SelectItem>
+													<SelectItem value="http">http</SelectItem>
+												</SelectContent>
+											</Select>
+											<Input
+												v-model="scMirror"
+												:placeholder="t('settings.scMirror.placeholder')"
+												autocomplete="off"
+												class="flex-1"
+												@keyup.enter="persistDraft"
+												@blur="persistDraft"
+											/>
+										</div>
+									</div>
+									<div class="flex flex-col gap-1.5">
+										<Label>{{ t("settings.scBrowseProxy.label") }}</Label>
+										<SchemeUrlInput
+											v-model="scBrowseProxy"
+											kind="proxy"
+											:placeholder="t('settings.scBrowseProxy.placeholder')"
+											@commit="persistDraft"
+										/>
+										<p class="text-xs text-muted-foreground">
+											{{ t("settings.scBrowseProxy.hint") }}
+										</p>
+									</div>
+									<div class="flex flex-col gap-1.5">
+										<Label>{{ t("settings.scBrowseMirror.label") }}</Label>
+										<SchemeUrlInput
+											v-model="scBrowseMirror"
+											kind="mirror"
+											:placeholder="t('settings.scBrowseMirror.placeholder')"
+											@commit="persistDraft"
+										/>
+										<p class="text-xs text-muted-foreground">
+											{{ t("settings.scBrowseMirror.hint") }}
+										</p>
+									</div>
+									<div class="flex flex-col gap-1.5">
+										<Label>{{ t("settings.cdnProxy.label") }}</Label>
+										<SchemeUrlInput
+											v-model="cdnProxy"
+											kind="proxy"
+											:placeholder="t('settings.cdnProxy.placeholder')"
+											@commit="persistDraft"
+										/>
+									</div>
+									<div class="flex flex-col gap-1.5">
+										<Label>{{ t("settings.communityProxy.label") }}</Label>
+										<SchemeUrlInput
+											v-model="communityProxy"
+											kind="proxy"
+											:placeholder="t('settings.communityProxy.placeholder')"
+											@commit="persistDraft"
+										/>
+									</div>
+									<div class="flex flex-col gap-1.5">
+										<Label>{{ t("settings.communityMirror.label") }}</Label>
+										<SchemeUrlInput
+											v-model="communityMirror"
+											kind="mirror"
+											:placeholder="t('settings.communityMirror.placeholder')"
+											@commit="persistDraft"
+										/>
+										<p class="text-xs text-muted-foreground">
+											{{ t("settings.communityMirror.hint") }}
+										</p>
+									</div>
+									<div class="flex flex-col gap-1.5">
+										<Label>{{ t("settings.cgfProxy.label") }}</Label>
+										<SchemeUrlInput
+											v-model="cgfProxy"
+											kind="proxy"
+											:placeholder="t('settings.cgfProxy.placeholder')"
+											@commit="persistDraft"
+										/>
+										<p class="text-xs text-muted-foreground">
+											{{ t("settings.cgfProxy.hint") }}
+										</p>
+									</div>
+									<!-- ECH 全局开关：立即落盘，浏览页/录制的 SC API 请求统一生效 /
 									Global ECH switch: persisted immediately, applies to both browse-page
 									and recording SC API requests -->
-								<div class="flex items-center justify-between gap-4">
-									<div class="flex min-w-0 flex-col gap-0.5">
-										<Label for="setup-ech-enabled" class="cursor-pointer">{{ t("settings.echEnabled.label") }}</Label>
-										<p class="text-xs text-muted-foreground">{{ t("settings.echEnabled.hint") }}</p>
+									<div class="flex items-center justify-between gap-4">
+										<div class="flex min-w-0 flex-col gap-0.5">
+											<Label for="setup-ech-enabled" class="cursor-pointer">{{
+												t("settings.echEnabled.label")
+											}}</Label>
+											<p class="text-xs text-muted-foreground">
+												{{ t("settings.echEnabled.hint") }}
+											</p>
+										</div>
+										<Switch
+											id="setup-ech-enabled"
+											class="shrink-0"
+											:model-value="echEnabled"
+											@update:model-value="
+												(v) => {
+													echEnabled = !!v;
+													void persistDraft();
+												}
+											"
+										/>
 									</div>
-									<Switch
-										id="setup-ech-enabled"
-										class="shrink-0"
-										:model-value="echEnabled"
-										@update:model-value="(v) => { echEnabled = !!v; void persistDraft(); }"
-									/>
 								</div>
-							</div>
-						</template>
+							</template>
 
-						<!-- Step 4: FFmpeg 检查（与首选项向导同源逻辑：探测两个位置、选择来源、
+							<!-- Step 4: FFmpeg 检查（与首选项向导同源逻辑：探测两个位置、选择来源、
 							tools 不齐可触发下载）/ FFmpeg check (same logic as the preference
 							wizard: probe both locations, pick a source, download when tools
 							is incomplete) -->
-						<template v-if="step === 4">
-							<div class="flex flex-col gap-1.5">
-								<h2 class="text-base font-semibold">{{ t("setup.step4.title") }}</h2>
-								<p class="text-sm text-muted-foreground">{{ t("setup.step4.desc") }}</p>
-							</div>
+							<template v-if="step === 4">
+								<div class="flex flex-col gap-1.5">
+									<h2 class="text-base font-semibold">
+										{{ t("setup.step4.title") }}
+									</h2>
+									<p class="text-sm text-muted-foreground">
+										{{ t("setup.step4.desc") }}
+									</p>
+								</div>
 
-							<!-- 探测区：三态（检测中/失败/结果）同高占位，切换不跳变 / Probe area:
+								<!-- 探测区：三态（检测中/失败/结果）同高占位，切换不跳变 / Probe area:
 								the three states share a reserved height so switching never jumps -->
-							<div class="flex min-h-[230px] flex-col justify-center">
-								<div v-if="ffmpegChecking && !ffmpegLocations" class="flex items-center justify-center gap-2 py-4 text-sm text-muted-foreground">
-									<Loader2 class="size-4 animate-spin" />
-									{{ t("ffmpeg.preferenceWizard.checking") }}
-								</div>
-								<div v-else-if="ffmpegCheckFailed && !ffmpegLocations" class="flex flex-col items-center gap-3 py-4">
-									<p class="text-sm text-destructive">{{ t("ffmpeg.preferenceWizard.checkFailed") }}</p>
-									<Button variant="ghost" size="sm" @click="probeFfmpeg">
-										<RefreshCw class="size-3.5" />
-										{{ t("ffmpeg.preferenceWizard.retry") }}
-									</Button>
-								</div>
-								<div v-else-if="ffmpegLocations" class="flex flex-col gap-2" role="radiogroup" :aria-label="t('setup.step4.title')">
-									<!-- 系统环境变量 / System PATH -->
+								<div class="flex min-h-[230px] flex-col justify-center">
 									<div
-										role="radio"
-										tabindex="0"
-										:aria-checked="ffmpegSelected === '0'"
-										class="cursor-pointer rounded-lg border px-3 py-2.5 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/60"
-										:class="ffmpegSelected === '0' ? 'border-primary ring-1 ring-primary' : 'hover:border-muted-foreground/50'"
-										@click="ffmpegSelected = '0'"
-										@keydown.enter.prevent="ffmpegSelected = '0'"
-										@keydown.space.prevent="ffmpegSelected = '0'"
+										v-if="ffmpegChecking && !ffmpegLocations"
+										class="flex items-center justify-center gap-2 py-4 text-sm text-muted-foreground"
 									>
-										<p class="min-w-0 text-sm font-medium">
-											{{ t("ffmpeg.preferenceWizard.systemPath") }}
-											<span v-if="ffmpegSystemDir" class="ml-1 break-all text-xs font-normal text-muted-foreground">（{{ ffmpegSystemDir }}）</span>
+										<Loader2 class="size-4 animate-spin" />
+										{{ t("ffmpeg.preferenceWizard.checking") }}
+									</div>
+									<div
+										v-else-if="ffmpegCheckFailed && !ffmpegLocations"
+										class="flex flex-col items-center gap-3 py-4"
+									>
+										<p class="text-sm text-destructive">
+											{{ t("ffmpeg.preferenceWizard.checkFailed") }}
 										</p>
-										<div class="mt-1.5 flex items-center gap-1.5 text-xs text-muted-foreground">
-											<span class="font-mono">ffmpeg</span>
-											<span v-if="ffmpegLocations.system.ffmpeg_version" class="font-mono text-foreground/80">{{ ffmpegLocations.system.ffmpeg_version }}</span>
-											<Check v-if="ffmpegLocations.system.ffmpeg" class="size-3.5 shrink-0 text-green-500" />
-											<X v-else class="size-3.5 shrink-0 text-destructive" />
+										<Button variant="ghost" size="sm" @click="probeFFmpeg">
+											<RefreshCw class="size-3.5" />
+											{{ t("ffmpeg.preferenceWizard.retry") }}
+										</Button>
+									</div>
+									<div
+										v-else-if="ffmpegLocations"
+										class="flex flex-col gap-2"
+										role="radiogroup"
+										:aria-label="t('setup.step4.title')"
+									>
+										<!-- 系统环境变量 / System PATH -->
+										<div
+											role="radio"
+											tabindex="0"
+											:aria-checked="ffmpegSelected === '0'"
+											class="cursor-pointer rounded-lg border px-3 py-2.5 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/60"
+											:class="
+												ffmpegSelected === '0'
+													? 'border-primary ring-1 ring-primary'
+													: 'hover:border-muted-foreground/50'
+											"
+											@click="ffmpegSelected = '0'"
+											@keydown.enter.prevent="ffmpegSelected = '0'"
+											@keydown.space.prevent="ffmpegSelected = '0'"
+										>
+											<p class="min-w-0 text-sm font-medium">
+												{{ t("ffmpeg.preferenceWizard.systemPath") }}
+												<span
+													v-if="ffmpegSystemDir"
+													class="ml-1 break-all text-xs font-normal text-muted-foreground"
+													>（{{ ffmpegSystemDir }}）</span
+												>
+											</p>
+											<div
+												class="mt-1.5 flex items-center gap-1.5 text-xs text-muted-foreground"
+											>
+												<span class="font-mono">ffmpeg</span>
+												<span
+													v-if="ffmpegLocations.system.ffmpeg_version"
+													class="font-mono text-foreground/80"
+													>{{
+														ffmpegLocations.system.ffmpeg_version
+													}}</span
+												>
+												<Check
+													v-if="ffmpegLocations.system.ffmpeg"
+													class="size-3.5 shrink-0 text-green-500"
+												/>
+												<X
+													v-else
+													class="size-3.5 shrink-0 text-destructive"
+												/>
+											</div>
+											<div
+												class="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground"
+											>
+												<span class="font-mono">ffprobe</span>
+												<span
+													v-if="ffmpegLocations.system.ffprobe_version"
+													class="font-mono text-foreground/80"
+													>{{
+														ffmpegLocations.system.ffprobe_version
+													}}</span
+												>
+												<Check
+													v-if="ffmpegLocations.system.ffprobe"
+													class="size-3.5 shrink-0 text-green-500"
+												/>
+												<X
+													v-else
+													class="size-3.5 shrink-0 text-destructive"
+												/>
+											</div>
+											<div
+												class="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground"
+											>
+												<span class="font-mono">ffplay</span>
+												<span
+													v-if="ffmpegLocations.system.ffplay_version"
+													class="font-mono text-foreground/80"
+													>{{
+														ffmpegLocations.system.ffplay_version
+													}}</span
+												>
+												<Check
+													v-if="ffmpegLocations.system.ffplay"
+													class="size-3.5 shrink-0 text-green-500"
+												/>
+												<X
+													v-else
+													class="size-3.5 shrink-0 text-destructive"
+												/>
+											</div>
+											<div
+												class="mt-1.5 flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-500"
+											>
+												<Info class="size-3.5 shrink-0" />
+												{{
+													t(
+														"settings.ffmpegPreference.systemNoAutoUpdate",
+													)
+												}}
+											</div>
 										</div>
-										<div class="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
-											<span class="font-mono">ffprobe</span>
-											<span v-if="ffmpegLocations.system.ffprobe_version" class="font-mono text-foreground/80">{{ ffmpegLocations.system.ffprobe_version }}</span>
-											<Check v-if="ffmpegLocations.system.ffprobe" class="size-3.5 shrink-0 text-green-500" />
-											<X v-else class="size-3.5 shrink-0 text-destructive" />
-										</div>
-										<div class="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
-											<span class="font-mono">ffplay</span>
-											<span v-if="ffmpegLocations.system.ffplay_version" class="font-mono text-foreground/80">{{ ffmpegLocations.system.ffplay_version }}</span>
-											<Check v-if="ffmpegLocations.system.ffplay" class="size-3.5 shrink-0 text-green-500" />
-											<X v-else class="size-3.5 shrink-0 text-destructive" />
-										</div>
-										<div class="mt-1.5 flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-500">
-											<Info class="size-3.5 shrink-0" />
-											{{ t("settings.ffmpegPreference.systemNoAutoUpdate") }}
+
+										<!-- tools 文件夹 / tools folder -->
+										<div
+											role="radio"
+											tabindex="0"
+											:aria-checked="ffmpegSelected === '1'"
+											class="cursor-pointer rounded-lg border px-3 py-2.5 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/60"
+											:class="
+												ffmpegSelected === '1'
+													? 'border-primary ring-1 ring-primary'
+													: 'hover:border-muted-foreground/50'
+											"
+											@click="ffmpegSelected = '1'"
+											@keydown.enter.prevent="ffmpegSelected = '1'"
+											@keydown.space.prevent="ffmpegSelected = '1'"
+										>
+											<p class="min-w-0 text-sm font-medium">
+												{{ t("ffmpeg.preferenceWizard.toolsDir") }}
+												<span
+													class="ml-1 break-all text-xs font-normal text-muted-foreground"
+													>（{{ ffmpegLocations.tools_dir }}）</span
+												>
+											</p>
+											<div
+												class="mt-1.5 flex items-center gap-1.5 text-xs text-muted-foreground"
+											>
+												<span class="font-mono">ffmpeg</span>
+												<span
+													v-if="ffmpegLocations.tools.ffmpeg_version"
+													class="font-mono text-foreground/80"
+													>{{
+														ffmpegLocations.tools.ffmpeg_version
+													}}</span
+												>
+												<Check
+													v-if="ffmpegLocations.tools.ffmpeg"
+													class="size-3.5 shrink-0 text-green-500"
+												/>
+												<X
+													v-else
+													class="size-3.5 shrink-0 text-destructive"
+												/>
+											</div>
+											<div
+												class="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground"
+											>
+												<span class="font-mono">ffprobe</span>
+												<span
+													v-if="ffmpegLocations.tools.ffprobe_version"
+													class="font-mono text-foreground/80"
+													>{{
+														ffmpegLocations.tools.ffprobe_version
+													}}</span
+												>
+												<Check
+													v-if="ffmpegLocations.tools.ffprobe"
+													class="size-3.5 shrink-0 text-green-500"
+												/>
+												<X
+													v-else
+													class="size-3.5 shrink-0 text-destructive"
+												/>
+											</div>
+											<div
+												class="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground"
+											>
+												<span class="font-mono">ffplay</span>
+												<span
+													v-if="ffmpegLocations.tools.ffplay_version"
+													class="font-mono text-foreground/80"
+													>{{
+														ffmpegLocations.tools.ffplay_version
+													}}</span
+												>
+												<Check
+													v-if="ffmpegLocations.tools.ffplay"
+													class="size-3.5 shrink-0 text-green-500"
+												/>
+												<X
+													v-else
+													class="size-3.5 shrink-0 text-destructive"
+												/>
+											</div>
+											<div
+												class="mt-1.5 flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-500"
+											>
+												<Info class="size-3.5 shrink-0" />
+												{{ t("ffmpeg.preferenceWizard.toolsRecommended") }}
+											</div>
 										</div>
 									</div>
-
-									<!-- tools 文件夹 / tools folder -->
-									<div
-										role="radio"
-										tabindex="0"
-										:aria-checked="ffmpegSelected === '1'"
-										class="cursor-pointer rounded-lg border px-3 py-2.5 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/60"
-										:class="ffmpegSelected === '1' ? 'border-primary ring-1 ring-primary' : 'hover:border-muted-foreground/50'"
-										@click="ffmpegSelected = '1'"
-										@keydown.enter.prevent="ffmpegSelected = '1'"
-										@keydown.space.prevent="ffmpegSelected = '1'"
-									>
-										<p class="min-w-0 text-sm font-medium">
-											{{ t("ffmpeg.preferenceWizard.toolsDir") }}
-											<span class="ml-1 break-all text-xs font-normal text-muted-foreground">（{{ ffmpegLocations.tools_dir }}）</span>
-										</p>
-										<div class="mt-1.5 flex items-center gap-1.5 text-xs text-muted-foreground">
-											<span class="font-mono">ffmpeg</span>
-											<span v-if="ffmpegLocations.tools.ffmpeg_version" class="font-mono text-foreground/80">{{ ffmpegLocations.tools.ffmpeg_version }}</span>
-											<Check v-if="ffmpegLocations.tools.ffmpeg" class="size-3.5 shrink-0 text-green-500" />
-											<X v-else class="size-3.5 shrink-0 text-destructive" />
-										</div>
-										<div class="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
-											<span class="font-mono">ffprobe</span>
-											<span v-if="ffmpegLocations.tools.ffprobe_version" class="font-mono text-foreground/80">{{ ffmpegLocations.tools.ffprobe_version }}</span>
-											<Check v-if="ffmpegLocations.tools.ffprobe" class="size-3.5 shrink-0 text-green-500" />
-											<X v-else class="size-3.5 shrink-0 text-destructive" />
-										</div>
-										<div class="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
-											<span class="font-mono">ffplay</span>
-											<span v-if="ffmpegLocations.tools.ffplay_version" class="font-mono text-foreground/80">{{ ffmpegLocations.tools.ffplay_version }}</span>
-											<Check v-if="ffmpegLocations.tools.ffplay" class="size-3.5 shrink-0 text-green-500" />
-											<X v-else class="size-3.5 shrink-0 text-destructive" />
-										</div>
-										<div class="mt-1.5 flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-500">
-											<Info class="size-3.5 shrink-0" />
-											{{ t("ffmpeg.preferenceWizard.toolsRecommended") }}
-										</div>
-									</div>
 								</div>
-							</div>
 
-							<!-- 所选位置不完整时的提示（invisible 常驻占位避免布局跳动）/ Hint for
+								<!-- 所选位置不完整时的提示（invisible 常驻占位避免布局跳动）/ Hint for
 								an incomplete selection (always rendered so the layout doesn't jump) -->
-							<p
-								class="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-500"
-								:class="ffmpegSelected && !ffmpegSelectedComplete ? '' : 'invisible'"
-								:aria-hidden="!(ffmpegSelected && !ffmpegSelectedComplete)"
-							>
-								<AlertCircle class="size-3.5 shrink-0" />
-								{{ t("ffmpeg.preferenceWizard.incompleteSelection") }}
-							</p>
+								<p
+									class="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-500"
+									:class="
+										ffmpegSelected && !ffmpegSelectedComplete ? '' : 'invisible'
+									"
+									:aria-hidden="!(ffmpegSelected && !ffmpegSelectedComplete)"
+								>
+									<AlertCircle class="size-3.5 shrink-0" />
+									{{ t("ffmpeg.preferenceWizard.incompleteSelection") }}
+								</p>
 
-							<!-- 下载/安装进度：setup 期间内联显示（全局强制窗口被抑制）/
+								<!-- 下载/安装进度：setup 期间内联显示（全局强制窗口被抑制）/
 								Download/install progress: rendered inline during setup
 								(the global forced window is suppressed) -->
-							<div v-if="ffmpegProgress" class="flex flex-col gap-3">
-								<template v-if="ffmpegProgress.state === 'downloading'">
-									<div class="flex items-center gap-2 text-sm">
-										<Loader2 class="size-4 animate-spin text-primary" />
-										{{ t("ffmpeg.downloading") }}
-									</div>
-									<div class="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+								<div v-if="ffmpegProgress" class="flex flex-col gap-3">
+									<template v-if="ffmpegProgress.state === 'downloading'">
+										<div class="flex items-center gap-2 text-sm">
+											<Loader2 class="size-4 animate-spin text-primary" />
+											{{ t("ffmpeg.downloading") }}
+										</div>
 										<div
-											class="h-full bg-primary transition-all"
-											:class="ffmpegDownloadBar.indeterminate ? 'w-1/3 animate-pulse' : ''"
-											:style="ffmpegDownloadBar.indeterminate ? undefined : { width: `${ffmpegDownloadBar.pct}%` }"
-										/>
-									</div>
-									<p class="flex min-h-4 items-baseline justify-between text-xs tabular-nums text-muted-foreground">
-										<span>{{ ffmpegDownloadBar.size }}{{ ffmpegSpeed ? " · " + ffmpegSpeed : "" }}</span>
-										<span>{{ ffmpegDownloadBar.pctText }}</span>
-									</p>
-								</template>
-								<template v-else-if="ffmpegProgress.state === 'installing'">
-									<div class="flex items-center gap-2 text-sm">
-										<Loader2 class="size-4 animate-spin text-primary" />
-										{{ t("ffmpeg.installing") }}
-									</div>
-									<div class="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+											class="h-1.5 w-full overflow-hidden rounded-full bg-muted"
+										>
+											<div
+												class="h-full bg-primary transition-all"
+												:class="
+													ffmpegDownloadBar.indeterminate
+														? 'w-1/3 animate-pulse'
+														: ''
+												"
+												:style="
+													ffmpegDownloadBar.indeterminate
+														? undefined
+														: { width: `${ffmpegDownloadBar.pct}%` }
+												"
+											/>
+										</div>
+										<p
+											class="flex min-h-4 items-baseline justify-between text-xs tabular-nums text-muted-foreground"
+										>
+											<span
+												>{{ ffmpegDownloadBar.size
+												}}{{ ffmpegSpeed ? " · " + ffmpegSpeed : "" }}</span
+											>
+											<span>{{ ffmpegDownloadBar.pctText }}</span>
+										</p>
+									</template>
+									<template v-else-if="ffmpegProgress.state === 'installing'">
+										<div class="flex items-center gap-2 text-sm">
+											<Loader2 class="size-4 animate-spin text-primary" />
+											{{ t("ffmpeg.installing") }}
+										</div>
 										<div
-											class="h-full bg-primary transition-all"
-											:style="{ width: `${ffmpegProgress.pct ?? 0}%` }"
-										/>
-									</div>
-									<p class="flex min-h-4 items-baseline justify-end text-xs tabular-nums text-muted-foreground">
-										<span>{{ ffmpegProgress.pct != null ? `${ffmpegProgress.pct}%` : "" }}</span>
-									</p>
-								</template>
-								<template v-else-if="ffmpegProgress.state === 'error'">
-									<div class="flex items-center gap-2 text-sm text-destructive">
-										<AlertCircle class="size-4 shrink-0" />
-										{{ t("ffmpeg.downloadDialog.failed") }}
-									</div>
-									<p v-if="ffmpegProgress.message" class="max-h-24 overflow-y-auto break-all text-xs text-muted-foreground">
-										{{ ffmpegProgress.message }}
-									</p>
-								</template>
-							</div>
-						</template>
+											class="h-1.5 w-full overflow-hidden rounded-full bg-muted"
+										>
+											<div
+												class="h-full bg-primary transition-all"
+												:style="{ width: `${ffmpegProgress.pct ?? 0}%` }"
+											/>
+										</div>
+										<p
+											class="flex min-h-4 items-baseline justify-end text-xs tabular-nums text-muted-foreground"
+										>
+											<span>{{
+												ffmpegProgress.pct != null
+													? `${ffmpegProgress.pct}%`
+													: ""
+											}}</span>
+										</p>
+									</template>
+									<template v-else-if="ffmpegProgress.state === 'error'">
+										<div
+											class="flex items-center gap-2 text-sm text-destructive"
+										>
+											<AlertCircle class="size-4 shrink-0" />
+											{{ t("ffmpeg.downloadDialog.failed") }}
+										</div>
+										<p
+											v-if="ffmpegProgress.message"
+											class="max-h-24 overflow-y-auto break-all text-xs text-muted-foreground"
+										>
+											{{ ffmpegProgress.message }}
+										</p>
+									</template>
+								</div>
+							</template>
+						</div>
+					</Transition>
+				</div>
 
-					</div>
-				</Transition>
-			</div>
+				<!-- 错误提示（常驻占位避免导航按钮上下跳动）/ Error message (always rendered so the nav buttons don't shift when it appears) -->
+				<p class="text-sm text-destructive -mt-2 min-h-5">{{ error }}</p>
 
-			<!-- 错误提示（常驻占位避免导航按钮上下跳动）/ Error message (always rendered so the nav buttons don't shift when it appears) -->
-			<p class="text-sm text-destructive -mt-2 min-h-5">{{ error }}</p>
+				<!-- 导航按钮 / Navigation buttons -->
+				<div class="flex items-center justify-between">
+					<Button variant="ghost" :disabled="step === 1" @click="back">
+						{{ t("setup.back") }}
+					</Button>
 
-			<!-- 导航按钮 / Navigation buttons -->
-			<div class="flex items-center justify-between">
-				<Button variant="ghost" :disabled="step === 1" @click="back">
-					{{ t("setup.back") }}
-				</Button>
-
-				<div class="flex items-center gap-3">
-					<!-- FFmpeg 步骤且所选 tools 不完整：「完成」按钮变「下载」，触发后台
+					<div class="flex items-center gap-3">
+						<!-- FFmpeg 步骤且所选 tools 不完整：「完成」按钮变「下载」，触发后台
 						下载（进度由全局强制窗口展示）/ On the FFmpeg step with incomplete
 						tools selected the finish button becomes Download, triggering the
 						background download (progress shown by the global forced window) -->
-					<Button
-						v-if="step === FFMPEG_STEP && ffmpegNeedsDownload"
-						:disabled="ffmpegSaving || ffmpegInFlight"
-						@click="startFfmpegDownload"
-					>
-						<Loader2 v-if="ffmpegSaving || ffmpegInFlight" class="size-3.5 animate-spin" />
-						{{ t("ffmpeg.preferenceWizard.download") }}
-					</Button>
-					<Button v-else-if="step < TOTAL_STEPS" :disabled="!canNext" @click="next">
-						{{ t("setup.next") }}
-					</Button>
-					<!-- v-else-if 与上面构成互斥：FFmpeg 步（末步）tools 缺件时只显示「下载」，不再同时露出灰掉的「完成」/ v-else-if keeps the chain exclusive: on the last (FFmpeg) step with incomplete tools only Download shows — no ghosted Finish beside it -->
-					<Button v-else-if="step === TOTAL_STEPS" :disabled="saving || !canNext" @click="finish">
-						{{ saving ? t("setup.saving") : t("setup.finish") }}
-					</Button>
+						<Button
+							v-if="step === FFMPEG_STEP && ffmpegNeedsDownload"
+							:disabled="ffmpegSaving || ffmpegInFlight"
+							@click="startFFmpegDownload"
+						>
+							<Loader2
+								v-if="ffmpegSaving || ffmpegInFlight"
+								class="size-3.5 animate-spin"
+							/>
+							{{ t("ffmpeg.preferenceWizard.download") }}
+						</Button>
+						<Button v-else-if="step < TOTAL_STEPS" :disabled="!canNext" @click="next">
+							{{ t("setup.next") }}
+						</Button>
+						<!-- v-else-if 与上面构成互斥：FFmpeg 步（末步）tools 缺件时只显示「下载」，不再同时露出灰掉的「完成」/ v-else-if keeps the chain exclusive: on the last (FFmpeg) step with incomplete tools only Download shows — no ghosted Finish beside it -->
+						<Button
+							v-else-if="step === TOTAL_STEPS"
+							:disabled="saving || !canNext"
+							@click="finish"
+						>
+							{{ saving ? t("setup.saving") : t("setup.finish") }}
+						</Button>
+					</div>
 				</div>
-			</div>
-
 			</div>
 		</div>
 	</div>

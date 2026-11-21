@@ -1,974 +1,978 @@
 {
-  "languageName": "简体中文",
-  "nav": {
-    "streamers": "主播列表",
-    "recordings": "录制文件",
-    "postprocess": "后处理",
-    "relay": "转发流",
-    "finder": "主播查找",
-    "settings": "设置",
-    "about": "关于",
-    "status": "服务状态",
-    "usage": "资源占用",
-    "collapse": "收起",
-    "expand": "展开",
-    "notifications": "通知",
-    "community": "模块社区",
-    "stripchat": "StripChat",
-    "more": "更多"
-  },
-  "common": {
-    "confirm": "确认",
-    "cancel": "取消",
-    "delete": "删除",
-    "add": "添加",
-    "save": "保存",
-    "loading": "加载中...",
-    "noData": "暂无数据",
-    "unknown": "未知",
-    "show": "显示",
-    "hide": "隐藏"
-  },
-  "notify": {
-    "reconnected": "已重新连接到服务器，{n} 秒后刷新页面…",
-    "disconnected": "与服务器的连接已断开，正在尝试重连…",
-    "missingStreamers": {
-      "title": "发现不存在的主播",
-      "message": "以下主播账号不存在，将从列表中删除\n\n{list}",
-      "confirm": "删除",
-      "ignore": "忽略",
-      "done": "已删除 {count} 个不存在的主播"
-    },
-    "missingPpResults": {
-      "title": "发现已删除文件的后处理记录",
-      "message": "以下文件已不存在，但仍有后处理记录，将进行清理\n\n{list}",
-      "confirm": "清理",
-      "ignore": "忽略",
-      "done": "已清理 {count} 条后处理记录"
-    },
-    "disconnectedPage": {
-      "subtitle": "正在尝试重新连接到服务器，请稍候…",
-      "tip": "如果长时间无法连接，请检查服务器是否正常运行",
-      "title": "连接已断开"
-    }
-  },
-  "home": {
-    "title": "主播列表",
-    "subtitle": "共 {total} 位主播，{recording} 个录制中",
-    "addStreamer": "+ 添加主播",
-    "loadingStreamers": "加载中...",
-    "noStreamers": "还没有添加主播",
-    "addFirst": "添加第一个主播",
-    "remove": {
-      "title": "移除主播",
-      "message": "确定要移除 {username} 吗？相关录制文件也会被删除。",
-      "confirm": "移除",
-      "done": "已移除 {username}"
-    },
-    "start": {
-      "done": "开始录制 {username}",
-      "autoStarted": "已开始录制 {username}"
-    },
-    "stop": {
-      "title": "停止录制",
-      "message": "确定要停止录制 {username} 吗？",
-      "confirm": "停止",
-      "done": "已停止录制 {username}"
-    },
-    "relay": {
-      "started": "已开始转发 {username} 的直播流",
-      "stopped": "已停止转发 {username}"
-    },
-    "batch": {
-      "autoRecordDisable": "关闭",
-      "autoRecordDone": "已为 {count} 位主播{action}自动录制",
-      "autoRecordEnable": "开启",
-      "autoRecordFailed": "操作完成，{failed} 位失败",
-      "deselectAll": "取消全选",
-      "disableAutoRecord": "关闭自动 ({count})",
-      "enableAutoRecord": "开启自动 ({count})",
-      "exitSelect": "退出选择",
-      "remove": "移除 ({count})",
-      "removeConfirmMessage": "确定要移除选中的 {count} 位主播吗？相关录制文件也会被删除。",
-      "removeConfirmTitle": "批量移除主播",
-      "removeDone": "已移除 {count} 位主播",
-      "removeFailed": "移除完成，{failed} 位失败",
-      "selectAll": "全选",
-      "selected": "已选 {count} 位",
-      "startDone": "已开始录制 {count} 位主播",
-      "startFailed": "录制完成，{failed} 位失败",
-      "startRecording": "开始录制 ({count})",
-      "stopConfirmMessage": "确定要停止选中的 {count} 位主播的录制吗？",
-      "stopConfirmTitle": "批量停止录制",
-      "stopDone": "已停止录制 {count} 位主播",
-      "stopFailed": "停止完成，{failed} 位失败",
-      "stopRecording": "停止录制 ({count})"
-    },
-    "filter": {
-      "all": "全部",
-      "group": "群组秀",
-      "offline": "离线",
-      "online": "在线",
-      "p2p": "P2P",
-      "perMinute": "计时秀",
-      "private": "私密秀",
-      "public": "公开秀",
-      "recording": "录制中",
-      "ticket": "票务秀",
-      "virtualPrivate": "虚拟私密",
-      "waiting": "等待中"
-    },
-    "privacy": {
-      "label": "隐私模式（模糊缩略图）",
-      "off": "关闭",
-      "live": "仅直播画面",
-      "all": "全部图片"
-    }
-  },
-  "streamerCard": {
-    "offline": "离线",
-    "recording": "录制中",
-    "startRecording": "录制",
-    "stopRecording": "停止",
-    "autoRecord": "自动",
-    "autoRecordTitle": "上线自动录制",
-    "removeTitle": "移除主播",
-    "streamUrl": "转发流地址",
-    "streamUrlHint": "直接用播放器打开此地址即可播放",
-    "copyStreamUrl": "复制转发地址",
-    "revealImage": "显示图片",
-    "blurImage": "重新模糊"
-  },
-  "addStreamer": {
-    "title": "添加主播",
-    "description": "输入 Stripchat 用户名或链接以添加主播到追踪列表",
-    "label": "Stripchat 用户名或链接",
-    "placeholder": "例如: alice 或 https://stripchat.com/alice",
-    "cancel": "取消",
-    "submit": "确认添加",
-    "submitting": "添加中...",
-    "done": "已添加主播 {name}",
-    "batchDone": "已成功添加 {count} 位主播",
-    "batchPartialFailed": "添加完成，{success} 位成功，{failed} 位失败",
-    "batchSkipped": "添加完成，{success} 位成功，{skipped} 位已存在（已跳过）",
-    "inputCount": "{count} 个有效条目"
-  },
-  "recordings": {
-    "title": "录制文件",
-    "subtitle": {
-      "total": "共 {count} 个文件",
-      "recording": "{count} 个录制中",
-      "selected": "已选 {count} 个",
-      "totalSpeed": "总录制速度"
-    },
-    "diskLabel": {
-      "all": "存储空间",
-      "fragment": "分片",
-      "segment_merge": "合并"
-    },
-    "batchPostprocess": "批量后处理 ({count})",
-    "deleteSelected": "删除选中 ({count})",
-    "openDir": "打开目录",
-    "loading": "加载中...",
-    "empty": "暂无录制文件",
-    "resetZoom": "{pct}% · 重置",
-    "table": {
-      "filename": "文件名",
-      "size": "大小",
-      "startTime": "起始时间",
-      "recordDuration": "录制时长",
-      "videoDuration": "视频时长",
-      "speed": "录制速度",
-      "segments": "分片统计",
-      "postprocess": "后处理",
-      "actions": "操作",
-      "resolution": "分辨率"
-    },
-    "group": {
-      "fileCount": "{count} 个文件"
-    },
-    "status": {
-      "recording": "录制中",
-      "waitingMerge": "等待合并",
-      "merging": "合并中",
-      "waitingMergeVideo": "等待合并视频…",
-      "mergingVideo": "正在合并视频…",
-      "waiting": "等待中…",
-      "done": "已完成",
-      "failed": "失败",
-      "overallProgress": "总进度",
-      "overallProgressWithLabel": "{label} 总进度"
-    },
-    "actions": {
-      "play": "播放",
-      "playDisabled": "录制中，无法播放",
-      "postprocess": "后处理",
-      "delete": "删除",
-      "deleteDisabled": "文件正在录制中"
-    },
-    "delete": {
-      "title": "删除录制文件",
-      "message": "确定要删除 {name} 吗？此操作不可撤销。",
-      "confirm": "删除",
-      "done": "已删除 {name}",
-      "batchTitle": "批量删除",
-      "batchMessage": "确定要删除选中的 {count} 个文件吗？此操作不可撤销。",
-      "batchDone": "已删除 {count} 个文件",
-      "batchFailed": "删除完成，{count} 个文件失败"
-    },
-    "otherClientDeleted": "其他客户端删除了录制文件：{name}",
-    "segments": {
-      "downloaded": "成功 {count} 片",
-      "failed": "失败 {count} 片"
-    },
-    "postprocessEmptyPipeline": "后处理流水线未连接输入节点",
-    "postprocessNoneSelectable": "选中的文件均在处理中或正在录制"
-  },
-  "postprocess": {
-    "title": "后处理流水线",
-    "description": "录制合并完成后，视频文件将依次经过以下模块处理",
-    "saving": "保存中…",
-    "saved": "已自动保存",
-    "input": {
-      "label": "输入",
-      "description": "分片录制目录（fMP4 .m4s）"
-    },
-    "node": {
-      "skip": "跳过",
-      "skipped": "已跳过",
-      "missing": "模块缺失",
-      "enable": "启用"
-    },
-    "empty": "暂无后处理节点，点击下方添加",
-    "addModule": "+ 添加模块",
-    "stats": "{enabled} 个执行节点 · 共 {total} 个节点",
-    "picker": {
-      "title": "选择模块",
-      "description": "从可用模块列表中选择要添加到流水线的模块",
-      "noModules": "未找到模块。",
-      "noModulesHint": "请将模块可执行文件放入程序目录下的 modules/ 文件夹",
-      "allAdded": "所有模块已添加",
-      "connectTo": "连接到…",
-      "noCompatible": "没有兼容的模块"
-    },
-    "updatedByOther": "后处理流水线已由其他客户端更新",
-    "fitView": "自适应视图",
-    "guide": "右键单击画布添加模块 · 右键拖拽平移 · 左键拖拽框选节点 · 选中后按 Delete 删除 · segment_merge 将录制分片合并为视频文件，其他模块（接受 video_file 输入）需置于其后",
-    "multiSelected": "已选中 {count} 个节点，按 Delete 批量删除",
-    "snapToGrid": "对齐网格",
-    "mobileHint": "后处理流水线编辑器需要鼠标操作，请在 PC 端浏览器中使用此功能。"
-  },
-  "finder": {
-    "title": "主播查找",
-    "description": "通过 camgirlfinder.net 查找主播，支持人脸识别和名字搜索",
-    "tabs": {
-      "face": "人脸查找",
-      "name": "名字查找"
-    },
-    "face": {
-      "dropzone": "点击选择图片，或拖拽 / 粘贴图片到此处",
-      "dropzoneHint": "最大 10MB，支持 JPG / PNG / WebP 等格式",
-      "detectedFace": "已识别到的人脸",
-      "searching": "识别中…",
-      "search": "开始人脸搜索",
-      "results": "找到 {count} 个相似主播",
-      "noResults": "未找到相似主播",
-      "invalidFile": "请上传图片文件",
-      "timeout": "搜索超时，请重试",
-      "noFace": "图片中未检测到人脸，请换一张图片",
-      "searchFailed": "搜索失败"
-    },
-    "name": {
-      "placeholder": "输入主播名（至少 3 个字符）",
-      "searching": "搜索中…",
-      "results": "找到 {count} 个主播",
-      "noResults": "未找到相关主播，请尝试其他关键词"
-    },
-    "dialog": {
-      "title": "与「{name}」相似的主播",
-      "description": "通过人脸识别查找与该主播相似的其他主播",
-      "results": "找到 {count} 个相似主播",
-      "noResults": "未找到相似主播",
-      "searching": "识别中，请稍候…",
-      "noFace": "未能从该主播图片中识别到人脸",
-      "profile": "前往主页 →",
-      "bgMode": "背景图模式"
-    },
-    "card": {
-      "match": "匹配度：",
-      "matchShort": "匹配：",
-      "lastSeen": "最后在线：",
-      "firstSeen": "首次：",
-      "lastSeenShort": "最后：",
-      "imageCount": "{count} 张图",
-      "scOnly": "仅支持 SC",
-      "notFound": "主播不存在",
-      "timeout": "验证超时",
-      "added": "已添加",
-      "adding": "添加中…",
-      "verifying": "验证中…",
-      "addRecord": "+ 录制",
-      "addRecordLong": "+ 添加录制",
-      "noImage": "无图",
-      "addedToast": "已添加 {username} 到录制列表",
-      "probHigh": "高",
-      "probMedium": "中",
-      "probLow": "低"
-    },
-    "gender": {
-      "f": "女",
-      "m": "男",
-      "c": "情侣",
-      "t": "跨性别"
-    }
-  },
-  "statusPage": {
-    "title": "服务状态",
-    "subtitle": "各依赖服务的连通性与延时",
-    "lastRun": "上次检测 {time} · 总耗时 {ms}ms",
-    "live": "持续探测中",
-    "probing": "探测中…",
-    "empty": "暂无探测项",
-    "footnote": "探测走与生产相同的通道（代理 / ECH / 镜像按当前设置生效）；CDN 域测的是边缘连通性，收到 404 说明连接通畅。",
-    "groups": {
-      "frontend": "前端",
-      "backend": "后端服务",
-      "cdn": "CDN 域"
-    },
-    "items": {
-      "cgf": "camgirlfinder",
-      "scApi": "StripChat API",
-      "scBrowse": "StripChat 浏览页",
-      "githubApi": "GitHub API",
-      "githubWeb": "GitHub 站点",
-      "cdnPlaylist": "列表域",
-      "cdnMedia": "分片域",
-      "cdnNode": "节点分片",
-      "thumb": "缩略图",
-      "preview": "离线预览图"
-    },
-    "roles": {
-      "playlist": "列表域",
-      "media": "分片域",
-      "node": "节点分片",
-      "other": "其他"
-    },
-    "mirror": "镜像",
-    "sample": "样本",
-    "sampleHint": "仅探测其中一个节点主机，不代表全部节点",
-    "legs": {
-      "direct": "普通"
-    },
-    "providers": {
-      "cloudflare": "Cloudflare",
-      "tencent": "腾讯云",
-      "cloudfront": "AWS CloudFront",
-      "baishan": "白山云",
-      "bytedance": "字节跳动",
-      "cdn77": "CDN77",
-      "github": "GitHub",
-      "sc": "StripChat",
-      "unknown": "未知"
-    }
-  },
-  "usagePage": {
-    "title": "资源占用",
-    "subtitle": "本程序及其唤起进程（ffmpeg、后处理模块等）的 CPU 与内存",
-    "live": "实时",
-    "loading": "加载中…",
-    "empty": "暂无进程数据",
-    "error": "获取失败：{msg}",
-    "read": "读",
-    "write": "写",
-    "summary": {
-      "totalCpu": "总 CPU",
-      "ofAllCores": "占 {n} 核的 {pct}%",
-      "totalMem": "总内存",
-      "procCount": "进程数",
-      "gpu": "总 GPU",
-      "gpuHint": "全树 GPU 引擎利用率合计（悬停进程行可见显存明细）",
-      "disk": "总磁盘",
-      "net": "系统网络",
-      "netHint": "操作系统不按进程归属网络流量，此处为整机口径（排除回环口）"
-    },
-    "roles": {
-      "main": "主程序",
-      "module": "模块",
-      "ffmpeg": "FFmpeg",
-      "other": "其他"
-    },
-    "table": {
-      "process": "进程",
-      "pid": "PID",
-      "role": "角色",
-      "cpu": "CPU",
-      "cpuHint": "100% = 单核满载，多核可超 100%",
-      "gpu": "GPU",
-      "gpuHint": "各 GPU 引擎利用率合计，可超 100%",
-      "vram": "显存",
-      "disk": "磁盘",
-      "diskHint": "磁盘 I/O 速率（读/写）",
-      "mem": "内存",
-      "uptime": "运行时长",
-      "cmd": "命令行"
-    },
-    "chart": {
-      "mem": "内存",
-      "disk": "磁盘 I/O",
-      "net": "网络"
-    }
-  },
-  "settings": {
-    "title": "设置",
-    "loading": "加载中...",
-    "saved": "设置已保存",
-    "saving": "保存中…",
-    "saveFailed": "自动保存失败",
-    "updatedByOther": "设置已由其他客户端更新",
-    "mouflonUpdatedByOther": "Mouflon Keys 已由其他客户端更新",
-    "sections": {
-      "recording": "录制",
-      "network": "网络",
-      "mouflonKeys": "Mouflon 解密密钥",
-      "security": "安全",
-      "language": "语言"
-    },
-    "language": {
-      "label": "界面语言",
-      "zhCN": "中文",
-      "enUS": "English"
-    },
-    "outputDir": {
-      "label": "分片流输出目录",
-      "placeholder": "/path/to/recordings",
-      "hint": "录制产生的分片流（fMP4 .m4s）存放位置。修改后按回车或点击其他区域确认。",
-      "pick": "选择",
-      "changeTitle": "修改分片流输出目录",
-      "changeMessage": "将分片流输出目录改为：\n{dir}\n\n此更改将在下次录制时生效。",
-      "changeConfirm": "确认"
-    },
-    "maxPpConcurrent": {
-      "label": "最大并发后处理数",
-      "hint": "同时处理的后处理任务数。0 = 自动（= CPU 逻辑核心数）；手动设置时上限同为 CPU 逻辑核心数，可设置低于自动值以主动限制并发。实际并发会随系统负载自动下调，上限只是天花板。"
-    },
-    "pollInterval": {
-      "label": "轮询间隔（秒）"
-    },
-    "preferredResolution": {
-      "label": "首选录制分辨率",
-      "original": "原始画质（最高）",
-      "hint": "选择目标画质，并设置该画质不可用时的搜索方向。"
-    },
-    "resolutionPreference": {
-      "label": "回退方向",
-      "lower": "优先较低画质",
-      "higher": "优先较高画质",
-      "hint": "先使用该方向最接近的画质；若不存在，则使用反方向最接近的画质，不会因缺少精确画质而失败。"
-    },
-    "preferredCodec": {
-      "label": "首选视频编码",
-      "default": "默认（由服务器决定）",
-      "hint": "获取播放列表时附带 preferredVideoCodec 参数。是否生效取决于服务器是否提供该编码；H.265 / AV1 体积更小，但部分播放器和后处理工具可能不支持。修改后对之后新获取的播放列表生效。"
-    },
-    "playerPath": {
-      "label": "自定义播放器",
-      "placeholder": "留空自动探测",
-      "hint": "播放转发流与录制文件时唤起的播放器程序；留空则按平台自动探测（转发流探测 mpv/VLC/PotPlayer 等，录制文件走系统默认程序）。",
-      "pick": "选择程序",
-      "clear": "恢复自动探测"
-    },
-    "recordingDuration": {
-      "label": "录制文件时长",
-      "hint": "设为 00:00:00 表示不限制时长。自动保存并应用于正在录制的文件。达到时长后在下一个 HLS 分片边界开始新文件，实际时长可能多几秒。",
-      "unitH": "时",
-      "unitM": "分",
-      "unitS": "秒"
-    },
-    "maxTmpDirGb": {
-      "label": "后处理临时目录最大占用（GB）",
-      "hint": "后处理模块运行时产生的临时文件上限，超出后自动删除最旧的文件。0 表示不限制，默认 50 GB"
-    },
-    "checkPrerelease": {
-      "label": "检查 beta 版本更新",
-      "hint": "开启后将同时检查 beta 预发布版本。beta 版本可能不稳定，仅建议尝鲜用户开启。",
-      "hintBeta": "当前运行的是 beta 版本，已自动启用 beta 更新检查。"
-    },
-    "ffmpegAutoUpdate": {
-      "label": "空闲时自动更新 FFmpeg",
-      "hint": "开启后，程序会定期检查下载到 tools 文件夹中的 FFmpeg 是否有新版本，并在没有录制和后处理任务时自动更新。使用系统 PATH 中的 FFmpeg 或手动放入 tools 的 FFmpeg 不受影响。"
-    },
-    "ffmpegPreference": {
-      "label": "FFmpeg 首选项",
-      "hint": "选择使用系统环境变量（PATH）中的 FFmpeg，还是程序目录 tools 文件夹中的 FFmpeg。",
-      "system": "系统环境变量",
-      "tools": "tools 文件夹",
-      "unset": "未设置",
-      "systemNoAutoUpdate": "使用系统环境变量中的 FFmpeg 时将禁用 FFmpeg 自动更新。",
-      "pathMissingTitle": "未检测到 FFmpeg",
-      "pathMissingDesc": "系统环境变量（PATH）中未检测到完整的 FFmpeg 组件（ffmpeg、ffprobe、ffplay），无法使用该来源。确认后将自动改为 tools 文件夹。",
-      "toolsMissingTitle": "tools 文件夹缺少 FFmpeg",
-      "toolsMissingDesc": "tools 文件夹中未检测到完整的 FFmpeg 组件（ffmpeg、ffprobe、ffplay）。是否现在下载 FFmpeg 到 tools 文件夹？取消则改用系统环境变量（PATH）。",
-      "download": "下载",
-      "downloadStartFailed": "下载启动失败，请稍后重试",
-      "notInstalled": "未安装"
-    },
-    "apiProxy": {
-      "label": "API 代理（访问 stripchat.com，留空不使用）",
-      "placeholder": "127.0.0.1:10808",
-      "hint": "修改后按回车或点击其他区域确认"
-    },
-    "scMirror": {
-      "label": "Stripchat 镜像站（替换 API 中的 stripchat.com 域名，留空不使用）",
-      "placeholder": "stripchat.example.com",
-      "hint": "同时填写 API 代理与镜像站时，将通过 API 代理访问镜像站"
-    },
-    "scBrowseProxy": {
-      "label": "浏览页代理（StripChat 页列表/快照请求，与 API 代理相互独立，留空直连）",
-      "placeholder": "127.0.0.1:10808",
-      "hint": "仅作用于 StripChat 浏览页，不影响录制与状态轮询"
-    },
-    "scBrowseMirror": {
-      "label": "浏览页镜像站（StripChat 页专用，与上方镜像站相互独立，留空直连 stripchat.com）",
-      "placeholder": "stripchat.example.com",
-      "hint": "同时填写浏览页代理与镜像站时，将通过该代理访问该镜像站"
-    },
-    "cdnProxy": {
-      "label": "CDN 代理（下载 HLS 分片，留空不使用）",
-      "placeholder": "127.0.0.1:10808",
-      "hint": "修改后按回车或点击其他区域确认"
-    },
-    "communityProxy": {
-      "label": "模块社区代理（下载社区模块文件，留空不使用）",
-      "placeholder": "127.0.0.1:10808",
-      "hint": "修改后按回车或点击其他区域确认"
-    },
-    "communityMirror": {
-      "label": "模块社区加速站（在 GitHub 地址前加前缀，留空不使用）",
-      "placeholder": "ghproxy.com",
-      "hint": "同时填写模块社区代理与加速站时，将通过模块社区代理访问加速站"
-    },
-    "cgfProxy": {
-      "label": "camgirlfinder 代理（访问 camgirlfinder.net，留空不使用）",
-      "placeholder": "127.0.0.1:10808",
-      "hint": "主播查找页面（人脸/名字搜索）为纯前端功能，直接从浏览器访问 camgirlfinder.net，无需此代理。本设置仅用于后端在后台获取主播历史在线规律（schedule），以自适应调整轮询间隔节省流量。修改后按回车或点击其他区域确认"
-    },
-    "echEnabled": {
-      "label": "ECH（加密 ClientHello）",
-      "hint": "开启后仅 SC API 请求的 TLS ClientHello 经借用 ECH 配置加密，对外隐藏真实 SNI，可能有效改善 API 返回 403 的情况；不可路由或解析失败时自动回退普通连接。CDN 分片流量直取优先，仅全部直连失败后在兜底竞速中带 ECH 腿"
-    },
-    "mouflonKeysDesc": "Stripchat 对 HLS 分片文件名进行了加密（Mouflon 系统）。录制前需在此填入对应的 pkey → pdkey 密钥对，密钥可从社区渠道获取。",
-    "mouflonTable": {
-      "pkey": "pkey（密钥标识符）",
-      "pdkey": "pdkey（解密密钥）",
-      "keystream": "keystream（密钥流）"
-    },
-    "mouflonKeystreamHint": "pdkey 与 keystream 填一个即可：keystream 为十六进制（至少 16 字节），用于没有 pdkey 的 pkey；同一 pkey 两者都有时优先使用 pdkey。",
-    "noKeys": "暂无密钥",
-    "addKey": "添加",
-    "keyError": {
-      "needKey": "pkey 不能为空，且 pdkey 与 keystream 至少填写一个"
-    },
-    "mouflonSyncUrl": {
-      "label": "同步地址",
-      "placeholder": "https://mouflon.chantrail.com"
-    },
-    "mouflonSyncToken": {
-      "label": "同步令牌（可选）",
-      "placeholder": "不需要鉴权时留空"
-    },
-    "mouflonSync": "立即同步",
-    "mouflonSyncing": "同步中…",
-    "mouflonSyncDone": "密钥同步成功",
-    "mouflonSyncUpToDate": "密钥已是最新，无需更新",
-    "mouflonSyncFailed": "同步失败：{error}",
-    "mouflonAutoSyncedAt": "数据源更新：",
-    "mouflonManualUpdatedAt": "上次手动更新：",
-    "mouflonNever": "从未",
-    "localeFileInvalid": "语言文件 {file} 校验失败",
-    "mergeFormat": {
-      "hint": "录制结束后自动合并分片为单一文件的格式，修改后对当前录制同样生效",
-      "label": "合并格式"
-    }
-  },
-  "usePostprocess": {
-    "processing": "处理中",
-    "waitingProgress": "等待进度…",
-    "fetchOutputFailed": "获取模块输出失败",
-    "fetchTasksFailed": "获取后处理任务失败",
-    "doneForFile": "{name} 后处理完成",
-    "failedWithDetail": "{name} 后处理失败：{detail}",
-    "failedGeneric": "{name} 后处理失败"
-  },
-  "relay": {
-    "title": "转发流",
-    "subtitle": "{streams} 个转发流，{connections} 个活跃连接",
-    "hint": "直接用播放器打开以下地址即可播放，无需手动启动。首次访问时自动连接上游。未在录制列表中的主播同样可以转发。",
-    "noSessions": "暂无活跃转发流",
-    "noSessionsHint": "用播放器打开 /stream/{modelname} 即可自动启动",
-    "connections": "{n} 个连接",
-    "uptime": "运行 {t}",
-    "copyUrl": "复制地址",
-    "stopRelay": "停止转发",
-    "desktopUnsupported": "转发流功能仅在 Server 模式下可用",
-    "state": {
-      "live": "直播中",
-      "offline": "离线",
-      "connecting": "连接中",
-      "error": "错误"
-    }
-  },
-  "login": {
-    "title": "登录",
-    "subtitle": "请输入管理员密码以继续",
-    "initTitle": "设置管理员密码",
-    "initSubtitle": "系统已完成初始化，请先设置一个管理员密码",
-    "passwordLabel": "密码",
-    "passwordPlaceholder": "请输入密码",
-    "initPlaceholder": "请输入密码",
-    "loginButton": "登录",
-    "initButton": "设置密码并登录",
-    "logout": "退出登录",
-    "passwordRequired": "请输入密码",
-    "passwordStrength": "密码需至少 6 位，且包含字母、数字和特殊字符",
-    "passwordStrengthHint": "至少 6 位 · 包含字母 · 包含数字 · 包含特殊字符（如 !#$%）",
-    "wrongPassword": "密码错误，请重试",
-    "statusFetchFailed": "无法连接到服务器，请刷新重试",
-    "continueWithoutPassword": "不设置密码，直接进入（仅限可信环境）",
-    "changePassword": {
-      "title": "修改密码",
-      "oldLabel": "当前密码",
-      "newLabel": "新密码",
-      "oldPlaceholder": "请输入当前密码",
-      "newPlaceholder": "请输入新密码",
-      "submit": "修改密码",
-      "submitting": "修改中…",
-      "success": "密码已修改，请重新登录",
-      "wrongOld": "当前密码错误"
-    },
-    "removePassword": {
-      "submit": "移除密码",
-      "submitting": "移除中…",
-      "success": "已移除密码，此后访问免登录",
-      "dialogTitle": "移除管理员密码",
-      "dialogDesc": "移除后无需登录即可访问管理界面，请确认当前环境可信。输入当前密码以确认操作。"
-    },
-    "setPassword": {
-      "noPasswordHint": "当前处于无密码模式，任何人都能访问管理界面。设置密码后将恢复登录保护。",
-      "newLabel": "新密码",
-      "submit": "设置密码",
-      "submitting": "设置中…"
-    }
-  },
-  "setup": {
-    "title": "初始配置",
-    "subtitle": "首次启动需要完成以下配置，之后可在「设置」页面随时修改",
-    "back": "上一步",
-    "next": "下一步",
-    "skip": "跳过",
-    "finish": "完成配置",
-    "saving": "保存中…",
-    "outputDirRequired": "请填写录制输出目录",
-    "step1": {
-      "title": "选择界面语言",
-      "desc": "选择你偏好的界面语言"
-    },
-    "step2": {
-      "title": "录制输出目录",
-      "desc": "录制文件将保存到此目录，请确保该路径有足够的磁盘空间",
-      "placeholder": "/path/to/recordings",
-      "hint": "填写服务器上的绝对路径，例如 /data/recordings 或 D:\\recordings"
-    },
-    "step3": {
-      "title": "网络代理（可选）",
-      "desc": "如果服务器无法直接访问 Stripchat，可在此配置代理。不需要可直接跳过"
-    },
-    "step4": {
-      "title": "FFmpeg 检查",
-      "desc": "录制与后处理需要 ffmpeg / ffprobe / ffplay，请选择使用哪个位置的 FFmpeg"
-    },
-    "step5": {
-      "title": "设置管理员密码",
-      "desc": "设置一个访问管理界面的密码（至少 6 位），之后每次访问都需要输入此密码",
-      "placeholder": "请输入密码（至少 6 位）",
-      "hint": "此密码用于保护管理界面，请妥善记录",
-      "noPassword": "不设置密码，免登录直接使用（仅限可信环境）"
-    }
-  },
-  "notifications": {
-    "markAllRead": "全部已读",
-    "empty": "暂无通知",
-    "action": {
-      "remove_streamers": "删除主播",
-      "view_update": "前往关于页面"
-    },
-    "backend": {
-      "ffmpegMissing": "未检测到 ffmpeg，录制和后处理功能将无法使用。请安装 ffmpeg 并确保其在 PATH 中，或放入程序目录的 tools 文件夹。",
-      "ffmpegDownloadFailed": "FFmpeg 自动下载失败：{error}。录制和后处理功能将无法使用，请手动安装 ffmpeg 并确保其在 PATH 中，或放入程序目录的 tools 文件夹。",
-      "ffmpegUpdateFailed": "FFmpeg 自动更新失败：{error}（将继续使用当前版本）",
-      "ffmpegUpdateAvailable": "检测到 FFmpeg 新版本，将在程序空闲时自动更新",
-      "ffmpegInstallStarted": "FFmpeg 下载安装已开始",
-      "ffmpegUpdateStarted": "FFmpeg 更新下载已开始",
-      "ffmpegInstalled": "FFmpeg 安装完成：{version}",
-      "ffmpegUpdated": "FFmpeg 更新完成：{version}",
-      "metaMigrated": "已将 {count} 个旧版 meta 文件迁移到按主播子目录的新结构。",
-      "mouflonSyncFailed": "Mouflon 密钥同步失败（已重试 {retries} 次）：{error}",
-      "metaCleanup": "已清理 {count} 个孤立的 meta 文件（对应视频已不存在）",
-      "ppRemainingOne": "发现 1 个未完成的后处理任务（可能由上次异常退出遗留），已重新触发：{name}",
-      "ppRemainingMany": "发现 {count} 个未完成的后处理任务（可能由上次异常退出遗留），已重新触发：{names}",
-      "ppRetryOne": "上次后处理失败，启动后自动重试 1 个任务：{name}",
-      "ppRetryMany": "上次后处理失败，启动后自动重试 {count} 个任务：{names}",
-      "ppFailed": "{name} 后处理失败：{detail}",
-      "startupScanDone": "启动扫描完成",
-      "streamerDeadOne": "主播 {username} 已无法通过用户名或内部 ID 找到，可能已改名、注销或被封禁，后续将跳过其轮询请求。",
-      "streamerDeadMany": "以下 {count} 个主播已无法找到，可能已改名、注销或被封禁，后续将跳过其轮询请求：{usernames}",
-      "updateAvailableDocker": "发现新版本 v{version}，请更新 Docker 镜像以升级",
-      "updateAvailable": "发现新版本 v{version}，前往关于页面下载更新"
-    }
-  },
-  "dirBrowser": {
-    "title": "选择目录",
-    "titleFile": "选择文件",
-    "titleExec": "选择程序",
-    "pathLabel": "路径",
-    "pathPlaceholder": "输入路径后按回车跳转",
-    "thisPc": "此电脑",
-    "up": "上一级",
-    "refresh": "刷新",
-    "go": "跳转",
-    "newFolder": "新建文件夹",
-    "newFolderPlaceholder": "文件夹名称",
-    "empty": "此目录下没有子目录",
-    "emptyFile": "此目录下没有子目录或文件",
-    "emptyExec": "此目录下没有可执行程序",
-    "loadFailed": "无法访问该目录",
-    "createFailed": "创建文件夹失败",
-    "select": "选择此目录",
-    "selectFile": "选择此文件",
-    "selectExec": "选择此程序",
-    "cancel": "取消"
-  },
-  "streamers": {
-    "otherClientAdded": "其他客户端添加了主播：{username}",
-    "otherClientRemoved": "其他客户端移除了主播：{username}",
-    "otherClientAutoRecord": "其他客户端{action}了 {username} 的自动录制",
-    "otherClientAutoRecordEnable": "开启",
-    "otherClientAutoRecordDisable": "关闭",
-    "renamed": "主播 {oldUsername} 已改名为 {newUsername}",
-    "apiError": "Stripchat API 连接错误：{message}"
-  },
-  "stripchat": {
-    "title": "StripChat",
-    "description": "按 Stripchat 官方分类浏览直播，点击卡片右下角按钮添加主播",
-    "tabs": {
-      "girls": "女生",
-      "couples": "情侣",
-      "men": "男生",
-      "trans": "跨性别"
-    },
-    "sort": {
-      "stripRanking": "综合排名",
-      "trending": "热门趋势"
-    },
-    "groups": {
-      "traits": "特征",
-      "langs": "语言"
-    },
-    "tags": {
-      "all": "全部",
-      "ageTeen": "18岁+",
-      "ageYoung": "年轻",
-      "ageMilf": "熟女",
-      "ageMature": "成熟",
-      "ethnicityAsian": "亚洲",
-      "ethnicityWhite": "白人",
-      "ethnicityEbony": "黑人",
-      "ethnicityLatino": "拉丁裔",
-      "ethnicityIndian": "印度裔",
-      "ethnicityMiddleEastern": "中东",
-      "bodyTypePetite": "娇小",
-      "bodyTypeAthletic": "健美",
-      "bodyTypeCurvy": "丰满",
-      "bodyTypeBBW": "BBW",
-      "specificsBigTits": "巨乳",
-      "specificsBigAss": "翘臀",
-      "specificsBigCock": "大屌",
-      "hairColorBlonde": "金发",
-      "hairColorBlack": "黑发",
-      "hairColorRed": "红发",
-      "subcultureGoth": "哥特",
-      "subcultureRomantic": "浪漫",
-      "subcultureAnime": "动漫",
-      "subcultureStudent": "学生",
-      "tagLanguageChinese": "中文",
-      "tagLanguageJapanese": "日语",
-      "tagLanguageKorean": "韩语",
-      "tagLanguageTaiwanese": "台语",
-      "tagLanguageVietnamese": "越南语",
-      "tagLanguageThai": "泰语",
-      "tagLanguageFilipino": "菲律宾语",
-      "tagLanguageHindi": "印地语",
-      "tagLanguageBengali": "孟加拉语",
-      "tagLanguageUkrainian": "乌克兰语",
-      "tagLanguageRomanian": "罗马尼亚语",
-      "tagLanguageFrench": "法语",
-      "tagLanguageItalian": "意大利语",
-      "tagLanguageTurkish": "土耳其语",
-      "tagLanguageSpanish": "西班牙语",
-      "tagLanguageHungarian": "匈牙利语",
-      "tagLanguageDutch": "荷兰语",
-      "tagLanguagePolish": "波兰语",
-      "tagLanguageCzech": "捷克语",
-      "tagLanguagePortuguese": "葡萄牙语",
-      "tagLanguageGreek": "希腊语"
-    },
-    "add": "添加",
-    "added": "已添加",
-    "addedToast": "已添加 {username}",
-    "end": "已到底部",
-    "empty": "该分类暂无主播",
-    "error": "加载失败：{message}",
-    "toy": "互动玩具",
-    "play": "用系统播放器播放转发流",
-    "playFailed": "唤起播放器失败：{message}",
-    "noPlayer": "未找到可用的播放器，请安装 VLC、mpv 或 PotPlayer",
-    "playerMissing": "设置的播放器路径不存在，请在设置中重新选择",
-    "status": {
-      "public": "公开秀",
-      "private": "私密秀",
-      "virtualPrivate": "虚拟私密",
-      "groupShow": "群组秀",
-      "ticketShow": "票务秀",
-      "p2p": "P2P",
-      "p2pVoice": "P2P语音",
-      "spy": "偷窥",
-      "idle": "等待",
-      "off": "离线"
-    }
-  },
-  "community": {
-    "terms": {
-      "title": "使用社区模块前请注意",
-      "body": "模块社区提供的后处理模块均为第三方社区贡献，与本项目官方无关。\n\n安装并运行社区模块即表示您同意自行承担相关风险：\n\n• 官方不对社区模块的安全性、稳定性或功能完整性作任何保证。\n• 社区模块将在您的服务器本地运行并处理您的录制文件，请确保来源可信。\n• 建议在安装前查看模块源码仓库，了解其具体行为。\n\n如果您理解并接受上述风险，可以继续使用模块社区。",
-      "accept": "我已了解，继续",
-      "decline": "返回"
-    },
-    "author": "作者",
-    "connecting": "连接中…",
-    "description": "浏览并安装社区贡献的后处理模块",
-    "detail": {
-      "author": "作者",
-      "changelog": "更新日志",
-      "installedVersion": "已安装版本",
-      "latestVersion": "最新版本",
-      "license": "许可证",
-      "platformNotSupported": "当前平台不支持此模块",
-      "platforms": "支持平台",
-      "readme": "README",
-      "readmeFailed": "README 加载失败",
-      "readmeLoading": "加载 README 中…",
-      "repo": "源码仓库",
-      "tags": "标签"
-    },
-    "empty": "暂无可用模块",
-    "fetchError": "加载失败，请检查网络连接",
-    "filterAll": "全部",
-    "filterByTag": "按标签",
-    "filterInstalled": "已安装",
-    "filterUpdatable": "可更新",
-    "install": "安装",
-    "installed": "已安装",
-    "installedVersion": "已安装版本",
-    "installError": "安装失败：{error}",
-    "installing": "安装中…",
-    "installSuccess": "模块 {name} 安装成功",
-    "latestVersion": "最新版本",
-    "license": "许可证",
-    "noResults": "没有匹配的模块",
-    "notSupported": "不支持当前平台",
-    "refresh": "刷新列表",
-    "refreshing": "加载中…",
-    "retry": "重试",
-    "search": "搜索模块…",
-    "tags": "标签",
-    "title": "模块社区",
-    "uninstall": "卸载",
-    "uninstallError": "卸载失败：{error}",
-    "uninstalling": "卸载中…",
-    "uninstallSuccess": "模块 {name} 已卸载",
-    "update": "更新",
-    "updateAvailable": "有更新",
-    "updating": "更新中…",
-    "viewRepo": "查看源码"
-  },
-  "about": {
-    "title": "关于",
-    "version": "版本",
-    "updates": "版本更新",
-    "updateCheck": "检查更新",
-    "updateRetry": "重试",
-    "updateChecking": "检查中...",
-    "updateAvailable": "有新版本：{version}",
-    "updateNone": "已是最新版本",
-    "updateFailed": "检查更新失败",
-    "download": "下载更新",
-    "downloadProgress": "下载中 {pct}%",
-    "downloadProgressBytes": "下载中 {mb} MB…",
-    "downloadDone": "下载完成",
-    "downloadDoneHint": "已保存为 {filename}，解压后替换程序文件即可完成更新",
-    "downloadFailed": "下载失败，请重试",
-    "downloadNoAsset": "当前平台暂无可用安装包，请前往 GitHub 手动下载",
-    "installing": "安装中，请稍候…",
-    "installingHint": "正在解压并替换程序文件",
-    "updateDone": "更新完成，正在重启…",
-    "updateDoneHint": "服务器即将重启，页面将自动重新连接",
-    "updateError": "更新失败：{message}",
-    "updateStart": "开始更新",
-    "changelog": "更新日志",
-    "releaseNotes": "版本说明",
-    "github": "GitHub 仓库",
-    "license": "开源许可",
-    "licenseValue": "GPL-3.0",
-    "copyright": "版权所有",
-    "contributors": "贡献者",
-    "contributorsFailed": "贡献者信息加载失败",
-    "dockerUpdateHint": "请更新 Docker 镜像",
-    "reportBug": "反馈 Bug",
-    "viewOnGitHub": "在 GitHub 上查看",
-    "telegram": "Telegram 频道",
-    "ffmpegBuilds": "FFmpeg 构建",
-    "links": "相关链接"
-  },
-  "ffmpeg": {
-    "downloading": "正在下载 FFmpeg…",
-    "updating": "正在更新 FFmpeg…",
-    "installing": "正在校验并安装…",
-    "installed": "FFmpeg 已安装完成",
-    "updated": "FFmpeg 已更新到最新版本",
-    "preferenceWizard": {
-      "title": "选择 FFmpeg 来源",
-      "desc": "由于版本更新，请选择使用哪个位置的 FFmpeg，各位置的检测结果如下：",
-      "systemPath": "系统环境变量（PATH）",
-      "toolsDir": "tools 文件夹",
-      "checking": "正在检测…",
-      "checkFailed": "检测失败",
-      "retry": "重新检测",
-      "confirm": "确认",
-      "download": "下载",
-      "downloadStartFailed": "下载启动失败，请稍后重试",
-      "toolsRecommended": "推荐使用：程序将自动更新此位置的 FFmpeg",
-      "saveFailed": "保存失败，请重试",
-      "incompleteSelection": "注意：所选位置未检测到完整的 ffmpeg / ffprobe / ffplay"
-    },
-    "downloadDialog": {
-      "title": "下载 FFmpeg",
-      "titleInstalling": "校验并安装 FFmpeg",
-      "titleDone": "FFmpeg 安装完成",
-      "titleFailed": "FFmpeg 下载失败",
-      "desc": "正在下载并安装 FFmpeg 到 tools 文件夹，请稍候。",
-      "failed": "下载失败",
-      "retry": "重试下载",
-      "retryFailed": "下载启动失败，请稍后重试",
-      "close": "关闭"
-    }
-  }
+	"languageName": "简体中文",
+	"nav": {
+		"streamers": "主播列表",
+		"recordings": "录制文件",
+		"postprocess": "后处理",
+		"relay": "转发流",
+		"finder": "主播查找",
+		"settings": "设置",
+		"about": "关于",
+		"status": "服务状态",
+		"usage": "资源占用",
+		"collapse": "收起",
+		"expand": "展开",
+		"notifications": "通知",
+		"community": "模块社区",
+		"stripchat": "StripChat",
+		"more": "更多"
+	},
+	"common": {
+		"confirm": "确认",
+		"cancel": "取消",
+		"delete": "删除",
+		"add": "添加",
+		"save": "保存",
+		"loading": "加载中...",
+		"noData": "暂无数据",
+		"unknown": "未知",
+		"show": "显示",
+		"hide": "隐藏"
+	},
+	"notify": {
+		"reconnected": "已重新连接到服务器，{n} 秒后刷新页面…",
+		"disconnected": "与服务器的连接已断开，正在尝试重连…",
+		"missingStreamers": {
+			"title": "发现不存在的主播",
+			"message": "以下主播账号不存在，将从列表中删除\n\n{list}",
+			"confirm": "删除",
+			"ignore": "忽略",
+			"done": "已删除 {count} 个不存在的主播"
+		},
+		"missingPpResults": {
+			"title": "发现已删除文件的后处理记录",
+			"message": "以下文件已不存在，但仍有后处理记录，将进行清理\n\n{list}",
+			"confirm": "清理",
+			"ignore": "忽略",
+			"done": "已清理 {count} 条后处理记录"
+		},
+		"disconnectedPage": {
+			"subtitle": "正在尝试重新连接到服务器，请稍候…",
+			"tip": "如果长时间无法连接，请检查服务器是否正常运行",
+			"title": "连接已断开"
+		}
+	},
+	"home": {
+		"title": "主播列表",
+		"subtitle": "共 {total} 位主播，{recording} 个录制中",
+		"addStreamer": "+ 添加主播",
+		"loadingStreamers": "加载中...",
+		"noStreamers": "还没有添加主播",
+		"addFirst": "添加第一个主播",
+		"remove": {
+			"title": "移除主播",
+			"message": "确定要移除 {username} 吗？相关录制文件也会被删除。",
+			"confirm": "移除",
+			"done": "已移除 {username}"
+		},
+		"start": {
+			"done": "开始录制 {username}",
+			"autoStarted": "已开始录制 {username}"
+		},
+		"stop": {
+			"title": "停止录制",
+			"message": "确定要停止录制 {username} 吗？",
+			"confirm": "停止",
+			"done": "已停止录制 {username}"
+		},
+		"relay": {
+			"started": "已开始转发 {username} 的直播流",
+			"stopped": "已停止转发 {username}"
+		},
+		"batch": {
+			"autoRecordDisable": "关闭",
+			"autoRecordDone": "已为 {count} 位主播{action}自动录制",
+			"autoRecordEnable": "开启",
+			"autoRecordFailed": "操作完成，{failed} 位失败",
+			"deselectAll": "取消全选",
+			"disableAutoRecord": "关闭自动 ({count})",
+			"enableAutoRecord": "开启自动 ({count})",
+			"exitSelect": "退出选择",
+			"remove": "移除 ({count})",
+			"removeConfirmMessage": "确定要移除选中的 {count} 位主播吗？相关录制文件也会被删除。",
+			"removeConfirmTitle": "批量移除主播",
+			"removeDone": "已移除 {count} 位主播",
+			"removeFailed": "移除完成，{failed} 位失败",
+			"selectAll": "全选",
+			"selected": "已选 {count} 位",
+			"startDone": "已开始录制 {count} 位主播",
+			"startFailed": "录制完成，{failed} 位失败",
+			"startRecording": "开始录制 ({count})",
+			"stopConfirmMessage": "确定要停止选中的 {count} 位主播的录制吗？",
+			"stopConfirmTitle": "批量停止录制",
+			"stopDone": "已停止录制 {count} 位主播",
+			"stopFailed": "停止完成，{failed} 位失败",
+			"stopRecording": "停止录制 ({count})"
+		},
+		"filter": {
+			"all": "全部",
+			"group": "群组秀",
+			"offline": "离线",
+			"online": "在线",
+			"p2p": "P2P",
+			"perMinute": "计时秀",
+			"private": "私密秀",
+			"public": "公开秀",
+			"recording": "录制中",
+			"ticket": "票务秀",
+			"virtualPrivate": "虚拟私密",
+			"waiting": "等待中"
+		},
+		"privacy": {
+			"label": "隐私模式（模糊缩略图）",
+			"off": "关闭",
+			"live": "仅直播画面",
+			"all": "全部图片"
+		}
+	},
+	"streamerCard": {
+		"offline": "离线",
+		"recording": "录制中",
+		"startRecording": "录制",
+		"stopRecording": "停止",
+		"autoRecord": "自动",
+		"autoRecordTitle": "上线自动录制",
+		"removeTitle": "移除主播",
+		"streamUrl": "转发流地址",
+		"streamUrlHint": "直接用播放器打开此地址即可播放",
+		"copyStreamUrl": "复制转发地址",
+		"revealImage": "显示图片",
+		"blurImage": "重新模糊"
+	},
+	"addStreamer": {
+		"title": "添加主播",
+		"description": "输入 Stripchat 用户名或链接以添加主播到追踪列表",
+		"label": "Stripchat 用户名或链接",
+		"placeholder": "例如: alice 或 https://stripchat.com/alice",
+		"cancel": "取消",
+		"submit": "确认添加",
+		"submitting": "添加中...",
+		"done": "已添加主播 {name}",
+		"batchDone": "已成功添加 {count} 位主播",
+		"batchPartialFailed": "添加完成，{success} 位成功，{failed} 位失败",
+		"batchSkipped": "添加完成，{success} 位成功，{skipped} 位已存在（已跳过）",
+		"inputCount": "{count} 个有效条目"
+	},
+	"recordings": {
+		"title": "录制文件",
+		"subtitle": {
+			"total": "共 {count} 个文件",
+			"recording": "{count} 个录制中",
+			"selected": "已选 {count} 个",
+			"totalSpeed": "总录制速度"
+		},
+		"diskLabel": {
+			"all": "存储空间",
+			"fragment": "分片",
+			"segment_merge": "合并"
+		},
+		"batchPostprocess": "批量后处理 ({count})",
+		"deleteSelected": "删除选中 ({count})",
+		"openDir": "打开目录",
+		"loading": "加载中...",
+		"empty": "暂无录制文件",
+		"resetZoom": "{pct}% · 重置",
+		"table": {
+			"filename": "文件名",
+			"size": "大小",
+			"startTime": "起始时间",
+			"recordDuration": "录制时长",
+			"videoDuration": "视频时长",
+			"speed": "录制速度",
+			"segments": "分片统计",
+			"postprocess": "后处理",
+			"actions": "操作",
+			"resolution": "分辨率"
+		},
+		"group": {
+			"fileCount": "{count} 个文件"
+		},
+		"status": {
+			"recording": "录制中",
+			"waitingMerge": "等待合并",
+			"merging": "合并中",
+			"waitingMergeVideo": "等待合并视频…",
+			"mergingVideo": "正在合并视频…",
+			"waiting": "等待中…",
+			"done": "已完成",
+			"failed": "失败",
+			"overallProgress": "总进度",
+			"overallProgressWithLabel": "{label} 总进度"
+		},
+		"actions": {
+			"play": "播放",
+			"playDisabled": "录制中，无法播放",
+			"postprocess": "后处理",
+			"delete": "删除",
+			"deleteDisabled": "文件正在录制中"
+		},
+		"delete": {
+			"title": "删除录制文件",
+			"message": "确定要删除 {name} 吗？此操作不可撤销。",
+			"confirm": "删除",
+			"done": "已删除 {name}",
+			"batchTitle": "批量删除",
+			"batchMessage": "确定要删除选中的 {count} 个文件吗？此操作不可撤销。",
+			"batchDone": "已删除 {count} 个文件",
+			"batchFailed": "删除完成，{count} 个文件失败"
+		},
+		"otherClientDeleted": "其他客户端删除了录制文件：{name}",
+		"segments": {
+			"downloaded": "成功 {count} 片",
+			"failed": "失败 {count} 片"
+		},
+		"postprocessEmptyPipeline": "后处理流水线未连接输入节点",
+		"postprocessNoneSelectable": "选中的文件均在处理中或正在录制"
+	},
+	"postprocess": {
+		"title": "后处理流水线",
+		"description": "录制合并完成后，视频文件将依次经过以下模块处理",
+		"saving": "保存中…",
+		"saved": "已自动保存",
+		"input": {
+			"label": "输入",
+			"description": "分片录制目录（fMP4 .m4s）"
+		},
+		"node": {
+			"skip": "跳过",
+			"skipped": "已跳过",
+			"missing": "模块缺失",
+			"enable": "启用"
+		},
+		"empty": "暂无后处理节点，点击下方添加",
+		"addModule": "+ 添加模块",
+		"stats": "{enabled} 个执行节点 · 共 {total} 个节点",
+		"picker": {
+			"title": "选择模块",
+			"description": "从可用模块列表中选择要添加到流水线的模块",
+			"noModules": "未找到模块。",
+			"noModulesHint": "请将模块可执行文件放入程序目录下的 modules/ 文件夹",
+			"allAdded": "所有模块已添加",
+			"connectTo": "连接到…",
+			"noCompatible": "没有兼容的模块"
+		},
+		"updatedByOther": "后处理流水线已由其他客户端更新",
+		"fitView": "自适应视图",
+		"guide": "右键单击画布添加模块 · 右键拖拽平移 · 左键拖拽框选节点 · 选中后按 Delete 删除 · segment_merge 将录制分片合并为视频文件，其他模块（接受 video_file 输入）需置于其后",
+		"multiSelected": "已选中 {count} 个节点，按 Delete 批量删除",
+		"snapToGrid": "对齐网格",
+		"mobileHint": "后处理流水线编辑器需要鼠标操作，请在 PC 端浏览器中使用此功能。"
+	},
+	"finder": {
+		"title": "主播查找",
+		"description": "通过 camgirlfinder.net 查找主播，支持人脸识别和名字搜索",
+		"tabs": {
+			"face": "人脸查找",
+			"name": "名字查找"
+		},
+		"face": {
+			"dropzone": "点击选择图片，或拖拽 / 粘贴图片到此处",
+			"dropzoneHint": "最大 10MB，支持 JPG / PNG / WebP 等格式",
+			"detectedFace": "已识别到的人脸",
+			"searching": "识别中…",
+			"search": "开始人脸搜索",
+			"results": "找到 {count} 个相似主播",
+			"noResults": "未找到相似主播",
+			"invalidFile": "请上传图片文件",
+			"timeout": "搜索超时，请重试",
+			"noFace": "图片中未检测到人脸，请换一张图片",
+			"searchFailed": "搜索失败",
+			"bgMode": "背景图模式"
+		},
+		"name": {
+			"placeholder": "输入主播名（至少 3 个字符）",
+			"searching": "搜索中…",
+			"results": "找到 {count} 个主播",
+			"noResults": "未找到相关主播，请尝试其他关键词"
+		},
+		"card": {
+			"match": "匹配度：",
+			"matchShort": "匹配：",
+			"lastSeen": "最后在线：",
+			"firstSeen": "首次在线：",
+			"imageCount": "{count} 张图",
+			"scOnly": "仅支持 SC",
+			"notFound": "主播不存在",
+			"timeout": "验证超时",
+			"added": "已添加",
+			"adding": "添加中…",
+			"verifying": "验证中…",
+			"addRecord": "+ 录制",
+			"noImage": "无图",
+			"searchName": "名字查找",
+			"findSimilar": "相似人脸",
+			"addedToast": "已添加 {username} 到录制列表",
+			"probHigh": "高",
+			"probMedium": "中",
+			"probLow": "低"
+		},
+		"gender": {
+			"f": "女",
+			"m": "男",
+			"c": "情侣",
+			"t": "跨性别"
+		}
+	},
+	"statusPage": {
+		"title": "服务状态",
+		"subtitle": "各依赖服务的连通性与延时",
+		"lastRun": "上次检测 {time} · 总耗时 {ms}ms",
+		"live": "持续探测中",
+		"probing": "探测中…",
+		"empty": "暂无探测项",
+		"footnote": "探测走与生产相同的通道（代理 / ECH / 镜像按当前设置生效）；CDN 域测的是边缘连通性，收到 404 说明连接通畅。",
+		"groups": {
+			"frontend": "前端",
+			"backend": "后端服务",
+			"cdn": "CDN 域"
+		},
+		"items": {
+			"cgf": "camgirlfinder",
+			"scApi": "StripChat API",
+			"scBrowse": "StripChat 浏览页",
+			"githubApi": "GitHub API",
+			"githubWeb": "GitHub 站点",
+			"cdnPlaylist": "列表域",
+			"cdnMedia": "分片域",
+			"cdnNode": "节点分片",
+			"thumb": "缩略图",
+			"preview": "离线预览图"
+		},
+		"roles": {
+			"playlist": "列表域",
+			"media": "分片域",
+			"node": "节点分片",
+			"other": "其他"
+		},
+		"mirror": "镜像",
+		"sample": "样本",
+		"sampleHint": "仅探测其中一个节点主机，不代表全部节点",
+		"legs": {
+			"direct": "普通"
+		},
+		"providers": {
+			"cloudflare": "Cloudflare",
+			"tencent": "腾讯云",
+			"cloudfront": "AWS CloudFront",
+			"baishan": "白山云",
+			"bytedance": "字节跳动",
+			"cdn77": "CDN77",
+			"github": "GitHub",
+			"sc": "StripChat",
+			"unknown": "未知"
+		}
+	},
+	"usagePage": {
+		"title": "资源占用",
+		"subtitle": "本程序及其唤起进程（ffmpeg、后处理模块等）的 CPU 与内存",
+		"live": "实时",
+		"loading": "加载中…",
+		"empty": "暂无进程数据",
+		"error": "获取失败：{msg}",
+		"read": "读",
+		"write": "写",
+		"summary": {
+			"totalCpu": "总 CPU",
+			"ofAllCores": "占 {n} 核的 {pct}%",
+			"totalMem": "总内存",
+			"procCount": "进程数",
+			"gpu": "总 GPU",
+			"gpuHint": "全树 GPU 引擎利用率合计（悬停进程行可见显存明细）",
+			"disk": "总磁盘",
+			"net": "系统网络",
+			"netHint": "操作系统不按进程归属网络流量，此处为整机口径（排除回环口）"
+		},
+		"roles": {
+			"main": "主程序",
+			"module": "模块",
+			"ffmpeg": "FFmpeg",
+			"other": "其他"
+		},
+		"table": {
+			"process": "进程",
+			"pid": "PID",
+			"role": "角色",
+			"cpu": "CPU",
+			"cpuHint": "100% = 单核满载，多核可超 100%",
+			"gpu": "GPU",
+			"gpuHint": "各 GPU 引擎利用率合计，可超 100%",
+			"vram": "显存",
+			"disk": "磁盘",
+			"diskHint": "磁盘 I/O 速率（读/写）",
+			"mem": "内存",
+			"uptime": "运行时长",
+			"cmd": "命令行"
+		},
+		"chart": {
+			"mem": "内存",
+			"disk": "磁盘 I/O",
+			"net": "网络"
+		}
+	},
+	"settings": {
+		"title": "设置",
+		"loading": "加载中...",
+		"saved": "设置已保存",
+		"saving": "保存中…",
+		"saveFailed": "自动保存失败",
+		"updatedByOther": "设置已由其他客户端更新",
+		"mouflonUpdatedByOther": "Mouflon Keys 已由其他客户端更新",
+		"sections": {
+			"recording": "录制",
+			"network": "网络",
+			"mouflonKeys": "Mouflon 解密密钥",
+			"security": "安全",
+			"language": "语言"
+		},
+		"language": {
+			"label": "界面语言",
+			"zhCN": "中文",
+			"enUS": "English"
+		},
+		"outputDir": {
+			"label": "分片流输出目录",
+			"placeholder": "/path/to/recordings",
+			"hint": "录制产生的分片流（fMP4 .m4s）存放位置。修改后按回车或点击其他区域确认。",
+			"pick": "选择",
+			"changeTitle": "修改分片流输出目录",
+			"changeMessage": "将分片流输出目录改为：\n{dir}\n\n此更改将在下次录制时生效。",
+			"changeConfirm": "确认"
+		},
+		"maxPpConcurrent": {
+			"label": "最大并发后处理数",
+			"hint": "同时处理的后处理任务数。0 = 自动（= CPU 逻辑核心数）；手动设置时上限同为 CPU 逻辑核心数，可设置低于自动值以主动限制并发。实际并发会随系统负载自动下调，上限只是天花板。"
+		},
+		"pollInterval": {
+			"label": "轮询间隔（秒）"
+		},
+		"preferredResolution": {
+			"label": "首选录制分辨率",
+			"original": "原始画质（最高）",
+			"hint": "选择目标画质，并设置该画质不可用时的搜索方向。"
+		},
+		"resolutionPreference": {
+			"label": "回退方向",
+			"lower": "优先较低画质",
+			"higher": "优先较高画质",
+			"hint": "先使用该方向最接近的画质；若不存在，则使用反方向最接近的画质，不会因缺少精确画质而失败。"
+		},
+		"preferredCodec": {
+			"label": "首选视频编码",
+			"default": "默认（由服务器决定）",
+			"hint": "获取播放列表时附带 preferredVideoCodec 参数。是否生效取决于服务器是否提供该编码；H.265 / AV1 体积更小，但部分播放器和后处理工具可能不支持。修改后对之后新获取的播放列表生效。"
+		},
+		"playerPath": {
+			"label": "自定义播放器",
+			"placeholder": "留空自动探测",
+			"hint": "播放转发流与录制文件时唤起的播放器程序；留空则按平台自动探测（转发流探测 mpv/VLC/PotPlayer 等，录制文件走系统默认程序）。",
+			"pick": "选择程序",
+			"clear": "恢复自动探测"
+		},
+		"recordingDuration": {
+			"label": "录制文件时长",
+			"hint": "设为 00:00:00 表示不限制时长。自动保存并应用于正在录制的文件。达到时长后在下一个 HLS 分片边界开始新文件，实际时长可能多几秒。",
+			"unitH": "时",
+			"unitM": "分",
+			"unitS": "秒"
+		},
+		"maxTmpDirGb": {
+			"label": "后处理临时目录最大占用（GB）",
+			"hint": "后处理模块运行时产生的临时文件上限，超出后自动删除最旧的文件。0 表示不限制，默认 50 GB"
+		},
+		"checkPrerelease": {
+			"label": "检查 beta 版本更新",
+			"hint": "开启后将同时检查 beta 预发布版本。beta 版本可能不稳定，仅建议尝鲜用户开启。",
+			"hintBeta": "当前运行的是 beta 版本，已自动启用 beta 更新检查。"
+		},
+		"ffmpegAutoUpdate": {
+			"label": "空闲时自动更新 FFmpeg",
+			"hint": "开启后，程序会定期检查下载到 tools 文件夹中的 FFmpeg 是否有新版本，并在没有录制和后处理任务时自动更新。使用系统 PATH 中的 FFmpeg 或手动放入 tools 的 FFmpeg 不受影响。"
+		},
+		"ffmpegPreference": {
+			"label": "FFmpeg 首选项",
+			"hint": "选择使用系统环境变量（PATH）中的 FFmpeg，还是程序目录 tools 文件夹中的 FFmpeg。",
+			"system": "系统环境变量",
+			"tools": "tools 文件夹",
+			"unset": "未设置",
+			"systemNoAutoUpdate": "使用系统环境变量中的 FFmpeg 时将禁用 FFmpeg 自动更新。",
+			"pathMissingTitle": "未检测到 FFmpeg",
+			"pathMissingDesc": "系统环境变量（PATH）中未检测到完整的 FFmpeg 组件（ffmpeg、ffprobe、ffplay），无法使用该来源。确认后将自动改为 tools 文件夹。",
+			"toolsMissingTitle": "tools 文件夹缺少 FFmpeg",
+			"toolsMissingDesc": "tools 文件夹中未检测到完整的 FFmpeg 组件（ffmpeg、ffprobe、ffplay）。是否现在下载 FFmpeg 到 tools 文件夹？取消则改用系统环境变量（PATH）。",
+			"download": "下载",
+			"downloadStartFailed": "下载启动失败，请稍后重试",
+			"notInstalled": "未安装"
+		},
+		"apiProxy": {
+			"label": "API 代理（访问 stripchat.com，留空不使用）",
+			"placeholder": "127.0.0.1:10808",
+			"hint": "修改后按回车或点击其他区域确认"
+		},
+		"scMirror": {
+			"label": "Stripchat 镜像站（替换 API 中的 stripchat.com 域名，留空不使用）",
+			"placeholder": "stripchat.example.com",
+			"hint": "同时填写 API 代理与镜像站时，将通过 API 代理访问镜像站"
+		},
+		"scBrowseProxy": {
+			"label": "浏览页代理（StripChat 页列表/快照请求，与 API 代理相互独立，留空直连）",
+			"placeholder": "127.0.0.1:10808",
+			"hint": "仅作用于 StripChat 浏览页，不影响录制与状态轮询"
+		},
+		"scBrowseMirror": {
+			"label": "浏览页镜像站（StripChat 页专用，与上方镜像站相互独立，留空直连 stripchat.com）",
+			"placeholder": "stripchat.example.com",
+			"hint": "同时填写浏览页代理与镜像站时，将通过该代理访问该镜像站"
+		},
+		"cdnProxy": {
+			"label": "CDN 代理（下载 HLS 分片，留空不使用）",
+			"placeholder": "127.0.0.1:10808",
+			"hint": "修改后按回车或点击其他区域确认"
+		},
+		"communityProxy": {
+			"label": "模块社区代理（下载社区模块文件，留空不使用）",
+			"placeholder": "127.0.0.1:10808",
+			"hint": "修改后按回车或点击其他区域确认"
+		},
+		"communityMirror": {
+			"label": "模块社区加速站（在 GitHub 地址前加前缀，留空不使用）",
+			"placeholder": "ghproxy.com",
+			"hint": "同时填写模块社区代理与加速站时，将通过模块社区代理访问加速站"
+		},
+		"cgfProxy": {
+			"label": "camgirlfinder 代理（访问 camgirlfinder.net，留空不使用）",
+			"placeholder": "127.0.0.1:10808",
+			"hint": "主播查找页面（人脸/名字搜索）为纯前端功能，直接从浏览器访问 camgirlfinder.net，无需此代理。本设置仅用于后端在后台获取主播历史在线规律（schedule），以自适应调整轮询间隔节省流量。修改后按回车或点击其他区域确认"
+		},
+		"echEnabled": {
+			"label": "ECH（加密 ClientHello）",
+			"hint": "开启后仅 SC API 请求的 TLS ClientHello 经借用 ECH 配置加密，对外隐藏真实 SNI，可能有效改善 API 返回 403 的情况；不可路由或解析失败时自动回退普通连接。CDN 分片流量直取优先，仅全部直连失败后在兜底竞速中带 ECH 腿"
+		},
+		"mouflonKeysDesc": "Stripchat 对 HLS 分片文件名进行了加密（Mouflon 系统）。录制前需在此填入对应的 pkey → pdkey 密钥对，密钥可从社区渠道获取。",
+		"mouflonTable": {
+			"pkey": "pkey（密钥标识符）",
+			"pdkey": "pdkey（解密密钥）",
+			"keystream": "keystream（密钥流）"
+		},
+		"mouflonKeystreamHint": "pdkey 与 keystream 填一个即可：keystream 为十六进制（至少 16 字节），用于没有 pdkey 的 pkey；同一 pkey 两者都有时优先使用 pdkey。",
+		"noKeys": "暂无密钥",
+		"addKey": "添加",
+		"keyError": {
+			"needKey": "pkey 不能为空，且 pdkey 与 keystream 至少填写一个"
+		},
+		"mouflonSyncUrl": {
+			"label": "同步地址",
+			"placeholder": "https://mouflon.chantrail.com"
+		},
+		"mouflonSyncToken": {
+			"label": "同步令牌（可选）",
+			"placeholder": "不需要鉴权时留空"
+		},
+		"mouflonSync": "立即同步",
+		"mouflonSyncing": "同步中…",
+		"mouflonSyncDone": "密钥同步成功",
+		"mouflonSyncUpToDate": "密钥已是最新，无需更新",
+		"mouflonSyncFailed": "同步失败：{error}",
+		"mouflonAutoSyncedAt": "数据源更新：",
+		"mouflonManualUpdatedAt": "上次手动更新：",
+		"mouflonNever": "从未",
+		"localeFileInvalid": "语言文件 {file} 校验失败",
+		"mergeFormat": {
+			"hint": "录制结束后自动合并分片为单一文件的格式，修改后对当前录制同样生效",
+			"label": "合并格式"
+		}
+	},
+	"usePostprocess": {
+		"processing": "处理中",
+		"waitingProgress": "等待进度…",
+		"fetchOutputFailed": "获取模块输出失败",
+		"fetchTasksFailed": "获取后处理任务失败",
+		"doneForFile": "{name} 后处理完成",
+		"failedWithDetail": "{name} 后处理失败：{detail}",
+		"failedGeneric": "{name} 后处理失败"
+	},
+	"relay": {
+		"title": "转发流",
+		"subtitle": "{streams} 个转发流，{connections} 个活跃连接",
+		"hint": "直接用播放器打开以下地址即可播放，无需手动启动。首次访问时自动连接上游。未在录制列表中的主播同样可以转发。",
+		"hintParams": "可选参数：?resolution=720&codec=h264&preference=higher（分辨率/编码/回退方向，缺省回退程序设置；变更参数重新请求会重启对应会话）",
+		"noSessions": "暂无活跃转发流",
+		"noSessionsHint": "用播放器打开 /stream/{modelname} 即可自动启动",
+		"connections": "{n} 个连接",
+		"uptime": "运行 {t}",
+		"copyUrl": "复制地址",
+		"stopRelay": "停止转发",
+		"desktopUnsupported": "转发流功能仅在 Server 模式下可用",
+		"state": {
+			"live": "直播中",
+			"offline": "离线",
+			"connecting": "连接中",
+			"error": "错误"
+		}
+	},
+	"login": {
+		"title": "登录",
+		"subtitle": "请输入管理员密码以继续",
+		"initTitle": "设置管理员密码",
+		"initSubtitle": "系统已完成初始化，请先设置一个管理员密码",
+		"passwordLabel": "密码",
+		"passwordPlaceholder": "请输入密码",
+		"initPlaceholder": "请输入密码",
+		"loginButton": "登录",
+		"initButton": "设置密码并登录",
+		"logout": "退出登录",
+		"passwordRequired": "请输入密码",
+		"passwordStrength": "密码需至少 6 位，且包含字母、数字和特殊字符",
+		"passwordStrengthHint": "至少 6 位 · 包含字母 · 包含数字 · 包含特殊字符（如 !#$%）",
+		"wrongPassword": "密码错误，请重试",
+		"statusFetchFailed": "无法连接到服务器，请刷新重试",
+		"continueWithoutPassword": "不设置密码，直接进入（仅限可信环境）",
+		"changePassword": {
+			"title": "修改密码",
+			"oldLabel": "当前密码",
+			"newLabel": "新密码",
+			"oldPlaceholder": "请输入当前密码",
+			"newPlaceholder": "请输入新密码",
+			"submit": "修改密码",
+			"submitting": "修改中…",
+			"success": "密码已修改，请重新登录",
+			"wrongOld": "当前密码错误"
+		},
+		"removePassword": {
+			"submit": "移除密码",
+			"submitting": "移除中…",
+			"success": "已移除密码，此后访问免登录",
+			"dialogTitle": "移除管理员密码",
+			"dialogDesc": "移除后无需登录即可访问管理界面，请确认当前环境可信。输入当前密码以确认操作。"
+		},
+		"setPassword": {
+			"noPasswordHint": "当前处于无密码模式，任何人都能访问管理界面。设置密码后将恢复登录保护。",
+			"newLabel": "新密码",
+			"submit": "设置密码",
+			"submitting": "设置中…"
+		}
+	},
+	"setup": {
+		"title": "初始配置",
+		"subtitle": "首次启动需要完成以下配置，之后可在「设置」页面随时修改",
+		"back": "上一步",
+		"next": "下一步",
+		"skip": "跳过",
+		"finish": "完成配置",
+		"saving": "保存中…",
+		"outputDirRequired": "请填写录制输出目录",
+		"step1": {
+			"title": "选择界面语言",
+			"desc": "选择你偏好的界面语言"
+		},
+		"step2": {
+			"title": "录制输出目录",
+			"desc": "录制文件将保存到此目录，请确保该路径有足够的磁盘空间",
+			"placeholder": "/path/to/recordings",
+			"hint": "填写服务器上的绝对路径，例如 /data/recordings 或 D:\\recordings"
+		},
+		"step3": {
+			"title": "网络代理（可选）",
+			"desc": "如果服务器无法直接访问 Stripchat，可在此配置代理。不需要可直接跳过"
+		},
+		"step4": {
+			"title": "FFmpeg 检查",
+			"desc": "录制与后处理需要 ffmpeg / ffprobe / ffplay，请选择使用哪个位置的 FFmpeg"
+		},
+		"step5": {
+			"title": "设置管理员密码",
+			"desc": "设置一个访问管理界面的密码（至少 6 位），之后每次访问都需要输入此密码",
+			"placeholder": "请输入密码（至少 6 位）",
+			"hint": "此密码用于保护管理界面，请妥善记录",
+			"noPassword": "不设置密码，免登录直接使用（仅限可信环境）"
+		}
+	},
+	"notifications": {
+		"markAllRead": "全部已读",
+		"empty": "暂无通知",
+		"action": {
+			"remove_streamers": "删除主播",
+			"view_update": "前往关于页面"
+		},
+		"backend": {
+			"ffmpegMissing": "未检测到 ffmpeg，录制和后处理功能将无法使用。请安装 ffmpeg 并确保其在 PATH 中，或放入程序目录的 tools 文件夹。",
+			"ffmpegDownloadFailed": "FFmpeg 自动下载失败：{error}。录制和后处理功能将无法使用，请手动安装 ffmpeg 并确保其在 PATH 中，或放入程序目录的 tools 文件夹。",
+			"ffmpegUpdateFailed": "FFmpeg 自动更新失败：{error}（将继续使用当前版本）",
+			"ffmpegUpdateAvailable": "检测到 FFmpeg 新版本，将在程序空闲时自动更新",
+			"ffmpegInstallStarted": "FFmpeg 下载安装已开始",
+			"ffmpegUpdateStarted": "FFmpeg 更新下载已开始",
+			"ffmpegInstalled": "FFmpeg 安装完成：{version}",
+			"ffmpegUpdated": "FFmpeg 更新完成：{version}",
+			"metaMigrated": "已将 {count} 个旧版 meta 文件迁移到按主播子目录的新结构。",
+			"mouflonSyncFailed": "Mouflon 密钥同步失败（已重试 {retries} 次）：{error}",
+			"metaCleanup": "已清理 {count} 个孤立的 meta 文件（对应视频已不存在）",
+			"ppRemainingOne": "发现 1 个未完成的后处理任务（可能由上次异常退出遗留），已重新触发：{name}",
+			"ppRemainingMany": "发现 {count} 个未完成的后处理任务（可能由上次异常退出遗留），已重新触发：{names}",
+			"ppRetryOne": "上次后处理失败，启动后自动重试 1 个任务：{name}",
+			"ppRetryMany": "上次后处理失败，启动后自动重试 {count} 个任务：{names}",
+			"ppFailed": "{name} 后处理失败：{detail}",
+			"startupScanDone": "启动扫描完成",
+			"streamerDeadOne": "主播 {username} 已无法通过用户名或内部 ID 找到，可能已改名、注销或被封禁，后续将跳过其轮询请求。",
+			"streamerDeadMany": "以下 {count} 个主播已无法找到，可能已改名、注销或被封禁，后续将跳过其轮询请求：{usernames}",
+			"updateAvailableDocker": "发现新版本 v{version}，请更新 Docker 镜像以升级",
+			"updateAvailable": "发现新版本 v{version}，前往关于页面下载更新"
+		}
+	},
+	"dirBrowser": {
+		"title": "选择目录",
+		"titleFile": "选择文件",
+		"titleExec": "选择程序",
+		"pathLabel": "路径",
+		"pathPlaceholder": "输入路径后按回车跳转",
+		"thisPc": "此电脑",
+		"up": "上一级",
+		"refresh": "刷新",
+		"go": "跳转",
+		"newFolder": "新建文件夹",
+		"newFolderPlaceholder": "文件夹名称",
+		"empty": "此目录下没有子目录",
+		"emptyFile": "此目录下没有子目录或文件",
+		"emptyExec": "此目录下没有可执行程序",
+		"loadFailed": "无法访问该目录",
+		"createFailed": "创建文件夹失败",
+		"select": "选择此目录",
+		"selectFile": "选择此文件",
+		"selectExec": "选择此程序",
+		"cancel": "取消"
+	},
+	"streamers": {
+		"otherClientAdded": "其他客户端添加了主播：{username}",
+		"otherClientRemoved": "其他客户端移除了主播：{username}",
+		"otherClientAutoRecord": "其他客户端{action}了 {username} 的自动录制",
+		"otherClientAutoRecordEnable": "开启",
+		"otherClientAutoRecordDisable": "关闭",
+		"renamed": "主播 {oldUsername} 已改名为 {newUsername}",
+		"apiError": "Stripchat API 连接错误：{message}"
+	},
+	"stripchat": {
+		"title": "StripChat",
+		"description": "按 Stripchat 官方分类浏览直播，点击卡片右下角按钮添加主播",
+		"tabs": {
+			"girls": "女生",
+			"couples": "情侣",
+			"men": "男生",
+			"trans": "跨性别"
+		},
+		"sort": {
+			"stripRanking": "综合排名",
+			"trending": "热门趋势"
+		},
+		"groups": {
+			"traits": "特征",
+			"langs": "语言"
+		},
+		"tags": {
+			"all": "全部",
+			"ageTeen": "18岁+",
+			"ageYoung": "年轻",
+			"ageMilf": "熟女",
+			"ageMature": "成熟",
+			"ethnicityAsian": "亚洲",
+			"ethnicityWhite": "白人",
+			"ethnicityEbony": "黑人",
+			"ethnicityLatino": "拉丁裔",
+			"ethnicityIndian": "印度裔",
+			"ethnicityMiddleEastern": "中东",
+			"bodyTypePetite": "娇小",
+			"bodyTypeAthletic": "健美",
+			"bodyTypeCurvy": "丰满",
+			"bodyTypeBBW": "BBW",
+			"specificsBigTits": "巨乳",
+			"specificsBigAss": "翘臀",
+			"specificsBigCock": "大屌",
+			"hairColorBlonde": "金发",
+			"hairColorBlack": "黑发",
+			"hairColorRed": "红发",
+			"subcultureGoth": "哥特",
+			"subcultureRomantic": "浪漫",
+			"subcultureAnime": "动漫",
+			"subcultureStudent": "学生",
+			"tagLanguageChinese": "中文",
+			"tagLanguageJapanese": "日语",
+			"tagLanguageKorean": "韩语",
+			"tagLanguageTaiwanese": "台语",
+			"tagLanguageVietnamese": "越南语",
+			"tagLanguageThai": "泰语",
+			"tagLanguageFilipino": "菲律宾语",
+			"tagLanguageHindi": "印地语",
+			"tagLanguageBengali": "孟加拉语",
+			"tagLanguageUkrainian": "乌克兰语",
+			"tagLanguageRomanian": "罗马尼亚语",
+			"tagLanguageFrench": "法语",
+			"tagLanguageItalian": "意大利语",
+			"tagLanguageTurkish": "土耳其语",
+			"tagLanguageSpanish": "西班牙语",
+			"tagLanguageHungarian": "匈牙利语",
+			"tagLanguageDutch": "荷兰语",
+			"tagLanguagePolish": "波兰语",
+			"tagLanguageCzech": "捷克语",
+			"tagLanguagePortuguese": "葡萄牙语",
+			"tagLanguageGreek": "希腊语"
+		},
+		"add": "添加",
+		"added": "已添加",
+		"addedToast": "已添加 {username}",
+		"end": "已到底部",
+		"empty": "该分类暂无主播",
+		"error": "加载失败：{message}",
+		"toy": "互动玩具",
+		"play": "用系统播放器播放转发流",
+		"playFailed": "唤起播放器失败：{message}",
+		"noPlayer": "未找到可用的播放器，请安装 VLC、mpv 或 PotPlayer",
+		"playerMissing": "设置的播放器路径不存在，请在设置中重新选择",
+		"status": {
+			"public": "公开秀",
+			"private": "私密秀",
+			"virtualPrivate": "虚拟私密",
+			"groupShow": "群组秀",
+			"ticketShow": "票务秀",
+			"p2p": "P2P",
+			"p2pVoice": "P2P语音",
+			"spy": "偷窥",
+			"idle": "等待",
+			"off": "离线"
+		}
+	},
+	"community": {
+		"terms": {
+			"title": "使用社区模块前请注意",
+			"body": "模块社区提供的后处理模块均为第三方社区贡献，与本项目官方无关。\n\n安装并运行社区模块即表示您同意自行承担相关风险：\n\n• 官方不对社区模块的安全性、稳定性或功能完整性作任何保证。\n• 社区模块将在您的服务器本地运行并处理您的录制文件，请确保来源可信。\n• 建议在安装前查看模块源码仓库，了解其具体行为。\n\n如果您理解并接受上述风险，可以继续使用模块社区。",
+			"accept": "我已了解，继续",
+			"decline": "返回"
+		},
+		"author": "作者",
+		"connecting": "连接中…",
+		"description": "浏览并安装社区贡献的后处理模块",
+		"detail": {
+			"author": "作者",
+			"changelog": "更新日志",
+			"installedVersion": "已安装版本",
+			"latestVersion": "最新版本",
+			"license": "许可证",
+			"platformNotSupported": "当前平台不支持此模块",
+			"platforms": "支持平台",
+			"readme": "README",
+			"readmeFailed": "README 加载失败",
+			"readmeLoading": "加载 README 中…",
+			"repo": "源码仓库",
+			"tags": "标签"
+		},
+		"empty": "暂无可用模块",
+		"fetchError": "加载失败，请检查网络连接",
+		"filterAll": "全部",
+		"filterByTag": "按标签",
+		"filterInstalled": "已安装",
+		"filterUpdatable": "可更新",
+		"install": "安装",
+		"installed": "已安装",
+		"installedVersion": "已安装版本",
+		"installError": "安装失败：{error}",
+		"installing": "安装中…",
+		"installSuccess": "模块 {name} 安装成功",
+		"latestVersion": "最新版本",
+		"license": "许可证",
+		"noResults": "没有匹配的模块",
+		"notSupported": "不支持当前平台",
+		"refresh": "刷新列表",
+		"refreshing": "加载中…",
+		"retry": "重试",
+		"search": "搜索模块…",
+		"tags": "标签",
+		"title": "模块社区",
+		"uninstall": "卸载",
+		"uninstallError": "卸载失败：{error}",
+		"uninstalling": "卸载中…",
+		"uninstallSuccess": "模块 {name} 已卸载",
+		"update": "更新",
+		"updateAvailable": "有更新",
+		"updating": "更新中…",
+		"viewRepo": "查看源码"
+	},
+	"about": {
+		"title": "关于",
+		"version": "版本",
+		"updates": "版本更新",
+		"updateCheck": "检查更新",
+		"updateRetry": "重试",
+		"updateChecking": "检查中...",
+		"updateAvailable": "有新版本：{version}",
+		"updateNone": "已是最新版本",
+		"updateFailed": "检查更新失败",
+		"download": "下载更新",
+		"downloadProgress": "下载中 {pct}%",
+		"downloadProgressBytes": "下载中 {mb} MB…",
+		"downloadDone": "下载完成",
+		"downloadDoneHint": "已保存为 {filename}，解压后替换程序文件即可完成更新",
+		"downloadFailed": "下载失败，请重试",
+		"downloadNoAsset": "当前平台暂无可用安装包，请前往 GitHub 手动下载",
+		"installing": "安装中，请稍候…",
+		"installingHint": "正在解压并替换程序文件",
+		"updateDone": "更新完成，正在重启…",
+		"updateDoneHint": "服务器即将重启，页面将自动重新连接",
+		"updateError": "更新失败：{message}",
+		"updateStart": "开始更新",
+		"changelog": "更新日志",
+		"releaseNotes": "版本说明",
+		"github": "GitHub 仓库",
+		"license": "开源许可",
+		"licenseValue": "GPL-3.0",
+		"copyright": "版权所有",
+		"contributors": "贡献者",
+		"contributorsFailed": "贡献者信息加载失败",
+		"dockerUpdateHint": "请更新 Docker 镜像",
+		"reportBug": "反馈 Bug",
+		"viewOnGitHub": "在 GitHub 上查看",
+		"telegram": "Telegram 频道",
+		"ffmpegBuilds": "FFmpeg 构建",
+		"links": "相关链接"
+	},
+	"ffmpeg": {
+		"downloading": "正在下载 FFmpeg…",
+		"updating": "正在更新 FFmpeg…",
+		"installing": "正在校验并安装…",
+		"installed": "FFmpeg 已安装完成",
+		"updated": "FFmpeg 已更新到最新版本",
+		"preferenceWizard": {
+			"title": "选择 FFmpeg 来源",
+			"desc": "由于版本更新，请选择使用哪个位置的 FFmpeg，各位置的检测结果如下：",
+			"systemPath": "系统环境变量（PATH）",
+			"toolsDir": "tools 文件夹",
+			"checking": "正在检测…",
+			"checkFailed": "检测失败",
+			"retry": "重新检测",
+			"confirm": "确认",
+			"download": "下载",
+			"downloadStartFailed": "下载启动失败，请稍后重试",
+			"toolsRecommended": "推荐使用：程序将自动更新此位置的 FFmpeg",
+			"saveFailed": "保存失败，请重试",
+			"incompleteSelection": "注意：所选位置未检测到完整的 ffmpeg / ffprobe / ffplay",
+			"buildLabel": "下载构建：",
+			"buildTrack": "构建轨",
+			"buildVariant": "形态",
+			"trackDefault": "默认轨（{platform}，新硬件基线）",
+			"trackLegacy": "兼容轨（{platform}，老硬件）",
+			"legacyHint": "适用于无 AVX2 的老 CPU",
+			"variant": {
+				"static": "静态（推荐）",
+				"shared": "共享（旁位库）",
+				"debug": "调试（全符号）",
+				"shareddebug": "共享+调试"
+			}
+		},
+		"downloadDialog": {
+			"title": "下载 FFmpeg",
+			"titleInstalling": "校验并安装 FFmpeg",
+			"titleDone": "FFmpeg 安装完成",
+			"titleFailed": "FFmpeg 下载失败",
+			"desc": "正在下载并安装 FFmpeg 到 tools 文件夹，请稍候。",
+			"failed": "下载失败",
+			"retry": "重试下载",
+			"retryFailed": "下载启动失败，请稍后重试",
+			"close": "关闭"
+		}
+	}
 }

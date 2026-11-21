@@ -17,99 +17,123 @@
 	scrollbar-overlay auto-hide scrollbars).
 -->
 <script setup lang="ts">
-	import { computed, nextTick, ref, watch } from "vue";
-	import type { HTMLAttributes } from "vue";
-	import { PopoverContent, PopoverPortal, PopoverRoot, PopoverTrigger } from "reka-ui";
-	import { Clock, X } from "@lucide/vue";
-	import { useI18n } from "vue-i18n";
-	import { cn } from "@/lib/utils";
-	import { Button } from "@/components/ui/button";
-	import { useScrollbar } from "@/composables/useScrollbar";
+import { computed, nextTick, ref, watch } from "vue";
+import type { HTMLAttributes } from "vue";
+import { PopoverContent, PopoverPortal, PopoverRoot, PopoverTrigger } from "reka-ui";
+import { Clock, X } from "@lucide/vue";
+import { useI18n } from "vue-i18n";
+import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { useScrollbar } from "@/composables/useScrollbar";
 
-	const props = withDefaults(
-		defineProps<{
-			/** 总秒数（0 = 不限制）/ Total seconds (0 = unlimited) */
-			modelValue: number;
-			class?: HTMLAttributes["class"];
-		}>(),
-		{ modelValue: 0 },
+const props = withDefaults(
+	defineProps<{
+		/** 总秒数（0 = 不限制）/ Total seconds (0 = unlimited) */
+		modelValue: number;
+		class?: HTMLAttributes["class"];
+	}>(),
+	{ modelValue: 0 },
+);
+
+const emit = defineEmits<{
+	"update:modelValue": [seconds: number];
+}>();
+
+const { t } = useI18n();
+
+/** 弹层开关 / Picker open state */
+const open = ref(false);
+
+// ── 显示文本 / Display text ──────────────────────────────────────────────
+/** 时部分：不足两位补零，>=100 自然扩展 / Hours: zero-padded to 2, grows naturally >=100 */
+const display = computed(() => {
+	const total = Math.max(0, Math.floor(props.modelValue || 0));
+	const h = Math.floor(total / 3600);
+	const m = Math.floor((total % 3600) / 60);
+	const s = total % 60;
+	const pad = (n: number) => String(n).padStart(2, "0");
+	return `${pad(h)}:${pad(m)}:${pad(s)}`;
+});
+
+// ── 弹层草稿值（确认前不改真值）/ Picker draft values (untouched until confirm) ──
+const draftH = ref(0);
+const draftM = ref(0);
+const draftS = ref(0);
+
+/** 时列取值范围：默认 0-99，若当前值更大则扩展列表 / Hour list range: 0-99 default, grows if the current value exceeds it */
+const hourList = computed(() => {
+	const n = Math.max(99, draftH.value);
+	return Array.from({ length: n + 1 }, (_, i) => i);
+});
+/** 分/秒列固定 0-59 / Minute/second columns are fixed 0-59 */
+const msList = Array.from({ length: 60 }, (_, i) => i);
+
+/** 三列定义：取值列表 + 草稿读写 + aria 标签键 / Column defs: value list + draft accessors + aria-label key */
+const columns = [
+	{
+		key: "h",
+		aria: "settings.recordingDuration.unitH",
+		list: () => hourList.value,
+		get: () => draftH.value,
+		set: (n: number) => (draftH.value = n),
+	},
+	{
+		key: "m",
+		aria: "settings.recordingDuration.unitM",
+		list: () => msList,
+		get: () => draftM.value,
+		set: (n: number) => (draftM.value = n),
+	},
+	{
+		key: "s",
+		aria: "settings.recordingDuration.unitS",
+		list: () => msList,
+		get: () => draftS.value,
+		set: (n: number) => (draftS.value = n),
+	},
+] as const;
+
+// 三列容器引用：打开时滚动定位 + 隐藏式滚动条 / Column container refs:
+// scroll-to-selection on open + overlay scrollbar wiring
+const colRefs = [
+	ref<HTMLElement | null>(null),
+	ref<HTMLElement | null>(null),
+	ref<HTMLElement | null>(null),
+];
+colRefs.forEach((r) => useScrollbar(r));
+
+/** 把列中 data-active 的项滚动到视口中央 / Scroll the data-active item to the column's center */
+function scrollActiveIntoView(el: HTMLElement | null) {
+	el?.querySelector('[data-active="true"]')?.scrollIntoView({ block: "center" });
+}
+
+// 打开弹层：用真值播种草稿，并把三列的选中项滚到中间 / On open: seed drafts
+// from the real value and center the selected item in each column
+watch(open, async (v) => {
+	if (!v) return;
+	const total = Math.max(0, Math.floor(props.modelValue || 0));
+	draftH.value = Math.floor(total / 3600);
+	draftM.value = Math.floor((total % 3600) / 60);
+	draftS.value = total % 60;
+	await nextTick();
+	colRefs.forEach((r) => scrollActiveIntoView(r.value));
+});
+
+/** 确认：草稿合成总秒数回写并关闭 / Confirm: combine drafts into total seconds, emit, close */
+function confirm() {
+	emit(
+		"update:modelValue",
+		Math.max(0, draftH.value) * 3600 +
+			Math.max(0, draftM.value) * 60 +
+			Math.max(0, draftS.value),
 	);
+	open.value = false;
+}
 
-	const emit = defineEmits<{
-		"update:modelValue": [seconds: number];
-	}>();
-
-	const { t } = useI18n();
-
-	/** 弹层开关 / Picker open state */
-	const open = ref(false);
-
-	// ── 显示文本 / Display text ──────────────────────────────────────────────
-	/** 时部分：不足两位补零，>=100 自然扩展 / Hours: zero-padded to 2, grows naturally >=100 */
-	const display = computed(() => {
-		const total = Math.max(0, Math.floor(props.modelValue || 0));
-		const h = Math.floor(total / 3600);
-		const m = Math.floor((total % 3600) / 60);
-		const s = total % 60;
-		const pad = (n: number) => String(n).padStart(2, "0");
-		return `${pad(h)}:${pad(m)}:${pad(s)}`;
-	});
-
-	// ── 弹层草稿值（确认前不改真值）/ Picker draft values (untouched until confirm) ──
-	const draftH = ref(0);
-	const draftM = ref(0);
-	const draftS = ref(0);
-
-	/** 时列取值范围：默认 0-99，若当前值更大则扩展列表 / Hour list range: 0-99 default, grows if the current value exceeds it */
-	const hourList = computed(() => {
-		const n = Math.max(99, draftH.value);
-		return Array.from({ length: n + 1 }, (_, i) => i);
-	});
-	/** 分/秒列固定 0-59 / Minute/second columns are fixed 0-59 */
-	const msList = Array.from({ length: 60 }, (_, i) => i);
-
-	/** 三列定义：取值列表 + 草稿读写 + aria 标签键 / Column defs: value list + draft accessors + aria-label key */
-	const columns = [
-		{ key: "h", aria: "settings.recordingDuration.unitH", list: () => hourList.value, get: () => draftH.value, set: (n: number) => (draftH.value = n) },
-		{ key: "m", aria: "settings.recordingDuration.unitM", list: () => msList, get: () => draftM.value, set: (n: number) => (draftM.value = n) },
-		{ key: "s", aria: "settings.recordingDuration.unitS", list: () => msList, get: () => draftS.value, set: (n: number) => (draftS.value = n) },
-	] as const;
-
-	// 三列容器引用：打开时滚动定位 + 隐藏式滚动条 / Column container refs:
-	// scroll-to-selection on open + overlay scrollbar wiring
-	const colRefs = [ref<HTMLElement | null>(null), ref<HTMLElement | null>(null), ref<HTMLElement | null>(null)];
-	colRefs.forEach((r) => useScrollbar(r));
-
-	/** 把列中 data-active 的项滚动到视口中央 / Scroll the data-active item to the column's center */
-	function scrollActiveIntoView(el: HTMLElement | null) {
-		el?.querySelector('[data-active="true"]')?.scrollIntoView({ block: "center" });
-	}
-
-	// 打开弹层：用真值播种草稿，并把三列的选中项滚到中间 / On open: seed drafts
-	// from the real value and center the selected item in each column
-	watch(open, async (v) => {
-		if (!v) return;
-		const total = Math.max(0, Math.floor(props.modelValue || 0));
-		draftH.value = Math.floor(total / 3600);
-		draftM.value = Math.floor((total % 3600) / 60);
-		draftS.value = total % 60;
-		await nextTick();
-		colRefs.forEach((r) => scrollActiveIntoView(r.value));
-	});
-
-	/** 确认：草稿合成总秒数回写并关闭 / Confirm: combine drafts into total seconds, emit, close */
-	function confirm() {
-		emit(
-			"update:modelValue",
-			Math.max(0, draftH.value) * 3600 + Math.max(0, draftM.value) * 60 + Math.max(0, draftS.value),
-		);
-		open.value = false;
-	}
-
-	/** 清零（= 不限制）/ Clear to 0 (= unlimited) */
-	function clear() {
-		emit("update:modelValue", 0);
-	}
+/** 清零（= 不限制）/ Clear to 0 (= unlimited) */
+function clear() {
+	emit("update:modelValue", 0);
+}
 </script>
 
 <template>
@@ -182,7 +206,12 @@
 				<!-- 底部：取消/确认（草稿确认前不落真值）/ Footer: cancel/confirm
 					(draft only lands on confirm) -->
 				<div class="flex justify-end gap-2 border-t px-2.5 py-2">
-					<Button variant="ghost" size="sm" class="h-7 px-2.5 text-xs" @click="open = false">
+					<Button
+						variant="ghost"
+						size="sm"
+						class="h-7 px-2.5 text-xs"
+						@click="open = false"
+					>
 						{{ t("common.cancel") }}
 					</Button>
 					<Button size="sm" class="h-7 px-2.5 text-xs" @click="confirm">

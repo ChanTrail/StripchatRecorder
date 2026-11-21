@@ -73,10 +73,7 @@ export async function call<T = unknown>(
  * @param cb    - 事件回调 / Event callback
  * @returns 取消订阅函数 / Unsubscribe function
  */
-export async function on(
-	event: string,
-	cb: (payload: unknown) => void,
-): Promise<() => void> {
+export async function on(event: string, cb: (payload: unknown) => void): Promise<() => void> {
 	const unlisten: UnlistenFn = await listen<unknown>(event, (e) => {
 		cb(e.payload);
 	});
@@ -88,5 +85,3 @@ export async function on(
 export function startTokenRenew(): void {
 	// no-op in Tauri mode
 }
-
-

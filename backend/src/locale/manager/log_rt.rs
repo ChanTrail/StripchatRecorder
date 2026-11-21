@@ -12,8 +12,8 @@ static LOG_TRANSLATIONS: OnceLock<ParkingRwLock<serde_json::Value>> = OnceLock::
 
 /// 返回全局日志翻译缓存的引用 / Return the global log-translation cache
 fn log_translations() -> &'static ParkingRwLock<serde_json::Value> {
-    LOG_TRANSLATIONS
-        .get_or_init(|| ParkingRwLock::new(serde_json::Value::Object(Default::default())))
+	LOG_TRANSLATIONS
+		.get_or_init(|| ParkingRwLock::new(serde_json::Value::Object(Default::default())))
 }
 
 /// 加载指定语言的日志翻译到全局缓存（缺失条目用内置文案兜底，见 [`read_log_locale`]）。
@@ -22,8 +22,8 @@ fn log_translations() -> &'static ParkingRwLock<serde_json::Value> {
 /// back to the embedded text, see [`read_log_locale`]). Called at startup
 /// (`startup::init_logging_and_locale`) and on both ends when a settings save changes the language.
 pub fn load_log_translations(locale_code: &str) {
-    let value = read_log_locale(locale_code);
-    *log_translations().write() = value;
+	let value = read_log_locale(locale_code);
+	*log_translations().write() = value;
 }
 
 /// 通过点分 key 在翻译 JSON 中查找字符串，进行 `{varName}` 参数插值后返回。
@@ -36,26 +36,26 @@ pub fn load_log_translations(locale_code: &str) {
 /// `key` 示例 / Example key: `"recorder.started"`
 /// `params` 示例 / Example params: `&[("username", "alice"), ("dir", "/tmp/rec")]`
 pub fn tl_log(key: &str, params: &[(&str, &str)]) -> String {
-    let guard = log_translations().read();
-    // 按 '.' 逐层下钻 / Descend level by level on '.'
-    let mut node: &serde_json::Value = &guard;
-    for part in key.split('.') {
-        match node.get(part) {
-            Some(v) => node = v,
-            None => return key.to_string(),
-        }
-    }
-    let template = match node.as_str() {
-        Some(s) => s.to_string(),
-        None => return key.to_string(),
-    };
-    // 参数插值：把 {varName} 替换为对应值 / Interpolate {varName} → value
-    if params.is_empty() {
-        return template;
-    }
-    let mut result = template;
-    for (name, value) in params {
-        result = result.replace(&format!("{{{}}}", name), value);
-    }
-    result
+	let guard = log_translations().read();
+	// 按 '.' 逐层下钻 / Descend level by level on '.'
+	let mut node: &serde_json::Value = &guard;
+	for part in key.split('.') {
+		match node.get(part) {
+			Some(v) => node = v,
+			None => return key.to_string(),
+		}
+	}
+	let template = match node.as_str() {
+		Some(s) => s.to_string(),
+		None => return key.to_string(),
+	};
+	// 参数插值：把 {varName} 替换为对应值 / Interpolate {varName} → value
+	if params.is_empty() {
+		return template;
+	}
+	let mut result = template;
+	for (name, value) in params {
+		result = result.replace(&format!("{{{}}}", name), value);
+	}
+	result
 }

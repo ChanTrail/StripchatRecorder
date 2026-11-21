@@ -56,8 +56,7 @@ export function useCanvasTransform(canvasRef: Ref<HTMLElement | null>, onBeforeW
 		isPanning.value = false;
 		const dx = Math.abs(e.clientX - rightMouseDownPos.x);
 		const dy = Math.abs(e.clientY - rightMouseDownPos.y);
-		const wasClick =
-			dx < 5 && dy < 5 && !(e.target as HTMLElement).closest(".pipeline-node");
+		const wasClick = dx < 5 && dy < 5 && !(e.target as HTMLElement).closest(".pipeline-node");
 		return { wasClick, canvasPos: screenToCanvas(e.clientX, e.clientY) };
 	}
 
@@ -105,7 +104,12 @@ export function useCanvasTransform(canvasRef: Ref<HTMLElement | null>, onBeforeW
 		const canvasRect = canvasRef.value?.getBoundingClientRect();
 		if (!canvasRect || canvasRect.width === 0 || canvasRect.height === 0) return;
 
-		interface NodeBox { x: number; y: number; w: number; h: number }
+		interface NodeBox {
+			x: number;
+			y: number;
+			w: number;
+			h: number;
+		}
 		const boxes: NodeBox[] = [];
 
 		const inputEl = canvasRef.value?.querySelector(".pipeline-node") as HTMLElement | null;
@@ -125,7 +129,10 @@ export function useCanvasTransform(canvasRef: Ref<HTMLElement | null>, onBeforeW
 
 		if (boxes.length === 0) return;
 
-		let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+		let minX = Infinity,
+			minY = Infinity,
+			maxX = -Infinity,
+			maxY = -Infinity;
 		for (const b of boxes) {
 			minX = Math.min(minX, b.x);
 			minY = Math.min(minY, b.y);

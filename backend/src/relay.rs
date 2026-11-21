@@ -28,17 +28,15 @@ pub mod worker;
 /// ## 错误 / Errors
 /// - 绑定监听或读取本地地址失败 → IO 错误 /
 ///   binding the listener or reading its address fails → IO error
-pub async fn start_stream_listener(
-    state: handler::RelayState,
-) -> crate::core::error::Result<u16> {
-    use axum::{Router, routing::get};
-    let router: Router<()> = Router::new()
-        .route("/stream/{modelname}", get(handler::stream_handler))
-        .with_state(state);
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
-    let port = listener.local_addr()?.port();
-    tokio::spawn(async move {
-        let _ = axum::serve(listener, router).await;
-    });
-    Ok(port)
+pub async fn start_stream_listener(state: handler::RelayState) -> crate::core::error::Result<u16> {
+	use axum::{Router, routing::get};
+	let router: Router<()> = Router::new()
+		.route("/stream/{modelname}", get(handler::stream_handler))
+		.with_state(state);
+	let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+	let port = listener.local_addr()?.port();
+	tokio::spawn(async move {
+		let _ = axum::serve(listener, router).await;
+	});
+	Ok(port)
 }

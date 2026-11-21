@@ -8,7 +8,12 @@
  */
 
 import { computed, reactive } from "vue";
-import { usePostprocessStore, isPortCompatible, nodeEffectiveId, type PortType } from "@/stores/postprocess";
+import {
+	usePostprocessStore,
+	isPortCompatible,
+	nodeEffectiveId,
+	type PortType,
+} from "@/stores/postprocess";
 import type { PortRef } from "./usePortWiring";
 
 export function useNodeContextMenu() {
@@ -39,12 +44,16 @@ export function useNodeContextMenu() {
 	 */
 	const contextMenuModules = computed(() => {
 		const used = new Set(store.pipeline.nodes.map((n) => n.moduleId));
-		return store.modules.filter((m) =>
-			(m.reusable || !used.has(m.id)) && !m.id.startsWith("__builtin__recording_input"),
+		return store.modules.filter(
+			(m) =>
+				(m.reusable || !used.has(m.id)) && !m.id.startsWith("__builtin__recording_input"),
 		);
 	});
 
-	function addModuleAtCursor(moduleId: string, snapPos: (pos: { x: number; y: number }) => { x: number; y: number }) {
+	function addModuleAtCursor(
+		moduleId: string,
+		snapPos: (pos: { x: number; y: number }) => { x: number; y: number },
+	) {
 		store.addNode(moduleId, snapPos({ ...contextMenu.canvasPos }));
 		closeContextMenu();
 	}
@@ -58,7 +67,12 @@ export function useNodeContextMenu() {
 		fromPort: PortRef | null;
 	}>({ visible: false, x: 0, y: 0, canvasPos: { x: 0, y: 0 }, fromPort: null });
 
-	function openWireMenu(x: number, y: number, canvasPos: { x: number; y: number }, fromPort: PortRef) {
+	function openWireMenu(
+		x: number,
+		y: number,
+		canvasPos: { x: number; y: number },
+		fromPort: PortRef,
+	) {
 		wireMenu.x = x;
 		wireMenu.y = y;
 		wireMenu.canvasPos = canvasPos;
@@ -86,7 +100,10 @@ export function useNodeContextMenu() {
 		});
 	});
 
-	function addModuleFromWire(moduleId: string, snapPos: (pos: { x: number; y: number }) => { x: number; y: number }) {
+	function addModuleFromWire(
+		moduleId: string,
+		snapPos: (pos: { x: number; y: number }) => { x: number; y: number },
+	) {
 		if (!wireMenu.fromPort) return;
 		const pos = snapPos({ x: wireMenu.canvasPos.x + 20, y: wireMenu.canvasPos.y });
 		store.addNode(moduleId, pos);

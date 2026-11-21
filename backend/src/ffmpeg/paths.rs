@@ -13,7 +13,7 @@ use std::path::PathBuf;
 /// ffmpeg / ffprobe 的自动安装目录（`<exe_dir>/tools/`）。
 /// Auto-install directory for ffmpeg / ffprobe (`<exe_dir>/tools/`).
 pub fn tools_dir() -> PathBuf {
-    crate::config::app_state::exe_dir().join("tools")
+	crate::config::app_state::exe_dir().join("tools")
 }
 
 /// 把旧版本使用的 `lib/` 安装目录整体迁移为 `tools/`。
@@ -25,34 +25,34 @@ pub fn tools_dir() -> PathBuf {
 /// Called once by the startup flow so an already-downloaded copy is not
 /// orphaned into a ~200 MB re-download.
 pub(crate) fn migrate_legacy_lib_dir() {
-    let exe = crate::config::app_state::exe_dir();
-    let old = exe.join("lib");
-    let new = tools_dir();
-    if old.is_dir()
-        && !new.exists()
-        && let Err(e) = std::fs::rename(&old, &new)
-    {
-        tracing::warn!(
-            "{}",
-            crate::tl!(
-                "ffmpeg.migrateLibDirFailed",
-                from = old.display(),
-                to = new.display(),
-                error = e
-            )
-        );
-    }
+	let exe = crate::config::app_state::exe_dir();
+	let old = exe.join("lib");
+	let new = tools_dir();
+	if old.is_dir()
+		&& !new.exists()
+		&& let Err(e) = std::fs::rename(&old, &new)
+	{
+		tracing::warn!(
+			"{}",
+			crate::tl!(
+				"ffmpeg.migrateLibDirFailed",
+				from = old.display(),
+				to = new.display(),
+				error = e
+			)
+		);
+	}
 }
 
 /// 当前平台的可执行文件名（Windows 带 `.exe` 后缀）。
 /// Executable file name for the current platform (`.exe` suffix on Windows).
 pub(crate) fn exe_name(base: &str) -> String {
-    #[cfg(target_os = "windows")]
-    {
-        format!("{}.exe", base)
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        base.to_string()
-    }
+	#[cfg(target_os = "windows")]
+	{
+		format!("{}.exe", base)
+	}
+	#[cfg(not(target_os = "windows"))]
+	{
+		base.to_string()
+	}
 }

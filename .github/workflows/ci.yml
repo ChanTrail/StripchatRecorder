@@ -257,13 +257,7 @@ jobs:
     name: Auto-tag release
     runs-on: ubuntu-22.04
     needs:
-      [
-        check-frontend,
-        check-desktop-frontend,
-        check-desktop-backend,
-        check-server,
-        check-modules,
-      ]
+      [check-frontend, check-desktop-frontend, check-desktop-backend, check-server, check-modules]
     if: github.ref == 'refs/heads/master' && github.event_name == 'push'
 
     steps:
@@ -309,13 +303,7 @@ jobs:
     name: Auto-tag pre-release (beta)
     runs-on: ubuntu-22.04
     needs:
-      [
-        check-frontend,
-        check-desktop-frontend,
-        check-desktop-backend,
-        check-server,
-        check-modules,
-      ]
+      [check-frontend, check-desktop-frontend, check-desktop-backend, check-server, check-modules]
     if: github.ref == 'refs/heads/beta' && github.event_name == 'push'
 
     steps:

@@ -3,8 +3,8 @@
 //! migrated into the new layout.
 
 use super::super::model::{
-    VideoMeta, legacy_truncated_meta_target, list_all_meta_paths_in, meta_dir, meta_dir_for,
-    username_from_path,
+	VideoMeta, legacy_truncated_meta_target, list_all_meta_paths_in, meta_dir, meta_dir_for,
+	username_from_path,
 };
 use std::path::Path;
 
@@ -34,82 +34,82 @@ use std::path::Path;
 /// calls are idempotent — migrated files no longer exist at the root and won't be
 /// reprocessed.
 pub fn migrate_flat_meta_files() -> usize {
-    let dir = meta_dir();
-    let entries = match std::fs::read_dir(&dir) {
-        Ok(e) => e,
-        Err(_) => return 0,
-    };
+	let dir = meta_dir();
+	let entries = match std::fs::read_dir(&dir) {
+		Ok(e) => e,
+		Err(_) => return 0,
+	};
 
-    let mut migrated = 0usize;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        // 子目录（新结构）或非 json 文件，跳过 / Subdirectory (new layout) or non-json file, skip
-        if !path.is_file() || path.extension().and_then(|e| e.to_str()) != Some("json") {
-            continue;
-        }
+	let mut migrated = 0usize;
+	for entry in entries.flatten() {
+		let path = entry.path();
+		// 子目录（新结构）或非 json 文件，跳过 / Subdirectory (new layout) or non-json file, skip
+		if !path.is_file() || path.extension().and_then(|e| e.to_str()) != Some("json") {
+			continue;
+		}
 
-        let content = match std::fs::read_to_string(&path) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-        let meta: VideoMeta = match serde_json::from_str(&content) {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
-        let video_path_str = match meta.video_path.as_deref() {
-            Some(p) => p,
-            None => continue,
-        };
+		let content = match std::fs::read_to_string(&path) {
+			Ok(c) => c,
+			Err(_) => continue,
+		};
+		let meta: VideoMeta = match serde_json::from_str(&content) {
+			Ok(m) => m,
+			Err(_) => continue,
+		};
+		let video_path_str = match meta.video_path.as_deref() {
+			Some(p) => p,
+			None => continue,
+		};
 
-        let username = username_from_path(Path::new(video_path_str));
-        let target_dir = meta_dir_for(&username);
-        if let Err(e) = std::fs::create_dir_all(&target_dir) {
-            tracing::warn!(
-                "{}",
-                crate::tl!(
-                    "meta.migrationCreateDirFailed",
-                    dir = target_dir.display(),
-                    error = e
-                )
-            );
-            continue;
-        }
-        let Some(file_name) = path.file_name() else {
-            continue;
-        };
-        let target_path = target_dir.join(file_name);
-        if target_path.exists() {
-            tracing::warn!(
-                "{}",
-                crate::tl!("meta.migrationTargetExists", path = path.display())
-            );
-            continue;
-        }
-        match std::fs::rename(&path, &target_path) {
-            Ok(()) => {
-                tracing::info!(
-                    "{}",
-                    crate::tl!(
-                        "meta.migrationMoved",
-                        from = path.display(),
-                        to = target_path.display()
-                    )
-                );
-                migrated += 1;
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "{}",
-                    crate::tl!("meta.migrationMoveFailed", path = path.display(), error = e)
-                );
-            }
-        }
-    }
+		let username = username_from_path(Path::new(video_path_str));
+		let target_dir = meta_dir_for(&username);
+		if let Err(e) = std::fs::create_dir_all(&target_dir) {
+			tracing::warn!(
+				"{}",
+				crate::tl!(
+					"meta.migrationCreateDirFailed",
+					dir = target_dir.display(),
+					error = e
+				)
+			);
+			continue;
+		}
+		let Some(file_name) = path.file_name() else {
+			continue;
+		};
+		let target_path = target_dir.join(file_name);
+		if target_path.exists() {
+			tracing::warn!(
+				"{}",
+				crate::tl!("meta.migrationTargetExists", path = path.display())
+			);
+			continue;
+		}
+		match std::fs::rename(&path, &target_path) {
+			Ok(()) => {
+				tracing::info!(
+					"{}",
+					crate::tl!(
+						"meta.migrationMoved",
+						from = path.display(),
+						to = target_path.display()
+					)
+				);
+				migrated += 1;
+			}
+			Err(e) => {
+				tracing::warn!(
+					"{}",
+					crate::tl!("meta.migrationMoveFailed", path = path.display(), error = e)
+				);
+			}
+		}
+	}
 
-    if migrated > 0 {
-        tracing::info!("{}", crate::tl!("meta.migrationDone", count = migrated));
-    }
-    migrated
+	if migrated > 0 {
+		tracing::info!("{}", crate::tl!("meta.migrationDone", count = migrated));
+	}
+	migrated
 }
 
 /// 一次性迁移：把按旧 stem 规则（`file_stem()`）截断文件名的 meta 重命名为新规则
@@ -131,63 +131,63 @@ pub fn migrate_flat_meta_files() -> usize {
 /// already exists the original is kept and a warning is logged. Must be called before the
 /// first scan (both ends call it at startup); repeated calls are idempotent.
 pub fn migrate_truncated_stem_meta_files() -> usize {
-    migrate_truncated_stem_meta_files_in(&meta_dir())
+	migrate_truncated_stem_meta_files_in(&meta_dir())
 }
 
 /// [`migrate_truncated_stem_meta_files`] 的实现，作用于指定 meta 根目录。
 /// Implementation of [`migrate_truncated_stem_meta_files`] for the given meta root.
 fn migrate_truncated_stem_meta_files_in(root: &Path) -> usize {
-    let mut count = 0usize;
-    for file in list_all_meta_paths_in(root) {
-        let Ok(content) = std::fs::read_to_string(&file) else {
-            continue;
-        };
-        let Ok(meta) = serde_json::from_str::<VideoMeta>(&content) else {
-            continue;
-        };
-        let Some(vp) = meta.video_path.as_deref() else {
-            continue;
-        };
-        let Some(target) = legacy_truncated_meta_target(&file, Path::new(vp)) else {
-            continue;
-        };
-        if target.exists() {
-            tracing::warn!(
-                "{}",
-                crate::tl!(
-                    "meta.migrationStemTargetExists",
-                    path = file.display(),
-                    to = target.display()
-                )
-            );
-            continue;
-        }
-        match std::fs::rename(&file, &target) {
-            Ok(()) => {
-                tracing::info!(
-                    "{}",
-                    crate::tl!(
-                        "meta.migrationStemMoved",
-                        from = file.display(),
-                        to = target.display()
-                    )
-                );
-                count += 1;
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "{}",
-                    crate::tl!(
-                        "meta.migrationStemMoveFailed",
-                        path = file.display(),
-                        error = e
-                    )
-                );
-            }
-        }
-    }
-    if count > 0 {
-        tracing::info!("{}", crate::tl!("meta.migrationStemDone", count = count));
-    }
-    count
+	let mut count = 0usize;
+	for file in list_all_meta_paths_in(root) {
+		let Ok(content) = std::fs::read_to_string(&file) else {
+			continue;
+		};
+		let Ok(meta) = serde_json::from_str::<VideoMeta>(&content) else {
+			continue;
+		};
+		let Some(vp) = meta.video_path.as_deref() else {
+			continue;
+		};
+		let Some(target) = legacy_truncated_meta_target(&file, Path::new(vp)) else {
+			continue;
+		};
+		if target.exists() {
+			tracing::warn!(
+				"{}",
+				crate::tl!(
+					"meta.migrationStemTargetExists",
+					path = file.display(),
+					to = target.display()
+				)
+			);
+			continue;
+		}
+		match std::fs::rename(&file, &target) {
+			Ok(()) => {
+				tracing::info!(
+					"{}",
+					crate::tl!(
+						"meta.migrationStemMoved",
+						from = file.display(),
+						to = target.display()
+					)
+				);
+				count += 1;
+			}
+			Err(e) => {
+				tracing::warn!(
+					"{}",
+					crate::tl!(
+						"meta.migrationStemMoveFailed",
+						path = file.display(),
+						error = e
+					)
+				);
+			}
+		}
+	}
+	if count > 0 {
+		tracing::info!("{}", crate::tl!("meta.migrationStemDone", count = count));
+	}
+	count
 }

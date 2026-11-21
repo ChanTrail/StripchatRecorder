@@ -10,7 +10,7 @@
 //!   调用立即生效、无需重启
 //! - [`guard`]：进程内 ffmpeg 使用计数 + 活跃录制计数组成的"空闲"判断，
 //!   自动更新只在空闲时替换二进制文件
-//! - [`state`]：下载/安装进度事件模型（`FfmpegKind` / `FfmpegProgress`）
+//! - [`state`]：下载/安装进度事件模型（`FFmpegKind` / `FFmpegProgress`）
 //!   与进度状态存储（SSE 广播 + 重连恢复）
 //! - [`probe`]：system（PATH）与 tools 两个位置中 ffmpeg/ffprobe/ffplay 的
 //!   存在性与 `-version` 版本探测，供"FFmpeg 首选项"向导与设置页展示
@@ -30,8 +30,8 @@
 //!   changed preference takes effect on the next invocation without restart
 //! - [`guard`]: in-process ffmpeg usage counter combined with the active
 //!   recording count; auto-updates only swap binaries while idle
-//! - [`state`]: download/install progress event model (`FfmpegKind` /
-//!   `FfmpegProgress`) and the progress state store (SSE broadcast +
+//! - [`state`]: download/install progress event model (`FFmpegKind` /
+//!   `FFmpegProgress`) and the progress state store (SSE broadcast +
 //!   reconnect restore)
 //! - [`probe`]: presence + `-version` probing for ffmpeg/ffprobe/ffplay on the
 //!   system PATH and in the tools directory, shown by the FFmpeg preference
@@ -61,11 +61,11 @@ mod state;
 pub use guard::{InUseGuard, in_use, in_use_count, is_idle};
 pub use paths::tools_dir;
 pub use preference::{
-    ffmpeg_available, ffmpeg_program, ffplay_program, ffprobe_program, path_env_with_tools,
-    preference, set_preference,
+	ffmpeg_available, ffmpeg_program, ffplay_program, ffprobe_program, path_env_with_tools,
+	preference, set_preference,
 };
-pub use probe::{FfmpegLocationProbe, FfmpegLocations, ffmpeg_locations};
-pub use state::{FfmpegKind, FfmpegProgress, FfmpegStateStore, new_ffmpeg_state};
+pub use probe::{FFmpegLocationProbe, FFmpegLocations, ffmpeg_locations};
+pub use state::{FFmpegKind, FFmpegProgress, FFmpegStateStore, new_ffmpeg_state};
 
 pub(crate) use paths::{exe_name, migrate_legacy_lib_dir};
 pub(crate) use preference::{location_complete, raw_preference};

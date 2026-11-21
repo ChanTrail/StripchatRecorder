@@ -7,48 +7,46 @@
     Desktop 差异：open-contact-sheet 通过 Tauri read_output_file 命令读取图片。
 -->
 <script setup lang="ts">
-	import { computed } from "vue";
-	import { Button } from "@/components/ui/button";
-	import { Badge } from "@/components/ui/badge";
-	import { Checkbox } from "@/components/ui/checkbox";
-	import { Tooltip } from "@/components/ui/tooltip";
-	import { TableRow, TableCell } from "@/components/ui/table";
-	import { Loader2, Image } from "@lucide/vue";
-	import SegmentStatsBadges from "@/components/SegmentStatsBadges.vue";
-	import PostprocessProgressCell from "@/components/PostprocessProgressCell.vue";
-	import type { RecordingFile } from "@/types/recordings";
-	import type { PpProgress, PpStatus } from "@/composables/usePostprocess";
-	import { formatSize, formatDuration } from "@/utils/format";
-	import { useI18n } from "vue-i18n";
+import { computed } from "vue";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Tooltip } from "@/components/ui/tooltip";
+import { TableRow, TableCell } from "@/components/ui/table";
+import { Loader2, Image } from "@lucide/vue";
+import SegmentStatsBadges from "@/components/SegmentStatsBadges.vue";
+import PostprocessProgressCell from "@/components/PostprocessProgressCell.vue";
+import type { RecordingFile } from "@/types/recordings";
+import type { PpProgress, PpStatus } from "@/composables/usePostprocess";
+import { formatSize, formatDuration } from "@/utils/format";
+import { useI18n } from "vue-i18n";
 
-	const props = defineProps<{
-		file: RecordingFile;
-		checked: boolean;
-		elapsedSecs: number;
-		speedBps: number | null;
-		segmentStats: { downloaded: number; failed: number } | null;
-		ppStatus?: PpStatus;
-		ppProgress?: PpProgress;
-		hasContactSheet: boolean;
-		hasPipelineNodes: boolean;
-	}>();
+const props = defineProps<{
+	file: RecordingFile;
+	checked: boolean;
+	elapsedSecs: number;
+	speedBps: number | null;
+	segmentStats: { downloaded: number; failed: number } | null;
+	ppStatus?: PpStatus;
+	ppProgress?: PpProgress;
+	hasContactSheet: boolean;
+	hasPipelineNodes: boolean;
+}>();
 
-	defineEmits<{
-		"toggle-checked": [];
-		open: [];
-		"open-contact-sheet": [];
-		"run-postprocess": [];
-		delete: [];
-	}>();
+defineEmits<{
+	"toggle-checked": [];
+	open: [];
+	"open-contact-sheet": [];
+	"run-postprocess": [];
+	delete: [];
+}>();
 
-	const { t } = useI18n();
+const { t } = useI18n();
 
-	const segmentDownloaded = computed(
-		() => props.segmentStats?.downloaded ?? props.file.segments_downloaded ?? null,
-	);
-	const segmentFailed = computed(
-		() => props.segmentStats?.failed ?? props.file.segments_failed ?? 0,
-	);
+const segmentDownloaded = computed(
+	() => props.segmentStats?.downloaded ?? props.file.segments_downloaded ?? null,
+);
+const segmentFailed = computed(() => props.segmentStats?.failed ?? props.file.segments_failed ?? 0);
 </script>
 
 <template>
@@ -62,22 +60,24 @@
 		</TableCell>
 		<TableCell class="font-medium w-px whitespace-nowrap pl-7">
 			{{ file.name }}
-			<Badge
-				v-if="file.is_recording"
-				variant="destructive"
-				class="ml-1.5 text-[10px]"
-			>{{ t("recordings.status.recording") }}</Badge>
+			<Badge v-if="file.is_recording" variant="destructive" class="ml-1.5 text-[10px]">{{
+				t("recordings.status.recording")
+			}}</Badge>
 		</TableCell>
 		<TableCell class="tabular-nums">{{ formatSize(file.size_bytes) }}</TableCell>
 		<TableCell class="tabular-nums text-muted-foreground">{{
 			new Date(file.started_at).toLocaleString()
 		}}</TableCell>
 		<TableCell class="tabular-nums">
-			<span v-if="file.is_recording" class="text-destructive">{{ formatDuration(elapsedSecs) }}</span>
+			<span v-if="file.is_recording" class="text-destructive">{{
+				formatDuration(elapsedSecs)
+			}}</span>
 			<span v-else class="text-muted-foreground">—</span>
 		</TableCell>
 		<TableCell class="tabular-nums">
-			<span v-if="file.video_duration_secs != null">{{ formatDuration(file.video_duration_secs) }}</span>
+			<span v-if="file.video_duration_secs != null">{{
+				formatDuration(file.video_duration_secs)
+			}}</span>
 			<span v-else class="text-muted-foreground">—</span>
 		</TableCell>
 		<TableCell class="tabular-nums font-mono text-xs">
@@ -112,7 +112,8 @@
 					:disabled="file.is_recording"
 					:title="file.is_recording ? t('recordings.actions.playDisabled') : ''"
 					@click="$emit('open')"
-				>{{ t("recordings.actions.play") }}</Button>
+					>{{ t("recordings.actions.play") }}</Button
+				>
 				<Button
 					v-if="hasContactSheet"
 					size="sm"
@@ -152,7 +153,8 @@
 					:disabled="file.is_recording"
 					:title="file.is_recording ? t('recordings.actions.deleteDisabled') : ''"
 					@click="$emit('delete')"
-				>{{ t("recordings.actions.delete") }}</Button>
+					>{{ t("recordings.actions.delete") }}</Button
+				>
 			</div>
 		</TableCell>
 	</TableRow>

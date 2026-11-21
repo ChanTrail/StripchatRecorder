@@ -11,18 +11,18 @@
         failed     - 下载失败的分片数 / Number of failed segment downloads
 -->
 <script setup lang="ts">
-	import { computed } from "vue";
-	import { Badge } from "@/components/ui/badge";
+import { computed } from "vue";
+import { Badge } from "@/components/ui/badge";
 
-	const props = defineProps<{
-		downloaded: number;
-		failed: number;
-	}>();
+const props = defineProps<{
+	downloaded: number;
+	failed: number;
+}>();
 
-	const successPct = computed(() => {
-		const total = props.downloaded + props.failed;
-		return total > 0 ? Math.round((props.downloaded / total) * 100) : 100;
-	});
+const successPct = computed(() => {
+	const total = props.downloaded + props.failed;
+	return total > 0 ? Math.round((props.downloaded / total) * 100) : 100;
+});
 </script>
 
 <template>
@@ -40,7 +40,11 @@
 		<Badge
 			variant="outline"
 			class="tabular-nums text-[11px] px-1.5 py-0"
-			:class="failed === 0 ? 'border-green-500 text-green-500' : 'border-destructive text-destructive'"
+			:class="
+				failed === 0
+					? 'border-green-500 text-green-500'
+					: 'border-destructive text-destructive'
+			"
 		>
 			{{ successPct }}%
 		</Badge>

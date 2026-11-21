@@ -105,10 +105,12 @@ export const useStreamersStore = defineStore("streamers", () => {
 		}
 
 		try {
-			const result = await call<{ total: number; success: number; skipped: number; failed: number }>(
-				"add_streamer",
-				{ usernames },
-			);
+			const result = await call<{
+				total: number;
+				success: number;
+				skipped: number;
+				failed: number;
+			}>("add_streamer", { usernames });
 			await fetchStreamers();
 			return result;
 		} finally {
@@ -160,9 +162,7 @@ export const useStreamersStore = defineStore("streamers", () => {
 	 * 批量开始录制，并发发起，返回失败数量。
 	 * Batch start recording concurrently, returns failure count.
 	 */
-	async function batchStartRecording(
-		usernames: string[],
-	): Promise<{ failed: number }> {
+	async function batchStartRecording(usernames: string[]): Promise<{ failed: number }> {
 		const results = await Promise.allSettled(
 			usernames.map((u) => call("start_recording", { username: u })),
 		);
@@ -174,9 +174,7 @@ export const useStreamersStore = defineStore("streamers", () => {
 	 * 批量停止录制，并发发起，返回失败数量。
 	 * Batch stop recording concurrently, returns failure count.
 	 */
-	async function batchStopRecording(
-		usernames: string[],
-	): Promise<{ failed: number }> {
+	async function batchStopRecording(usernames: string[]): Promise<{ failed: number }> {
 		for (const u of usernames) {
 			stoppingSet.value.add(u);
 			const s = streamers.value.find((st) => st.username === u);
@@ -215,9 +213,7 @@ export const useStreamersStore = defineStore("streamers", () => {
 	 *
 	 * @param usernames - 主播用户名列表 / List of streamer usernames
 	 */
-	async function batchRemove(
-		usernames: string[],
-	): Promise<{ failed: number }> {
+	async function batchRemove(usernames: string[]): Promise<{ failed: number }> {
 		let failed = 0;
 		for (const u of usernames) {
 			try {
@@ -251,9 +247,7 @@ export const useStreamersStore = defineStore("streamers", () => {
 				if (!localActions.has(`remove:${p.username}`)) {
 					toast(t("streamers.otherClientRemoved", { username: p.username }));
 				}
-				streamers.value = streamers.value.filter(
-					(s) => s.username !== p.username,
-				);
+				streamers.value = streamers.value.filter((s) => s.username !== p.username);
 			}),
 			on("status-update", (payload) => {
 				const p = payload as StatusUpdatePayload;
@@ -284,9 +278,10 @@ export const useStreamersStore = defineStore("streamers", () => {
 			on("auto-record-changed", (payload) => {
 				const p = payload as { username: string; enabled: boolean };
 				if (!localActions.has(`auto:${p.username}`)) {
-					const action = t(p.enabled
-						? "streamers.otherClientAutoRecordEnable"
-						: "streamers.otherClientAutoRecordDisable",
+					const action = t(
+						p.enabled
+							? "streamers.otherClientAutoRecordEnable"
+							: "streamers.otherClientAutoRecordDisable",
 					);
 					toast(t("streamers.otherClientAutoRecord", { action, username: p.username }));
 				}
@@ -299,7 +294,12 @@ export const useStreamersStore = defineStore("streamers", () => {
 				const p = payload as { old_username: string; new_username: string };
 				const s = streamers.value.find((s) => s.username === p.old_username);
 				if (s) s.username = p.new_username;
-				toast(t("streamers.renamed", { oldUsername: p.old_username, newUsername: p.new_username }));
+				toast(
+					t("streamers.renamed", {
+						oldUsername: p.old_username,
+						newUsername: p.new_username,
+					}),
+				);
 			}),
 			on("api-error", (payload) => {
 				const p = payload as { message: string };

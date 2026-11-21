@@ -49,7 +49,10 @@ async function submit() {
 		error.value = t("login.passwordRequired");
 		return;
 	}
-	if (isInit.value && (pwd.length < 6 || !/[a-zA-Z]/.test(pwd) || !/[0-9]/.test(pwd) || !/[^a-zA-Z0-9]/.test(pwd))) {
+	if (
+		isInit.value &&
+		(pwd.length < 6 || !/[a-zA-Z]/.test(pwd) || !/[0-9]/.test(pwd) || !/[^a-zA-Z0-9]/.test(pwd))
+	) {
 		error.value = t("login.passwordStrength");
 		return;
 	}
@@ -109,9 +112,11 @@ async function continueWithoutPassword() {
 </script>
 
 <template>
-	<div class="min-h-screen flex items-center justify-center bg-background p-6">
+	<!-- min-h-dvh：同 App.vue 根布局的说明，避免移动端 vh/小视口错位 /
+		min-h-dvh: same rationale as the App.vue root — avoids the mobile
+		vh vs. small-viewport mismatch -->
+	<div class="min-h-dvh flex items-center justify-center bg-background p-6">
 		<div class="w-full max-w-sm flex flex-col gap-6">
-
 			<div class="flex flex-col gap-1.5">
 				<div class="flex items-center gap-2.5">
 					<img src="/icon.png" alt="icon" class="w-6 h-6 shrink-0" />
@@ -131,9 +136,21 @@ async function continueWithoutPassword() {
 			</p>
 
 			<!-- 表单 / Form -->
-			<form v-else-if="passwordSet !== null" class="flex flex-col gap-4" @submit.prevent="submit">
+			<form
+				v-else-if="passwordSet !== null"
+				class="flex flex-col gap-4"
+				@submit.prevent="submit"
+			>
 				<!-- 无障碍：密码表单需要 username 字段 / Accessibility: password forms require a username field -->
-				<input type="text" name="username" value="admin" autocomplete="username" class="sr-only" aria-hidden="true" tabindex="-1" />
+				<input
+					type="text"
+					name="username"
+					value="admin"
+					autocomplete="username"
+					class="sr-only"
+					aria-hidden="true"
+					tabindex="-1"
+				/>
 				<div class="flex flex-col gap-1.5">
 					<Label for="password">{{ t("login.passwordLabel") }}</Label>
 					<Input
@@ -141,17 +158,27 @@ async function continueWithoutPassword() {
 						v-model="password"
 						type="password"
 						:autocomplete="isInit ? 'new-password' : 'current-password'"
-						:placeholder="isInit ? t('login.initPlaceholder') : t('login.passwordPlaceholder')"
+						:placeholder="
+							isInit ? t('login.initPlaceholder') : t('login.passwordPlaceholder')
+						"
 						autofocus
 					/>
-					<p v-if="isInit" class="text-xs text-muted-foreground">{{ t("login.passwordStrengthHint") }}</p>
+					<p v-if="isInit" class="text-xs text-muted-foreground">
+						{{ t("login.passwordStrengthHint") }}
+					</p>
 				</div>
 
 				<!-- 错误行常驻占位：登录失败时不挤压提交按钮位置 / Error line always rendered: a failed login doesn't shift the submit button -->
 				<p class="min-h-5 text-sm text-destructive">{{ error }}</p>
 
 				<Button type="submit" :disabled="loading" class="w-full">
-					{{ loading ? t("common.loading") : isInit ? t("login.initButton") : t("login.loginButton") }}
+					{{
+						loading
+							? t("common.loading")
+							: isInit
+								? t("login.initButton")
+								: t("login.loginButton")
+					}}
 				</Button>
 				<!-- 初次设密可跳过：进入无密码模式（标记 admin_password_disabled）/
 					First-time setup can be skipped: enter no-password mode (flags admin_password_disabled) -->
@@ -169,7 +196,6 @@ async function continueWithoutPassword() {
 
 			<!-- 连接失败 / Connection failed -->
 			<p v-if="error && passwordSet === null" class="text-sm text-destructive">{{ error }}</p>
-
 		</div>
 	</div>
 </template>

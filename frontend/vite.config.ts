@@ -4,7 +4,9 @@ import tailwindcss from "@tailwindcss/vite";
 import { fileURLToPath, URL } from "node:url";
 import { readFileSync } from "node:fs";
 
-const pkg = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf-8")) as { version: string };
+const pkg = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf-8")) as {
+	version: string;
+};
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -40,12 +42,9 @@ export default defineConfig({
 						return "vendor-i18n";
 					if (id.includes("/node_modules/reka-ui/")) return "vendor-reka";
 					if (
-						[
-							"@vueuse/core",
-							"clsx",
-							"tailwind-merge",
-							"class-variance-authority",
-						].some((p) => id.includes(`/node_modules/${p}/`))
+						["@vueuse/core", "clsx", "tailwind-merge", "class-variance-authority"].some(
+							(p) => id.includes(`/node_modules/${p}/`),
+						)
 					)
 						return "vendor-utils";
 					if (id.includes("/node_modules/@lucide/")) return "vendor-icons";

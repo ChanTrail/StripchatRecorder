@@ -10,28 +10,28 @@
     2. Modal confirmation dialogs (driven by shared state from useNotify)
 -->
 <script setup lang="ts">
-	import { ref } from "vue";
-	import { useNotify } from "../composables/useNotify";
-	import { useScrollbar } from "@/composables/useScrollbar";
-	import { Toaster } from "@/components/ui/sonner";
-	import {
-		Dialog,
-		DialogContent,
-		DialogHeader,
-		DialogTitle,
-		DialogDescription,
-		DialogFooter,
-	} from "@/components/ui/dialog";
-	import { Button } from "@/components/ui/button";
-	import { useI18n } from "vue-i18n";
+import { ref } from "vue";
+import { useNotify } from "../composables/useNotify";
+import { useScrollbar } from "@/composables/useScrollbar";
+import { Toaster } from "@/components/ui/sonner";
+import {
+	Dialog,
+	DialogContent,
+	DialogHeader,
+	DialogTitle,
+	DialogDescription,
+	DialogFooter,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { useI18n } from "vue-i18n";
 
-	// 从 useNotify 获取对话框状态和解析函数
-	// Get dialog state and resolve function from useNotify
-	const { dialog, _resolveDialog } = useNotify();
-	const { t } = useI18n();
+// 从 useNotify 获取对话框状态和解析函数
+// Get dialog state and resolve function from useNotify
+const { dialog, _resolveDialog } = useNotify();
+const { t } = useI18n();
 
-	const dialogScrollEl = ref<HTMLElement | null>(null);
-	useScrollbar(dialogScrollEl);
+const dialogScrollEl = ref<HTMLElement | null>(null);
+useScrollbar(dialogScrollEl);
 </script>
 
 <template>

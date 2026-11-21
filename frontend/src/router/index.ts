@@ -54,7 +54,7 @@ router.beforeEach(async (to) => {
 		}
 
 		if (res.ok) {
-			const settings = await res.json() as { setup_done: boolean };
+			const settings = (await res.json()) as { setup_done: boolean };
 			if (!settings.setup_done) return "/setup";
 		}
 	} catch {
@@ -73,7 +73,11 @@ router.beforeEach(async (to) => {
 			headers: token ? { Authorization: `Bearer ${token}` } : {},
 		});
 		if (statusRes.ok) {
-			const status = await statusRes.json() as { password_set: boolean; logged_in: boolean; password_disabled?: boolean };
+			const status = (await statusRes.json()) as {
+				password_set: boolean;
+				logged_in: boolean;
+				password_disabled?: boolean;
+			};
 			if (!status.password_set) {
 				// 无密码模式：用户显式关闭了密码，直接放行——无 token 也放行 /
 				// No-password mode: user deliberately disabled the password —

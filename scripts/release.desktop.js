@@ -18,12 +18,24 @@
 "use strict";
 
 const path = require("path");
-const fs   = require("fs");
+const fs = require("fs");
 
 const {
-  ROOT, DESKTOP, DESKTOP_TARGET, BUILD_OUT, BUILD_TMP, NESTED,
-  step, header, run, listDir, collectBinaries, buildModules, copyDir, installDesktop,
-  readDesktopIdentifier,
+	ROOT,
+	DESKTOP,
+	DESKTOP_TARGET,
+	BUILD_OUT,
+	BUILD_TMP,
+	NESTED,
+	step,
+	header,
+	run,
+	listDir,
+	collectBinaries,
+	buildModules,
+	copyDir,
+	installDesktop,
+	readDesktopIdentifier,
 } = require("./common");
 
 // 平台标识符：优先读环境变量（跨平台 CI 交叉打包时使用），否则按当前宿主机推导。
@@ -37,10 +49,10 @@ const {
 // out by the backend's has_valid_module_filename (requires ≥3 segments), resulting
 // in an empty module list (this bug has been present in desktop release builds).
 function detectPlatform() {
-  const archStr = process.arch === "arm64" ? "aarch64" : "x86_64";
-  if (process.platform === "win32")  return `windows-${archStr}`;
-  if (process.platform === "darwin") return `darwin-${archStr}`;
-  return `linux-${archStr}`;
+	const archStr = process.arch === "arm64" ? "aarch64" : "x86_64";
+	if (process.platform === "win32") return `windows-${archStr}`;
+	if (process.platform === "darwin") return `darwin-${archStr}`;
+	return `linux-${archStr}`;
 }
 const platform = process.env.CARGO_BUILD_PLATFORM || detectPlatform();
 
@@ -54,18 +66,22 @@ const DESKTOP_BUILD_OUT = path.join(BUILD_OUT, "desktop");
 const DESKTOP_BUILD_TMP = path.join(BUILD_TMP, "desktop");
 
 const TOTAL = 7;
-header("Desktop Build", "check → install → modules → tauri build → collect → collect modules → cleanup");
+header(
+	"Desktop Build",
+	"check → install → modules → tauri build → collect → collect modules → cleanup",
+);
 
 // ── Step 1: 类型检查 / Type check ────────────────────────────────────────────
 step(1, TOTAL, "Type checking desktop + modules");
 run("node scripts/check.desktop.js", {
-  cwd: ROOT,
-  env: { ...process.env, CHECK_NESTED: "1" },
+	cwd: ROOT,
+	env: { ...process.env, CHECK_NESTED: "1" },
 });
 
 // ── Step 2: 安装依赖 / Install dependencies ──────────────────────────────────
 step(2, TOTAL, "Installing desktop dependencies");
-if (fs.existsSync(DESKTOP_BUILD_OUT)) fs.rmSync(DESKTOP_BUILD_OUT, { recursive: true, force: true });
+if (fs.existsSync(DESKTOP_BUILD_OUT))
+	fs.rmSync(DESKTOP_BUILD_OUT, { recursive: true, force: true });
 installDesktop();
 
 // ── Step 3: 构建模块并复制 / Build modules & copy binaries ───────────────────
@@ -90,44 +106,44 @@ buildModules("release", DESKTOP_MODULES_OUT, null, platform);
 // stays an installed build:
 //   "--bundles deb;--bundles appimage -- --features portable"
 const variants = (process.env.TAURI_BUILD_VARIANTS || "default")
-  .split(";")
-  .map((s) => s.trim())
-  .filter(Boolean);
+	.split(";")
+	.map((s) => s.trim())
+	.filter(Boolean);
 step(4, TOTAL, `Building desktop (tauri build ×${variants.length}) → build_tmp/desktop/target/`);
 for (const variant of variants) {
-  const args = variant === "default" ? "" : ` ${variant}`;
-  console.log(`  → npx tauri build${args || " (default)"}`);
-  run(`npx tauri build${args}`, {
-    cwd: DESKTOP,
-    env: { ...process.env, CARGO_TARGET_DIR: DESKTOP_TARGET },
-  });
+	const args = variant === "default" ? "" : ` ${variant}`;
+	console.log(`  → npx tauri build${args || " (default)"}`);
+	run(`npx tauri build${args}`, {
+		cwd: DESKTOP,
+		env: { ...process.env, CARGO_TARGET_DIR: DESKTOP_TARGET },
+	});
 
-  // --no-bundle 变体构建后立即收集裸二进制到 build/desktop/portable/
-  // （在循环内按参数判断，与变体顺序无关；cleanup 删 build_tmp 之前完成）。
-  // DESKTOP_COLLECT_NO_BUNDLE=1 时启用。二进制名 = Cargo 包名。
-  //
-  // Right after a --no-bundle variant, collect the bare binary into
-  // build/desktop/portable/ (detected from the args inside the loop, so variant
-  // order doesn't matter; still before cleanup removes build_tmp). Enabled by
-  // DESKTOP_COLLECT_NO_BUNDLE=1. Binary name = the Cargo package name.
-  if (args.includes("--no-bundle") && process.env.DESKTOP_COLLECT_NO_BUNDLE === "1") {
-    const cargoToml = fs.readFileSync(path.join(DESKTOP, "src-tauri", "Cargo.toml"), "utf8");
-    const pkgName = (cargoToml.match(/^\s*name\s*=\s*"([^"]+)"/m) || [])[1];
-    const binName = `${pkgName}${process.platform === "win32" ? ".exe" : ""}`;
-    const binSrc = path.join(DESKTOP_TARGET, "release", binName);
-    const portableOut = path.join(DESKTOP_BUILD_OUT, "portable");
-    fs.mkdirSync(portableOut, { recursive: true });
-    fs.copyFileSync(binSrc, path.join(portableOut, binName));
-    console.log(`  ✓ build/desktop/portable/${binName}`);
-  }
+	// --no-bundle 变体构建后立即收集裸二进制到 build/desktop/portable/
+	// （在循环内按参数判断，与变体顺序无关；cleanup 删 build_tmp 之前完成）。
+	// DESKTOP_COLLECT_NO_BUNDLE=1 时启用。二进制名 = Cargo 包名。
+	//
+	// Right after a --no-bundle variant, collect the bare binary into
+	// build/desktop/portable/ (detected from the args inside the loop, so variant
+	// order doesn't matter; still before cleanup removes build_tmp). Enabled by
+	// DESKTOP_COLLECT_NO_BUNDLE=1. Binary name = the Cargo package name.
+	if (args.includes("--no-bundle") && process.env.DESKTOP_COLLECT_NO_BUNDLE === "1") {
+		const cargoToml = fs.readFileSync(path.join(DESKTOP, "src-tauri", "Cargo.toml"), "utf8");
+		const pkgName = (cargoToml.match(/^\s*name\s*=\s*"([^"]+)"/m) || [])[1];
+		const binName = `${pkgName}${process.platform === "win32" ? ".exe" : ""}`;
+		const binSrc = path.join(DESKTOP_TARGET, "release", binName);
+		const portableOut = path.join(DESKTOP_BUILD_OUT, "portable");
+		fs.mkdirSync(portableOut, { recursive: true });
+		fs.copyFileSync(binSrc, path.join(portableOut, binName));
+		console.log(`  ✓ build/desktop/portable/${binName}`);
+	}
 }
 
 // ── Step 5: 收集 bundle 产物 / Collect bundle artifacts ──────────────────────
 step(5, TOTAL, "Collecting bundle artifacts → build/desktop/");
 
 if (!fs.existsSync(TAURI_BUNDLE_SRC)) {
-  console.error(`ERROR: Tauri bundle directory not found: ${TAURI_BUNDLE_SRC}`);
-  process.exit(1);
+	console.error(`ERROR: Tauri bundle directory not found: ${TAURI_BUNDLE_SRC}`);
+	process.exit(1);
 }
 copyDir(TAURI_BUNDLE_SRC, DESKTOP_BUILD_OUT, "build/desktop/");
 
@@ -135,11 +151,11 @@ copyDir(TAURI_BUNDLE_SRC, DESKTOP_BUILD_OUT, "build/desktop/");
 step(6, TOTAL, "Collecting module binaries → build/desktop/modules/");
 const moduleBins = collectBinaries(DESKTOP_MODULES_OUT);
 if (moduleBins.length === 0) {
-  console.warn("  ⚠ No module binaries found");
+	console.warn("  ⚠ No module binaries found");
 } else {
-  for (const bin of moduleBins) {
-    console.log(`  ✓ build/desktop/modules/${bin}`);
-  }
+	for (const bin of moduleBins) {
+		console.log(`  ✓ build/desktop/modules/${bin}`);
+	}
 }
 
 // 用户安装打包产物后，模块二进制需要手动放到 Tauri app_data_dir()（每用户标准数据

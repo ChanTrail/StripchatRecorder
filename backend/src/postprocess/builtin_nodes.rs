@@ -46,31 +46,31 @@ pub const BUNDLE_SEP: char = '\n';
 /// 将视频路径和图片路径打包为 MediaBundle 路径字符串。
 /// Pack video and image paths into a MediaBundle path string.
 pub fn pack_bundle(video: &std::path::Path, image: &std::path::Path) -> PathBuf {
-    PathBuf::from(format!(
-        "{}{}{}",
-        video.to_string_lossy(),
-        BUNDLE_SEP,
-        image.to_string_lossy()
-    ))
+	PathBuf::from(format!(
+		"{}{}{}",
+		video.to_string_lossy(),
+		BUNDLE_SEP,
+		image.to_string_lossy()
+	))
 }
 
 /// 从 MediaBundle 路径字符串中解包视频路径和可选的图片路径。
 /// Unpack a MediaBundle path string into the video path and an optional image path.
 pub fn unpack_bundle(bundle: &std::path::Path) -> (PathBuf, Option<PathBuf>) {
-    let s = bundle.to_string_lossy();
-    if let Some(sep) = s.find(BUNDLE_SEP) {
-        let video = PathBuf::from(&s[..sep]);
-        let image_str = s[sep + BUNDLE_SEP.len_utf8()..].trim();
-        let image = if image_str.is_empty() {
-            None
-        } else {
-            Some(PathBuf::from(image_str))
-        };
-        (video, image)
-    } else {
-        // 没有分隔符，整体视为视频路径 / No separator — treat entire string as video path
-        (bundle.to_path_buf(), None)
-    }
+	let s = bundle.to_string_lossy();
+	if let Some(sep) = s.find(BUNDLE_SEP) {
+		let video = PathBuf::from(&s[..sep]);
+		let image_str = s[sep + BUNDLE_SEP.len_utf8()..].trim();
+		let image = if image_str.is_empty() {
+			None
+		} else {
+			Some(PathBuf::from(image_str))
+		};
+		(video, image)
+	} else {
+		// 没有分隔符，整体视为视频路径 / No separator — treat entire string as video path
+		(bundle.to_path_buf(), None)
+	}
 }
 
 /// 返回所有内置节点的 `ModuleInfo` 描述，注入到 `discover_modules` 返回列表。
@@ -82,84 +82,84 @@ pub fn unpack_bundle(bundle: &std::path::Path) -> (PathBuf, Option<PathBuf>) {
 /// filled from the embedded translations, falling back to Simplified Chinese), and the hardcoded
 /// Chinese defaults below are used when nothing can be read.
 pub fn builtin_module_infos() -> Vec<ModuleInfo> {
-    // 读取当前语言设置：只读 settings.json，不构造完整 AppState（每次 discover_modules 都会调用，
-    // 避免重复创建目录、初始化信号量等副作用）；配置不可读时回退为 Settings::default() 的语言。
-    // Read current language setting: read only settings.json instead of building a full
-    // AppState (called on every discover_modules; avoids repeated directory creation and
-    // semaphore init); falls back to Settings::default()'s language if unreadable.
-    let locale_code = crate::config::app_state::AppState::load_settings_from_disk().language;
+	// 读取当前语言设置：只读 settings.json，不构造完整 AppState（每次 discover_modules 都会调用，
+	// 避免重复创建目录、初始化信号量等副作用）；配置不可读时回退为 Settings::default() 的语言。
+	// Read current language setting: read only settings.json instead of building a full
+	// AppState (called on every discover_modules; avoids repeated directory creation and
+	// semaphore init); falls back to Settings::default()'s language if unreadable.
+	let locale_code = crate::config::app_state::AppState::load_settings_from_disk().language;
 
-    // 从合并的 __builtin__ locale 文件中取指定节点 key 的翻译
-    // Read name/description for a node key from the merged __builtin__ locale file
-    let tr = |node_key: &str, name_default: &str, desc_default: &str| -> (String, String) {
-        crate::locale::manager::read_module_locale("__builtin__", &locale_code)
-            .and_then(|v| v.get(node_key).cloned())
-            .map(|entry| {
-                let name = entry
-                    .get("name")
-                    .and_then(|n| n.as_str())
-                    .unwrap_or(name_default)
-                    .to_string();
-                let desc = entry
-                    .get("description")
-                    .and_then(|d| d.as_str())
-                    .unwrap_or(desc_default)
-                    .to_string();
-                (name, desc)
-            })
-            .unwrap_or_else(|| (name_default.to_string(), desc_default.to_string()))
-    };
+	// 从合并的 __builtin__ locale 文件中取指定节点 key 的翻译
+	// Read name/description for a node key from the merged __builtin__ locale file
+	let tr = |node_key: &str, name_default: &str, desc_default: &str| -> (String, String) {
+		crate::locale::manager::read_module_locale("__builtin__", &locale_code)
+			.and_then(|v| v.get(node_key).cloned())
+			.map(|entry| {
+				let name = entry
+					.get("name")
+					.and_then(|n| n.as_str())
+					.unwrap_or(name_default)
+					.to_string();
+				let desc = entry
+					.get("description")
+					.and_then(|d| d.as_str())
+					.unwrap_or(desc_default)
+					.to_string();
+				(name, desc)
+			})
+			.unwrap_or_else(|| (name_default.to_string(), desc_default.to_string()))
+	};
 
-    // 最后一道兜底与回退语言一致，使用简体中文（与 locale/defaults/modules/__builtin__/zh-CN.json 相同）
-    // The last-resort defaults match the fallback language, Simplified Chinese (same as
-    // locale/defaults/modules/__builtin__/zh-CN.json)
-    let (ri_name, ri_desc) = tr(
-        "recording_input",
-        "录制输入",
-        "虚拟录制输入节点，始终作为流水线的起点",
-    );
-    let (unpack_name, unpack_desc) = tr(
-        "unpack",
-        "解组媒体包",
-        "将媒体包拆分为视频文件（端口 0）和图片文件（端口 1）",
-    );
+	// 最后一道兜底与回退语言一致，使用简体中文（与 locale/defaults/modules/__builtin__/zh-CN.json 相同）
+	// The last-resort defaults match the fallback language, Simplified Chinese (same as
+	// locale/defaults/modules/__builtin__/zh-CN.json)
+	let (ri_name, ri_desc) = tr(
+		"recording_input",
+		"录制输入",
+		"虚拟录制输入节点，始终作为流水线的起点",
+	);
+	let (unpack_name, unpack_desc) = tr(
+		"unpack",
+		"解组媒体包",
+		"将媒体包拆分为视频文件（端口 0）和图片文件（端口 1）",
+	);
 
-    // 内置节点没有独立的 Cargo.toml，也不随 backend 版本单独展示版本号——
-    // 它们与 backend 是同一次编译产物，展示版本号对用户没有实际意义（无法单独升级），
-    // 留空即可，前端在 version 为空字符串时不渲染版本号徽章。
-    //
-    // Built-in nodes have no separate Cargo.toml and don't display a version on their
-    // own — they're compiled as part of the backend itself, so showing a version number
-    // would be meaningless to the user (they can't be upgraded independently). Left empty;
-    // the frontend skips rendering the version badge when it's an empty string.
-    vec![
-        ModuleInfo {
-            id: ID_RECORDING_INPUT.to_string(),
-            name: ri_name,
-            version: String::new(),
-            description: ri_desc,
-            input_types: vec![],
-            output_types: vec![PortType::SessionDir],
-            params: vec![],
-            i18n: None,
-            official: false,
-            reusable: false,
-            exe_path: PathBuf::new(),
-        },
-        ModuleInfo {
-            id: ID_UNPACK.to_string(),
-            name: unpack_name,
-            version: String::new(),
-            description: unpack_desc,
-            input_types: vec![PortType::MediaBundle],
-            output_types: vec![PortType::VideoFile, PortType::ImageFile],
-            params: vec![],
-            i18n: None,
-            official: true,
-            reusable: true,
-            exe_path: PathBuf::new(),
-        },
-    ]
+	// 内置节点没有独立的 Cargo.toml，也不随 backend 版本单独展示版本号——
+	// 它们与 backend 是同一次编译产物，展示版本号对用户没有实际意义（无法单独升级），
+	// 留空即可，前端在 version 为空字符串时不渲染版本号徽章。
+	//
+	// Built-in nodes have no separate Cargo.toml and don't display a version on their
+	// own — they're compiled as part of the backend itself, so showing a version number
+	// would be meaningless to the user (they can't be upgraded independently). Left empty;
+	// the frontend skips rendering the version badge when it's an empty string.
+	vec![
+		ModuleInfo {
+			id: ID_RECORDING_INPUT.to_string(),
+			name: ri_name,
+			version: String::new(),
+			description: ri_desc,
+			input_types: vec![],
+			output_types: vec![PortType::SessionDir],
+			params: vec![],
+			i18n: None,
+			official: false,
+			reusable: false,
+			exe_path: PathBuf::new(),
+		},
+		ModuleInfo {
+			id: ID_UNPACK.to_string(),
+			name: unpack_name,
+			version: String::new(),
+			description: unpack_desc,
+			input_types: vec![PortType::MediaBundle],
+			output_types: vec![PortType::VideoFile, PortType::ImageFile],
+			params: vec![],
+			i18n: None,
+			official: true,
+			reusable: true,
+			exe_path: PathBuf::new(),
+		},
+	]
 }
 
 /// 执行内置 `unpack` 节点：将 MediaBundle 拆分为视频和图片两个输出端口。
@@ -169,54 +169,54 @@ pub fn builtin_module_infos() -> Vec<ModuleInfo> {
 /// - port 0 (VideoFile): 视频路径，始终存在 / Video path, always present
 /// - port 1 (ImageFile): 图片路径，bundle 中无图片时不输出 / Image path, absent when bundle has no image
 pub fn run_unpack(effective_id: &str, inputs: &[PathBuf]) -> NodeResult {
-    let bundle = match inputs.first() {
-        Some(p) => p,
-        None => {
-            return NodeResult {
-                effective_id: effective_id.to_string(),
-                module_id: ID_UNPACK.to_string(),
-                code: PpExecCode::Error,
-                message: "unpack: no input provided".to_string(),
-                outputs: vec![],
-                inputs: inputs.to_vec(),
-            };
-        }
-    };
+	let bundle = match inputs.first() {
+		Some(p) => p,
+		None => {
+			return NodeResult {
+				effective_id: effective_id.to_string(),
+				module_id: ID_UNPACK.to_string(),
+				code: PpExecCode::Error,
+				message: "unpack: no input provided".to_string(),
+				outputs: vec![],
+				inputs: inputs.to_vec(),
+			};
+		}
+	};
 
-    let (video, image) = unpack_bundle(bundle);
+	let (video, image) = unpack_bundle(bundle);
 
-    if !video.exists() {
-        return NodeResult {
-            effective_id: effective_id.to_string(),
-            module_id: ID_UNPACK.to_string(),
-            code: PpExecCode::Error,
-            message: format!("unpack: video path not found: {}", video.display()),
-            outputs: vec![],
-            inputs: inputs.to_vec(),
-        };
-    }
+	if !video.exists() {
+		return NodeResult {
+			effective_id: effective_id.to_string(),
+			module_id: ID_UNPACK.to_string(),
+			code: PpExecCode::Error,
+			message: format!("unpack: video path not found: {}", video.display()),
+			outputs: vec![],
+			inputs: inputs.to_vec(),
+		};
+	}
 
-    let mut outputs = vec![video];
-    if let Some(img) = image {
-        if img.exists() {
-            outputs.push(img);
-        } else {
-            tracing::warn!(
-                "{}",
-                crate::tl!(
-                    "postprocess.builtinUnpackImageNotFound",
-                    path = img.display()
-                )
-            );
-        }
-    }
+	let mut outputs = vec![video];
+	if let Some(img) = image {
+		if img.exists() {
+			outputs.push(img);
+		} else {
+			tracing::warn!(
+				"{}",
+				crate::tl!(
+					"postprocess.builtinUnpackImageNotFound",
+					path = img.display()
+				)
+			);
+		}
+	}
 
-    NodeResult {
-        effective_id: effective_id.to_string(),
-        module_id: ID_UNPACK.to_string(),
-        code: PpExecCode::Ok,
-        message: format!("unpacked {} output(s)", outputs.len()),
-        outputs,
-        inputs: inputs.to_vec(),
-    }
+	NodeResult {
+		effective_id: effective_id.to_string(),
+		module_id: ID_UNPACK.to_string(),
+		code: PpExecCode::Ok,
+		message: format!("unpacked {} output(s)", outputs.len()),
+		outputs,
+		inputs: inputs.to_vec(),
+	}
 }

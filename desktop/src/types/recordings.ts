@@ -52,12 +52,7 @@ export function entryEffectiveId(entry: PpExecutionEntry): string {
  * 注：合并 TS 分片现由 segment_merge 后处理模块负责，不再有单独的 merging 状态。
  * Note: TS segment merging is now handled by the segment_merge module; no separate merging status.
  */
-export type RecordingStatus =
-	| "recording"
-	| "pp_waiting"
-	| "pp_running"
-	| "pp_error"
-	| "finish";
+export type RecordingStatus = "recording" | "pp_waiting" | "pp_running" | "pp_error" | "finish";
 
 /** 正在执行的节点的模块内进度快照 / In-progress node's intra-module progress snapshot */
 export interface PpNodeProgress {

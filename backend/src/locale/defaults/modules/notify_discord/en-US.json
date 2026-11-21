@@ -1,9 +1,9 @@
 {
-  "name": "Discord Notification",
-  "description": "Send recording info and cover image to a Discord Webhook",
-  "params": {
-    "webhook_url": { "label": "Webhook URL" },
-    "proxy": { "label": "Proxy (http:// or socks5://)" },
-    "username": { "label": "Bot display name" }
-  }
+	"name": "Discord Notification",
+	"description": "Send recording info and cover image to a Discord Webhook",
+	"params": {
+		"webhook_url": { "label": "Webhook URL" },
+		"proxy": { "label": "Proxy (http:// or socks5://)" },
+		"username": { "label": "Bot display name" }
+	}
 }

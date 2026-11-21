@@ -22,12 +22,12 @@ use std::time::{Duration, Instant};
 /// .tmp/.part/.partial files) that change frequently and should not
 /// trigger a refresh.
 fn is_noisy_path(path: &Path) -> bool {
-    matches!(
-        path.extension()
-            .and_then(|e| e.to_str())
-            .map(|s| s.to_ascii_lowercase()),
-        Some(ext) if matches!(ext.as_str(), "m4s" | "ts" | "tmp" | "part" | "partial")
-    )
+	matches!(
+		path.extension()
+			.and_then(|e| e.to_str())
+			.map(|s| s.to_ascii_lowercase()),
+		Some(ext) if matches!(ext.as_str(), "m4s" | "ts" | "tmp" | "part" | "partial")
+	)
 }
 
 /// 判断文件系统事件是否应该触发前端刷新。
@@ -36,10 +36,10 @@ fn is_noisy_path(path: &Path) -> bool {
 /// Determine if a file system event should trigger a frontend refresh.
 /// Filters out pure access events and changes to noisy paths.
 fn should_emit(event: &Event) -> bool {
-    if matches!(event.kind, EventKind::Access(_)) {
-        return false;
-    }
-    event.paths.iter().any(|p| !is_noisy_path(p))
+	if matches!(event.kind, EventKind::Access(_)) {
+		return false;
+	}
+	event.paths.iter().any(|p| !is_noisy_path(p))
 }
 
 /// 启动录制输出目录监控器（在独立线程中运行）。
@@ -48,93 +48,93 @@ fn should_emit(event: &Event) -> bool {
 /// Start the recording output directory watcher (runs in a dedicated thread).
 /// Automatically switches the watch target when the output directory setting changes.
 pub fn start_recordings_dir_watcher(state: Arc<AppState>, emitter: Arc<dyn Emitter>) {
-    std::thread::spawn(move || {
-        let (tx, rx) = mpsc::channel::<notify::Result<Event>>();
+	std::thread::spawn(move || {
+		let (tx, rx) = mpsc::channel::<notify::Result<Event>>();
 
-        let mut watched_dir = PathBuf::new();
-        let mut last_emit = Instant::now()
-            .checked_sub(Duration::from_secs(1))
-            .unwrap_or_else(Instant::now);
-        let mut _watcher: Option<RecommendedWatcher> = None;
+		let mut watched_dir = PathBuf::new();
+		let mut last_emit = Instant::now()
+			.checked_sub(Duration::from_secs(1))
+			.unwrap_or_else(Instant::now);
+		let mut _watcher: Option<RecommendedWatcher> = None;
 
-        loop {
-            let current_dir = PathBuf::from(state.get_settings().output_dir);
-            // 若输出目录发生变化，重新创建监控器 / If output dir changed, recreate the watcher
-            if current_dir != watched_dir {
-                if let Err(e) = std::fs::create_dir_all(&current_dir) {
-                    tracing::error!(
-                        "{}",
-                        crate::tl!(
-                            "watcher.recordingsCreateDirFailed",
-                            dir = current_dir.display(),
-                            error = e
-                        )
-                    );
-                }
+		loop {
+			let current_dir = PathBuf::from(state.get_settings().output_dir);
+			// 若输出目录发生变化，重新创建监控器 / If output dir changed, recreate the watcher
+			if current_dir != watched_dir {
+				if let Err(e) = std::fs::create_dir_all(&current_dir) {
+					tracing::error!(
+						"{}",
+						crate::tl!(
+							"watcher.recordingsCreateDirFailed",
+							dir = current_dir.display(),
+							error = e
+						)
+					);
+				}
 
-                match RecommendedWatcher::new(tx.clone(), Config::default()) {
-                    Ok(mut w) => match w.watch(&current_dir, RecursiveMode::Recursive) {
-                        Ok(()) => {
-                            tracing::info!(
-                                "{}",
-                                crate::tl!(
-                                    "watcher.recordingsWatching",
-                                    dir = current_dir.display()
-                                )
-                            );
-                            watched_dir = current_dir;
-                            _watcher = Some(w);
-                        }
-                        Err(e) => {
-                            tracing::error!(
-                                "{}",
-                                crate::tl!(
-                                    "watcher.recordingsWatchFailed",
-                                    dir = current_dir.display(),
-                                    error = e
-                                )
-                            );
-                        }
-                    },
-                    Err(e) => {
-                        tracing::error!(
-                            "{}",
-                            crate::tl!("watcher.recordingsWatcherFailed", error = e)
-                        );
-                    }
-                }
-            }
+				match RecommendedWatcher::new(tx.clone(), Config::default()) {
+					Ok(mut w) => match w.watch(&current_dir, RecursiveMode::Recursive) {
+						Ok(()) => {
+							tracing::info!(
+								"{}",
+								crate::tl!(
+									"watcher.recordingsWatching",
+									dir = current_dir.display()
+								)
+							);
+							watched_dir = current_dir;
+							_watcher = Some(w);
+						}
+						Err(e) => {
+							tracing::error!(
+								"{}",
+								crate::tl!(
+									"watcher.recordingsWatchFailed",
+									dir = current_dir.display(),
+									error = e
+								)
+							);
+						}
+					},
+					Err(e) => {
+						tracing::error!(
+							"{}",
+							crate::tl!("watcher.recordingsWatcherFailed", error = e)
+						);
+					}
+				}
+			}
 
-            match rx.recv_timeout(Duration::from_secs(1)) {
-                Ok(Ok(event)) => {
-                    if watched_dir.as_os_str().is_empty() || !should_emit(&event) {
-                        continue;
-                    }
-                    // 防抖：400ms 内的多次事件只触发一次 / Debounce: only emit once within 400ms
-                    if last_emit.elapsed() < Duration::from_millis(400) {
-                        continue;
-                    }
-                    last_emit = Instant::now();
-                    emitter.emit(
-                        "recordings-dir-changed",
-                        &serde_json::json!({
-                            "outputDir": watched_dir,
-                            "kind": format!("{:?}", event.kind),
-                            "paths": event.paths,
-                        }),
-                    );
-                }
-                Ok(Err(e)) => {
-                    tracing::error!("{}", crate::tl!("watcher.recordingsEventError", error = e))
-                }
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    tracing::error!("{}", crate::tl!("watcher.recordingsDisconnected"));
-                    break;
-                }
-            }
-        }
-    });
+			match rx.recv_timeout(Duration::from_secs(1)) {
+				Ok(Ok(event)) => {
+					if watched_dir.as_os_str().is_empty() || !should_emit(&event) {
+						continue;
+					}
+					// 防抖：400ms 内的多次事件只触发一次 / Debounce: only emit once within 400ms
+					if last_emit.elapsed() < Duration::from_millis(400) {
+						continue;
+					}
+					last_emit = Instant::now();
+					emitter.emit(
+						"recordings-dir-changed",
+						&serde_json::json!({
+							"outputDir": watched_dir,
+							"kind": format!("{:?}", event.kind),
+							"paths": event.paths,
+						}),
+					);
+				}
+				Ok(Err(e)) => {
+					tracing::error!("{}", crate::tl!("watcher.recordingsEventError", error = e))
+				}
+				Err(mpsc::RecvTimeoutError::Timeout) => {}
+				Err(mpsc::RecvTimeoutError::Disconnected) => {
+					tracing::error!("{}", crate::tl!("watcher.recordingsDisconnected"));
+					break;
+				}
+			}
+		}
+	});
 }
 
 /// 启动 locale 目录监控器（在独立线程中运行）。
@@ -145,73 +145,73 @@ pub fn start_recordings_dir_watcher(state: Arc<AppState>, emitter: Arc<dyn Emitt
 /// Watches for JSON file additions/removals in `locale/app/` and emits `locale-files-changed` events.
 /// Debounced at 800ms to avoid multiple triggers when several files are written at once.
 pub fn start_locale_dir_watcher(emitter: Arc<dyn Emitter>) {
-    std::thread::spawn(move || {
-        let locale_dir = crate::locale::manager::app_locale_dir();
-        let _ = std::fs::create_dir_all(&locale_dir);
+	std::thread::spawn(move || {
+		let locale_dir = crate::locale::manager::app_locale_dir();
+		let _ = std::fs::create_dir_all(&locale_dir);
 
-        let (tx, rx) = mpsc::channel::<notify::Result<Event>>();
-        let mut last_emit = Instant::now()
-            .checked_sub(Duration::from_secs(1))
-            .unwrap_or_else(Instant::now);
+		let (tx, rx) = mpsc::channel::<notify::Result<Event>>();
+		let mut last_emit = Instant::now()
+			.checked_sub(Duration::from_secs(1))
+			.unwrap_or_else(Instant::now);
 
-        let mut watcher = match RecommendedWatcher::new(tx, Config::default()) {
-            Ok(mut w) => {
-                // 只监控 locale/app/ 目录本身，不递归（只关心顶层 .json 文件的增删）
-                // Watch only the locale/app/ dir itself, non-recursive (only top-level .json changes matter)
-                if let Err(e) = w.watch(&locale_dir, RecursiveMode::NonRecursive) {
-                    tracing::error!(
-                        "{}",
-                        crate::tl!(
-                            "watcher.localeWatchFailed",
-                            dir = locale_dir.display(),
-                            error = e
-                        )
-                    );
-                } else {
-                    tracing::info!(
-                        "{}",
-                        crate::tl!("watcher.localeWatching", dir = locale_dir.display())
-                    );
-                }
-                w
-            }
-            Err(e) => {
-                tracing::error!("{}", crate::tl!("watcher.localeWatcherFailed", error = e));
-                return;
-            }
-        };
-        let _watcher = &mut watcher;
+		let mut watcher = match RecommendedWatcher::new(tx, Config::default()) {
+			Ok(mut w) => {
+				// 只监控 locale/app/ 目录本身，不递归（只关心顶层 .json 文件的增删）
+				// Watch only the locale/app/ dir itself, non-recursive (only top-level .json changes matter)
+				if let Err(e) = w.watch(&locale_dir, RecursiveMode::NonRecursive) {
+					tracing::error!(
+						"{}",
+						crate::tl!(
+							"watcher.localeWatchFailed",
+							dir = locale_dir.display(),
+							error = e
+						)
+					);
+				} else {
+					tracing::info!(
+						"{}",
+						crate::tl!("watcher.localeWatching", dir = locale_dir.display())
+					);
+				}
+				w
+			}
+			Err(e) => {
+				tracing::error!("{}", crate::tl!("watcher.localeWatcherFailed", error = e));
+				return;
+			}
+		};
+		let _watcher = &mut watcher;
 
-        loop {
-            match rx.recv_timeout(Duration::from_secs(5)) {
-                Ok(Ok(event)) => {
-                    // 只关心 .json 文件的创建和删除事件
-                    // Only care about Create/Remove events for .json files
-                    if matches!(event.kind, EventKind::Access(_)) {
-                        continue;
-                    }
-                    let has_json = event
-                        .paths
-                        .iter()
-                        .any(|p| p.extension().and_then(|e| e.to_str()) == Some("json"));
-                    if !has_json {
-                        continue;
-                    }
-                    // 防抖：800ms 内的多次事件只触发一次 / Debounce: only emit once within 800ms
-                    if last_emit.elapsed() < Duration::from_millis(800) {
-                        continue;
-                    }
-                    last_emit = Instant::now();
-                    emitter.emit("locale-files-changed", &serde_json::json!({}));
-                }
-                Ok(Err(e)) => {
-                    tracing::error!("{}", crate::tl!("watcher.localeEventError", error = e))
-                }
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => break,
-            }
-        }
-    });
+		loop {
+			match rx.recv_timeout(Duration::from_secs(5)) {
+				Ok(Ok(event)) => {
+					// 只关心 .json 文件的创建和删除事件
+					// Only care about Create/Remove events for .json files
+					if matches!(event.kind, EventKind::Access(_)) {
+						continue;
+					}
+					let has_json = event
+						.paths
+						.iter()
+						.any(|p| p.extension().and_then(|e| e.to_str()) == Some("json"));
+					if !has_json {
+						continue;
+					}
+					// 防抖：800ms 内的多次事件只触发一次 / Debounce: only emit once within 800ms
+					if last_emit.elapsed() < Duration::from_millis(800) {
+						continue;
+					}
+					last_emit = Instant::now();
+					emitter.emit("locale-files-changed", &serde_json::json!({}));
+				}
+				Ok(Err(e)) => {
+					tracing::error!("{}", crate::tl!("watcher.localeEventError", error = e))
+				}
+				Err(mpsc::RecvTimeoutError::Timeout) => {}
+				Err(mpsc::RecvTimeoutError::Disconnected) => break,
+			}
+		}
+	});
 }
 
 /// 启动模块目录监控器（在独立线程中运行）。
@@ -220,54 +220,54 @@ pub fn start_locale_dir_watcher(emitter: Arc<dyn Emitter>) {
 /// Start the modules directory watcher (runs in a dedicated thread).
 /// Detects additions/removals of executables in the modules/ directory and emits `modules-changed` events.
 pub fn start_modules_dir_watcher(emitter: Arc<dyn Emitter>) {
-    std::thread::spawn(move || {
-        let modules_dir = crate::postprocess::pipeline::modules_dir();
-        let _ = std::fs::create_dir_all(&modules_dir);
+	std::thread::spawn(move || {
+		let modules_dir = crate::postprocess::pipeline::modules_dir();
+		let _ = std::fs::create_dir_all(&modules_dir);
 
-        let (tx, rx) = mpsc::channel::<notify::Result<Event>>();
-        let mut last_emit = Instant::now()
-            .checked_sub(Duration::from_secs(1))
-            .unwrap_or_else(Instant::now);
+		let (tx, rx) = mpsc::channel::<notify::Result<Event>>();
+		let mut last_emit = Instant::now()
+			.checked_sub(Duration::from_secs(1))
+			.unwrap_or_else(Instant::now);
 
-        let mut watcher = match RecommendedWatcher::new(tx, Config::default()) {
-            Ok(mut w) => {
-                // 只监控模块目录本身，不递归 / Watch only the modules dir itself, non-recursive
-                if let Err(e) = w.watch(&modules_dir, RecursiveMode::NonRecursive) {
-                    tracing::error!("{}", crate::tl!("watcher.modulesWatchFailed", error = e));
-                } else {
-                    tracing::info!(
-                        "{}",
-                        crate::tl!("watcher.modulesWatching", dir = modules_dir.display())
-                    );
-                }
-                w
-            }
-            Err(e) => {
-                tracing::error!("{}", crate::tl!("watcher.modulesWatcherFailed", error = e));
-                return;
-            }
-        };
-        let _watcher = &mut watcher;
+		let mut watcher = match RecommendedWatcher::new(tx, Config::default()) {
+			Ok(mut w) => {
+				// 只监控模块目录本身，不递归 / Watch only the modules dir itself, non-recursive
+				if let Err(e) = w.watch(&modules_dir, RecursiveMode::NonRecursive) {
+					tracing::error!("{}", crate::tl!("watcher.modulesWatchFailed", error = e));
+				} else {
+					tracing::info!(
+						"{}",
+						crate::tl!("watcher.modulesWatching", dir = modules_dir.display())
+					);
+				}
+				w
+			}
+			Err(e) => {
+				tracing::error!("{}", crate::tl!("watcher.modulesWatcherFailed", error = e));
+				return;
+			}
+		};
+		let _watcher = &mut watcher;
 
-        loop {
-            match rx.recv_timeout(Duration::from_secs(5)) {
-                Ok(Ok(event)) => {
-                    if matches!(event.kind, EventKind::Access(_)) {
-                        continue;
-                    }
-                    // 防抖：500ms 内的多次事件只触发一次 / Debounce: only emit once within 500ms
-                    if last_emit.elapsed() < Duration::from_millis(500) {
-                        continue;
-                    }
-                    last_emit = Instant::now();
-                    emitter.emit("modules-changed", &serde_json::json!({}));
-                }
-                Ok(Err(e)) => {
-                    tracing::error!("{}", crate::tl!("watcher.modulesEventError", error = e))
-                }
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => break,
-            }
-        }
-    });
+		loop {
+			match rx.recv_timeout(Duration::from_secs(5)) {
+				Ok(Ok(event)) => {
+					if matches!(event.kind, EventKind::Access(_)) {
+						continue;
+					}
+					// 防抖：500ms 内的多次事件只触发一次 / Debounce: only emit once within 500ms
+					if last_emit.elapsed() < Duration::from_millis(500) {
+						continue;
+					}
+					last_emit = Instant::now();
+					emitter.emit("modules-changed", &serde_json::json!({}));
+				}
+				Ok(Err(e)) => {
+					tracing::error!("{}", crate::tl!("watcher.modulesEventError", error = e))
+				}
+				Err(mpsc::RecvTimeoutError::Timeout) => {}
+				Err(mpsc::RecvTimeoutError::Disconnected) => break,
+			}
+		}
+	});
 }

@@ -139,10 +139,7 @@ export async function call<T = unknown>(
  * @param cb - 事件回调函数 / Event callback function
  * @returns 取消订阅函数 / Unsubscribe function
  */
-export async function on(
-	event: string,
-	cb: EventCallback,
-): Promise<() => void> {
+export async function on(event: string, cb: EventCallback): Promise<() => void> {
 	ensureSse();
 	await sseReady;
 	if (!sseListeners.has(event)) sseListeners.set(event, new Set());
@@ -210,9 +207,7 @@ const COMMAND_MAP: Record<
 	service_status: {
 		method: "GET",
 		url: (a) =>
-			a?.skip_mirrored
-				? "/api/service-status?skip_mirrored=1"
-				: "/api/service-status",
+			a?.skip_mirrored ? "/api/service-status?skip_mirrored=1" : "/api/service-status",
 	},
 	// 资源占用页：本进程及其后代（ffmpeg、后处理模块等）的 CPU/内存快照
 	// Resource usage page: CPU/memory snapshot of this process and its
@@ -349,6 +344,7 @@ const COMMAND_MAP: Record<
 	download_ffmpeg: {
 		method: "POST",
 		url: () => "/api/ffmpeg/download",
+		body: (a) => ({ platform: a.platform, variant: a.variant }),
 	},
 	start_update_download: {
 		method: "POST",
@@ -366,10 +362,7 @@ const COMMAND_MAP: Record<
  * @returns 解析后的响应数据 / Parsed response data
  * @throws 命令未知或 HTTP 请求失败时抛出错误 / Throws on unknown command or HTTP failure
  */
-async function httpCall<T>(
-	command: string,
-	args: Record<string, unknown> = {},
-): Promise<T> {
+async function httpCall<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
 	const def = COMMAND_MAP[command];
 	if (!def) throw new Error(`Unknown command: ${command}`);
 
@@ -403,5 +396,3 @@ async function httpCall<T>(
 	if (!text) return undefined as T;
 	return JSON.parse(text) as T;
 }
-
-

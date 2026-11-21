@@ -42,7 +42,12 @@ export function usePortWiring(
 		return `${nodeId}:${isOutput ? "o" : "i"}:${portIndex}`;
 	}
 
-	function registerPortEl(el: HTMLElement | null, nodeId: string, isOutput: boolean, portIndex: number) {
+	function registerPortEl(
+		el: HTMLElement | null,
+		nodeId: string,
+		isOutput: boolean,
+		portIndex: number,
+	) {
 		if (!el) return;
 		const rect = el.getBoundingClientRect();
 		const canvasRect = canvasRef.value?.getBoundingClientRect();
@@ -118,9 +123,7 @@ export function usePortWiring(
 	function pendingLineFrom() {
 		void portVersion.value;
 		const from = connectingFrom.value;
-		return from
-			? portPositions[portKey(from.nodeId, from.isOutput, from.portIndex)]
-			: null;
+		return from ? portPositions[portKey(from.nodeId, from.isOutput, from.portIndex)] : null;
 	}
 
 	return {

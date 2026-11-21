@@ -19,11 +19,12 @@ import "vue-sonner/style.css";
 const _addEventListener = EventTarget.prototype.addEventListener;
 EventTarget.prototype.addEventListener = function (type, listener, options) {
 	if (type === "wheel" || type === "touchstart") {
-		const opts = options === undefined || options === null
-			? { passive: true }
-			: typeof options === "object"
-				? { passive: true, ...options }
-				: options;
+		const opts =
+			options === undefined || options === null
+				? { passive: true }
+				: typeof options === "object"
+					? { passive: true, ...options }
+					: options;
 		return _addEventListener.call(this, type, listener, opts);
 	}
 	return _addEventListener.call(this, type, listener, options);

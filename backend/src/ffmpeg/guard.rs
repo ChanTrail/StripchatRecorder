@@ -28,26 +28,26 @@ static IN_USE: AtomicUsize = AtomicUsize::new(0);
 /// Held for the scope of functions that spawn ffmpeg/ffprobe (or module processes
 /// that may spawn ffmpeg), so auto-update can tell whether ffmpeg is in use.
 pub struct InUseGuard {
-    _private: (),
+	_private: (),
 }
 
 impl Drop for InUseGuard {
-    fn drop(&mut self) {
-        IN_USE.fetch_sub(1, Ordering::Relaxed);
-    }
+	fn drop(&mut self) {
+		IN_USE.fetch_sub(1, Ordering::Relaxed);
+	}
 }
 
 /// 获取一个 ffmpeg 使用中守卫（计数 +1，离开作用域自动 -1）。
 /// Acquire an ffmpeg in-use guard (count +1, automatically -1 when dropped).
 pub fn in_use() -> InUseGuard {
-    IN_USE.fetch_add(1, Ordering::Relaxed);
-    InUseGuard { _private: () }
+	IN_USE.fetch_add(1, Ordering::Relaxed);
+	InUseGuard { _private: () }
 }
 
 /// 当前 ffmpeg 使用中计数。
 /// Current ffmpeg in-use count.
 pub fn in_use_count() -> usize {
-    IN_USE.load(Ordering::Relaxed)
+	IN_USE.load(Ordering::Relaxed)
 }
 
 /// 当前是否空闲：没有进行中的 ffmpeg 调用且没有活跃录制。
@@ -57,5 +57,5 @@ pub fn in_use_count() -> usize {
 /// Auto-update only swaps binaries while idle, avoiding disturbance to running
 /// ffmpeg processes.
 pub fn is_idle(app_state: &AppState) -> bool {
-    in_use_count() == 0 && app_state.active_recording_count.load(Ordering::Relaxed) == 0
+	in_use_count() == 0 && app_state.active_recording_count.load(Ordering::Relaxed) == 0
 }

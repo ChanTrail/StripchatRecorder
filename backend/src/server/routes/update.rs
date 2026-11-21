@@ -11,46 +11,46 @@ use serde::Deserialize;
 
 /// GET /api/update/info — 返回当前版本、平台、Docker 状态及最新 Release 信息。
 pub async fn get_update_info(
-    AxumState(s): AxumState<ServerState>,
+	AxumState(s): AxumState<ServerState>,
 ) -> ApiResult<crate::update::UpdateInfo> {
-    let settings = s.app_state.get_settings();
-    let proxy_url = settings.api_proxy_url;
-    // beta 版本强制检查预发布，否则读取用户配置
-    // Force check_prerelease on beta builds; otherwise respect user setting
-    let check_prerelease = crate::update::is_beta_version() || settings.check_prerelease;
+	let settings = s.app_state.get_settings();
+	let proxy_url = settings.api_proxy_url;
+	// beta 版本强制检查预发布，否则读取用户配置
+	// Force check_prerelease on beta builds; otherwise respect user setting
+	let check_prerelease = crate::update::is_beta_version() || settings.check_prerelease;
 
-    let (release, asset_names) = match crate::update::fetch_latest_release_with_assets(
-        proxy_url.as_deref(),
-        check_prerelease,
-    )
-    .await
-    {
-        Ok((r, names)) => (Some(r), names),
-        Err(_) => (None, vec![]),
-    };
+	// 拉取失败如实报错：吞掉错误会让前端把「检查失败」误报成「已是最新」
+	// Propagate fetch errors: swallowing them would make the frontend
+	// report "already up to date" for what was actually a failed check.
+	let (release, asset_names) = crate::update::fetch_latest_release_with_assets(
+		proxy_url.as_deref(),
+		check_prerelease,
+	)
+	.await
+	.map_err(|e| ApiError(format!("获取最新 Release 信息失败: {}", e)))?;
 
-    Ok(Json(crate::update::UpdateInfo {
-        current_version: crate::update::APP_VERSION.to_string(),
-        platform: crate::update::current_platform().to_string(),
-        is_docker: crate::update::is_docker(),
-        is_beta: crate::update::is_beta_version(),
-        release,
-        asset_names,
-    }))
+	Ok(Json(crate::update::UpdateInfo {
+		current_version: crate::update::APP_VERSION.to_string(),
+		platform: crate::update::current_platform().to_string(),
+		is_docker: crate::update::is_docker(),
+		is_beta: crate::update::is_beta_version(),
+		release: Some(release),
+		asset_names,
+	}))
 }
 
 /// GET /api/update/status — 返回当前更新进度（前端 SSE 重连后用于恢复状态）。
 pub async fn get_update_status(
-    AxumState(s): AxumState<ServerState>,
+	AxumState(s): AxumState<ServerState>,
 ) -> ApiResult<crate::update::UpdateProgress> {
-    let progress = s.app_state.update_state.read().clone();
-    Ok(Json(progress))
+	let progress = s.app_state.update_state.read().clone();
+	Ok(Json(progress))
 }
 
 #[derive(Deserialize)]
 pub struct StartDownloadBody {
-    /// 要下载的 asset URL / Asset URL to download
-    pub download_url: String,
+	/// 要下载的 asset URL / Asset URL to download
+	pub download_url: String,
 }
 
 /// POST /api/update/download — 在后台下载并安装更新。
@@ -61,33 +61,33 @@ pub struct StartDownloadBody {
 /// Returns 202 Accepted immediately; download/install progress is pushed via SSE.
 /// Returns 400 if a download is already in progress to prevent duplicate triggers.
 pub async fn start_download(
-    AxumState(s): AxumState<ServerState>,
-    Json(body): Json<StartDownloadBody>,
+	AxumState(s): AxumState<ServerState>,
+	Json(body): Json<StartDownloadBody>,
 ) -> ApiResult<serde_json::Value> {
-    use crate::update::UpdateProgress;
+	use crate::update::UpdateProgress;
 
-    // 防止重复触发 / prevent duplicate triggers
-    {
-        let state = s.app_state.update_state.read();
-        match *state {
-            UpdateProgress::Downloading { .. } | UpdateProgress::Installing => {
-                return Err(ApiError("更新下载已在进行中".to_string()));
-            }
-            _ => {}
-        }
-    }
+	// 防止重复触发 / prevent duplicate triggers
+	{
+		let state = s.app_state.update_state.read();
+		match *state {
+			UpdateProgress::Downloading { .. } | UpdateProgress::Installing => {
+				return Err(ApiError("更新下载已在进行中".to_string()));
+			}
+			_ => {}
+		}
+	}
 
-    let proxy_url = s.app_state.get_settings().api_proxy_url;
-    let state_store = std::sync::Arc::clone(&s.app_state.update_state);
-    let emitter = std::sync::Arc::clone(&s.emitter);
+	let proxy_url = s.app_state.get_settings().api_proxy_url;
+	let state_store = std::sync::Arc::clone(&s.app_state.update_state);
+	let emitter = std::sync::Arc::clone(&s.emitter);
 
-    // 异步启动，立即返回 / spawn async task, return immediately
-    tokio::spawn(crate::update::download_and_install(
-        body.download_url,
-        proxy_url,
-        state_store,
-        emitter,
-    ));
+	// 异步启动，立即返回 / spawn async task, return immediately
+	tokio::spawn(crate::update::download_and_install(
+		body.download_url,
+		proxy_url,
+		state_store,
+		emitter,
+	));
 
-    Ok(Json(serde_json::json!({ "ok": true })))
+	Ok(Json(serde_json::json!({ "ok": true })))
 }

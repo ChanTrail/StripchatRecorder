@@ -15,345 +15,363 @@
     - Listening for SSE disconnect/reconnect events, auto-reloading on reconnect
 -->
 <script setup lang="ts">
-	import { onMounted, onUnmounted, ref, computed } from "vue";
-	import { RouterView, useRouter, useRoute } from "vue-router";
-	import NotifyLayer from "./components/NotifyLayer.vue";
-	import DirectoryBrowserDialog from "./components/DirectoryBrowserDialog.vue";
-	import FFmpegPreferenceDialog from "./components/FFmpegPreferenceDialog.vue";
-	import FFmpegDownloadDialog from "./components/FFmpegDownloadDialog.vue";
-	import { Button } from "@/components/ui/button";
-	import { call, on, onSseReconnect, onSseDisconnect } from "@/lib/api";
-	import {
-		Users, Video, Clapperboard, Radio, Search, Settings, Info, LogOut,
-		ChevronsLeft, ChevronsRight, Bell, Store, X, WifiOff, Loader2,
-		Menu, LayoutGrid, Activity, Cpu,
-	} from "@lucide/vue";
-	import {
-		useNotify, notify,
-		frontendNotifications, dismissFrontendNotification, dismissAllFrontendNotifications,
-		type FrontendNotification,
-	} from "@/composables/useNotify";
-	import { useStreamersStore } from "@/stores/streamers";
-	import { useI18n } from "vue-i18n";
-	import { useScrollbar } from "@/composables/useScrollbar";
-	import { useMobileLayout } from "@/composables/useMobileLayout";
-	import { setupFfmpegProgressToast } from "@/composables/useFfmpegProgress";
-	import { loadLocaleFromServer } from "@/i18n";
-	import { useModuleLocaleStore } from "@/stores/moduleLocale";
-	import { useLocalesStore } from "@/stores/locales";
-	import { useAuthStore } from "@/stores/auth";
-	import { useNotificationsStore, resolveNotificationMessage, type Notification } from "@/stores/notifications";
-	import {
-		Dialog, DialogContent, DialogHeader, DialogTitle,
-	} from "@/components/ui/dialog";
+import { onMounted, onUnmounted, ref, computed } from "vue";
+import { RouterView, useRouter, useRoute } from "vue-router";
+import NotifyLayer from "./components/NotifyLayer.vue";
+import DirectoryBrowserDialog from "./components/DirectoryBrowserDialog.vue";
+import FFmpegPreferenceDialog from "./components/FFmpegPreferenceDialog.vue";
+import FFmpegDownloadDialog from "./components/FFmpegDownloadDialog.vue";
+import { Button } from "@/components/ui/button";
+import { call, on, onSseReconnect, onSseDisconnect } from "@/lib/api";
+import {
+	Users,
+	Video,
+	Clapperboard,
+	Radio,
+	Search,
+	Settings,
+	Info,
+	LogOut,
+	ChevronsLeft,
+	ChevronsRight,
+	Bell,
+	Store,
+	X,
+	WifiOff,
+	Loader2,
+	Menu,
+	LayoutGrid,
+	Activity,
+	Cpu,
+} from "@lucide/vue";
+import {
+	useNotify,
+	notify,
+	frontendNotifications,
+	dismissFrontendNotification,
+	dismissAllFrontendNotifications,
+	type FrontendNotification,
+} from "@/composables/useNotify";
+import { useStreamersStore } from "@/stores/streamers";
+import { useI18n } from "vue-i18n";
+import { useScrollbar } from "@/composables/useScrollbar";
+import { useMobileLayout } from "@/composables/useMobileLayout";
+import { setupFFmpegProgressToast } from "@/composables/useFFmpegProgress";
+import { loadLocaleFromServer } from "@/i18n";
+import { useModuleLocaleStore } from "@/stores/moduleLocale";
+import { useLocalesStore } from "@/stores/locales";
+import { useAuthStore } from "@/stores/auth";
+import {
+	useNotificationsStore,
+	resolveNotificationMessage,
+	type Notification,
+} from "@/stores/notifications";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
-	const router = useRouter();
-	const route = useRoute();
-	const { toast } = useNotify();
-	const streamersStore = useStreamersStore();
-	const { t, locale } = useI18n();
-	const moduleLocaleStore = useModuleLocaleStore();
-	const localesStore = useLocalesStore();
-	const authStore = useAuthStore();
+const router = useRouter();
+const route = useRoute();
+const { toast } = useNotify();
+const streamersStore = useStreamersStore();
+const { t, locale } = useI18n();
+const moduleLocaleStore = useModuleLocaleStore();
+const localesStore = useLocalesStore();
+const authStore = useAuthStore();
 
-	const notificationsStore = useNotificationsStore();
+const notificationsStore = useNotificationsStore();
 
-	/**
-	 * 合并后端持久化通知与前端内存通知，按时间倒序排列。
-	 * 后端通知使用 created_at 字段；前端通知使用 timestamp 字段。
-	 *
-	 * Merge backend persistent notifications and frontend in-memory notifications,
-	 * sorted by time descending.
-	 */
-	type MergedNotification =
-		| { source: "backend"; data: Notification }
-		| { source: "frontend"; data: FrontendNotification };
+/**
+ * 合并后端持久化通知与前端内存通知，按时间倒序排列。
+ * 后端通知使用 created_at 字段；前端通知使用 timestamp 字段。
+ *
+ * Merge backend persistent notifications and frontend in-memory notifications,
+ * sorted by time descending.
+ */
+type MergedNotification =
+	{ source: "backend"; data: Notification } | { source: "frontend"; data: FrontendNotification };
 
-	const mergedNotifications = computed<MergedNotification[]>(() => {
-		const backend: MergedNotification[] = notificationsStore.notifications.map((n) => ({
-			source: "backend",
-			data: n,
-		}));
-		const frontend: MergedNotification[] = frontendNotifications.value.map((n) => ({
-			source: "frontend",
-			data: n,
-		}));
-		return [...backend, ...frontend].sort((a, b) => {
-			const ta = a.source === "backend"
+const mergedNotifications = computed<MergedNotification[]>(() => {
+	const backend: MergedNotification[] = notificationsStore.notifications.map((n) => ({
+		source: "backend",
+		data: n,
+	}));
+	const frontend: MergedNotification[] = frontendNotifications.value.map((n) => ({
+		source: "frontend",
+		data: n,
+	}));
+	return [...backend, ...frontend].sort((a, b) => {
+		const ta =
+			a.source === "backend"
 				? new Date(a.data.created_at).getTime()
 				: a.data.timestamp.getTime();
-			const tb = b.source === "backend"
+		const tb =
+			b.source === "backend"
 				? new Date(b.data.created_at).getTime()
 				: b.data.timestamp.getTime();
-			return tb - ta; // 倒序：最新在上 / descending: newest first
-		});
+		return tb - ta; // 倒序：最新在上 / descending: newest first
 	});
+});
 
-	/** 面板通知总数（后端 + 前端内存）/ Total panel notification count (backend + frontend) */
-	const totalNotificationCount = computed(
-		() => notificationsStore.unreadCount + frontendNotifications.value.length,
-	);
+/** 面板通知总数（后端 + 前端内存）/ Total panel notification count (backend + frontend) */
+const totalNotificationCount = computed(
+	() => notificationsStore.unreadCount + frontendNotifications.value.length,
+);
 
-	/** 通知面板是否打开 / Whether the notification panel is open */
-	const notificationPanelOpen = ref(false);
+/** 通知面板是否打开 / Whether the notification panel is open */
+const notificationPanelOpen = ref(false);
 
-	/** SSE 是否已断开连接（显示断连遮罩）/ Whether SSE is disconnected (shows overlay) */
-	const isDisconnected = ref(false);
-	const notificationScrollEl = ref<HTMLElement | null>(null);
-	useScrollbar(notificationScrollEl);
+/** SSE 是否已断开连接（显示断连遮罩）/ Whether SSE is disconnected (shows overlay) */
+const isDisconnected = ref(false);
+const notificationScrollEl = ref<HTMLElement | null>(null);
+useScrollbar(notificationScrollEl);
 
-	const mainScrollEl = ref<HTMLElement | null>(null);
-	useScrollbar(mainScrollEl);
+const mainScrollEl = ref<HTMLElement | null>(null);
+useScrollbar(mainScrollEl);
 
-	const { isMobile } = useMobileLayout();
+const { isMobile } = useMobileLayout();
 
-	/**
-	 * 侧边栏导航项配置。
-	 *
-	 * 注：早前这里的注释写的是"桌面版无流转发"，但这份代码是 frontend/（Web/Server
-	 * 版）而不是 desktop/——流转发（backend/src/relay.rs）是纯 Server 端功能，
-	 * RelayView.vue、对应的 /relay 路由（见 router/index.ts）、以及 relay.* 的
-	 * 中英文翻译此前都完整存在，只是这个导航数组里缺了这一项，导致页面在实际存在、
-	 * 路由能正常跳转的情况下，用户在侧边栏里根本看不到入口。
-	 *
-	 * Sidebar navigation items configuration.
-	 *
-	 * Note: this used to be commented "desktop: no relay", but this file lives under
-	 * frontend/ (the Web/Server build), not desktop/ — relay streaming
-	 * (backend/src/relay.rs) is a server-only feature. RelayView.vue, its /relay route
-	 * (see router/index.ts), and the relay.* zh-CN/en-US translations were all already
-	 * complete; this array was simply missing the entry, so the page existed and the
-	 * route worked fine, but users had no way to find it from the sidebar.
-	 */
-	const navItems = [
-		{ to: "/", labelKey: "nav.streamers", icon: Users },
-		{ to: "/recordings", labelKey: "nav.recordings", icon: Video },
-		{ to: "/postprocess", labelKey: "nav.postprocess", icon: Clapperboard },
-		{ to: "/stripchat", labelKey: "nav.stripchat", icon: LayoutGrid },
-		{ to: "/finder", labelKey: "nav.finder", icon: Search },
-		{ to: "/relay", labelKey: "nav.relay", icon: Radio },
-		{ to: "/community", labelKey: "nav.community", icon: Store },
-		{ to: "/settings", labelKey: "nav.settings", icon: Settings },
-		{ to: "/usage", labelKey: "nav.usage", icon: Cpu },
-		{ to: "/status", labelKey: "nav.status", icon: Activity },
-		{ to: "/about", labelKey: "nav.about", icon: Info },
-	];
+/**
+ * 侧边栏导航项配置。
+ *
+ * 注：早前这里的注释写的是"桌面版无流转发"，但这份代码是 frontend/（Web/Server
+ * 版）而不是 desktop/——流转发（backend/src/relay.rs）是纯 Server 端功能，
+ * RelayView.vue、对应的 /relay 路由（见 router/index.ts）、以及 relay.* 的
+ * 中英文翻译此前都完整存在，只是这个导航数组里缺了这一项，导致页面在实际存在、
+ * 路由能正常跳转的情况下，用户在侧边栏里根本看不到入口。
+ *
+ * Sidebar navigation items configuration.
+ *
+ * Note: this used to be commented "desktop: no relay", but this file lives under
+ * frontend/ (the Web/Server build), not desktop/ — relay streaming
+ * (backend/src/relay.rs) is a server-only feature. RelayView.vue, its /relay route
+ * (see router/index.ts), and the relay.* zh-CN/en-US translations were all already
+ * complete; this array was simply missing the entry, so the page existed and the
+ * route worked fine, but users had no way to find it from the sidebar.
+ */
+const navItems = [
+	{ to: "/", labelKey: "nav.streamers", icon: Users },
+	{ to: "/recordings", labelKey: "nav.recordings", icon: Video },
+	{ to: "/postprocess", labelKey: "nav.postprocess", icon: Clapperboard },
+	{ to: "/stripchat", labelKey: "nav.stripchat", icon: LayoutGrid },
+	{ to: "/finder", labelKey: "nav.finder", icon: Search },
+	{ to: "/relay", labelKey: "nav.relay", icon: Radio },
+	{ to: "/community", labelKey: "nav.community", icon: Store },
+	{ to: "/settings", labelKey: "nav.settings", icon: Settings },
+	{ to: "/usage", labelKey: "nav.usage", icon: Cpu },
+	{ to: "/status", labelKey: "nav.status", icon: Activity },
+	{ to: "/about", labelKey: "nav.about", icon: Info },
+];
 
-	/** 侧边栏是否折叠（持久化到 localStorage，刷新/重登录后保持状态）
-	 *  Whether the sidebar is collapsed (persisted to localStorage, survives refresh/re-login) */
-	const SIDEBAR_KEY = "sidebar_collapsed";
-	const sidebarCollapsed = ref(localStorage.getItem(SIDEBAR_KEY) === "1");
+/** 侧边栏是否折叠（持久化到 localStorage，刷新/重登录后保持状态）
+ *  Whether the sidebar is collapsed (persisted to localStorage, survives refresh/re-login) */
+const SIDEBAR_KEY = "sidebar_collapsed";
+const sidebarCollapsed = ref(localStorage.getItem(SIDEBAR_KEY) === "1");
 
-	function toggleSidebar() {
-		sidebarCollapsed.value = !sidebarCollapsed.value;
-		localStorage.setItem(SIDEBAR_KEY, sidebarCollapsed.value ? "1" : "0");
-	}
+function toggleSidebar() {
+	sidebarCollapsed.value = !sidebarCollapsed.value;
+	localStorage.setItem(SIDEBAR_KEY, sidebarCollapsed.value ? "1" : "0");
+}
 
-	/** 移动端抽屉是否打开 / Whether the mobile drawer is open */
-	const mobileDrawerOpen = ref(false);
+/** 移动端抽屉是否打开 / Whether the mobile drawer is open */
+const mobileDrawerOpen = ref(false);
 
-	/**
-	 * 移动端底部 Tab 栏的固定 5 项：最常用的 4 项 + "更多"。
-	 * 点击"更多"打开抽屉，展示全部导航项。
-	 *
-	 * Fixed 5 items for the mobile bottom tab bar: 4 most-used + "More".
-	 * Tapping "More" opens the drawer to show all nav items.
-	 */
-	const bottomTabItems = [
-		{ to: "/",           labelKey: "nav.streamers",  icon: Users },
-		{ to: "/recordings", labelKey: "nav.recordings", icon: Video },
-		{ to: "/finder",     labelKey: "nav.finder",     icon: Search },
-		{ to: "/settings",   labelKey: "nav.settings",   icon: Settings },
-	];
+/**
+ * 移动端底部 Tab 栏的固定 5 项：最常用的 4 项 + "更多"。
+ * 点击"更多"打开抽屉，展示全部导航项。
+ *
+ * Fixed 5 items for the mobile bottom tab bar: 4 most-used + "More".
+ * Tapping "More" opens the drawer to show all nav items.
+ */
+const bottomTabItems = [
+	{ to: "/", labelKey: "nav.streamers", icon: Users },
+	{ to: "/recordings", labelKey: "nav.recordings", icon: Video },
+	{ to: "/finder", labelKey: "nav.finder", icon: Search },
+	{ to: "/settings", labelKey: "nav.settings", icon: Settings },
+];
 
-	function mobileNavTo(path: string) {
-		router.push(path);
-		mobileDrawerOpen.value = false;
-	}
+function mobileNavTo(path: string) {
+	router.push(path);
+	mobileDrawerOpen.value = false;
+}
 
-	/**
-	 * 根据参数切换文档根元素的 dark 类，实现深色/浅色主题切换。
-	 * Toggle the dark class on the document root element for dark/light theme switching.
-	 *
-	 * @param dark - 是否应用深色主题 / Whether to apply dark theme
-	 */
-	function applyTheme(dark: boolean) {
-		document.documentElement.classList.toggle("dark", dark);
-	}
+/**
+ * 根据参数切换文档根元素的 dark 类，实现深色/浅色主题切换。
+ * Toggle the dark class on the document root element for dark/light theme switching.
+ *
+ * @param dark - 是否应用深色主题 / Whether to apply dark theme
+ */
+function applyTheme(dark: boolean) {
+	document.documentElement.classList.toggle("dark", dark);
+}
 
-	// 监听系统主题变化 / Listen for system theme changes
-	const mq = window.matchMedia("(prefers-color-scheme: dark)");
-	function onThemeChange(e: MediaQueryListEvent) {
-		applyTheme(e.matches);
-	}
+// 监听系统主题变化 / Listen for system theme changes
+const mq = window.matchMedia("(prefers-color-scheme: dark)");
+function onThemeChange(e: MediaQueryListEvent) {
+	applyTheme(e.matches);
+}
 
-	// 事件取消订阅函数 / Event unsubscribe functions
-	let unlistenFfmpeg: (() => void) | null = null;
-	let unlistenReconnect: (() => void) | null = null;
-	let unlistenDisconnect: (() => void) | null = null;
-	let unlistenLocaleWarnings: (() => void) | null = null;
-	let unlistenNotification: (() => void) | null = null;
-	let unlistenFfmpegProgress: (() => void) | null = null;
-	/**
-	 * 执行通知面板中的操作按钮（删除主播、清理孤立记录等）。
-	 * Execute an action button in the notification panel.
-	 */
-	async function executeNotificationAction(n: Notification) {
-		if (!n.action) return;
-		const { action_type, targets } = n.action;
-		try {
-			if (action_type === "remove_streamers") {
-				for (const username of targets) {
-					await streamersStore.removeStreamer(username).catch(() => {});
-				}
-				toast(t("notify.missingStreamers.done", { count: targets.length }), "success");
-			} else if (action_type === "view_update") {
-				// 跳转到关于页面查看更新 / Navigate to the About page to view the update
-				router.push("/about");
+// 事件取消订阅函数 / Event unsubscribe functions
+let unlistenFFmpeg: (() => void) | null = null;
+let unlistenReconnect: (() => void) | null = null;
+let unlistenDisconnect: (() => void) | null = null;
+let unlistenLocaleWarnings: (() => void) | null = null;
+let unlistenNotification: (() => void) | null = null;
+let unlistenFFmpegProgress: (() => void) | null = null;
+/**
+ * 执行通知面板中的操作按钮（删除主播、清理孤立记录等）。
+ * Execute an action button in the notification panel.
+ */
+async function executeNotificationAction(n: Notification) {
+	if (!n.action) return;
+	const { action_type, targets } = n.action;
+	try {
+		if (action_type === "remove_streamers") {
+			for (const username of targets) {
+				await streamersStore.removeStreamer(username).catch(() => {});
 			}
-		} catch {
-			// 静默失败
+			toast(t("notify.missingStreamers.done", { count: targets.length }), "success");
+		} else if (action_type === "view_update") {
+			// 跳转到关于页面查看更新 / Navigate to the About page to view the update
+			router.push("/about");
 		}
-		// 操作完成后标记通知已读
-		await notificationsStore.markRead([n.id]);
+	} catch {
+		// 静默失败
 	}
+	// 操作完成后标记通知已读
+	await notificationsStore.markRead([n.id]);
+}
 
-	async function handleLogout() {
-		await authStore.logout();
-		router.push("/login");
-	}
+async function handleLogout() {
+	await authStore.logout();
+	router.push("/login");
+}
 
-	/**
-	 * 渲染后端通知消息：委托 stores/notifications 的共享实现
-	 * （message_key → i18n，缺失回退 message），与实时 toast 同源。
-	 * Render a backend notification message: delegates to the shared
-	 * implementation in stores/notifications (message_key → i18n, falls back
-	 * to message), the same source the real-time toast uses.
-	 */
-	function renderNotificationMessage(n: Notification): string {
-		return resolveNotificationMessage(n);
-	}
+/**
+ * 渲染后端通知消息：委托 stores/notifications 的共享实现
+ * （message_key → i18n，缺失回退 message），与实时 toast 同源。
+ * Render a backend notification message: delegates to the shared
+ * implementation in stores/notifications (message_key → i18n, falls back
+ * to message), the same source the real-time toast uses.
+ */
+function renderNotificationMessage(n: Notification): string {
+	return resolveNotificationMessage(n);
+}
 
-	function notificationLevelClass(level: Notification["level"]): string {
-		return level === "error"
-			? "text-destructive"
-			: level === "warning"
+function notificationLevelClass(level: Notification["level"]): string {
+	return level === "error"
+		? "text-destructive"
+		: level === "warning"
 			? "text-yellow-500 dark:text-yellow-400"
 			: "text-muted-foreground";
-	}
+}
 
-	/** 前端内存通知的颜色类（ToastType → CSS class）/ Color class for frontend in-memory notifications */
-	function frontendNotificationClass(type: FrontendNotification["type"]): string {
-		return type === "error"
-			? "text-destructive"
-			: type === "warning"
+/** 前端内存通知的颜色类（ToastType → CSS class）/ Color class for frontend in-memory notifications */
+function frontendNotificationClass(type: FrontendNotification["type"]): string {
+	return type === "error"
+		? "text-destructive"
+		: type === "warning"
 			? "text-yellow-500 dark:text-yellow-400"
 			: type === "success"
-			? "text-green-600 dark:text-green-400"
-			: "text-muted-foreground";
-	}
+				? "text-green-600 dark:text-green-400"
+				: "text-muted-foreground";
+}
 
-	onMounted(async () => {
-		// 初始化主题并监听系统主题变化 / Initialize theme and listen for system theme changes
-		applyTheme(mq.matches);
-		mq.addEventListener("change", onThemeChange);
+onMounted(async () => {
+	// 初始化主题并监听系统主题变化 / Initialize theme and listen for system theme changes
+	applyTheme(mq.matches);
+	mq.addEventListener("change", onThemeChange);
 
-		// 从后端同步语言设置，先加载消息再切换 locale
-		// Sync language from backend, load messages before switching locale
-		try {
-			const settings = await call<{ language?: string }>("get_settings");
-			if (settings?.language) {
-				// 先加载该语言的消息，再切换 locale，保证首屏就用正确语言渲染
-				// Load messages for the language first, then switch locale,
-				// so the first render already uses the correct language
-				const { modules: moduleLocales } = await loadLocaleFromServer(settings.language);
-				locale.value = settings.language;
-				localStorage.setItem("locale", settings.language);
-				moduleLocaleStore.setLocales(settings.language, moduleLocales);
-			} else {
-				// 无自定义语言，仍加载默认 locale 的服务器覆盖（模块翻译等）
-				// No custom language, still load server overrides for the default locale
-				const { modules: moduleLocales } = await loadLocaleFromServer(locale.value);
-				moduleLocaleStore.setLocales(locale.value, moduleLocales);
-			}
-		} catch {
-			// 后端未就绪时加载当前 locale 的消息作为 fallback
-			// Backend not ready: load current locale messages as fallback
+	// 从后端同步语言设置，先加载消息再切换 locale
+	// Sync language from backend, load messages before switching locale
+	try {
+		const settings = await call<{ language?: string }>("get_settings");
+		if (settings?.language) {
+			// 先加载该语言的消息，再切换 locale，保证首屏就用正确语言渲染
+			// Load messages for the language first, then switch locale,
+			// so the first render already uses the correct language
+			const { modules: moduleLocales } = await loadLocaleFromServer(settings.language);
+			locale.value = settings.language;
+			localStorage.setItem("locale", settings.language);
+			moduleLocaleStore.setLocales(settings.language, moduleLocales);
+		} else {
+			// 无自定义语言，仍加载默认 locale 的服务器覆盖（模块翻译等）
+			// No custom language, still load server overrides for the default locale
 			const { modules: moduleLocales } = await loadLocaleFromServer(locale.value);
 			moduleLocaleStore.setLocales(locale.value, moduleLocales);
 		}
+	} catch {
+		// 后端未就绪时加载当前 locale 的消息作为 fallback
+		// Backend not ready: load current locale messages as fallback
+		const { modules: moduleLocales } = await loadLocaleFromServer(locale.value);
+		moduleLocaleStore.setLocales(locale.value, moduleLocales);
+	}
 
-		// 监听 ffmpeg 缺失警告 / Listen for ffmpeg missing warning
-		unlistenFfmpeg = await on("ffmpeg-missing", (payload) => {
-			const p = payload as { message: string };
-			notify(p.message, "warning");
-		});
-
-		// SSE 重连后直接刷新页面，清除前端缓存并让路由守卫重新验证 token。
-		// Reload the page on SSE reconnect to clear frontend cache and re-run auth guards.
-		unlistenReconnect = onSseReconnect(() => {
-			window.location.reload();
-		});
-
-		// 监听 SSE 断开连接 / Listen for SSE disconnect
-		unlistenDisconnect = onSseDisconnect(() => {
-			toast(t("notify.disconnected"), "warning");
-			isDisconnected.value = true;
-		});
-
-		// 监听自定义语言文件校验警告 / Listen for custom locale file validation warnings
-		unlistenLocaleWarnings = await on(
-			"locale-warnings",
-			(payload) => {
-				const items = payload as Array<{ path: string; reason: string }>;
-				for (const item of items) {
-					const file = item.path.replace(/\\/g, "/").split("/").pop() ?? item.path;
-					notify(`${t("settings.localeFileInvalid", { file })}: ${item.reason}`, "warning");
-				}
-			},
-		);
-
-		// 初始加载可用语言列表
-		// Load available locales
-		await localesStore.refresh();
-
-		// 首次加载通知列表 / Fetch notifications on first load
-		await notificationsStore.fetch();
-
-		// 监听实时新通知（用户在线时：同时追加面板 + 弹 toast）
-		// Listen for real-time new notifications (user online: panel + toast)
-		unlistenNotification = await on("notification-created", (payload) => {
-			notificationsStore.append(payload as Notification, true);
-		});
-
-		// 监听启动扫描完成信号，重新拉取通知列表（只加面板，不弹 toast）
-		// On startup scan done, re-fetch notification list (panel only, no toast)
-		await on("startup-scan-done", () => {
-			void notificationsStore.fetch();
-		});
-
-		// FFmpeg 下载/安装进度 toast（拉一次当前状态，恢复进行中的下载显示）
-		// FFmpeg download/install progress toast (fetches current state once to
-		// restore an in-progress download)
-		unlistenFfmpegProgress = await setupFfmpegProgressToast(t);
+	// 监听 ffmpeg 缺失警告 / Listen for ffmpeg missing warning
+	unlistenFFmpeg = await on("ffmpeg-missing", (payload) => {
+		const p = payload as { message: string };
+		notify(p.message, "warning");
 	});
 
-	onUnmounted(() => {
-		// 清理所有事件监听器 / Clean up all event listeners
-		mq.removeEventListener("change", onThemeChange);
-		unlistenFfmpeg?.();
-		unlistenReconnect?.();
-		unlistenDisconnect?.();
-		unlistenLocaleWarnings?.();
-		unlistenNotification?.();
-		unlistenFfmpegProgress?.();
+	// SSE 重连后直接刷新页面，清除前端缓存并让路由守卫重新验证 token。
+	// Reload the page on SSE reconnect to clear frontend cache and re-run auth guards.
+	unlistenReconnect = onSseReconnect(() => {
+		window.location.reload();
 	});
+
+	// 监听 SSE 断开连接 / Listen for SSE disconnect
+	unlistenDisconnect = onSseDisconnect(() => {
+		toast(t("notify.disconnected"), "warning");
+		isDisconnected.value = true;
+	});
+
+	// 监听自定义语言文件校验警告 / Listen for custom locale file validation warnings
+	unlistenLocaleWarnings = await on("locale-warnings", (payload) => {
+		const items = payload as Array<{ path: string; reason: string }>;
+		for (const item of items) {
+			const file = item.path.replace(/\\/g, "/").split("/").pop() ?? item.path;
+			notify(`${t("settings.localeFileInvalid", { file })}: ${item.reason}`, "warning");
+		}
+	});
+
+	// 初始加载可用语言列表
+	// Load available locales
+	await localesStore.refresh();
+
+	// 首次加载通知列表 / Fetch notifications on first load
+	await notificationsStore.fetch();
+
+	// 监听实时新通知（用户在线时：同时追加面板 + 弹 toast）
+	// Listen for real-time new notifications (user online: panel + toast)
+	unlistenNotification = await on("notification-created", (payload) => {
+		notificationsStore.append(payload as Notification, true);
+	});
+
+	// 监听启动扫描完成信号，重新拉取通知列表（只加面板，不弹 toast）
+	// On startup scan done, re-fetch notification list (panel only, no toast)
+	await on("startup-scan-done", () => {
+		void notificationsStore.fetch();
+	});
+
+	// FFmpeg 下载/安装进度 toast（拉一次当前状态，恢复进行中的下载显示）
+	// FFmpeg download/install progress toast (fetches current state once to
+	// restore an in-progress download)
+	unlistenFFmpegProgress = await setupFFmpegProgressToast(t);
+});
+
+onUnmounted(() => {
+	// 清理所有事件监听器 / Clean up all event listeners
+	mq.removeEventListener("change", onThemeChange);
+	unlistenFFmpeg?.();
+	unlistenReconnect?.();
+	unlistenDisconnect?.();
+	unlistenLocaleWarnings?.();
+	unlistenNotification?.();
+	unlistenFFmpegProgress?.();
+});
 </script>
 
 <template>
 	<!-- 全局布局过渡：setup/login 页面与主页面之间的切换 / Global layout transition between setup/login and main -->
 	<Transition name="layout" mode="out-in">
-
 		<!-- setup / login 页面：全屏无侧边栏 / Setup / login page: full-screen without sidebar -->
 		<div v-if="route.path === '/setup' || route.path === '/login'" key="setup" class="contents">
 			<RouterView v-slot="{ Component }">
@@ -366,21 +384,30 @@
 		</div>
 
 		<!-- 正常布局：侧边栏 + 内容区 / Normal layout: sidebar + content -->
-		<div v-else key="main" class="flex h-screen overflow-hidden">
+		<!-- h-dvh 而非 h-screen：100vh 取的是浏览器工具栏隐藏时的大视口，
+			而 position:fixed（对话框遮罩等）锚定的是工具栏可见的小视口——
+			两者在移动端不一致会导致弹窗遮罩盖不全、弹窗视觉上偏上。
+			dvh 与 fixed 定位始终使用同一视口基准 /
+			h-dvh instead of h-screen: 100vh resolves to the LARGE viewport
+			(toolbar hidden) while position:fixed anchors to the SMALL one
+			(toolbar shown) — the mismatch on mobile leaves dialog overlays
+			short and dialogs visually off-center. dvh always matches the
+			viewport that fixed positioning uses -->
+		<div v-else key="main" class="flex h-dvh overflow-hidden">
 			<aside
 				class="shrink-0 bg-sidebar border-r border-sidebar-border flex flex-col p-3 gap-1 transition-[width] duration-200 ease-in-out overflow-hidden"
-				:class="[
-					isMobile ? 'hidden' : 'flex',
-					sidebarCollapsed ? 'w-14' : 'w-52',
-				]"
+				:class="[isMobile ? 'hidden' : 'flex', sidebarCollapsed ? 'w-14' : 'w-52']"
 			>
 				<!-- 品牌区 / Brand area -->
-				<div class="flex items-center gap-2 px-1 py-4 mb-1 border-b border-sidebar-border min-w-0">
+				<div
+					class="flex items-center gap-2 px-1 py-4 mb-1 border-b border-sidebar-border min-w-0"
+				>
 					<img src="/icon.png" alt="icon" class="w-5 h-5 shrink-0" />
 					<span
 						class="text-sm font-bold text-sidebar-foreground truncate transition-[opacity,width] duration-200 ease-in-out"
 						:class="sidebarCollapsed ? 'opacity-0 w-0' : 'opacity-100'"
-					>StripchatRecorder</span>
+						>StripchatRecorder</span
+					>
 				</div>
 
 				<!-- 导航项 / Nav items -->
@@ -394,13 +421,15 @@
 							sidebarCollapsed ? 'justify-center gap-0' : 'justify-start gap-2',
 							route.path === item.to
 								? 'bg-sidebar-accent text-sidebar-accent-foreground font-semibold'
-								: 'text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/50'
+								: 'text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/50',
 						]"
 						:title="sidebarCollapsed ? t(item.labelKey) : undefined"
 						@click="router.push(item.to)"
 					>
 						<component :is="item.icon" class="size-4 shrink-0" />
-						<span v-show="!sidebarCollapsed" class="truncate">{{ t(item.labelKey) }}</span>
+						<span v-show="!sidebarCollapsed" class="truncate">{{
+							t(item.labelKey)
+						}}</span>
 					</Button>
 				</nav>
 
@@ -423,7 +452,9 @@
 								{{ totalNotificationCount > 99 ? "99+" : totalNotificationCount }}
 							</span>
 						</span>
-						<span v-show="!sidebarCollapsed" class="truncate">{{ t("nav.notifications") }}</span>
+						<span v-show="!sidebarCollapsed" class="truncate">{{
+							t("nav.notifications")
+						}}</span>
 					</Button>
 					<Button
 						variant="ghost"
@@ -433,7 +464,9 @@
 						@click="handleLogout"
 					>
 						<LogOut class="size-4 shrink-0" />
-						<span v-show="!sidebarCollapsed" class="truncate">{{ t("login.logout") }}</span>
+						<span v-show="!sidebarCollapsed" class="truncate">{{
+							t("login.logout")
+						}}</span>
 					</Button>
 					<Button
 						variant="ghost"
@@ -444,7 +477,9 @@
 					>
 						<ChevronsLeft v-if="!sidebarCollapsed" class="size-4 shrink-0" />
 						<ChevronsRight v-else class="size-4 shrink-0" />
-						<span v-show="!sidebarCollapsed" class="truncate">{{ t("nav.collapse") }}</span>
+						<span v-show="!sidebarCollapsed" class="truncate">{{
+							t("nav.collapse")
+						}}</span>
 					</Button>
 				</div>
 			</aside>
@@ -457,7 +492,11 @@
 				<div ref="mainScrollEl" class="relative h-full overflow-y-auto scrollbar-overlay">
 					<RouterView v-slot="{ Component }">
 						<Transition name="page" mode="out-in">
-							<component :is="Component" :key="route.path" :class="isMobile ? 'pb-16' : ''" />
+							<component
+								:is="Component"
+								:key="route.path"
+								:class="isMobile ? 'pb-16' : ''"
+							/>
 						</Transition>
 					</RouterView>
 				</div>
@@ -479,9 +518,11 @@
 					v-for="item in bottomTabItems"
 					:key="item.to"
 					class="flex-1 flex flex-col items-center justify-center gap-0.5 text-[10px] leading-tight transition-colors rounded-md mx-0.5"
-					:class="route.path === item.to
-						? 'bg-sidebar-accent text-sidebar-accent-foreground font-semibold'
-						: 'text-sidebar-foreground/60 active:bg-sidebar-accent/50 active:text-sidebar-foreground'"
+					:class="
+						route.path === item.to
+							? 'bg-sidebar-accent text-sidebar-accent-foreground font-semibold'
+							: 'text-sidebar-foreground/60 active:bg-sidebar-accent/50 active:text-sidebar-foreground'
+					"
 					@click="mobileNavTo(item.to)"
 				>
 					<component :is="item.icon" class="size-5 shrink-0" />
@@ -491,9 +532,11 @@
 				<!-- 更多按钮（通知角标 + 汉堡）/ More button (notification badge + hamburger) -->
 				<button
 					class="flex-1 flex flex-col items-center justify-center gap-0.5 text-[10px] leading-tight transition-colors rounded-md mx-0.5 relative"
-					:class="mobileDrawerOpen
-						? 'bg-sidebar-accent text-sidebar-accent-foreground font-semibold'
-						: 'text-sidebar-foreground/60 active:bg-sidebar-accent/50 active:text-sidebar-foreground'"
+					:class="
+						mobileDrawerOpen
+							? 'bg-sidebar-accent text-sidebar-accent-foreground font-semibold'
+							: 'text-sidebar-foreground/60 active:bg-sidebar-accent/50 active:text-sidebar-foreground'
+					"
 					@click="mobileDrawerOpen = !mobileDrawerOpen"
 				>
 					<span class="relative">
@@ -540,10 +583,14 @@
 					class="fixed inset-y-0 right-0 z-50 w-72 max-w-[85vw] bg-sidebar flex flex-col p-4 gap-1 overflow-y-auto scrollbar-overlay"
 				>
 					<!-- 顶部品牌 + 关闭 / Brand + close -->
-					<div class="flex items-center justify-between mb-3 pb-3 border-b border-sidebar-border">
+					<div
+						class="flex items-center justify-between mb-3 pb-3 border-b border-sidebar-border"
+					>
 						<div class="flex items-center gap-2">
 							<img src="/icon.png" alt="icon" class="w-5 h-5 shrink-0" />
-							<span class="text-sm font-bold text-sidebar-foreground">StripchatRecorder</span>
+							<span class="text-sm font-bold text-sidebar-foreground"
+								>StripchatRecorder</span
+							>
 						</div>
 						<button
 							class="p-1 rounded text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent/50"
@@ -559,9 +606,11 @@
 							v-for="item in navItems"
 							:key="item.to"
 							class="flex items-center gap-3 w-full px-3 py-2.5 rounded-md text-sm transition-colors text-left"
-							:class="route.path === item.to
-								? 'bg-sidebar-accent text-sidebar-accent-foreground font-semibold'
-								: 'text-sidebar-foreground/70 active:bg-sidebar-accent/50'"
+							:class="
+								route.path === item.to
+									? 'bg-sidebar-accent text-sidebar-accent-foreground font-semibold'
+									: 'text-sidebar-foreground/70 active:bg-sidebar-accent/50'
+							"
 							@click="mobileNavTo(item.to)"
 						>
 							<component :is="item.icon" class="size-4 shrink-0" />
@@ -573,7 +622,10 @@
 					<div class="mt-auto pt-3 border-t border-sidebar-border flex flex-col gap-0.5">
 						<button
 							class="flex items-center gap-3 w-full px-3 py-2.5 rounded-md text-sm text-sidebar-foreground/70 active:bg-sidebar-accent/50 transition-colors"
-							@click="notificationPanelOpen = true; mobileDrawerOpen = false"
+							@click="
+								notificationPanelOpen = true;
+								mobileDrawerOpen = false;
+							"
 						>
 							<span class="relative">
 								<Bell class="size-4 shrink-0" />
@@ -581,7 +633,9 @@
 									v-if="totalNotificationCount > 0"
 									class="absolute -top-1.5 -right-1.5 min-w-4 h-4 rounded-full bg-destructive text-destructive-foreground text-[10px] font-bold flex items-center justify-center px-0.5 leading-none"
 								>
-									{{ totalNotificationCount > 99 ? "99+" : totalNotificationCount }}
+									{{
+										totalNotificationCount > 99 ? "99+" : totalNotificationCount
+									}}
 								</span>
 							</span>
 							{{ t("nav.notifications") }}
@@ -610,7 +664,10 @@
 							variant="outline"
 							size="sm"
 							class="h-7 px-3 text-xs"
-							@click="notificationsStore.markAllRead(); dismissAllFrontendNotifications()"
+							@click="
+								notificationsStore.markAllRead();
+								dismissAllFrontendNotifications();
+							"
 						>
 							{{ t("notifications.markAllRead") }}
 						</Button>
@@ -625,13 +682,23 @@
 						class="flex flex-col gap-2 pr-1 overflow-y-auto scrollbar-overlay max-h-[60vh]"
 					>
 						<!-- 后端持久化通知（带 action 按钮）/ Backend persistent notification (with action button) -->
-						<template v-for="item in mergedNotifications" :key="item.source === 'backend' ? `b-${item.data.id}` : `f-${item.data.id}`">
+						<template
+							v-for="item in mergedNotifications"
+							:key="
+								item.source === 'backend'
+									? `b-${item.data.id}`
+									: `f-${item.data.id}`
+							"
+						>
 							<div
 								v-if="item.source === 'backend'"
 								class="rounded-lg border px-3 py-2.5 flex flex-col gap-1.5"
 							>
 								<div class="flex items-start justify-between gap-2">
-									<p class="text-sm leading-snug flex-1" :class="notificationLevelClass(item.data.level)">
+									<p
+										class="text-sm leading-snug flex-1"
+										:class="notificationLevelClass(item.data.level)"
+									>
 										{{ renderNotificationMessage(item.data) }}
 									</p>
 									<Button
@@ -649,25 +716,35 @@
 									</p>
 									<Button
 										v-if="item.data.action"
-										:variant="item.data.action.action_type === 'view_update' ? 'default' : 'destructive'"
+										:variant="
+											item.data.action.action_type === 'view_update'
+												? 'default'
+												: 'destructive'
+										"
 										size="sm"
-										:class="item.data.action.action_type === 'view_update'
-											? 'h-6 text-xs px-2 bg-green-600 hover:bg-green-700 text-white'
-											: 'h-6 text-xs px-2'"
+										:class="
+											item.data.action.action_type === 'view_update'
+												? 'h-6 text-xs px-2 bg-green-600 hover:bg-green-700 text-white'
+												: 'h-6 text-xs px-2'
+										"
 										@click="executeNotificationAction(item.data)"
 									>
-										{{ t(`notifications.action.${item.data.action.action_type}`) }}
+										{{
+											t(
+												`notifications.action.${item.data.action.action_type}`,
+											)
+										}}
 									</Button>
 								</div>
 							</div>
 
 							<!-- 前端内存通知（纯展示，刷新后消失）/ Frontend in-memory notification (display only, cleared on refresh) -->
-							<div
-								v-else
-								class="rounded-lg border px-3 py-2.5 flex flex-col gap-1.5"
-							>
+							<div v-else class="rounded-lg border px-3 py-2.5 flex flex-col gap-1.5">
 								<div class="flex items-start justify-between gap-2">
-									<p class="text-sm leading-snug flex-1" :class="frontendNotificationClass(item.data.type)">
+									<p
+										class="text-sm leading-snug flex-1"
+										:class="frontendNotificationClass(item.data.type)"
+									>
 										{{ item.data.message }}
 									</p>
 									<Button
@@ -696,7 +773,6 @@
 				</DialogContent>
 			</Dialog>
 		</div>
-
 	</Transition>
 
 	<!-- 断连全屏遮罩（z-[60]：叠在 z-50 的对话框等所有内容上）/ Disconnect full-screen overlay (z-[60]: above z-50 dialogs and all content) -->
@@ -727,5 +803,4 @@
 			</div>
 		</div>
 	</Transition>
-
 </template>

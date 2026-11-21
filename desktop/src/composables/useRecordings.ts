@@ -125,9 +125,7 @@ export function useRecordings() {
 		return result;
 	});
 
-	const allSelectableFiles = computed(() =>
-		files.value.filter((f) => !f.is_recording),
-	);
+	const allSelectableFiles = computed(() => files.value.filter((f) => !f.is_recording));
 	const selectedCount = computed(() => selected.value.size);
 
 	function getFileChecked(path: string) {
@@ -172,8 +170,7 @@ export function useRecordings() {
 	}
 
 	function toggleGroup(username: string) {
-		if (collapsedGroups.value.has(username))
-			collapsedGroups.value.delete(username);
+		if (collapsedGroups.value.has(username)) collapsedGroups.value.delete(username);
 		else collapsedGroups.value.add(username);
 	}
 

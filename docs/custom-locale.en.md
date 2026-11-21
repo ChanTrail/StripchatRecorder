@@ -88,11 +88,11 @@ Each module has its own folder under `locale/modules/<module_id>/`. Place a `{lo
 
 ```json
 {
-  "name": "My Module",
-  "description": "Module description",
-  "params": {
-    "param_key": { "label": "Param label" }
-  }
+	"name": "My Module",
+	"description": "Module description",
+	"params": {
+		"param_key": { "label": "Param label" }
+	}
 }
 ```
 
@@ -108,14 +108,14 @@ The `__builtin__` module locale file uses a **per-node nested structure**, unlik
 
 ```json
 {
-  "recording_input": {
-    "name": "Recording Input",
-    "description": "Virtual recording input node — always the pipeline start point"
-  },
-  "unpack": {
-    "name": "Unpack Media Bundle",
-    "description": "Split a media bundle into a video file (port 0) and an image file (port 1)"
-  }
+	"recording_input": {
+		"name": "Recording Input",
+		"description": "Virtual recording input node — always the pipeline start point"
+	},
+	"unpack": {
+		"name": "Unpack Media Bundle",
+		"description": "Split a media bundle into a video file (port 0) and an image file (port 1)"
+	}
 }
 ```
 
@@ -126,7 +126,7 @@ The `__builtin__` module locale file uses a **per-node nested structure**, unlik
 | Top-level key    | Description                                                   |
 | ---------------- | ------------------------------------------------------------- |
 | `nav`            | Sidebar navigation labels                                     |
-| `common`         | Shared button text (confirm, cancel…)                        |
+| `common`         | Shared button text (confirm, cancel…)                         |
 | `notify`         | System notifications and dialogs (disconnect, missing files…) |
 | `home`           | Streamers list page                                           |
 | `streamerCard`   | Streamer card component                                       |
@@ -143,7 +143,7 @@ The `__builtin__` module locale file uses a **per-node nested structure**, unlik
 | `login`          | Login page (password input, initial password setup)           |
 | `notifications`  | In-app notification panel                                     |
 | `dirBrowser`     | Directory picker dialog                                       |
-| `streamers`      | Streamer event messages (rename notifications, API errors…)  |
+| `streamers`      | Streamer event messages (rename notifications, API errors…)   |
 | `stripchat`      | StripChat browse page                                         |
 | `community`      | Community module marketplace page                             |
 | `about`          | About page (version info, update check)                       |

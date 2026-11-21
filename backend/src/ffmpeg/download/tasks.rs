@@ -31,16 +31,18 @@
 
 use super::net::{download_proxy, http_client};
 use super::pipeline::install;
-use super::release::{archive_file_name, build_platform, parse_sha256_file, read_marker};
+use super::release::{
+	FFmpegDownloadChoice, build_platform, parse_sha256_file, read_marker, resolve_asset,
+};
 use super::{
-    AUTO_UPDATE_FIRST_DELAY, AUTO_UPDATE_INTERVAL, DOWNLOAD_DIR_NAME, IDLE_POLL_INTERVAL,
-    RELEASE_BASE, SMALL_TIMEOUT_SECS, STAGING_DIR_NAME,
+	AUTO_UPDATE_FIRST_DELAY, AUTO_UPDATE_INTERVAL, DOWNLOAD_DIR_NAME, IDLE_POLL_INTERVAL,
+	RELEASE_BASE, SMALL_TIMEOUT_SECS, STAGING_DIR_NAME,
 };
 use crate::config::app_state::AppState;
 use crate::core::emitter::Emitter;
 use crate::core::error::AppError;
 use crate::core::notifications::NotificationLevel;
-use crate::ffmpeg::{FfmpegKind, FfmpegProgress, tools_dir};
+use crate::ffmpeg::{FFmpegKind, FFmpegProgress, tools_dir};
 use std::collections::HashMap;
 use std::fs;
 use std::sync::Arc;
@@ -55,39 +57,39 @@ use std::time::Duration;
 /// called at startup before the availability check. All errors are ignored
 /// (logged only).
 pub fn cleanup_leftovers() {
-    let tools = tools_dir();
-    for dir in [tools.join(DOWNLOAD_DIR_NAME), tools.join(STAGING_DIR_NAME)] {
-        if dir.exists()
-            && let Err(e) = fs::remove_dir_all(&dir)
-        {
-            tracing::warn!(
-                "{}",
-                crate::tl!(
-                    "ffmpeg.leftoverCleanupFailed",
-                    path = dir.display(),
-                    error = e
-                )
-            );
-        }
-    }
-    if let Ok(entries) = fs::read_dir(&tools) {
-        for entry in entries.flatten() {
-            let p = entry.path();
-            if p.is_file()
-                && p.extension().is_some_and(|ext| ext == "old")
-                && let Err(e) = fs::remove_file(&p)
-            {
-                tracing::warn!(
-                    "{}",
-                    crate::tl!(
-                        "ffmpeg.leftoverCleanupFailed",
-                        path = p.display(),
-                        error = e
-                    )
-                );
-            }
-        }
-    }
+	let tools = tools_dir();
+	for dir in [tools.join(DOWNLOAD_DIR_NAME), tools.join(STAGING_DIR_NAME)] {
+		if dir.exists()
+			&& let Err(e) = fs::remove_dir_all(&dir)
+		{
+			tracing::warn!(
+				"{}",
+				crate::tl!(
+					"ffmpeg.leftoverCleanupFailed",
+					path = dir.display(),
+					error = e
+				)
+			);
+		}
+	}
+	if let Ok(entries) = fs::read_dir(&tools) {
+		for entry in entries.flatten() {
+			let p = entry.path();
+			if p.is_file()
+				&& p.extension().is_some_and(|ext| ext == "old")
+				&& let Err(e) = fs::remove_file(&p)
+			{
+				tracing::warn!(
+					"{}",
+					crate::tl!(
+						"ffmpeg.leftoverCleanupFailed",
+						path = p.display(),
+						error = e
+					)
+				);
+			}
+		}
+	}
 }
 
 /// 启动时的 FFmpeg 检查入口（由 `server::startup::run_all` 经 `check_ffmpeg` 调用）：
@@ -119,138 +121,145 @@ pub fn cleanup_leftovers() {
 ///    1st/2nd failure); on final failure push the `ffmpegDownloadFailed` error
 ///    notification
 pub fn spawn_startup_install(app_state: Arc<AppState>, emitter: Arc<dyn Emitter>) {
-    tokio::spawn(async move {
-        // 旧版本把下载副本放在 lib/，先整体迁移到 tools/ 再开始检查
-        // Older versions kept the downloaded copy in lib/; migrate it to tools/
-        // before the checks below
-        crate::ffmpeg::migrate_legacy_lib_dir();
-        cleanup_leftovers();
+	tokio::spawn(async move {
+		// 旧版本把下载副本放在 lib/，先整体迁移到 tools/ 再开始检查
+		// Older versions kept the downloaded copy in lib/; migrate it to tools/
+		// before the checks below
+		crate::ffmpeg::migrate_legacy_lib_dir();
+		cleanup_leftovers();
 
-        let available = tokio::task::spawn_blocking(crate::ffmpeg::ffmpeg_available)
-            .await
-            .unwrap_or(false);
-        // 用户选了 tools 但 tools 组件不齐（下载被中断/文件被删）：即使 PATH
-        // 顶得上（生效值已回落 None、自动解析可用），也要把所选位置补齐——
-        // 否则重启后永远不会续下载。
-        // The user chose tools but the tools set is incomplete (an interrupted
-        // download or deleted files): refill the chosen location even when PATH
-        // covers (the effective value already fell back to None and PATH
-        // resolution works) — otherwise a restart would never resume the download.
-        let refill_tools =
-            crate::ffmpeg::raw_preference() == Some(1) && !crate::ffmpeg::location_complete(1);
-        if available && !refill_tools {
-            tracing::debug!(
-                "{}",
-                crate::tl!(
-                    "ffmpeg.alreadyAvailable",
-                    path = crate::ffmpeg::ffmpeg_program().to_string_lossy()
-                )
-            );
-            // 可用≠最新：启动即做一次更新检查（自动更新关闭 / PATH 首选 /
-            // 无标记非受管副本等不满足条件时内部各自短路）；否则要等到
-            // 更新循环首轮的 AUTO_UPDATE_FIRST_DELAY 才检查
-            // Available ≠ latest: run an update check right at startup (it
-            // short-circuits internally when auto-update is off, the PATH
-            // preference is set, there's no managed marker, etc.) —
-            // otherwise nothing checks until the loop's first round after
-            // AUTO_UPDATE_FIRST_DELAY
-            check_and_update(&app_state, &emitter).await;
-            return;
-        }
+		let available = tokio::task::spawn_blocking(crate::ffmpeg::ffmpeg_available)
+			.await
+			.unwrap_or(false);
+		// 用户选了 tools 但 tools 组件不齐（下载被中断/文件被删）：即使 PATH
+		// 顶得上（生效值已回落 None、自动解析可用），也要把所选位置补齐——
+		// 否则重启后永远不会续下载。
+		// The user chose tools but the tools set is incomplete (an interrupted
+		// download or deleted files): refill the chosen location even when PATH
+		// covers (the effective value already fell back to None and PATH
+		// resolution works) — otherwise a restart would never resume the download.
+		let refill_tools =
+			crate::ffmpeg::raw_preference() == Some(1) && !crate::ffmpeg::location_complete(1);
+		if available && !refill_tools {
+			tracing::debug!(
+				"{}",
+				crate::tl!(
+					"ffmpeg.alreadyAvailable",
+					path = crate::ffmpeg::ffmpeg_program().to_string_lossy()
+				)
+			);
+			// 可用≠最新：启动即做一次更新检查（自动更新关闭 / PATH 首选 /
+			// 无标记非受管副本等不满足条件时内部各自短路）；否则要等到
+			// 更新循环首轮的 AUTO_UPDATE_FIRST_DELAY 才检查
+			// Available ≠ latest: run an update check right at startup (it
+			// short-circuits internally when auto-update is off, the PATH
+			// preference is set, there's no managed marker, etc.) —
+			// otherwise nothing checks until the loop's first round after
+			// AUTO_UPDATE_FIRST_DELAY
+			check_and_update(&app_state, &emitter).await;
+			return;
+		}
 
-        // 用户首选系统环境变量：不往 tools 自动下载——来源由用户自己管理；
-        // 缺失时只提示（与不支持平台同一通知），由用户安装或改回首选项。
-        // 用 raw_preference 判定：PATH 缺组件时生效值已回落 None，但"选了
-        // PATH"这一策略不随之失效。
-        // When the user prefers the system PATH, never auto-download into tools —
-        // the source is theirs to manage; just notify (same notification as the
-        // unsupported-platform path) so they can install it or switch preference.
-        // Checked via raw_preference: the effective value falls back to None
-        // when PATH is incomplete, but the "PATH was chosen" policy must hold.
-        if !available && crate::ffmpeg::raw_preference() == Some(0) {
-            tracing::info!("{}", crate::tl!("ffmpeg.systemPreferenceMissing"));
-            app_state.notification_store.emit_i18n(
-                emitter.as_ref(),
-                NotificationLevel::Error,
-                "startup",
-                "ffmpeg not found on the system PATH. Recording and post-processing will be unavailable.",
-                "notifications.backend.ffmpegMissing",
-                None,
-            );
-            return;
-        }
+		// 用户首选系统环境变量：不往 tools 自动下载——来源由用户自己管理；
+		// 缺失时只提示（与不支持平台同一通知），由用户安装或改回首选项。
+		// 用 raw_preference 判定：PATH 缺组件时生效值已回落 None，但"选了
+		// PATH"这一策略不随之失效。
+		// When the user prefers the system PATH, never auto-download into tools —
+		// the source is theirs to manage; just notify (same notification as the
+		// unsupported-platform path) so they can install it or switch preference.
+		// Checked via raw_preference: the effective value falls back to None
+		// when PATH is incomplete, but the "PATH was chosen" policy must hold.
+		if !available && crate::ffmpeg::raw_preference() == Some(0) {
+			tracing::info!("{}", crate::tl!("ffmpeg.systemPreferenceMissing"));
+			app_state.notification_store.emit_i18n(
+				emitter.as_ref(),
+				NotificationLevel::Error,
+				"startup",
+				"ffmpeg not found on the system PATH. Recording and post-processing will be unavailable.",
+				"notifications.backend.ffmpegMissing",
+				None,
+			);
+			return;
+		}
 
-        if build_platform().is_none() {
-            // 仅"不可用"才提示：refill_tools 时 PATH 仍可用，不打扰 /
-            // Only notify when actually unavailable: during a tools refill PATH
-            // still covers, so no need to bother the user
-            if !available {
-                tracing::warn!(
-                    "{}",
-                    crate::tl!(
-                        "ffmpeg.unsupportedPlatform",
-                        os = std::env::consts::OS,
-                        arch = std::env::consts::ARCH
-                    )
-                );
-                app_state.notification_store.emit_i18n(
-                    emitter.as_ref(),
-                    NotificationLevel::Error,
-                    "startup",
-                    "ffmpeg not found. Recording and post-processing will be unavailable.",
-                    "notifications.backend.ffmpegMissing",
-                    None,
-                );
-            }
-            return;
-        }
+		if build_platform().is_none() {
+			// 仅"不可用"才提示：refill_tools 时 PATH 仍可用，不打扰 /
+			// Only notify when actually unavailable: during a tools refill PATH
+			// still covers, so no need to bother the user
+			if !available {
+				tracing::warn!(
+					"{}",
+					crate::tl!(
+						"ffmpeg.unsupportedPlatform",
+						os = std::env::consts::OS,
+						arch = std::env::consts::ARCH
+					)
+				);
+				app_state.notification_store.emit_i18n(
+					emitter.as_ref(),
+					NotificationLevel::Error,
+					"startup",
+					"ffmpeg not found. Recording and post-processing will be unavailable.",
+					"notifications.backend.ffmpegMissing",
+					None,
+				);
+			}
+			return;
+		}
 
-        tracing::info!(
-            "{}",
-            crate::tl!("ffmpeg.missingDownload", dir = tools_dir().display())
-        );
+		tracing::info!(
+			"{}",
+			crate::tl!("ffmpeg.missingDownload", dir = tools_dir().display())
+		);
 
-        const MAX_ATTEMPTS: u32 = 3;
-        let mut last_error = String::new();
-        for attempt in 1..=MAX_ATTEMPTS {
-            match install(FfmpegKind::Install, &app_state, &emitter).await {
-                Ok(()) => return,
-                Err(e) => {
-                    last_error = e.to_string();
-                    tracing::warn!(
-                        "{}",
-                        crate::tl!(
-                            "ffmpeg.downloadAttemptFailed",
-                            attempt = attempt,
-                            max = MAX_ATTEMPTS,
-                            error = last_error
-                        )
-                    );
-                    if attempt < MAX_ATTEMPTS {
-                        let backoff = if attempt == 1 { 5 } else { 15 };
-                        tokio::time::sleep(Duration::from_secs(backoff)).await;
-                    }
-                }
-            }
-        }
+		const MAX_ATTEMPTS: u32 = 3;
+		let mut last_error = String::new();
+		for attempt in 1..=MAX_ATTEMPTS {
+			match install(
+				FFmpegKind::Install,
+				FFmpegDownloadChoice::default(),
+				&app_state,
+				&emitter,
+			)
+			.await
+			{
+				Ok(()) => return,
+				Err(e) => {
+					last_error = e.to_string();
+					tracing::warn!(
+						"{}",
+						crate::tl!(
+							"ffmpeg.downloadAttemptFailed",
+							attempt = attempt,
+							max = MAX_ATTEMPTS,
+							error = last_error
+						)
+					);
+					if attempt < MAX_ATTEMPTS {
+						let backoff = if attempt == 1 { 5 } else { 15 };
+						tokio::time::sleep(Duration::from_secs(backoff)).await;
+					}
+				}
+			}
+		}
 
-        // 全部尝试失败 → 错误通知（继续使用手动安装的指引见 i18n 文案）
-        // All attempts failed → error notification (the i18n text points the user
-        // at manual installation)
-        let mut args = HashMap::new();
-        args.insert("error".to_string(), serde_json::json!(last_error));
-        app_state.notification_store.emit_i18n(
-            emitter.as_ref(),
-            NotificationLevel::Error,
-            "ffmpeg",
-            format!(
-                "FFmpeg auto-download failed: {}. Recording and post-processing will be unavailable.",
-                last_error
-            ),
-            "notifications.backend.ffmpegDownloadFailed",
-            Some(args),
-        );
-    });
+		// 全部尝试失败 → 错误通知（继续使用手动安装的指引见 i18n 文案）
+		// All attempts failed → error notification (the i18n text points the user
+		// at manual installation)
+		let mut args = HashMap::new();
+		args.insert("error".to_string(), serde_json::json!(last_error));
+		app_state.notification_store.emit_i18n(
+			emitter.as_ref(),
+			NotificationLevel::Error,
+			"ffmpeg",
+			format!(
+				"FFmpeg auto-download failed: {}. Recording and post-processing will be unavailable.",
+				last_error
+			),
+			"notifications.backend.ffmpegDownloadFailed",
+			Some(args),
+		);
+	});
 }
 
 /// 手动触发 tools 目录的 FFmpeg 下载安装（首选项向导"下载"按钮、
@@ -274,23 +283,33 @@ pub fn spawn_startup_install(app_state: Arc<AppState>, emitter: Arc<dyn Emitter>
 /// `tokio::spawn` without awaiting; progress and errors broadcast over the
 /// `ffmpeg-progress` SSE event, failures are log-only (the user can re-click,
 /// and the update loop silently retries a missing FFmpeg every 6 hours).
-pub fn spawn_manual_install(app_state: Arc<AppState>, emitter: Arc<dyn Emitter>) {
-    // 手动点击即明确意图：不按 PATH 首选项拦截（PATH 自管策略只约束自动
-    // 路径）——前端可借此"先下载、装完再写首选项" / An explicit click is
-    // deliberate intent: the PATH preference does not block it (the PATH
-    // self-manage policy only constrains the automatic paths) — the frontend
-    // can download first and persist the preference after install
-    if build_platform().is_none() {
-        return;
-    }
-    tokio::spawn(async move {
-        if let Err(e) = install(FfmpegKind::Install, &app_state, &emitter).await {
-            tracing::warn!(
-                "{}",
-                crate::tl!("ffmpeg.manualDownloadFailed", error = e.to_string())
-            );
-        }
-    });
+///
+/// `choice` 携带前端选择的平台轨/构建变体；任一字段缺省时自动解析
+/// （保留已安装标记的轨与形态，否则宿主默认轨 + 静态）。
+/// `choice` carries the frontend's platform-track/variant pick; each field
+/// auto-resolves when absent (keeping the installed marker's values, else
+/// host default + static).
+pub fn spawn_manual_install(
+	app_state: Arc<AppState>,
+	emitter: Arc<dyn Emitter>,
+	choice: FFmpegDownloadChoice,
+) {
+	// 手动点击即明确意图：不按 PATH 首选项拦截（PATH 自管策略只约束自动
+	// 路径）——前端可借此"先下载、装完再写首选项" / An explicit click is
+	// deliberate intent: the PATH preference does not block it (the PATH
+	// self-manage policy only constrains the automatic paths) — the frontend
+	// can download first and persist the preference after install
+	if build_platform().is_none() {
+		return;
+	}
+	tokio::spawn(async move {
+		if let Err(e) = install(FFmpegKind::Install, choice, &app_state, &emitter).await {
+			tracing::warn!(
+				"{}",
+				crate::tl!("ffmpeg.manualDownloadFailed", error = e.to_string())
+			);
+		}
+	});
 }
 
 // ─── 自动更新 / Auto-update ──────────────────────────────────────────────────
@@ -314,42 +333,48 @@ pub fn spawn_manual_install(app_state: Arc<AppState>, emitter: Arc<dyn Emitter>)
 ///     update pushes a `ffmpegUpdateFailed` warning notification and keeps the
 ///     old binaries; check failures are debug-logged only
 pub async fn auto_update_loop(app_state: Arc<AppState>, emitter: Arc<dyn Emitter>) {
-    tokio::time::sleep(AUTO_UPDATE_FIRST_DELAY).await;
-    loop {
-        run_update_round(&app_state, &emitter).await;
-        tokio::time::sleep(AUTO_UPDATE_INTERVAL).await;
-    }
+	tokio::time::sleep(AUTO_UPDATE_FIRST_DELAY).await;
+	loop {
+		run_update_round(&app_state, &emitter).await;
+		tokio::time::sleep(AUTO_UPDATE_INTERVAL).await;
+	}
 }
 
 /// [`auto_update_loop`] 的单轮逻辑。
 /// One round of [`auto_update_loop`].
 async fn run_update_round(app_state: &Arc<AppState>, emitter: &Arc<dyn Emitter>) {
-    // (a) 缺失或所选 tools 不齐 → 静默重试安装（首选项为系统 PATH 时不自动
-    //     下载，与启动路径一致）。raw_preference 判定策略：PATH 缺组件时生效
-    //     值回落 None，但"选了 PATH"仍须阻止自动下载。
-    // (a) Missing — or the chosen tools set is incomplete — → silently retry
-    //     the install (skipped when the preference is the system PATH, same as
-    //     the startup path). The policy is checked via raw_preference: the
-    //     effective value falls back to None when PATH is incomplete, but a
-    //     PATH choice must still block auto-download.
-    let available = tokio::task::spawn_blocking(crate::ffmpeg::ffmpeg_available)
-        .await
-        .unwrap_or(false);
-    let refill_tools =
-        crate::ffmpeg::raw_preference() == Some(1) && !crate::ffmpeg::location_complete(1);
-    if !available || refill_tools {
-        if crate::ffmpeg::raw_preference() != Some(0)
-            && build_platform().is_some()
-            && let Err(e) = install(FfmpegKind::Install, app_state, emitter).await
-        {
-            tracing::debug!("{}", crate::tl!("ffmpeg.updateCheckFailed", error = e));
-        }
-        return;
-    }
+	// (a) 缺失或所选 tools 不齐 → 静默重试安装（首选项为系统 PATH 时不自动
+	//     下载，与启动路径一致）。raw_preference 判定策略：PATH 缺组件时生效
+	//     值回落 None，但"选了 PATH"仍须阻止自动下载。
+	// (a) Missing — or the chosen tools set is incomplete — → silently retry
+	//     the install (skipped when the preference is the system PATH, same as
+	//     the startup path). The policy is checked via raw_preference: the
+	//     effective value falls back to None when PATH is incomplete, but a
+	//     PATH choice must still block auto-download.
+	let available = tokio::task::spawn_blocking(crate::ffmpeg::ffmpeg_available)
+		.await
+		.unwrap_or(false);
+	let refill_tools =
+		crate::ffmpeg::raw_preference() == Some(1) && !crate::ffmpeg::location_complete(1);
+	if !available || refill_tools {
+		if crate::ffmpeg::raw_preference() != Some(0)
+			&& build_platform().is_some()
+			&& let Err(e) = install(
+				FFmpegKind::Install,
+				FFmpegDownloadChoice::default(),
+				app_state,
+				emitter,
+			)
+			.await
+		{
+			tracing::debug!("{}", crate::tl!("ffmpeg.updateCheckFailed", error = e));
+		}
+		return;
+	}
 
-    // (b) ffmpeg 可用 → 受管副本的更新检查
-    // (b) ffmpeg usable → update check for the managed copy
-    check_and_update(app_state, emitter).await;
+	// (b) ffmpeg 可用 → 受管副本的更新检查
+	// (b) ffmpeg usable → update check for the managed copy
+	check_and_update(app_state, emitter).await;
 }
 
 /// FFmpeg 更新检查（要求 ffmpeg 已可用，由调用方保证）：`ffmpeg_auto_update`
@@ -369,125 +394,137 @@ async fn run_update_round(app_state: &Arc<AppState>, emitter: &Arc<dyn Emitter>)
 /// check failures are debug-logged only. Shared by startup (ffmpeg-already-
 /// usable branch) and the periodic loop.
 async fn check_and_update(app_state: &Arc<AppState>, emitter: &Arc<dyn Emitter>) {
-    // 首选项为系统环境变量时不维护 tools 副本
-    // Skipped when the preference is the system PATH — no point maintaining a
-    // tools copy the user doesn't use
-    let settings = app_state.get_settings();
-    if !settings.ffmpeg_auto_update || crate::ffmpeg::raw_preference() == Some(0) {
-        return;
-    }
-    let Some((platform, ext)) = build_platform() else {
-        return;
-    };
-    // 无标记 = 非本程序安装（PATH 或用户手动放入 tools），不替换
-    // No marker = not installed by us (PATH or manually placed in tools) — never replaced
-    let Some(marker) = read_marker() else {
-        return;
-    };
+	// 首选项为系统环境变量时不维护 tools 副本
+	// Skipped when the preference is the system PATH — no point maintaining a
+	// tools copy the user doesn't use
+	let settings = app_state.get_settings();
+	if !settings.ffmpeg_auto_update || crate::ffmpeg::raw_preference() == Some(0) {
+		return;
+	}
+	// 无标记 = 非本程序安装（PATH 或用户手动放入 tools），不替换
+	// No marker = not installed by us (PATH or manually placed in tools) — never replaced
+	let Some(marker) = read_marker() else {
+		return;
+	};
+	// 校验文件取标记记录的平台轨+变体：更新保持与安装同一轨（请求缺省 →
+	// 标记 → 宿主默认的解析链与 install 内一致）
+	// The checksum asset follows the marker's recorded track + variant so an
+	// update stays on the same track as the install (absent-request → marker
+	// → host-default, matching the resolution inside install)
+	let Ok(spec) = resolve_asset(None, None, Some(&marker)) else {
+		return;
+	};
 
-    let checksum_name = format!("{}.sha256", archive_file_name(platform, ext));
-    let checksum_url = format!("{}/{}", RELEASE_BASE, checksum_name);
-    let checksum_url = crate::postprocess::community::apply_mirror(
-        &checksum_url,
-        settings.community_mirror_url.as_deref(),
-    );
-    let proxy = download_proxy(&settings);
+	let checksum_name = format!("{}.sha256", spec.archive_name());
+	let checksum_url = format!("{}/{}", RELEASE_BASE, checksum_name);
+	let checksum_url = crate::postprocess::community::apply_mirror(
+		&checksum_url,
+		settings.community_mirror_url.as_deref(),
+	);
+	let proxy = download_proxy(&settings);
 
-    let remote_sha = async {
-        let client = http_client(proxy.as_deref(), SMALL_TIMEOUT_SECS)?;
-        let resp = client
-            .get(&checksum_url)
-            .send()
-            .await
-            .map_err(|e| AppError::Other(e.to_string()))?;
-        if !resp.status().is_success() {
-            return Err(AppError::Other(format!("HTTP {}", resp.status())));
-        }
-        let text = resp
-            .text()
-            .await
-            .map_err(|e| AppError::Other(e.to_string()))?;
-        parse_sha256_file(&text)
-            .ok_or_else(|| AppError::Other("invalid checksum content".to_string()))
-    }
-    .await;
+	let remote_sha = async {
+		let client = http_client(proxy.as_deref(), SMALL_TIMEOUT_SECS)?;
+		let resp = client
+			.get(&checksum_url)
+			.send()
+			.await
+			.map_err(|e| AppError::Other(e.to_string()))?;
+		if !resp.status().is_success() {
+			return Err(AppError::Other(format!("HTTP {}", resp.status())));
+		}
+		let text = resp
+			.text()
+			.await
+			.map_err(|e| AppError::Other(e.to_string()))?;
+		parse_sha256_file(&text)
+			.ok_or_else(|| AppError::Other("invalid checksum content".to_string()))
+	}
+	.await;
 
-    let remote_sha = match remote_sha {
-        Ok(h) => h,
-        Err(e) => {
-            tracing::debug!("{}", crate::tl!("ffmpeg.updateCheckFailed", error = e));
-            return;
-        }
-    };
+	let remote_sha = match remote_sha {
+		Ok(h) => h,
+		Err(e) => {
+			tracing::debug!("{}", crate::tl!("ffmpeg.updateCheckFailed", error = e));
+			return;
+		}
+	};
 
-    if remote_sha.eq_ignore_ascii_case(&marker.archive_sha256) {
-        return;
-    }
+	if remote_sha.eq_ignore_ascii_case(&marker.archive_sha256) {
+		return;
+	}
 
-    tracing::info!(
-        "{}",
-        crate::tl!("ffmpeg.updateAvailable", hash = remote_sha)
-    );
-    // 入库通知"检测到新版本"：到真正下载之间还隔着等待空闲（可能数小时），
-    // 没有这条的话更新已在排队的事实完全无迹可寻
-    // Store an "update detected" notification: the wait-for-idle below can
-    // last hours, and without this entry a queued update leaves no trace
-    app_state.notification_store.emit_i18n(
-        emitter.as_ref(),
-        NotificationLevel::Info,
-        "ffmpeg",
-        "A new FFmpeg version is available and will be installed when the program is idle",
-        "notifications.backend.ffmpegUpdateAvailable",
-        None,
-    );
+	tracing::info!(
+		"{}",
+		crate::tl!("ffmpeg.updateAvailable", hash = remote_sha)
+	);
+	// 入库通知"检测到新版本"：到真正下载之间还隔着等待空闲（可能数小时），
+	// 没有这条的话更新已在排队的事实完全无迹可寻
+	// Store an "update detected" notification: the wait-for-idle below can
+	// last hours, and without this entry a queued update leaves no trace
+	app_state.notification_store.emit_i18n(
+		emitter.as_ref(),
+		NotificationLevel::Info,
+		"ffmpeg",
+		"A new FFmpeg version is available and will be installed when the program is idle",
+		"notifications.backend.ffmpegUpdateAvailable",
+		None,
+	);
 
-    // 等到空闲再更新；等待期间用户可能关闭自动更新 → 本轮中止
-    // Wait for idle before updating; the user may disable auto-update meanwhile →
-    // abort this round
-    if !crate::ffmpeg::is_idle(app_state) {
-        tracing::debug!("{}", crate::tl!("ffmpeg.waitingForIdle"));
-    }
-    loop {
-        if !app_state.get_settings().ffmpeg_auto_update {
-            return;
-        }
-        if crate::ffmpeg::is_idle(app_state) {
-            break;
-        }
-        tokio::time::sleep(IDLE_POLL_INTERVAL).await;
-    }
+	// 等到空闲再更新；等待期间用户可能关闭自动更新 → 本轮中止
+	// Wait for idle before updating; the user may disable auto-update meanwhile →
+	// abort this round
+	if !crate::ffmpeg::is_idle(app_state) {
+		tracing::debug!("{}", crate::tl!("ffmpeg.waitingForIdle"));
+	}
+	loop {
+		if !app_state.get_settings().ffmpeg_auto_update {
+			return;
+		}
+		if crate::ffmpeg::is_idle(app_state) {
+			break;
+		}
+		tokio::time::sleep(IDLE_POLL_INTERVAL).await;
+	}
 
-    match install(FfmpegKind::Update, app_state, emitter).await {
-        Ok(()) => {}
-        Err(e) => {
-            // install 内部因设置被关闭而中止时不发通知（不算失败）
-            // No notification when install aborted because the setting was turned
-            // off mid-flight (not a failure)
-            if app_state.get_settings().ffmpeg_auto_update {
-                tracing::warn!("{}", crate::tl!("ffmpeg.updateFailed", error = e));
-                let mut args = HashMap::new();
-                args.insert("error".to_string(), serde_json::json!(e.to_string()));
-                app_state.notification_store.emit_i18n(
-                    emitter.as_ref(),
-                    NotificationLevel::Warning,
-                    "ffmpeg",
-                    format!(
-                        "FFmpeg auto-update failed: {} (continuing with the current version)",
-                        e
-                    ),
-                    "notifications.backend.ffmpegUpdateFailed",
-                    Some(args),
-                );
-            } else {
-                tracing::debug!("{}", crate::tl!("ffmpeg.updateFailed", error = e));
-            }
-        }
-    }
+	match install(
+		FFmpegKind::Update,
+		FFmpegDownloadChoice::default(),
+		app_state,
+		emitter,
+	)
+	.await
+	{
+		Ok(()) => {}
+		Err(e) => {
+			// install 内部因设置被关闭而中止时不发通知（不算失败）
+			// No notification when install aborted because the setting was turned
+			// off mid-flight (not a failure)
+			if app_state.get_settings().ffmpeg_auto_update {
+				tracing::warn!("{}", crate::tl!("ffmpeg.updateFailed", error = e));
+				let mut args = HashMap::new();
+				args.insert("error".to_string(), serde_json::json!(e.to_string()));
+				app_state.notification_store.emit_i18n(
+					emitter.as_ref(),
+					NotificationLevel::Warning,
+					"ffmpeg",
+					format!(
+						"FFmpeg auto-update failed: {} (continuing with the current version)",
+						e
+					),
+					"notifications.backend.ffmpegUpdateFailed",
+					Some(args),
+				);
+			} else {
+				tracing::debug!("{}", crate::tl!("ffmpeg.updateFailed", error = e));
+			}
+		}
+	}
 }
 
 /// 当前的 FFmpeg 下载/安装进度（供 `GET /api/ffmpeg/status` 与 Tauri 命令使用）。
 /// Current FFmpeg download/install progress (for `GET /api/ffmpeg/status` and
 /// the Tauri command).
-pub fn current_progress(app_state: &AppState) -> FfmpegProgress {
-    app_state.ffmpeg_state.read().clone()
+pub fn current_progress(app_state: &AppState) -> FFmpegProgress {
+	app_state.ffmpeg_state.read().clone()
 }

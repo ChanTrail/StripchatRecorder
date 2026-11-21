@@ -1,19 +1,19 @@
 {
-  "identifier": "default",
-  "description": "Default capabilities for StripchatRecorder desktop",
-  "windows": ["main"],
-  "permissions": [
-    "core:default",
-    "core:event:allow-listen",
-    "core:event:allow-unlisten",
-    "core:event:allow-emit",
-    "opener:default",
-    "updater:default",
-    "updater:allow-check",
-    "updater:allow-download",
-    "updater:allow-install",
-    "updater:allow-download-and-install",
-    "process:default",
-    "process:allow-restart"
-  ]
+	"identifier": "default",
+	"description": "Default capabilities for StripchatRecorder desktop",
+	"windows": ["main"],
+	"permissions": [
+		"core:default",
+		"core:event:allow-listen",
+		"core:event:allow-unlisten",
+		"core:event:allow-emit",
+		"opener:default",
+		"updater:default",
+		"updater:allow-check",
+		"updater:allow-download",
+		"updater:allow-install",
+		"updater:allow-download-and-install",
+		"process:default",
+		"process:allow-restart"
+	]
 }

@@ -68,8 +68,9 @@ function detectPlatform(): string {
 		// Apple Silicon browsers include arm info in ua or via navigator.platform
 		const isArm =
 			ua.includes("arm") ||
-			(navigator as unknown as { userAgentData?: { platform?: string } })
-				.userAgentData?.platform
+			(
+				navigator as unknown as { userAgentData?: { platform?: string } }
+			).userAgentData?.platform
 				?.toLowerCase()
 				.includes("arm") ||
 			false;
@@ -125,10 +126,7 @@ function repoRegistryUrls(repo: string): [string, string] {
 			`https://raw.githubusercontent.com/${path}/main/registry.json`,
 		];
 	}
-	return [
-		`${r}/raw/master/registry.json`,
-		`${r}/raw/main/registry.json`,
-	];
+	return [`${r}/raw/master/registry.json`, `${r}/raw/main/registry.json`];
 }
 
 // ─── Store ────────────────────────────────────────────────────────────────────
@@ -151,7 +149,9 @@ export const useCommunityStore = defineStore("community", () => {
 	 * Download progress per module (moduleId → { downloaded, total, pct }).
 	 * pct = -1 means Content-Length is unknown; only downloaded bytes can be shown.
 	 */
-	const downloadProgress = ref<Map<string, { downloaded: number; total: number; pct: number }>>(new Map());
+	const downloadProgress = ref<Map<string, { downloaded: number; total: number; pct: number }>>(
+		new Map(),
+	);
 
 	// ─── SSE 订阅 / SSE Subscriptions ─────────────────────────────────────────
 
@@ -263,9 +263,8 @@ export const useCommunityStore = defineStore("community", () => {
 
 			// 4. 从后端获取已安装模块列表（discover_modules 扫描磁盘）
 			//    Get locally installed modules from backend (discover_modules scans disk)
-			const installedList = await call<Array<{ id: string; version: string }>>(
-				"list_modules",
-			);
+			const installedList =
+				await call<Array<{ id: string; version: string }>>("list_modules");
 			const installed = new Map<string, string>(
 				(installedList ?? [])
 					.filter((m) => !m.id.startsWith("__builtin__"))
@@ -301,7 +300,11 @@ export const useCommunityStore = defineStore("community", () => {
 	 */
 	async function installModule(mod: CommunityModule): Promise<void> {
 		pendingIds.value = new Set([...pendingIds.value, mod.id]);
-		downloadProgress.value = new Map(downloadProgress.value).set(mod.id, { downloaded: 0, total: 0, pct: -1 });
+		downloadProgress.value = new Map(downloadProgress.value).set(mod.id, {
+			downloaded: 0,
+			total: 0,
+			pct: -1,
+		});
 		try {
 			await call("install_community_module", { module: mod });
 			// 安装 API 返回后清理状态（SSE 事件可能已先清理，这里是兜底）

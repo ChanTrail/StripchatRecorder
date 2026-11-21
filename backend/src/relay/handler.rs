@@ -10,23 +10,23 @@
 //! - 上游在线时转发直播流（HTTP-FLV 格式，兼容 flv.js / mpegts.js 等播放器）
 //! - 上游离线时 worker 退出，HTTP 连接自然关闭
 
-use super::state::RelayManager;
+use super::state::{RelayManager, RelayStreamParams};
 use super::worker::start_streamer;
 use crate::config::app_state::AppState;
 use axum::{
-    Json,
-    body::Body,
-    extract::{Path, State as AxumState},
-    http::{StatusCode, header},
-    response::{IntoResponse, Response},
+	Json,
+	body::Body,
+	extract::{Path, Query, State as AxumState},
+	http::{StatusCode, header},
+	response::{IntoResponse, Response},
 };
 use std::sync::Arc;
 
 /// Axum 路由共享状态（转发专用）/ Axum shared state for relay routes
 #[derive(Clone)]
 pub struct RelayState {
-    pub app_state: Arc<AppState>,
-    pub relay_manager: Arc<RelayManager>,
+	pub app_state: Arc<AppState>,
+	pub relay_manager: Arc<RelayManager>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -37,97 +37,106 @@ pub struct RelayState {
 /// 兼容所有支持 HTTP-FLV 的播放器（flv.js、mpegts.js、VLC、PotPlayer 等）。
 /// 上游离线时 worker 自动退出，HTTP 响应正常结束，客户端连接关闭。
 ///
+/// 可通过查询参数覆盖程序设置的流选择（缺省字段回退程序设置）：
+/// `?resolution=720&codec=h264&preference=higher`——仅在会话创建时生效，
+/// 已有会话的后续连接沿用首个请求的参数。
+///
 /// Starts relay worker on demand, continuously outputs HTTP-FLV byte stream.
 /// Compatible with any player that supports HTTP-FLV (flv.js, mpegts.js, VLC, PotPlayer, etc.).
 /// When upstream goes offline the worker exits, the HTTP response ends, and the client disconnects.
+///
+/// Query params can override the program's stream selection (missing fields fall back
+/// to settings): `?resolution=720&codec=h264&preference=higher` — applied at session
+/// creation; a request with different params restarts the session so the new params apply.
 pub async fn stream_handler(
-    AxumState(s): AxumState<RelayState>,
-    Path(modelname): Path<String>,
+	AxumState(s): AxumState<RelayState>,
+	Path(modelname): Path<String>,
+	Query(params): Query<RelayStreamParams>,
 ) -> Response {
-    // 在单次写锁内完成"已存在则订阅，否则创建会话并订阅"，并发请求只有一个会拿到
-    // new_worker，因此每个会话只会启动一个 worker。
-    // Check-and-create plus subscribe happen within a single write lock; among concurrent
-    // requests only one receives new_worker, so exactly one worker is started per session.
-    let sub = s.relay_manager.subscribe_or_create(&modelname);
-    if let Some(worker) = sub.new_worker {
-        start_streamer(
-            modelname.clone(),
-            sub.session_id,
-            Arc::clone(&s.app_state),
-            Arc::clone(&s.relay_manager),
-            worker,
-        );
-    }
-    let rx = sub.rx;
-    let prebuf = sub.prebuffer;
+	// 在单次写锁内完成"已存在则订阅，否则创建会话并订阅"，并发请求只有一个会拿到
+	// new_worker，因此每个会话只会启动一个 worker。
+	// Check-and-create plus subscribe happen within a single write lock; among concurrent
+	// requests only one receives new_worker, so exactly one worker is started per session.
+	let sub = s.relay_manager.subscribe_or_create(&modelname, params);
+	if let Some(worker) = sub.new_worker {
+		start_streamer(
+			modelname.clone(),
+			sub.session_id,
+			Arc::clone(&s.app_state),
+			Arc::clone(&s.relay_manager),
+			worker,
+		);
+	}
+	let rx = sub.rx;
+	let prebuf = sub.prebuffer;
 
-    let relay_manager = Arc::clone(&s.relay_manager);
-    let modelname_clone = modelname.clone();
+	let relay_manager = Arc::clone(&s.relay_manager);
+	let modelname_clone = modelname.clone();
 
-    // RAII guard：无论 stream 正常结束还是客户端强制断开，都能保证 unsubscribe 被调用。
-    // 携带 session_id，旧会话的连接断开不会扣减新会话的计数。
-    // RAII guard: ensures unsubscribe is called whether the stream ends normally or the client disconnects abruptly.
-    // Carries session_id so a connection of an old session never decrements a newer session's count.
-    struct UnsubscribeGuard {
-        relay_manager: Arc<RelayManager>,
-        username: String,
-        session_id: u64,
-    }
-    impl Drop for UnsubscribeGuard {
-        fn drop(&mut self) {
-            self.relay_manager
-                .unsubscribe(&self.username, self.session_id);
-        }
-    }
-    let _guard = UnsubscribeGuard {
-        relay_manager: Arc::clone(&relay_manager),
-        username: modelname_clone.clone(),
-        session_id: sub.session_id,
-    };
+	// RAII guard：无论 stream 正常结束还是客户端强制断开，都能保证 unsubscribe 被调用。
+	// 携带 session_id，旧会话的连接断开不会扣减新会话的计数。
+	// RAII guard: ensures unsubscribe is called whether the stream ends normally or the client disconnects abruptly.
+	// Carries session_id so a connection of an old session never decrements a newer session's count.
+	struct UnsubscribeGuard {
+		relay_manager: Arc<RelayManager>,
+		username: String,
+		session_id: u64,
+	}
+	impl Drop for UnsubscribeGuard {
+		fn drop(&mut self) {
+			self.relay_manager
+				.unsubscribe(&self.username, self.session_id);
+		}
+	}
+	let _guard = UnsubscribeGuard {
+		relay_manager: Arc::clone(&relay_manager),
+		username: modelname_clone.clone(),
+		session_id: sub.session_id,
+	};
 
-    // 连接断开时减少计数 / Decrement connection count on disconnect
-    let stream = async_stream::stream! {
-        // 将 guard 移入 stream 闭包，确保 stream 被 drop 时触发 unsubscribe
-        // Move guard into stream closure so unsubscribe fires when stream is dropped
-        let _guard = _guard;
-        let mut rx = rx;
+	// 连接断开时减少计数 / Decrement connection count on disconnect
+	let stream = async_stream::stream! {
+		// 将 guard 移入 stream 闭包，确保 stream 被 drop 时触发 unsubscribe
+		// Move guard into stream closure so unsubscribe fires when stream is dropped
+		let _guard = _guard;
+		let mut rx = rx;
 
-        // 先将预缓冲数据推给播放器，使其立即有数据可解码，无需等待 worker 下一批产出。
-        // Push prebuffered data first so the player can start decoding immediately
-        // without waiting for the worker's next output cycle.
-        for chunk in prebuf {
-            yield Ok::<axum::body::Bytes, std::convert::Infallible>(
-                axum::body::Bytes::from(chunk.as_ref().clone())
-            );
-        }
+		// 先将预缓冲数据推给播放器，使其立即有数据可解码，无需等待 worker 下一批产出。
+		// Push prebuffered data first so the player can start decoding immediately
+		// without waiting for the worker's next output cycle.
+		for chunk in prebuf {
+			yield Ok::<axum::body::Bytes, std::convert::Infallible>(
+				axum::body::Bytes::from(chunk.as_ref().clone())
+			);
+		}
 
-        loop {
-            match rx.recv().await {
-                Ok(chunk) => {
-                    yield Ok::<axum::body::Bytes, std::convert::Infallible>(
-                        axum::body::Bytes::from(chunk.as_ref().clone())
-                    );
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-            }
-        }
-    };
+		loop {
+			match rx.recv().await {
+				Ok(chunk) => {
+					yield Ok::<axum::body::Bytes, std::convert::Infallible>(
+						axum::body::Bytes::from(chunk.as_ref().clone())
+					);
+				}
+				Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+				Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+			}
+		}
+	};
 
-    // 不手动设置 Transfer-Encoding：hyper 会对流式 body 自动使用 chunked，
-    // 手动再设会产生重复头，部分客户端（ffmpeg http 层）会拒绝
-    // No manual Transfer-Encoding: hyper applies chunked automatically for
-    // streamed bodies; setting it ourselves can duplicate the header, which
-    // some clients (ffmpeg's http layer) reject
-    (
-        [
-            (header::CONTENT_TYPE, "video/x-flv"),
-            (header::CACHE_CONTROL, "no-cache, no-store"),
-            (header::ACCESS_CONTROL_ALLOW_ORIGIN, "*"),
-        ],
-        Body::from_stream(stream),
-    )
-        .into_response()
+	// 不手动设置 Transfer-Encoding：hyper 会对流式 body 自动使用 chunked，
+	// 手动再设会产生重复头，部分客户端（ffmpeg http 层）会拒绝
+	// No manual Transfer-Encoding: hyper applies chunked automatically for
+	// streamed bodies; setting it ourselves can duplicate the header, which
+	// some clients (ffmpeg's http layer) reject
+	(
+		[
+			(header::CONTENT_TYPE, "video/x-flv"),
+			(header::CACHE_CONTROL, "no-cache, no-store"),
+			(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*"),
+		],
+		Body::from_stream(stream),
+	)
+		.into_response()
 }
 
 /// GET /api/relay/sessions
@@ -135,8 +144,8 @@ pub async fn stream_handler(
 /// 返回所有活跃转发会话的状态列表。
 /// Returns the status list of all active relay sessions.
 pub async fn relay_sessions(AxumState(s): AxumState<RelayState>) -> impl IntoResponse {
-    let sessions = s.relay_manager.get_all_status();
-    Json(sessions)
+	let sessions = s.relay_manager.get_all_status();
+	Json(sessions)
 }
 
 /// POST /api/relay/{modelname}/stop
@@ -147,9 +156,9 @@ pub async fn relay_sessions(AxumState(s): AxumState<RelayState>) -> impl IntoRes
 /// Forcefully stops the relay worker for the given streamer, regardless of active connections.
 /// Useful for players like PotPlayer that briefly reconnect on close, preventing idle timeout.
 pub async fn stop_relay_handler(
-    AxumState(s): AxumState<RelayState>,
-    Path(modelname): Path<String>,
+	AxumState(s): AxumState<RelayState>,
+	Path(modelname): Path<String>,
 ) -> impl IntoResponse {
-    s.relay_manager.remove(&modelname);
-    (StatusCode::OK, Json(serde_json::json!({ "ok": true })))
+	s.relay_manager.remove(&modelname);
+	(StatusCode::OK, Json(serde_json::json!({ "ok": true })))
 }

@@ -88,11 +88,11 @@
 
 ```json
 {
-  "name": "我的模块",
-  "description": "模块功能描述",
-  "params": {
-    "param_key": { "label": "参数标签" }
-  }
+	"name": "我的模块",
+	"description": "模块功能描述",
+	"params": {
+		"param_key": { "label": "参数标签" }
+	}
 }
 ```
 
@@ -108,14 +108,14 @@
 
 ```json
 {
-  "recording_input": {
-    "name": "录制输入",
-    "description": "虚拟录制输入节点，始终作为流水线的起点"
-  },
-  "unpack": {
-    "name": "解组媒体包",
-    "description": "将媒体包拆分为视频文件（端口 0）和图片文件（端口 1）"
-  }
+	"recording_input": {
+		"name": "录制输入",
+		"description": "虚拟录制输入节点，始终作为流水线的起点"
+	},
+	"unpack": {
+		"name": "解组媒体包",
+		"description": "将媒体包拆分为视频文件（端口 0）和图片文件（端口 1）"
+	}
 }
 ```
 
@@ -123,31 +123,31 @@
 
 ## 翻译键参考
 
-| 顶层 key         | 说明                                      |
-| ---------------- | ----------------------------------------- |
-| `nav`            | 侧边栏导航标签                            |
+| 顶层 key         | 说明                                     |
+| ---------------- | ---------------------------------------- |
+| `nav`            | 侧边栏导航标签                           |
 | `common`         | 通用按钮文字（确认、取消…）              |
-| `notify`         | 系统通知和对话框（断线提示、缺失文件等）  |
-| `home`           | 主播列表页                                |
-| `streamerCard`   | 主播卡片组件                              |
-| `addStreamer`    | 添加主播对话框                            |
-| `recordings`     | 录制文件页                                |
-| `postprocess`    | 后处理流水线页                            |
-| `finder`         | 主播查找页                                |
-| `statusPage`     | 服务状态页                                |
-| `usagePage`      | 资源占用页                                |
-| `settings`       | 设置页                                    |
-| `usePostprocess` | 后处理任务状态消息                        |
-| `relay`          | 转发流页                                  |
-| `setup`          | 首次启动配置向导                          |
-| `login`          | 登录页（密码输入、初次设置密码）          |
-| `notifications`  | 应用内通知面板                            |
-| `dirBrowser`     | 目录选择器对话框                          |
-| `streamers`      | 主播相关事件提示（改名通知、API 错误等）  |
-| `stripchat`      | StripChat 浏览页                          |
-| `community`      | 社区模块市场页                            |
-| `about`          | 关于页面（版本信息、更新检查）            |
-| `ffmpeg`         | FFmpeg 下载进度与首选项向导               |
+| `notify`         | 系统通知和对话框（断线提示、缺失文件等） |
+| `home`           | 主播列表页                               |
+| `streamerCard`   | 主播卡片组件                             |
+| `addStreamer`    | 添加主播对话框                           |
+| `recordings`     | 录制文件页                               |
+| `postprocess`    | 后处理流水线页                           |
+| `finder`         | 主播查找页                               |
+| `statusPage`     | 服务状态页                               |
+| `usagePage`      | 资源占用页                               |
+| `settings`       | 设置页                                   |
+| `usePostprocess` | 后处理任务状态消息                       |
+| `relay`          | 转发流页                                 |
+| `setup`          | 首次启动配置向导                         |
+| `login`          | 登录页（密码输入、初次设置密码）         |
+| `notifications`  | 应用内通知面板                           |
+| `dirBrowser`     | 目录选择器对话框                         |
+| `streamers`      | 主播相关事件提示（改名通知、API 错误等） |
+| `stripchat`      | StripChat 浏览页                         |
+| `community`      | 社区模块市场页                           |
+| `about`          | 关于页面（版本信息、更新检查）           |
+| `ffmpeg`         | FFmpeg 下载进度与首选项向导              |
 
 插值变量使用 `{变量名}` 格式，翻译时保持占位符不变：
 

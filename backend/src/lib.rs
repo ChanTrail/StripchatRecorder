@@ -25,27 +25,27 @@ pub mod watcher;
 /// 3. `server_port` field in `config/settings.json`
 /// 4. Default: 3030
 pub fn run() {
-    // 更新重启时延迟等待旧进程释放端口
-    // When restarting after an update, wait for the old process to free the port
-    if let Ok(ms_str) = std::env::var("STRIPCHAT_RESTART_DELAY_MS")
-        && let Ok(ms) = ms_str.parse::<u64>()
-    {
-        std::thread::sleep(std::time::Duration::from_millis(ms));
-    }
+	// 更新重启时延迟等待旧进程释放端口
+	// When restarting after an update, wait for the old process to free the port
+	if let Ok(ms_str) = std::env::var("STRIPCHAT_RESTART_DELAY_MS")
+		&& let Ok(ms) = ms_str.parse::<u64>()
+	{
+		std::thread::sleep(std::time::Duration::from_millis(ms));
+	}
 
-    // 解析端口：CLI 参数 > 环境变量 > 配置文件 > 默认值
-    // Resolve port: CLI arg > env var > config file > default
-    // 只读 settings.json 取端口，不为此构造完整 AppState（避免重复初始化的副作用）；
-    // 完整状态只在 run_server 中构造一次。
-    // Read only settings.json for the port instead of building a full AppState (avoids
-    // duplicate initialization side effects); the full state is built once in run_server.
-    let port: u16 = std::env::args()
-        .nth(1)
-        .and_then(|s| s.parse().ok())
-        .or_else(|| std::env::var("PORT").ok().and_then(|s| s.parse().ok()))
-        .or_else(|| Some(config::app_state::AppState::load_settings_from_disk().server_port))
-        .unwrap_or(3030);
+	// 解析端口：CLI 参数 > 环境变量 > 配置文件 > 默认值
+	// Resolve port: CLI arg > env var > config file > default
+	// 只读 settings.json 取端口，不为此构造完整 AppState（避免重复初始化的副作用）；
+	// 完整状态只在 run_server 中构造一次。
+	// Read only settings.json for the port instead of building a full AppState (avoids
+	// duplicate initialization side effects); the full state is built once in run_server.
+	let port: u16 = std::env::args()
+		.nth(1)
+		.and_then(|s| s.parse().ok())
+		.or_else(|| std::env::var("PORT").ok().and_then(|s| s.parse().ok()))
+		.or_else(|| Some(config::app_state::AppState::load_settings_from_disk().server_port))
+		.unwrap_or(3030);
 
-    let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
-    rt.block_on(server::router::run_server(port));
+	let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+	rt.block_on(server::router::run_server(port));
 }

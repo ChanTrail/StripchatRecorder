@@ -35,7 +35,8 @@ function generateId(): string {
 }
 
 /** 端口类型，与后端 PortType 枚举对应 / Port type, mirrors backend PortType enum */
-export type PortType = "session_dir" | "video_file" | "image_file" | "media_bundle" | "any_file" | "any_dir";
+export type PortType =
+	"session_dir" | "video_file" | "image_file" | "media_bundle" | "any_file" | "any_dir";
 
 /**
  * 判断上游输出类型是否兼容下游输入类型（与后端 is_compatible_with 逻辑一致）。
@@ -44,7 +45,11 @@ export type PortType = "session_dir" | "video_file" | "image_file" | "media_bund
  */
 export function isPortCompatible(from: PortType, to: PortType): boolean {
 	if (from === to) return true;
-	if (to === "any_file" && (from === "video_file" || from === "image_file" || from === "media_bundle")) return true;
+	if (
+		to === "any_file" &&
+		(from === "video_file" || from === "image_file" || from === "media_bundle")
+	)
+		return true;
 	if (to === "any_dir" && from === "session_dir") return true;
 	return false;
 }
@@ -52,11 +57,11 @@ export function isPortCompatible(from: PortType, to: PortType): boolean {
 /** 端口类型的显示颜色 / Display color per port type */
 export const PORT_TYPE_COLORS: Record<PortType, string> = {
 	session_dir: "#f59e0b", // amber
-	video_file: "#3b82f6",     // blue
-	image_file: "#10b981",     // emerald
-	media_bundle: "#a855f7",   // purple
-	any_file: "#8b5cf6",       // violet
-	any_dir: "#f97316",        // orange
+	video_file: "#3b82f6", // blue
+	image_file: "#10b981", // emerald
+	media_bundle: "#a855f7", // purple
+	any_file: "#8b5cf6", // violet
+	any_dir: "#f97316", // orange
 };
 
 /** 模块参数定义 / Module parameter definition */
@@ -91,10 +96,7 @@ export interface ParamDef {
  * @param type - 参数类型 / Parameter type
  * @param value - 原始值 / Raw value
  */
-function coerceDefault(
-	type: ParamDef["type"],
-	value: unknown,
-): string | number | boolean {
+function coerceDefault(type: ParamDef["type"], value: unknown): string | number | boolean {
 	if (type === "boolean") return Boolean(value);
 	if (type === "number") {
 		const n = Number(value);
@@ -204,9 +206,7 @@ export interface PipelineConfig {
  */
 export function countPipelineTotal(pipeline: PipelineConfig | null | undefined): number {
 	if (!pipeline?.nodes) return 0;
-	return pipeline.nodes.filter(
-		(n) => n.enabled && !n.moduleId.includes("__builtin__"),
-	).length;
+	return pipeline.nodes.filter((n) => n.enabled && !n.moduleId.includes("__builtin__")).length;
 }
 
 /**
@@ -266,15 +266,17 @@ export const usePostprocessStore = defineStore("postprocess", () => {
 			const serverTr = moduleLocaleStore.getModuleLocale(mod.id);
 			// 回退到 --describe 中的 i18n 字段 / Fall back to --describe i18n field
 			const describeTr = mod.i18n?.[lang] as
-				| { name?: string; description?: string; params?: Record<string, { label?: string }> }
+				| {
+						name?: string;
+						description?: string;
+						params?: Record<string, { label?: string }>;
+				  }
 				| undefined;
 
 			// 合并：服务器端优先，--describe 作为补充
 			// Merge: server-side takes priority, --describe fills the gaps
-			const name =
-				serverTr?.name ?? describeTr?.name ?? mod.name;
-			const description =
-				serverTr?.description ?? describeTr?.description ?? mod.description;
+			const name = serverTr?.name ?? describeTr?.name ?? mod.name;
+			const description = serverTr?.description ?? describeTr?.description ?? mod.description;
 			const params = mod.params.map((p) => ({
 				...p,
 				label:
@@ -467,9 +469,7 @@ export const usePostprocessStore = defineStore("postprocess", () => {
 	}
 
 	function removeNode(nodeId: string) {
-		pipeline.value.nodes = pipeline.value.nodes.filter(
-			(n) => nodeEffectiveId(n) !== nodeId,
-		);
+		pipeline.value.nodes = pipeline.value.nodes.filter((n) => nodeEffectiveId(n) !== nodeId);
 		removeEdgesForNode(nodeId);
 	}
 
@@ -508,7 +508,9 @@ export const usePostprocessStore = defineStore("postprocess", () => {
 				nodes: raw.nodes ?? [],
 				inputNodePosition: raw.inputNodePosition,
 			};
-			setTimeout(() => { _loaded = true; }, 0);
+			setTimeout(() => {
+				_loaded = true;
+			}, 0);
 			_onPipelineUpdated?.();
 		});
 	}

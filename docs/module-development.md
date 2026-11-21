@@ -40,7 +40,7 @@
 | 模式     | 命令                    | 说明                                |
 | -------- | ----------------------- | ----------------------------------- |
 | 描述模式 | `./<module> --describe` | 输出模块元数据 JSON，不执行任何处理 |
-| 执行模式 | `./<module>`            | 从 stdin 读取 JSON，执行处理逻辑   |
+| 执行模式 | `./<module>`            | 从 stdin 读取 JSON，执行处理逻辑    |
 
 > **文件名格式要求：** 主程序只会发现并加载符合 `{name}-{platform}-{version}` 格式的可执行文件（Windows 含 `.exe` 后缀），例如 `my_module-linux-x86_64-1.0.0`。不符合此格式的文件将被忽略。
 
@@ -50,27 +50,27 @@
 
 ```json
 {
-  "inputs": ["/recordings/alice_20240101_120000.ts"],
-  "params": {
-    "param_key": "param_value"
-  },
-  "exe_dir": "/app/stripchat-recorder",
-  "max_tmp_mb": 51200,
-  "recording": {
-    "video_path": "/recordings/alice_20240101_120000.ts",
-    "started_at": "2024-01-01T12:00:00Z",
-    "username": "alice"
-  }
+	"inputs": ["/recordings/alice_20240101_120000.ts"],
+	"params": {
+		"param_key": "param_value"
+	},
+	"exe_dir": "/app/stripchat-recorder",
+	"max_tmp_mb": 51200,
+	"recording": {
+		"video_path": "/recordings/alice_20240101_120000.ts",
+		"started_at": "2024-01-01T12:00:00Z",
+		"username": "alice"
+	}
 }
 ```
 
-| 字段         | 说明                                                                          |
-| ------------ | ----------------------------------------------------------------------------- |
-| `inputs`     | 输入路径列表，按端口索引顺序排列；单输入模块取 `inputs[0]`                   |
-| `params`     | 模块参数键值对（与 `--describe` 的 `params[].key` 对应）                     |
-| `exe_dir`    | 后端可执行文件所在目录（`pp_utils::tmp_dir()` 据此定位临时目录）             |
-| `max_tmp_mb` | 临时目录最大占用（MB），`pp_utils::tmp_dir()` 会据此自动清理旧文件           |
-| `recording`  | 录制上下文（`video_path`、`started_at`、`username`，供通知类模块使用）       |
+| 字段         | 说明                                                                   |
+| ------------ | ---------------------------------------------------------------------- |
+| `inputs`     | 输入路径列表，按端口索引顺序排列；单输入模块取 `inputs[0]`             |
+| `params`     | 模块参数键值对（与 `--describe` 的 `params[].key` 对应）               |
+| `exe_dir`    | 后端可执行文件所在目录（`pp_utils::tmp_dir()` 据此定位临时目录）       |
+| `max_tmp_mb` | 临时目录最大占用（MB），`pp_utils::tmp_dir()` 会据此自动清理旧文件     |
+| `recording`  | 录制上下文（`video_path`、`started_at`、`username`，供通知类模块使用） |
 
 > **兼容旧协议：** 若 stdin 为空或解析失败，`pp_utils::ModuleInput::read()` 会自动回退到旧的环境变量协议（`PP_INPUT`、`PP_PARAM_<KEY>`、`PP_EXE_DIR`），以兼容老版本调用方式。
 
@@ -78,11 +78,11 @@
 
 执行模式下，主程序还会向模块进程注入以下环境变量：
 
-| 环境变量       | 说明                                                                                                  |
-| -------------- | ----------------------------------------------------------------------------------------------------- |
-| `PP_FFMPEG`    | 主程序按 `ffmpeg_preference` 设置解析好的 ffmpeg 程序路径（绝对路径或裸命令名）                        |
-| `PP_FFPROBE`   | 同上，ffprobe 的解析路径                                                                              |
-| `PATH`         | 未选择系统 PATH 时，前置 `<exe_dir>/tools/`——模块以裸 `ffmpeg` 起进程也会优先命中主程序维护的副本      |
+| 环境变量     | 说明                                                                                              |
+| ------------ | ------------------------------------------------------------------------------------------------- |
+| `PP_FFMPEG`  | 主程序按 `ffmpeg_preference` 设置解析好的 ffmpeg 程序路径（绝对路径或裸命令名）                   |
+| `PP_FFPROBE` | 同上，ffprobe 的解析路径                                                                          |
+| `PATH`       | 未选择系统 PATH 时，前置 `<exe_dir>/tools/`——模块以裸 `ffmpeg` 起进程也会优先命中主程序维护的副本 |
 
 需要调用 ffmpeg/ffprobe 的模块应优先使用 `PP_FFMPEG`/`PP_FFPROBE`（Rust 模块用 `pp_utils::ffmpeg_program()`/`ffprobe_program()`，未注入时自动回退裸命令名）；不读取这两个变量的模块，只要以裸命令名调用，也能经 PATH 注入解析到主程序设置的副本。
 
@@ -94,21 +94,21 @@
 
 | 输出行                    | 说明                                                                       |
 | ------------------------- | -------------------------------------------------------------------------- |
-| `PROGRESS:<done>/<total>` | 进度上报，`done` 和 `total` 均为整数，`total` 固定为 `10000`（50% = 5000）|
-| `STATUS:<text>`           | 可选的状态文字（如上传速度），显示在 UI 的进度条旁                        |
+| `PROGRESS:<done>/<total>` | 进度上报，`done` 和 `total` 均为整数，`total` 固定为 `10000`（50% = 5000） |
+| `STATUS:<text>`           | 可选的状态文字（如上传速度），显示在 UI 的进度条旁                         |
 
 **最终结果行**（最后一行，必须输出一次）：
 
 ```json
-{"code": "ok", "message": "处理完成", "outputs": ["/recordings/alice_20240101_120000.ts"]}
+{ "code": "ok", "message": "处理完成", "outputs": ["/recordings/alice_20240101_120000.ts"] }
 ```
 
-| `code` 值  | 说明                                                                              |
-| ---------- | --------------------------------------------------------------------------------- |
-| `"ok"`     | 成功，`outputs` 中的路径将作为下游节点的输入                                     |
-| `"done"`   | 成功且流水线在此终止（如 `cleanup` 模块删除文件后不需要下游继续），`outputs` 为空 |
-| `"skipped"`| 已跳过处理（如输出文件已存在），`outputs` 中照常传递路径                          |
-| `"error"`  | 失败，流水线中止，后续节点不再执行                                                |
+| `code` 值   | 说明                                                                              |
+| ----------- | --------------------------------------------------------------------------------- |
+| `"ok"`      | 成功，`outputs` 中的路径将作为下游节点的输入                                      |
+| `"done"`    | 成功且流水线在此终止（如 `cleanup` 模块删除文件后不需要下游继续），`outputs` 为空 |
+| `"skipped"` | 已跳过处理（如输出文件已存在），`outputs` 中照常传递路径                          |
+| `"error"`   | 失败，流水线中止，后续节点不再执行                                                |
 
 > `pp_utils` 提供了 `output_ok()`、`output_done()`、`output_skipped()` 函数直接输出对应格式。
 
@@ -118,10 +118,10 @@
 
 ### 退出码
 
-| 退出码 | 含义                               |
-| ------ | ---------------------------------- |
-| `0`    | 成功（结合最终 JSON 的 `code` 判断）|
-| 非零   | 失败，流水线中止，后续模块不再执行 |
+| 退出码 | 含义                                 |
+| ------ | ------------------------------------ |
+| `0`    | 成功（结合最终 JSON 的 `code` 判断） |
+| 非零   | 失败，流水线中止，后续模块不再执行   |
 
 ---
 
@@ -133,35 +133,35 @@
 
 ```jsonc
 {
-  "id": "my_module",            // 模块唯一标识符，仅含小写字母、数字和下划线
-  "name": "我的模块",           // UI 中显示的名称
-  "description": "模块功能描述", // UI 中显示的简短描述
-  "version": "1.0.0",           // 版本号（由 pp_utils::describe_with_version 注入，无需手写）
-  "inputTypes": ["video_file"], // 输入端口类型列表，见端口类型系统
-  "outputTypes": ["video_file"],// 输出端口类型列表，留空表示流水线在此终止
-  "official": false,            // 是否为官方模块（官方模块建议置于 segment_merge 之后）
-  "params": [
-    {
-      "key": "param_key",       // 参数键名，对应 JSON 中 params.param_key
-      "label": "参数标签",       // UI 中显示的标签
-      "type": "string",         // 参数类型，见下文
-      "default": ""             // 默认值
-    }
-  ]
+	"id": "my_module", // 模块唯一标识符，仅含小写字母、数字和下划线
+	"name": "我的模块", // UI 中显示的名称
+	"description": "模块功能描述", // UI 中显示的简短描述
+	"version": "1.0.0", // 版本号（由 pp_utils::describe_with_version 注入，无需手写）
+	"inputTypes": ["video_file"], // 输入端口类型列表，见端口类型系统
+	"outputTypes": ["video_file"], // 输出端口类型列表，留空表示流水线在此终止
+	"official": false, // 是否为官方模块（官方模块建议置于 segment_merge 之后）
+	"params": [
+		{
+			"key": "param_key", // 参数键名，对应 JSON 中 params.param_key
+			"label": "参数标签", // UI 中显示的标签
+			"type": "string", // 参数类型，见下文
+			"default": "", // 默认值
+		},
+	],
 }
 ```
 
 ### 字段说明
 
-| 字段          | 类型    | 必填 | 说明                                                         |
-| ------------- | ------- | ---- | ------------------------------------------------------------ |
-| `id`          | string  | 是   | 模块唯一 ID，同一实例中不可重复                              |
-| `name`        | string  | 是   | UI 显示名称                                                  |
-| `description` | string  | 是   | UI 显示描述                                                  |
+| 字段          | 类型    | 必填 | 说明                                                                          |
+| ------------- | ------- | ---- | ----------------------------------------------------------------------------- |
+| `id`          | string  | 是   | 模块唯一 ID，同一实例中不可重复                                               |
+| `name`        | string  | 是   | UI 显示名称                                                                   |
+| `description` | string  | 是   | UI 显示描述                                                                   |
 | `inputTypes`  | array   | 是   | 输入端口类型列表（顺序对应 `inputs[]` 索引），见[端口类型系统](#端口类型系统) |
-| `outputTypes` | array   | 是   | 输出端口类型列表（顺序对应 `outputs[]` 索引），为空表示流水线在此终止  |
-| `official`    | boolean | 否   | 是否为官方模块（UI 中会提示应置于 `segment_merge` 之后），默认 `false` |
-| `params`      | array   | 是   | 参数定义列表，无参数时传空数组                               |
+| `outputTypes` | array   | 是   | 输出端口类型列表（顺序对应 `outputs[]` 索引），为空表示流水线在此终止         |
+| `official`    | boolean | 否   | 是否为官方模块（UI 中会提示应置于 `segment_merge` 之后），默认 `false`        |
+| `params`      | array   | 是   | 参数定义列表，无参数时传空数组                                                |
 
 > **版本号：** 不要在 `DESCRIBE` 常量中手写 `"version"` 字段。使用 `pp_utils::describe_with_version(DESCRIBE, env!("CARGO_PKG_VERSION"))` 在运行时自动从 `Cargo.toml` 注入，只需维护一处。
 
@@ -171,23 +171,23 @@
 
 `params` 数组中每个对象的 `type` 字段决定 UI 渲染方式：
 
-| 类型      | UI 控件      | 值格式                       |
-| --------- | ------------ | ---------------------------- |
-| `string`  | 文本输入框   | 任意字符串                   |
-| `number`  | 数字输入框   | 十进制整数或浮点数字符串     |
-| `boolean` | 开关         | `true` 或 `false`（JSON）    |
-| `select`  | 下拉选择框   | 选项值字符串                 |
-| `dir`     | 目录选择器   | 目录绝对路径字符串           |
+| 类型      | UI 控件    | 值格式                    |
+| --------- | ---------- | ------------------------- |
+| `string`  | 文本输入框 | 任意字符串                |
+| `number`  | 数字输入框 | 十进制整数或浮点数字符串  |
+| `boolean` | 开关       | `true` 或 `false`（JSON） |
+| `select`  | 下拉选择框 | 选项值字符串              |
+| `dir`     | 目录选择器 | 目录绝对路径字符串        |
 
 `select` 类型需额外提供 `options` 字段：
 
 ```jsonc
 {
-  "key": "format",
-  "label": "输出格式",
-  "type": "select",
-  "default": "mkv",
-  "options": ["mp4", "mkv", "ts"]
+	"key": "format",
+	"label": "输出格式",
+	"type": "select",
+	"default": "mkv",
+	"options": ["mp4", "mkv", "ts"],
 }
 ```
 
@@ -195,12 +195,12 @@
 
 ```jsonc
 {
-  "key": "quality",
-  "label": "图片质量",
-  "type": "number",
-  "default": 85,
-  "min": 1,
-  "max": 100
+	"key": "quality",
+	"label": "图片质量",
+	"type": "number",
+	"default": 85,
+	"min": 1,
+	"max": 100,
 }
 ```
 
@@ -210,18 +210,19 @@
 
 每个模块通过 `inputTypes` 和 `outputTypes` 声明其输入/输出端口的数据类型。在可视化流水线编辑器中，只有类型兼容的端口才能相互连接。
 
-| 类型标识符      | 说明                                                        |
-| --------------- | ----------------------------------------------------------- |
-| `session_dir`| 分片录制目录（fMP4 .m4s；旧录制可能残留 TS .ts，由录制系统产生，作为 `segment_merge` 的输入）  |
-| `video_file`    | 单个视频文件（mp4 / mkv / ts 等）                          |
-| `image_file`    | 单个图片文件（webp / jpg / png 等）                        |
-| `media_bundle`  | 媒体包（视频路径 + 图片路径，以 `\n` 分隔的单一路径字符串）|
-| `any_file`      | 任意文件（可接受上游任何文件类型，包括 `media_bundle`）    |
-| `any_dir`       | 任意目录（可接受上游任何目录类型）                         |
+| 类型标识符     | 说明                                                                                          |
+| -------------- | --------------------------------------------------------------------------------------------- |
+| `session_dir`  | 分片录制目录（fMP4 .m4s；旧录制可能残留 TS .ts，由录制系统产生，作为 `segment_merge` 的输入） |
+| `video_file`   | 单个视频文件（mp4 / mkv / ts 等）                                                             |
+| `image_file`   | 单个图片文件（webp / jpg / png 等）                                                           |
+| `media_bundle` | 媒体包（视频路径 + 图片路径，以 `\n` 分隔的单一路径字符串）                                   |
+| `any_file`     | 任意文件（可接受上游任何文件类型，包括 `media_bundle`）                                       |
+| `any_dir`      | 任意目录（可接受上游任何目录类型）                                                            |
 
 > 改名说明：`session_dir` 在旧版本中名为 `ts_session_dir`（旧合并模块 `ts_merge` 现名 `segment_merge`）。改名不设向后兼容——旧模块需更新 `--describe` 声明后方可继续使用。
 
 **兼容规则：**
+
 - 完全相同的类型可以连接
 - 任何文件类型（含 `media_bundle`）都可以连接到 `any_file`
 - 任何目录类型都可以连接到 `any_dir`
@@ -240,27 +241,27 @@
 
 ```jsonc
 {
-  "id": "my_module",
-  "name": "我的模块",          // 默认语言（中文）
-  "description": "模块功能描述",
-  "params": [
-    {
-      "key": "dest_dir",
-      "label": "目标目录路径",
-      "type": "dir",
-      "default": ""
-    }
-  ],
-  "i18n": {
-    "en-US": {
-      "name": "My Module",
-      "description": "Module description",
-      "params": {
-        "dest_dir": { "label": "Destination Directory" }
-      }
-    }
-    // 可继续添加其他语言，如 "ja-JP": { ... }
-  }
+	"id": "my_module",
+	"name": "我的模块", // 默认语言（中文）
+	"description": "模块功能描述",
+	"params": [
+		{
+			"key": "dest_dir",
+			"label": "目标目录路径",
+			"type": "dir",
+			"default": "",
+		},
+	],
+	"i18n": {
+		"en-US": {
+			"name": "My Module",
+			"description": "Module description",
+			"params": {
+				"dest_dir": { "label": "Destination Directory" },
+			},
+		},
+		// 可继续添加其他语言，如 "ja-JP": { ... }
+	},
 }
 ```
 
@@ -320,6 +321,7 @@ PROGRESS:10000/10000  # 100%
 ```
 
 **注意事项：**
+
 - 主程序取所有上报值中的最大值，进度不会倒退。
 - 建议在处理开始前输出 `PROGRESS:0/10000`，结束后输出 `PROGRESS:10000/10000`。
 - 对于固定步骤的任务，可按步骤均分进度（如 3 步：0、3333、6666、10000）。
@@ -623,7 +625,7 @@ Desktop 安装版（NSIS、deb、dmg）的模块安装到每用户数据目录�
 | ------- | --------------------------------------------------------------------------------- |
 | Windows | `%APPDATA%\com.chantrail.stripchat-recorder\modules\`                             |
 | macOS   | `~/Library/Application Support/com.chantrail.stripchat-recorder/modules/`         |
-| Linux   | `~/.local/share/com.chantrail.stripchat-recorder/modules/`（或 `$XDG_DATA_HOME`）|
+| Linux   | `~/.local/share/com.chantrail.stripchat-recorder/modules/`（或 `$XDG_DATA_HOME`） |
 
 便携版（Windows `*-portable.zip`、Linux AppImage）的模块放在程序本体旁边的 `modules/`（Windows 为 exe 同目录、AppImage 为 .AppImage 文件所在目录）。
 
@@ -641,26 +643,27 @@ Desktop 安装版（NSIS、deb、dmg）的模块安装到每用户数据目录�
 
 项目自带以下官方模块：
 
-| 模块 ID           | 输入类型         | 输出类型          | 说明                                                                              |
-| ----------------- | ---------------- | ----------------- | --------------------------------------------------------------------------------- |
-| `segment_merge`        | `session_dir` | `video_file`      | 将录制分片目录合并为单一视频文件，**官方流水线的首节点**，其他模块应置于其后     |
-| `filter_short`    | `video_file`     | `video_file`      | 删除时长低于阈值的视频并使流水线在此终止，支持 `dry_run` 预览模式                |
-| `contact_sheet`   | `video_file`     | `media_bundle`    | 按指定间隔截帧，拼合成带时间戳预览图，输出 media_bundle（视频路径 + 图片路径）    |
-| `notify_discord`  | `media_bundle`   | `media_bundle`    | 将录制信息和封面图通过 Webhook 发送到 Discord，支持 HTTP/SOCKS5 代理              |
-| `notify_telegram` | `media_bundle`   | `media_bundle`    | 通过 MTProto 向 Telegram 发送录制信息、封面图和视频，支持 >2GB 文件自动分割      |
-| `cleanup`         | `any_file`       | —（流水线终止）   | 清理本次录制相关文件：可选删除视频/预览图/meta 记录，以及其他模块产生的临时缓存  |
+| 模块 ID           | 输入类型       | 输出类型        | 说明                                                                            |
+| ----------------- | -------------- | --------------- | ------------------------------------------------------------------------------- |
+| `segment_merge`   | `session_dir`  | `video_file`    | 将录制分片目录合并为单一视频文件，**官方流水线的首节点**，其他模块应置于其后    |
+| `filter_short`    | `video_file`   | `video_file`    | 删除时长低于阈值的视频并使流水线在此终止，支持 `dry_run` 预览模式               |
+| `contact_sheet`   | `video_file`   | `media_bundle`  | 按指定间隔截帧，拼合成带时间戳预览图，输出 media_bundle（视频路径 + 图片路径）  |
+| `notify_discord`  | `media_bundle` | `media_bundle`  | 将录制信息和封面图通过 Webhook 发送到 Discord，支持 HTTP/SOCKS5 代理            |
+| `notify_telegram` | `media_bundle` | `media_bundle`  | 通过 MTProto 向 Telegram 发送录制信息、封面图和视频，支持 >2GB 文件自动分割     |
+| `cleanup`         | `any_file`     | —（流水线终止） | 清理本次录制相关文件：可选删除视频/预览图/meta 记录，以及其他模块产生的临时缓存 |
 
 > **内置 DAG 节点**（不是可执行文件，由后端直接处理）：
+>
 > - `recording_input`：虚拟录制输入节点，始终存在，不可删除，输出 `session_dir`
 > - `unpack`：将 `media_bundle` 拆分为 `video_file`（端口 0）和 `image_file`（端口 1）两个独立输出
 
 ### segment_merge 参数
 
-| 参数               | 类型    | 默认值  | 说明                                                              |
-| ------------------ | ------- | ------- | ----------------------------------------------------------------- |
-| `format`           | select  | `mp4`   | 输出格式：`mp4`、`mkv`、`ts`                                     |
-| `output_dir`       | dir     | `""`    | 合并后视频的输出目录，留空则与分片目录的父目录相同            |
-| `split_by_streamer`| boolean | `true`  | 在输出目录下按主播用户名创建子目录（仅当设置了 `output_dir` 时有意义）|
+| 参数                | 类型    | 默认值 | 说明                                                                   |
+| ------------------- | ------- | ------ | ---------------------------------------------------------------------- |
+| `format`            | select  | `mp4`  | 输出格式：`mp4`、`mkv`、`ts`                                           |
+| `output_dir`        | dir     | `""`   | 合并后视频的输出目录，留空则与分片目录的父目录相同                     |
+| `split_by_streamer` | boolean | `true` | 在输出目录下按主播用户名创建子目录（仅当设置了 `output_dir` 时有意义） |
 
 ### filter_short 参数
 
@@ -671,44 +674,44 @@ Desktop 安装版（NSIS、deb、dmg）的模块安装到每用户数据目录�
 
 ### contact_sheet 参数
 
-| 参数          | 类型   | 默认值  | 说明                                   |
-| ------------- | ------ | ------- | -------------------------------------- |
-| `interval`    | number | `30`    | 截帧间隔（秒）                         |
-| `thumb_width` | number | `320`   | 单帧宽度（px）                         |
-| `format`      | select | `webp`  | 图片格式：`webp`、`jpg`、`png`         |
-| `quality`     | number | `100`   | 图片质量（1–100，jpg/webp 有效）       |
-| `cols`        | number | `0`     | 列数，`0` 为自动                       |
-| `rows`        | number | `0`     | 行数，`0` 为自动                       |
-| `fontfile`    | string | `""`    | 字体文件路径，留空自动检测             |
-| `fontsize`    | number | `18`    | 时间戳字号                             |
+| 参数          | 类型   | 默认值 | 说明                             |
+| ------------- | ------ | ------ | -------------------------------- |
+| `interval`    | number | `30`   | 截帧间隔（秒）                   |
+| `thumb_width` | number | `320`  | 单帧宽度（px）                   |
+| `format`      | select | `webp` | 图片格式：`webp`、`jpg`、`png`   |
+| `quality`     | number | `100`  | 图片质量（1–100，jpg/webp 有效） |
+| `cols`        | number | `0`    | 列数，`0` 为自动                 |
+| `rows`        | number | `0`    | 行数，`0` 为自动                 |
+| `fontfile`    | string | `""`   | 字体文件路径，留空自动检测       |
+| `fontsize`    | number | `18`   | 时间戳字号                       |
 
 ### notify_discord 参数
 
-| 参数          | 类型   | 默认值          | 说明                                   |
-| ------------- | ------ | --------------- | -------------------------------------- |
-| `webhook_url` | string | `""`            | Discord Webhook URL（必填）            |
-| `proxy`       | string | `""`            | 代理地址，支持 `http://`、`socks5://`  |
-| `username`    | string | `Recorder Bot`  | Bot 显示名称                           |
+| 参数          | 类型   | 默认值         | 说明                                  |
+| ------------- | ------ | -------------- | ------------------------------------- |
+| `webhook_url` | string | `""`           | Discord Webhook URL（必填）           |
+| `proxy`       | string | `""`           | 代理地址，支持 `http://`、`socks5://` |
+| `username`    | string | `Recorder Bot` | Bot 显示名称                          |
 
 ### notify_telegram 参数
 
-| 参数         | 类型    | 默认值  | 说明                                                                              |
-| ------------ | ------- | ------- | --------------------------------------------------------------------------------- |
-| `api_id`     | string  | `""`    | Telegram API ID（从 my.telegram.org 获取，必填）                                  |
-| `api_hash`   | string  | `""`    | Telegram API Hash（必填）                                                         |
-| `bot_token`  | string  | `""`    | Bot Token（从 @BotFather 获取，必填）                                             |
-| `chat_id`    | string  | `""`    | Chat ID，私密群组/频道填写（超级群组格式为 `-100xxxxxxxxxx`）                     |
-| `username`   | string  | `""`    | 公开群组/频道 Username（不含 `@`）；`username` 与 `chat_id` 至少填一个，都填时优先 `username` |
-| `proxy`      | string  | `""`    | 代理地址，支持 `http://`、`socks5://`                                             |
-| `send_video` | boolean | `true`  | 是否同时发送视频文件                                                              |
+| 参数         | 类型    | 默认值 | 说明                                                                                          |
+| ------------ | ------- | ------ | --------------------------------------------------------------------------------------------- |
+| `api_id`     | string  | `""`   | Telegram API ID（从 my.telegram.org 获取，必填）                                              |
+| `api_hash`   | string  | `""`   | Telegram API Hash（必填）                                                                     |
+| `bot_token`  | string  | `""`   | Bot Token（从 @BotFather 获取，必填）                                                         |
+| `chat_id`    | string  | `""`   | Chat ID，私密群组/频道填写（超级群组格式为 `-100xxxxxxxxxx`）                                 |
+| `username`   | string  | `""`   | 公开群组/频道 Username（不含 `@`）；`username` 与 `chat_id` 至少填一个，都填时优先 `username` |
+| `proxy`      | string  | `""`   | 代理地址，支持 `http://`、`socks5://`                                                         |
+| `send_video` | boolean | `true` | 是否同时发送视频文件                                                                          |
 
 ### cleanup 参数
 
-| 参数                     | 类型    | 默认值  | 说明                                                                         |
-| ------------------------ | ------- | ------- | ---------------------------------------------------------------------------- |
-| `delete_recording_data`  | boolean | `false` | 删除录制数据（视频文件 + 预览图 + meta 记录），三者作为整体同时删除或都不删  |
-| `delete_tmp_files`       | boolean | `true`  | 删除其他模块在共享临时目录中产生的同名残留缓存文件                           |
-| `dry_run`                | boolean | `false` | 仅预览，不实际删除                                                           |
+| 参数                    | 类型    | 默认值  | 说明                                                                        |
+| ----------------------- | ------- | ------- | --------------------------------------------------------------------------- |
+| `delete_recording_data` | boolean | `false` | 删除录制数据（视频文件 + 预览图 + meta 记录），三者作为整体同时删除或都不删 |
+| `delete_tmp_files`      | boolean | `true`  | 删除其他模块在共享临时目录中产生的同名残留缓存文件                          |
+| `dry_run`               | boolean | `false` | 仅预览，不实际删除                                                          |
 
 ---
 

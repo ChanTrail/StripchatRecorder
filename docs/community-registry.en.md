@@ -31,10 +31,10 @@ registry.json                      registry.json (auto-maintained by CI)
 1. Create a **public repository** on GitHub, recommended name: `stripchat-pp-<your-module-id>`
 2. Copy the contents of [module-template/](https://github.com/ChanTrail/StripchatRecorderCommunity/tree/master/module-template) into your repo
 3. Edit these files once:
-   - `Cargo.toml`: change `name` (matching your module ID) and `version`
-   - `src/main.rs`: replace `my_module` with your module ID and implement `run()`
-   - `registry.json`: fill in `id`, `name`, `description`, `author`, `tags` (other fields are auto-managed by CI)
-   - Both workflow files: update `MODULE_NAME` at the top
+    - `Cargo.toml`: change `name` (matching your module ID) and `version`
+    - `src/main.rs`: replace `my_module` with your module ID and implement `run()`
+    - `registry.json`: fill in `id`, `name`, `description`, `author`, `tags` (other fields are auto-managed by CI)
+    - Both workflow files: update `MODULE_NAME` at the top
 
 See the [module development guide](module-development.en.md) for the full JSON stdin/stdout protocol, port type system, and DAG pipeline mechanics.
 
@@ -62,33 +62,33 @@ The template's `registry.json` only needs three fields filled in — **everythin
 
 ```json
 {
-  "description": "What your module does",
-  "tags": ["notify", "upload"],
-  "license": "MIT"
+	"description": "What your module does",
+	"tags": ["notify", "upload"],
+	"license": "MIT"
 }
 ```
 
 The Release workflow derives and writes all other fields automatically:
 
-| Field           | Source |
-|-----------------|--------|
-| `id`            | `Cargo.toml` `name` |
-| `name`          | Title Case form of `id` (`my_module` → `My Module`) |
-| `author`        | Repository owner (`owner` from `owner/repo`) |
-| `latestVersion` | `Cargo.toml` `version` |
-| `downloads`     | Constructed from the tag and platform names |
+| Field           | Source                                                  |
+| --------------- | ------------------------------------------------------- |
+| `id`            | `Cargo.toml` `name`                                     |
+| `name`          | Title Case form of `id` (`my_module` → `My Module`)     |
+| `author`        | Repository owner (`owner` from `owner/repo`)            |
+| `latestVersion` | `Cargo.toml` `version`                                  |
+| `downloads`     | Constructed from the tag and platform names             |
 | `sha256`        | Read from the `.sha256` files produced by the build job |
 
 ### Supported platform identifiers
 
-| Identifier       | Platform                  |
-|------------------|---------------------------|
-| `windows-x86_64` | Windows 64-bit            |
-| `windows-aarch64`| Windows ARM64             |
-| `linux-x86_64`   | Linux x86_64              |
-| `linux-aarch64`  | Linux ARM64               |
-| `darwin-x86_64`  | macOS Intel               |
-| `darwin-aarch64` | macOS Apple Silicon       |
+| Identifier        | Platform            |
+| ----------------- | ------------------- |
+| `windows-x86_64`  | Windows 64-bit      |
+| `windows-aarch64` | Windows ARM64       |
+| `linux-x86_64`    | Linux x86_64        |
+| `linux-aarch64`   | Linux ARM64         |
+| `darwin-x86_64`   | macOS Intel         |
+| `darwin-aarch64`  | macOS Apple Silicon |
 
 ---
 

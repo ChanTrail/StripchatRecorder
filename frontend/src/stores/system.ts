@@ -26,7 +26,9 @@ export const useSystemStore = defineStore("system", () => {
 	async function fetchSystemInfo() {
 		if (cpuCount.value > 0) return;
 		try {
-			const info = await call<{ cpuCount: number; maxPpConcurrentCap: number }>("get_system_info");
+			const info = await call<{ cpuCount: number; maxPpConcurrentCap: number }>(
+				"get_system_info",
+			);
 			cpuCount.value = info.cpuCount ?? 1;
 			maxPpConcurrentCap.value = info.maxPpConcurrentCap ?? cpuCount.value;
 		} catch {

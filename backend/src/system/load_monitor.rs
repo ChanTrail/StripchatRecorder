@@ -36,31 +36,31 @@ use sysinfo::{MemoryRefreshKind, RefreshKind, System};
 /// 一次系统负载快照 / A single system load snapshot
 #[derive(Debug, Clone)]
 pub struct LoadSnapshot {
-    /// 全局 CPU 使用率瞬时值（0.0 ~ 100.0）/ Instantaneous global CPU usage (0.0–100.0)
-    pub cpu_usage_pct: f32,
-    /// EMA 平滑后的全局 CPU 使用率（决策输入，抑制瞬时尖峰）/
-    /// EMA-smoothed global CPU usage (the decision input; suppresses transient spikes)
-    pub smoothed_cpu_pct: f32,
-    /// 内存使用率（0.0 ~ 100.0）/ Memory usage (0.0–100.0)
-    pub mem_usage_pct: f32,
-    /// 可用内存字节数 / Available memory in bytes
-    pub mem_available_bytes: u64,
-    /// 总内存字节数 / Total memory in bytes
-    pub mem_total_bytes: u64,
+	/// 全局 CPU 使用率瞬时值（0.0 ~ 100.0）/ Instantaneous global CPU usage (0.0–100.0)
+	pub cpu_usage_pct: f32,
+	/// EMA 平滑后的全局 CPU 使用率（决策输入，抑制瞬时尖峰）/
+	/// EMA-smoothed global CPU usage (the decision input; suppresses transient spikes)
+	pub smoothed_cpu_pct: f32,
+	/// 内存使用率（0.0 ~ 100.0）/ Memory usage (0.0–100.0)
+	pub mem_usage_pct: f32,
+	/// 可用内存字节数 / Available memory in bytes
+	pub mem_available_bytes: u64,
+	/// 总内存字节数 / Total memory in bytes
+	pub mem_total_bytes: u64,
 }
 
 /// 系统压力等级，供 AIMD/冻结决策使用（含迟滞带防震荡）/
 /// System pressure level for AIMD/freeze decisions (with a hysteresis band to prevent oscillation)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PressureLevel {
-    /// 宽裕：允许加性增长 / Comfortable: additive growth allowed
-    Comfortable,
-    /// 正常：迟滞带内，保持现状 / Normal: inside the hysteresis band, hold
-    Normal,
-    /// 高压：乘性退避 / 冻结 / High: multiplicative backoff / freeze
-    High,
-    /// 危急：硬下限 / Critical: hard floor
-    Critical,
+	/// 宽裕：允许加性增长 / Comfortable: additive growth allowed
+	Comfortable,
+	/// 正常：迟滞带内，保持现状 / Normal: inside the hysteresis band, hold
+	Normal,
+	/// 高压：乘性退避 / 冻结 / High: multiplicative backoff / freeze
+	High,
+	/// 危急：硬下限 / Critical: hard floor
+	Critical,
 }
 
 /// 判定阈值常量 / Assessment thresholds
@@ -87,21 +87,21 @@ const MEM_COMFORTABLE_RATIO: f64 = 0.25;
 /// All checks use the EMA-smoothed CPU so transient spikes don't trigger
 /// false adjustments.
 fn assess_with(s: &LoadSnapshot, cpu_high: f32, cpu_low: f32) -> PressureLevel {
-    let avail_ratio = if s.mem_total_bytes > 0 {
-        s.mem_available_bytes as f64 / s.mem_total_bytes as f64
-    } else {
-        // 无内存信息：视为宽裕（不做内存约束）/ No memory info: treat as ample (no memory constraint)
-        1.0
-    };
-    if avail_ratio < MEM_CRITICAL_RATIO || s.smoothed_cpu_pct >= CPU_CRITICAL {
-        PressureLevel::Critical
-    } else if avail_ratio < MEM_HIGH_RATIO || s.smoothed_cpu_pct >= cpu_high {
-        PressureLevel::High
-    } else if avail_ratio >= MEM_COMFORTABLE_RATIO && s.smoothed_cpu_pct <= cpu_low {
-        PressureLevel::Comfortable
-    } else {
-        PressureLevel::Normal
-    }
+	let avail_ratio = if s.mem_total_bytes > 0 {
+		s.mem_available_bytes as f64 / s.mem_total_bytes as f64
+	} else {
+		// 无内存信息：视为宽裕（不做内存约束）/ No memory info: treat as ample (no memory constraint)
+		1.0
+	};
+	if avail_ratio < MEM_CRITICAL_RATIO || s.smoothed_cpu_pct >= CPU_CRITICAL {
+		PressureLevel::Critical
+	} else if avail_ratio < MEM_HIGH_RATIO || s.smoothed_cpu_pct >= cpu_high {
+		PressureLevel::High
+	} else if avail_ratio >= MEM_COMFORTABLE_RATIO && s.smoothed_cpu_pct <= cpu_low {
+		PressureLevel::Comfortable
+	} else {
+		PressureLevel::Normal
+	}
 }
 
 /// 后处理负载的压力等级（阈值 75% 即退避、55% 以下才增长）。
@@ -111,7 +111,7 @@ fn assess_with(s: &LoadSnapshot, cpu_high: f32, cpu_low: f32) -> PressureLevel {
 /// only below 55%). pp deliberately yields early and recovers late, keeping
 /// headroom for recordings (uncapped) and other programs.
 pub fn assess_pp(s: &LoadSnapshot) -> PressureLevel {
-    assess_with(s, CPU_HIGH_PP, CPU_LOW_PP)
+	assess_with(s, CPU_HIGH_PP, CPU_LOW_PP)
 }
 
 /// 后处理并发度的下一步值（AIMD）。
@@ -137,17 +137,17 @@ pub fn assess_pp(s: &LoadSnapshot) -> PressureLevel {
 /// - Otherwise (`Normal` hysteresis band, or `Comfortable` with idle slots,
 ///   i.e. no extra demand): hold.
 pub fn next_pp_permits(level: PressureLevel, current: usize, running: usize, max: usize) -> usize {
-    // 加性步长随天花板缩放；乘性退避本身已随 current 缩放无需步长
-    // Additive step scales with the ceiling; multiplicative backoff already
-    // scales via `current` and needs no step
-    let step = (max / 8).max(1);
-    let next = match level {
-        PressureLevel::Critical => 1,
-        PressureLevel::High => current.saturating_sub((current / 3).max(1)).max(1),
-        PressureLevel::Comfortable if running >= current => current.saturating_add(step),
-        _ => current,
-    };
-    next.clamp(1, max.max(1))
+	// 加性步长随天花板缩放；乘性退避本身已随 current 缩放无需步长
+	// Additive step scales with the ceiling; multiplicative backoff already
+	// scales via `current` and needs no step
+	let step = (max / 8).max(1);
+	let next = match level {
+		PressureLevel::Critical => 1,
+		PressureLevel::High => current.saturating_sub((current / 3).max(1)).max(1),
+		PressureLevel::Comfortable if running >= current => current.saturating_add(step),
+		_ => current,
+	};
+	next.clamp(1, max.max(1))
 }
 
 /// EMA 平滑系数：新样本权重 / EMA smoothing factor: weight of the new sample
@@ -167,74 +167,74 @@ const EMA_ALPHA: f32 = 0.3;
 /// adjustments. Global CPU is always meaningful, so unlike per-task metrics it
 /// never needs resetting when nothing is running.
 pub struct LoadSampler {
-    sys: System,
-    /// EMA 平滑后的全局 CPU（百分点），None 表示尚未采样
-    /// EMA-smoothed global CPU (pct points); None before the first sample
-    ema_cpu: Option<f32>,
+	sys: System,
+	/// EMA 平滑后的全局 CPU（百分点），None 表示尚未采样
+	/// EMA-smoothed global CPU (pct points); None before the first sample
+	ema_cpu: Option<f32>,
 }
 
 impl Default for LoadSampler {
-    fn default() -> Self {
-        Self::new()
-    }
+	fn default() -> Self {
+		Self::new()
+	}
 }
 
 impl LoadSampler {
-    /// 创建采样器并完成第一次 CPU 采样（为差值计算热身）。
-    /// Create a sampler and perform the first CPU sample (warm-up for delta computation).
-    pub fn new() -> Self {
-        let mut sys = System::new_with_specifics(
-            RefreshKind::nothing()
-                .with_cpu(sysinfo::CpuRefreshKind::nothing().with_cpu_usage())
-                .with_memory(MemoryRefreshKind::nothing().with_ram()),
-        );
-        // 第一次刷新仅用于建立基准，CPU 使用率在下一次刷新时才有意义
-        // First refresh only establishes a baseline; CPU usage becomes meaningful after the next refresh
-        sys.refresh_specifics(
-            RefreshKind::nothing()
-                .with_cpu(sysinfo::CpuRefreshKind::nothing().with_cpu_usage())
-                .with_memory(MemoryRefreshKind::nothing().with_ram()),
-        );
-        Self { sys, ema_cpu: None }
-    }
+	/// 创建采样器并完成第一次 CPU 采样（为差值计算热身）。
+	/// Create a sampler and perform the first CPU sample (warm-up for delta computation).
+	pub fn new() -> Self {
+		let mut sys = System::new_with_specifics(
+			RefreshKind::nothing()
+				.with_cpu(sysinfo::CpuRefreshKind::nothing().with_cpu_usage())
+				.with_memory(MemoryRefreshKind::nothing().with_ram()),
+		);
+		// 第一次刷新仅用于建立基准，CPU 使用率在下一次刷新时才有意义
+		// First refresh only establishes a baseline; CPU usage becomes meaningful after the next refresh
+		sys.refresh_specifics(
+			RefreshKind::nothing()
+				.with_cpu(sysinfo::CpuRefreshKind::nothing().with_cpu_usage())
+				.with_memory(MemoryRefreshKind::nothing().with_ram()),
+		);
+		Self { sys, ema_cpu: None }
+	}
 
-    /// 刷新系统数据，更新全局 CPU 的 EMA 平滑器，并返回当前负载快照。
-    ///
-    /// Refresh system data, update the global-CPU EMA smoother, and return the
-    /// current load snapshot.
-    pub fn sample(&mut self) -> LoadSnapshot {
-        self.sys.refresh_specifics(
-            RefreshKind::nothing()
-                .with_cpu(sysinfo::CpuRefreshKind::nothing().with_cpu_usage())
-                .with_memory(MemoryRefreshKind::nothing().with_ram()),
-        );
+	/// 刷新系统数据，更新全局 CPU 的 EMA 平滑器，并返回当前负载快照。
+	///
+	/// Refresh system data, update the global-CPU EMA smoother, and return the
+	/// current load snapshot.
+	pub fn sample(&mut self) -> LoadSnapshot {
+		self.sys.refresh_specifics(
+			RefreshKind::nothing()
+				.with_cpu(sysinfo::CpuRefreshKind::nothing().with_cpu_usage())
+				.with_memory(MemoryRefreshKind::nothing().with_ram()),
+		);
 
-        // 全局 CPU 使用率（所有逻辑核的平均值）/ Global CPU usage (average across all logical cores)
-        let cpu_usage_pct = self.sys.global_cpu_usage();
+		// 全局 CPU 使用率（所有逻辑核的平均值）/ Global CPU usage (average across all logical cores)
+		let cpu_usage_pct = self.sys.global_cpu_usage();
 
-        // 全局 CPU EMA：新样本 = 本次全局值 / Global CPU EMA: new sample = this global value
-        let smoothed_cpu_pct = match self.ema_cpu {
-            None => cpu_usage_pct, // 首个样本直接作为初始值 / First sample: seed directly
-            Some(prev) => EMA_ALPHA * cpu_usage_pct + (1.0 - EMA_ALPHA) * prev,
-        };
-        self.ema_cpu = Some(smoothed_cpu_pct);
+		// 全局 CPU EMA：新样本 = 本次全局值 / Global CPU EMA: new sample = this global value
+		let smoothed_cpu_pct = match self.ema_cpu {
+			None => cpu_usage_pct, // 首个样本直接作为初始值 / First sample: seed directly
+			Some(prev) => EMA_ALPHA * cpu_usage_pct + (1.0 - EMA_ALPHA) * prev,
+		};
+		self.ema_cpu = Some(smoothed_cpu_pct);
 
-        // 内存使用率 / Memory usage
-        let total = self.sys.total_memory();
-        let available = self.sys.available_memory();
-        let used = total.saturating_sub(available);
-        let mem_usage_pct = if total > 0 {
-            (used as f64 / total as f64 * 100.0) as f32
-        } else {
-            0.0
-        };
+		// 内存使用率 / Memory usage
+		let total = self.sys.total_memory();
+		let available = self.sys.available_memory();
+		let used = total.saturating_sub(available);
+		let mem_usage_pct = if total > 0 {
+			(used as f64 / total as f64 * 100.0) as f32
+		} else {
+			0.0
+		};
 
-        LoadSnapshot {
-            cpu_usage_pct,
-            smoothed_cpu_pct,
-            mem_usage_pct,
-            mem_available_bytes: available,
-            mem_total_bytes: total,
-        }
-    }
+		LoadSnapshot {
+			cpu_usage_pct,
+			smoothed_cpu_pct,
+			mem_usage_pct,
+			mem_available_bytes: available,
+			mem_total_bytes: total,
+		}
+	}
 }

@@ -9,5 +9,5 @@
 #![cfg_attr(target_os = "windows", allow(linker_messages))]
 
 fn main() {
-    stripchat_recorder_lib::run()
+	stripchat_recorder_lib::run()
 }

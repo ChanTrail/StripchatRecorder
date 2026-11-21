@@ -53,60 +53,60 @@ const STALE_TMP_MAX_AGE: Duration = Duration::from_secs(3600);
 /// stale records stuck mid-state due to a process restart). The previous status-based
 /// pre-filter masked exactly these stale records, preventing orphaned meta from being cleaned.
 pub fn cleanup_orphaned_meta_files() -> usize {
-    let paths = list_all_meta_paths();
+	let paths = list_all_meta_paths();
 
-    let mut count = 0usize;
-    for path in paths {
-        let name = path.to_string_lossy().to_string();
+	let mut count = 0usize;
+	for path in paths {
+		let name = path.to_string_lossy().to_string();
 
-        let meta_content = match std::fs::read_to_string(&path) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-        let meta: VideoMeta = match serde_json::from_str(&meta_content) {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
+		let meta_content = match std::fs::read_to_string(&path) {
+			Ok(c) => c,
+			Err(_) => continue,
+		};
+		let meta: VideoMeta = match serde_json::from_str(&meta_content) {
+			Ok(m) => m,
+			Err(_) => continue,
+		};
 
-        // 没有 video_path 字段时无法判断，保守跳过（旧版 meta 无此字段）
-        // Cannot determine without video_path; skip conservatively (old meta format lacks it)
-        let video_path_str = match meta.video_path.as_deref() {
-            Some(p) => p.to_string(),
-            None => continue,
-        };
+		// 没有 video_path 字段时无法判断，保守跳过（旧版 meta 无此字段）
+		// Cannot determine without video_path; skip conservatively (old meta format lacks it)
+		let video_path_str = match meta.video_path.as_deref() {
+			Some(p) => p.to_string(),
+			None => continue,
+		};
 
-        // 唯一依据：路径存在则不是孤立 / Sole criterion: path exists → not orphaned
-        if std::path::Path::new(&video_path_str).exists() {
-            continue;
-        }
+		// 唯一依据：路径存在则不是孤立 / Sole criterion: path exists → not orphaned
+		if std::path::Path::new(&video_path_str).exists() {
+			continue;
+		}
 
-        if let Err(e) = std::fs::remove_file(&path) {
-            tracing::warn!(
-                "{}",
-                crate::tl!("meta.cleanupDeleteFailed", name = name, error = e)
-            );
-        } else {
-            tracing::info!("{}", crate::tl!("meta.cleanupDeleted", name = name));
-            count += 1;
-        }
-    }
+		if let Err(e) = std::fs::remove_file(&path) {
+			tracing::warn!(
+				"{}",
+				crate::tl!("meta.cleanupDeleteFailed", name = name, error = e)
+			);
+		} else {
+			tracing::info!("{}", crate::tl!("meta.cleanupDeleted", name = name));
+			count += 1;
+		}
+	}
 
-    if count > 0 {
-        tracing::info!("{}", crate::tl!("meta.cleanupDone", count = count));
-    }
-    // 清理 write_meta 崩溃残留的临时文件（不计入返回值：返回值用于"孤立 meta 已清理"通知）。
-    // 放在空子目录清理之前，否则只剩残留临时文件的子目录永远不会变空。
-    // Clean up temp files left by write_meta crashes (not counted in the return value, which
-    // drives the "orphaned meta cleaned" notification). Done before the empty-subdirectory
-    // cleanup, otherwise a subdirectory holding only leftover temp files would never become empty.
-    cleanup_stale_meta_tmp_files_in(&meta_dir(), META_TMP_MIN_AGE);
-    // 每轮都清理空子目录（不只在本轮删过 meta 时）：有最小年龄保护后，本轮因删掉最后一个
-    // meta 而变空的子目录修改时间刚被刷新，会被本轮跳过，需由下一轮清理
-    // Clean up empty subdirectories on every pass (not only when this pass deleted meta): with
-    // the minimum-age protection, a subdirectory emptied by deleting its last meta in this pass
-    // has a fresh mtime and is skipped now, so a later pass has to remove it
-    remove_empty_meta_subdirs();
-    count
+	if count > 0 {
+		tracing::info!("{}", crate::tl!("meta.cleanupDone", count = count));
+	}
+	// 清理 write_meta 崩溃残留的临时文件（不计入返回值：返回值用于"孤立 meta 已清理"通知）。
+	// 放在空子目录清理之前，否则只剩残留临时文件的子目录永远不会变空。
+	// Clean up temp files left by write_meta crashes (not counted in the return value, which
+	// drives the "orphaned meta cleaned" notification). Done before the empty-subdirectory
+	// cleanup, otherwise a subdirectory holding only leftover temp files would never become empty.
+	cleanup_stale_meta_tmp_files_in(&meta_dir(), META_TMP_MIN_AGE);
+	// 每轮都清理空子目录（不只在本轮删过 meta 时）：有最小年龄保护后，本轮因删掉最后一个
+	// meta 而变空的子目录修改时间刚被刷新，会被本轮跳过，需由下一轮清理
+	// Clean up empty subdirectories on every pass (not only when this pass deleted meta): with
+	// the minimum-age protection, a subdirectory emptied by deleting its last meta in this pass
+	// has a fresh mtime and is skipped now, so a later pass has to remove it
+	remove_empty_meta_subdirs();
+	count
 }
 
 /// 删除 meta 根目录（含一层主播子目录）下 `write_meta` 原子写入残留的临时文件
@@ -118,52 +118,52 @@ pub fn cleanup_orphaned_meta_files() -> usize {
 /// streamer subdirectories), only when modified at least `min_age` ago; files whose mtime
 /// can't be read are skipped conservatively. Returns the number removed.
 fn cleanup_stale_meta_tmp_files_in(root: &Path, min_age: Duration) -> usize {
-    let mut dirs = vec![root.to_path_buf()];
-    if let Ok(entries) = std::fs::read_dir(root) {
-        dirs.extend(entries.flatten().map(|e| e.path()).filter(|p| p.is_dir()));
-    }
-    let now = SystemTime::now();
-    let mut removed = 0usize;
-    for dir in dirs {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.is_file()
-                || !path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .is_some_and(is_meta_write_tmp_name)
-            {
-                continue;
-            }
-            let old_enough = std::fs::metadata(&path)
-                .and_then(|m| m.modified())
-                .ok()
-                // 修改时间晚于当前时间（时钟误差）视为年龄 0 / mtime in the future (clock skew) counts as age 0
-                .map(|t| now.duration_since(t).unwrap_or(Duration::ZERO))
-                .is_some_and(|age| age >= min_age);
-            if !old_enough {
-                continue;
-            }
-            match std::fs::remove_file(&path) {
-                Ok(()) => removed += 1,
-                Err(e) => tracing::warn!(
-                    "{}",
-                    crate::tl!(
-                        "meta.cleanupTmpDeleteFailed",
-                        name = path.display(),
-                        error = e
-                    )
-                ),
-            }
-        }
-    }
-    if removed > 0 {
-        tracing::info!("{}", crate::tl!("meta.cleanupTmpDone", count = removed));
-    }
-    removed
+	let mut dirs = vec![root.to_path_buf()];
+	if let Ok(entries) = std::fs::read_dir(root) {
+		dirs.extend(entries.flatten().map(|e| e.path()).filter(|p| p.is_dir()));
+	}
+	let now = SystemTime::now();
+	let mut removed = 0usize;
+	for dir in dirs {
+		let Ok(entries) = std::fs::read_dir(&dir) else {
+			continue;
+		};
+		for entry in entries.flatten() {
+			let path = entry.path();
+			if !path.is_file()
+				|| !path
+					.file_name()
+					.and_then(|n| n.to_str())
+					.is_some_and(is_meta_write_tmp_name)
+			{
+				continue;
+			}
+			let old_enough = std::fs::metadata(&path)
+				.and_then(|m| m.modified())
+				.ok()
+				// 修改时间晚于当前时间（时钟误差）视为年龄 0 / mtime in the future (clock skew) counts as age 0
+				.map(|t| now.duration_since(t).unwrap_or(Duration::ZERO))
+				.is_some_and(|age| age >= min_age);
+			if !old_enough {
+				continue;
+			}
+			match std::fs::remove_file(&path) {
+				Ok(()) => removed += 1,
+				Err(e) => tracing::warn!(
+					"{}",
+					crate::tl!(
+						"meta.cleanupTmpDeleteFailed",
+						name = path.display(),
+						error = e
+					)
+				),
+			}
+		}
+	}
+	if removed > 0 {
+		tracing::info!("{}", crate::tl!("meta.cleanupTmpDone", count = removed));
+	}
+	removed
 }
 
 /// 移除 meta 根目录下已变空的主播子目录（如该主播的所有录制都已被删除/清理）。
@@ -184,7 +184,7 @@ fn cleanup_stale_meta_tmp_files_in(root: &Path, min_age: Duration) -> usize {
 /// created and has no meta yet isn't removed. Old empty directories skipped in this pass are
 /// cleaned up by later passes.
 fn remove_empty_meta_subdirs() {
-    remove_empty_meta_subdirs_in(&meta_dir());
+	remove_empty_meta_subdirs_in(&meta_dir());
 }
 
 /// [`remove_empty_meta_subdirs`] 的实现，作用于指定 meta 根目录，返回删除的目录数。
@@ -194,12 +194,12 @@ fn remove_empty_meta_subdirs() {
 /// number of directories removed. Meta subdirectories are a single level deep, so the
 /// recursive helper behaves the same as a one-level check.
 fn remove_empty_meta_subdirs_in(root: &Path) -> usize {
-    crate::recording::segment_merge::remove_empty_dirs_recursive(
-        root,
-        false,
-        &|_| false,
-        crate::recording::segment_merge::EMPTY_DIR_MIN_AGE,
-    )
+	crate::recording::segment_merge::remove_empty_dirs_recursive(
+		root,
+		false,
+		&|_| false,
+		crate::recording::segment_merge::EMPTY_DIR_MIN_AGE,
+	)
 }
 
 /// 清理 tmp 目录中的过期内容：
@@ -238,100 +238,100 @@ fn remove_empty_meta_subdirs_in(root: &Path) -> usize {
 /// When `max_tmp_gb` is 0, the size cap fallback is skipped (size is unlimited, but stale file
 /// cleanup still runs).
 pub(super) fn cleanup_stale_tmp(
-    tmp: &std::path::Path,
-    max_tmp_gb: f64,
-    protected_stems: &[String],
+	tmp: &std::path::Path,
+	max_tmp_gb: f64,
+	protected_stems: &[String],
 ) {
-    if !tmp.exists() {
-        return;
-    }
+	if !tmp.exists() {
+		return;
+	}
 
-    let max_age = STALE_TMP_MAX_AGE;
-    let now = std::time::SystemTime::now();
+	let max_age = STALE_TMP_MAX_AGE;
+	let now = std::time::SystemTime::now();
 
-    // 路径所属的 tmp 顶层条目名包含运行中录制的 stem 时视为受保护
-    // A path is protected when its top-level tmp entry's name contains a running recording's stem
-    let is_protected = |p: &Path| -> bool {
-        p.strip_prefix(tmp)
-            .ok()
-            .and_then(|rel| rel.components().next())
-            .and_then(|c| c.as_os_str().to_str())
-            .is_some_and(|name| protected_stems.iter().any(|s| name.contains(s.as_str())))
-    };
+	// 路径所属的 tmp 顶层条目名包含运行中录制的 stem 时视为受保护
+	// A path is protected when its top-level tmp entry's name contains a running recording's stem
+	let is_protected = |p: &Path| -> bool {
+		p.strip_prefix(tmp)
+			.ok()
+			.and_then(|rel| rel.components().next())
+			.and_then(|c| c.as_os_str().to_str())
+			.is_some_and(|name| protected_stems.iter().any(|s| name.contains(s.as_str())))
+	};
 
-    // 递归收集所有文件（含子目录内文件），排除受保护条目
-    // Recursively collect all files (including inside subdirectories), excluding protected entries
-    let mut all_files: Vec<(std::path::PathBuf, u64, std::time::SystemTime)> = Vec::new();
-    collect_files_recursive(tmp, &mut all_files);
-    all_files.retain(|(p, _, _)| !is_protected(p));
+	// 递归收集所有文件（含子目录内文件），排除受保护条目
+	// Recursively collect all files (including inside subdirectories), excluding protected entries
+	let mut all_files: Vec<(std::path::PathBuf, u64, std::time::SystemTime)> = Vec::new();
+	collect_files_recursive(tmp, &mut all_files);
+	all_files.retain(|(p, _, _)| !is_protected(p));
 
-    let mut removed_bytes: u64 = 0;
-    let mut removed_count: usize = 0;
+	let mut removed_bytes: u64 = 0;
+	let mut removed_count: usize = 0;
 
-    // 第一轮：删除超过 1 小时未修改的文件
-    // Round 1: delete files not modified within the last hour
-    let mut remaining_files: Vec<(std::path::PathBuf, u64, std::time::SystemTime)> = Vec::new();
-    for (path, size, modified) in all_files {
-        let age = now.duration_since(modified).unwrap_or(max_age);
-        if age >= max_age {
-            if std::fs::remove_file(&path).is_ok() {
-                removed_bytes += size;
-                removed_count += 1;
-            }
-        } else {
-            remaining_files.push((path, size, modified));
-        }
-    }
+	// 第一轮：删除超过 1 小时未修改的文件
+	// Round 1: delete files not modified within the last hour
+	let mut remaining_files: Vec<(std::path::PathBuf, u64, std::time::SystemTime)> = Vec::new();
+	for (path, size, modified) in all_files {
+		let age = now.duration_since(modified).unwrap_or(max_age);
+		if age >= max_age {
+			if std::fs::remove_file(&path).is_ok() {
+				removed_bytes += size;
+				removed_count += 1;
+			}
+		} else {
+			remaining_files.push((path, size, modified));
+		}
+	}
 
-    // 第二轮：大小兜底——若仍超出上限，从旧到新继续删
-    // Round 2: size fallback — if still over cap, delete from oldest to newest
-    if max_tmp_gb > 0.0 {
-        let max_bytes = (max_tmp_gb * 1024.0 * 1024.0 * 1024.0) as u64;
-        let current: u64 = remaining_files.iter().map(|(_, s, _)| s).sum();
-        if current > max_bytes {
-            remaining_files.sort_by_key(|(_, _, t)| *t);
-            let mut total = current;
-            for (path, size, _) in &remaining_files {
-                if total <= max_bytes {
-                    break;
-                }
-                if std::fs::remove_file(path).is_ok() {
-                    removed_bytes += size;
-                    removed_count += 1;
-                    total = total.saturating_sub(*size);
-                }
-            }
-        }
-    }
+	// 第二轮：大小兜底——若仍超出上限，从旧到新继续删
+	// Round 2: size fallback — if still over cap, delete from oldest to newest
+	if max_tmp_gb > 0.0 {
+		let max_bytes = (max_tmp_gb * 1024.0 * 1024.0 * 1024.0) as u64;
+		let current: u64 = remaining_files.iter().map(|(_, s, _)| s).sum();
+		if current > max_bytes {
+			remaining_files.sort_by_key(|(_, _, t)| *t);
+			let mut total = current;
+			for (path, size, _) in &remaining_files {
+				if total <= max_bytes {
+					break;
+				}
+				if std::fs::remove_file(path).is_ok() {
+					removed_bytes += size;
+					removed_count += 1;
+					total = total.saturating_sub(*size);
+				}
+			}
+		}
+	}
 
-    // 清理空子目录（递归，从深到浅，不删 tmp 根目录）。本函数可能与维护触发的后台后处理
-    // 并行，因此复用输出目录空目录清理的最小年龄保护：跳过 60 秒内修改过的目录，避免误删
-    // notify_telegram 刚创建、ffmpeg 尚未写入的 split_* 目录。本轮刚删掉文件或子目录的
-    // 目录修改时间会被刷新，由下一次维护（5 分钟后）清理。
-    // Remove empty subdirectories (recursive, deepest first, keeping the tmp root). This may
-    // run in parallel with background post-processing triggered by maintenance, so reuse the
-    // output dir cleanup's minimum-age protection: skip directories modified within the last
-    // 60 seconds, so split_* dirs just created by notify_telegram and not yet written by ffmpeg
-    // aren't removed. Directories whose files/subdirs were removed in this pass get a fresh
-    // mtime and are cleaned up by the next maintenance pass (5 minutes later).
-    // 运行中任务的受保护目录同样跳过 / Protected directories of running tasks are skipped as well
-    crate::recording::segment_merge::remove_empty_dirs_recursive(
-        tmp,
-        false,
-        &is_protected,
-        crate::recording::segment_merge::EMPTY_DIR_MIN_AGE,
-    );
+	// 清理空子目录（递归，从深到浅，不删 tmp 根目录）。本函数可能与维护触发的后台后处理
+	// 并行，因此复用输出目录空目录清理的最小年龄保护：跳过 60 秒内修改过的目录，避免误删
+	// notify_telegram 刚创建、ffmpeg 尚未写入的 split_* 目录。本轮刚删掉文件或子目录的
+	// 目录修改时间会被刷新，由下一次维护（5 分钟后）清理。
+	// Remove empty subdirectories (recursive, deepest first, keeping the tmp root). This may
+	// run in parallel with background post-processing triggered by maintenance, so reuse the
+	// output dir cleanup's minimum-age protection: skip directories modified within the last
+	// 60 seconds, so split_* dirs just created by notify_telegram and not yet written by ffmpeg
+	// aren't removed. Directories whose files/subdirs were removed in this pass get a fresh
+	// mtime and are cleaned up by the next maintenance pass (5 minutes later).
+	// 运行中任务的受保护目录同样跳过 / Protected directories of running tasks are skipped as well
+	crate::recording::segment_merge::remove_empty_dirs_recursive(
+		tmp,
+		false,
+		&is_protected,
+		crate::recording::segment_merge::EMPTY_DIR_MIN_AGE,
+	);
 
-    if removed_count > 0 {
-        tracing::info!(
-            "{}",
-            crate::tl!(
-                "maintenance.tmpCleanup",
-                count = removed_count,
-                mb = format!("{:.1}", removed_bytes as f64 / 1024.0 / 1024.0)
-            )
-        );
-    }
+	if removed_count > 0 {
+		tracing::info!(
+			"{}",
+			crate::tl!(
+				"maintenance.tmpCleanup",
+				count = removed_count,
+				mb = format!("{:.1}", removed_bytes as f64 / 1024.0 / 1024.0)
+			)
+		);
+	}
 }
 
 /// 程序启动时清空 tmp 目录（`exe_dir()/tmp`）中的全部内容，保留 tmp 根目录本身。
@@ -352,78 +352,78 @@ pub(super) fn cleanup_stale_tmp(
 /// Trade-off: split parts kept after a failed Telegram upload can no longer be reused across a
 /// restart; the next retry re-splits (stream copy, fairly fast).
 pub fn cleanup_tmp_on_startup() -> usize {
-    cleanup_tmp_on_startup_in(&crate::config::app_state::exe_dir().join("tmp"))
+	cleanup_tmp_on_startup_in(&crate::config::app_state::exe_dir().join("tmp"))
 }
 
 /// [`cleanup_tmp_on_startup`] 的实现，作用于指定 tmp 目录，返回删除的文件数。
 /// Implementation of [`cleanup_tmp_on_startup`] for the given tmp dir; returns the number of
 /// files removed.
 fn cleanup_tmp_on_startup_in(tmp: &Path) -> usize {
-    let Ok(entries) = std::fs::read_dir(tmp) else {
-        return 0;
-    };
-    let mut removed_count = 0usize;
-    let mut removed_bytes = 0u64;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        // 不跟随符号链接 / Don't follow symlinks
-        let Ok(meta) = std::fs::symlink_metadata(&path) else {
-            continue;
-        };
-        let (result, count, bytes) = if meta.is_dir() {
-            let mut files = Vec::new();
-            collect_files_recursive(&path, &mut files);
-            let bytes: u64 = files.iter().map(|(_, s, _)| s).sum();
-            (std::fs::remove_dir_all(&path), files.len(), bytes)
-        } else {
-            (std::fs::remove_file(&path), 1, meta.len())
-        };
-        match result {
-            Ok(()) => {
-                removed_count += count;
-                removed_bytes += bytes;
-            }
-            Err(e) => tracing::warn!(
-                "{}",
-                crate::tl!(
-                    "maintenance.tmpStartupDeleteFailed",
-                    path = path.display(),
-                    error = e
-                )
-            ),
-        }
-    }
-    if removed_count > 0 {
-        tracing::info!(
-            "{}",
-            crate::tl!(
-                "maintenance.tmpStartupCleanup",
-                count = removed_count,
-                mb = format!("{:.1}", removed_bytes as f64 / 1024.0 / 1024.0)
-            )
-        );
-    }
-    removed_count
+	let Ok(entries) = std::fs::read_dir(tmp) else {
+		return 0;
+	};
+	let mut removed_count = 0usize;
+	let mut removed_bytes = 0u64;
+	for entry in entries.flatten() {
+		let path = entry.path();
+		// 不跟随符号链接 / Don't follow symlinks
+		let Ok(meta) = std::fs::symlink_metadata(&path) else {
+			continue;
+		};
+		let (result, count, bytes) = if meta.is_dir() {
+			let mut files = Vec::new();
+			collect_files_recursive(&path, &mut files);
+			let bytes: u64 = files.iter().map(|(_, s, _)| s).sum();
+			(std::fs::remove_dir_all(&path), files.len(), bytes)
+		} else {
+			(std::fs::remove_file(&path), 1, meta.len())
+		};
+		match result {
+			Ok(()) => {
+				removed_count += count;
+				removed_bytes += bytes;
+			}
+			Err(e) => tracing::warn!(
+				"{}",
+				crate::tl!(
+					"maintenance.tmpStartupDeleteFailed",
+					path = path.display(),
+					error = e
+				)
+			),
+		}
+	}
+	if removed_count > 0 {
+		tracing::info!(
+			"{}",
+			crate::tl!(
+				"maintenance.tmpStartupCleanup",
+				count = removed_count,
+				mb = format!("{:.1}", removed_bytes as f64 / 1024.0 / 1024.0)
+			)
+		);
+	}
+	removed_count
 }
 
 /// 递归收集目录下所有文件及其元数据。
 /// Recursively collect all files under a directory with their metadata.
 fn collect_files_recursive(
-    dir: &std::path::Path,
-    out: &mut Vec<(std::path::PathBuf, u64, std::time::SystemTime)>,
+	dir: &std::path::Path,
+	out: &mut Vec<(std::path::PathBuf, u64, std::time::SystemTime)>,
 ) {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_files_recursive(&path, out);
-        } else if let Ok(meta) = std::fs::metadata(&path) {
-            let size = meta.len();
-            let modified = meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-            out.push((path, size, modified));
-        }
-    }
+	let entries = match std::fs::read_dir(dir) {
+		Ok(e) => e,
+		Err(_) => return,
+	};
+	for entry in entries.flatten() {
+		let path = entry.path();
+		if path.is_dir() {
+			collect_files_recursive(&path, out);
+		} else if let Ok(meta) = std::fs::metadata(&path) {
+			let size = meta.len();
+			let modified = meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+			out.push((path, size, modified));
+		}
+	}
 }

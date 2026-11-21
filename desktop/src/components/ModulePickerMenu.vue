@@ -6,24 +6,24 @@
     - 拖拽连线释放到空白画布时弹出的"连接到…"菜单
 -->
 <script setup lang="ts">
-	import { Badge } from "@/components/ui/badge";
-	import type { ModuleInfo } from "@/stores/postprocess";
-	import { useI18n } from "vue-i18n";
+import { Badge } from "@/components/ui/badge";
+import type { ModuleInfo } from "@/stores/postprocess";
+import { useI18n } from "vue-i18n";
 
-	defineProps<{
-		visible: boolean;
-		x: number;
-		y: number;
-		modules: ModuleInfo[];
-		emptyMessage: string;
-	}>();
+defineProps<{
+	visible: boolean;
+	x: number;
+	y: number;
+	modules: ModuleInfo[];
+	emptyMessage: string;
+}>();
 
-	const emit = defineEmits<{
-		select: [moduleId: string];
-		close: [];
-	}>();
+const emit = defineEmits<{
+	select: [moduleId: string];
+	close: [];
+}>();
 
-	const { t } = useI18n();
+const { t } = useI18n();
 </script>
 
 <template>
@@ -35,7 +35,9 @@
 			@mousedown.stop
 			@click.stop
 		>
-			<div class="px-3 py-1 text-xs text-muted-foreground font-medium flex items-center gap-1.5">
+			<div
+				class="px-3 py-1 text-xs text-muted-foreground font-medium flex items-center gap-1.5"
+			>
 				<slot />
 			</div>
 			<div v-if="modules.length === 0" class="px-3 py-2 text-xs text-muted-foreground">
@@ -53,11 +55,13 @@
 						<span
 							v-if="mod.version"
 							class="text-[10px] text-muted-foreground font-mono shrink-0"
-						>v{{ mod.version }}</span>
+							>v{{ mod.version }}</span
+						>
 						<Badge
 							v-if="mod.official"
 							class="text-[9px] px-1 py-0 h-4 bg-amber-500/20 text-amber-400 border-amber-500/30 shrink-0"
-						>official</Badge>
+							>official</Badge
+						>
 					</div>
 					<p class="text-xs text-muted-foreground truncate">{{ mod.description }}</p>
 				</div>
@@ -66,14 +70,23 @@
 			<button
 				class="w-full px-3 py-1.5 text-left text-xs text-muted-foreground hover:bg-accent transition-colors"
 				@click="emit('close')"
-			>{{ t("common.cancel") }}</button>
+			>
+				{{ t("common.cancel") }}
+			</button>
 		</div>
 	</Transition>
 </template>
 
 <style scoped>
-	.fade-enter-active,
-	.fade-leave-active { transition: opacity 0.1s, transform 0.1s; }
-	.fade-enter-from,
-	.fade-leave-to { opacity: 0; transform: scale(0.97); }
+.fade-enter-active,
+.fade-leave-active {
+	transition:
+		opacity 0.1s,
+		transform 0.1s;
+}
+.fade-enter-from,
+.fade-leave-to {
+	opacity: 0;
+	transform: scale(0.97);
+}
 </style>

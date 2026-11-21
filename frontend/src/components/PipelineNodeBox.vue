@@ -14,11 +14,11 @@
         fixed       - 是否为固定节点（不可移除）/ Whether this is a fixed node (non-removable)
 -->
 <script setup lang="ts">
-	defineProps<{
-		label: string;
-		description?: string;
-		fixed?: boolean;
-	}>();
+defineProps<{
+	label: string;
+	description?: string;
+	fixed?: boolean;
+}>();
 </script>
 
 <template>

@@ -54,6 +54,6 @@ mod model;
 pub use discovery::{discover_modules, modules_dir};
 pub use exec::{RecordingContext, run_pipeline};
 pub use model::{
-    ModuleInfo, ModuleOutput, NodeInputRef, NodeResult, ParamDef, PipelineConfig, PipelineEdge,
-    PipelineNode, PortType, SEGMENT_MERGE_MODULE_ID,
+	ModuleInfo, ModuleOutput, NodeInputRef, NodeResult, ParamDef, PipelineConfig, PipelineEdge,
+	PipelineNode, PortType, SEGMENT_MERGE_MODULE_ID,
 };

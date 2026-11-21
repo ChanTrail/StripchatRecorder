@@ -51,26 +51,26 @@ pub(crate) const EMPTY_DIR_MIN_AGE: Duration = Duration::from_secs(60);
 /// Recursively remove all empty directories under the output directory, skipping
 /// directories locked by active recording sessions and those modified within 60 seconds.
 pub fn startup_remove_empty_dirs(output_dir: &Path, recorder: &RecorderManager) {
-    if !output_dir.exists() {
-        return;
-    }
+	if !output_dir.exists() {
+		return;
+	}
 
-    let removed = remove_empty_dirs_recursive(
-        output_dir,
-        false,
-        &|p| recorder.is_file_locked(p),
-        EMPTY_DIR_MIN_AGE,
-    );
-    if removed > 0 {
-        tracing::info!(
-            "{}",
-            crate::tl!(
-                "segment.startupRemovedEmpty",
-                count = removed,
-                dir = output_dir.display()
-            )
-        );
-    }
+	let removed = remove_empty_dirs_recursive(
+		output_dir,
+		false,
+		&|p| recorder.is_file_locked(p),
+		EMPTY_DIR_MIN_AGE,
+	);
+	if removed > 0 {
+		tracing::info!(
+			"{}",
+			crate::tl!(
+				"segment.startupRemovedEmpty",
+				count = removed,
+				dir = output_dir.display()
+			)
+		);
+	}
 }
 
 /// 递归删除 `dir` 下的空目录（`remove_self` 为真时也尝试删除 `dir` 本身），返回删除数量。
@@ -80,54 +80,54 @@ pub fn startup_remove_empty_dirs(output_dir: &Path, recorder: &RecorderManager) 
 /// returning the number removed. Directories for which `is_locked` is true, or modified more
 /// recently than `min_age`, are kept.
 pub(crate) fn remove_empty_dirs_recursive(
-    dir: &Path,
-    remove_self: bool,
-    is_locked: &dyn Fn(&Path) -> bool,
-    min_age: Duration,
+	dir: &Path,
+	remove_self: bool,
+	is_locked: &dyn Fn(&Path) -> bool,
+	min_age: Duration,
 ) -> usize {
-    let mut removed = 0;
+	let mut removed = 0;
 
-    let entries = match fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(_) => return 0,
-    };
+	let entries = match fs::read_dir(dir) {
+		Ok(entries) => entries,
+		Err(_) => return 0,
+	};
 
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            removed += remove_empty_dirs_recursive(&path, true, is_locked, min_age);
-        }
-    }
+	for entry in entries.flatten() {
+		let path = entry.path();
+		if path.is_dir() {
+			removed += remove_empty_dirs_recursive(&path, true, is_locked, min_age);
+		}
+	}
 
-    if remove_self {
-        // 跳过活跃录制会话的目录，避免删掉刚创建但还未写入第一个分片的 session 目录
-        // Skip directories locked by active recording sessions to avoid deleting a
-        // session directory that was just created but hasn't received its first segment yet
-        if is_locked(dir) {
-            return removed;
-        }
-        // 跳过最近修改过的目录（读取修改时间失败时保守跳过）
-        // Skip recently modified directories (skip conservatively if mtime can't be read)
-        let old_enough = fs::metadata(dir)
-            .and_then(|m| m.modified())
-            .ok()
-            // 修改时间晚于当前时间（时钟误差）视为年龄 0 / mtime in the future (clock skew) counts as age 0
-            .map(|t| {
-                SystemTime::now()
-                    .duration_since(t)
-                    .unwrap_or(Duration::ZERO)
-            })
-            .is_some_and(|age| age >= min_age);
-        if !old_enough {
-            return removed;
-        }
-        let is_empty = fs::read_dir(dir)
-            .map(|mut entries| entries.next().is_none())
-            .unwrap_or(false);
-        if is_empty && fs::remove_dir(dir).is_ok() {
-            removed += 1;
-        }
-    }
+	if remove_self {
+		// 跳过活跃录制会话的目录，避免删掉刚创建但还未写入第一个分片的 session 目录
+		// Skip directories locked by active recording sessions to avoid deleting a
+		// session directory that was just created but hasn't received its first segment yet
+		if is_locked(dir) {
+			return removed;
+		}
+		// 跳过最近修改过的目录（读取修改时间失败时保守跳过）
+		// Skip recently modified directories (skip conservatively if mtime can't be read)
+		let old_enough = fs::metadata(dir)
+			.and_then(|m| m.modified())
+			.ok()
+			// 修改时间晚于当前时间（时钟误差）视为年龄 0 / mtime in the future (clock skew) counts as age 0
+			.map(|t| {
+				SystemTime::now()
+					.duration_since(t)
+					.unwrap_or(Duration::ZERO)
+			})
+			.is_some_and(|age| age >= min_age);
+		if !old_enough {
+			return removed;
+		}
+		let is_empty = fs::read_dir(dir)
+			.map(|mut entries| entries.next().is_none())
+			.unwrap_or(false);
+		if is_empty && fs::remove_dir(dir).is_ok() {
+			removed += 1;
+		}
+	}
 
-    removed
+	removed
 }

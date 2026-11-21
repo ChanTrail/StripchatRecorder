@@ -50,7 +50,12 @@ export function usePortWiring(
 	}
 
 	/** 将端口 DOM 元素的中心转换为画布坐标并缓存 / Convert port element center to canvas coords and cache */
-	function registerPortEl(el: HTMLElement | null, nodeId: string, isOutput: boolean, portIndex: number) {
+	function registerPortEl(
+		el: HTMLElement | null,
+		nodeId: string,
+		isOutput: boolean,
+		portIndex: number,
+	) {
 		if (!el) return;
 		// 同步读取 getBoundingClientRect（此时 DOM 已挂载，不需要 nextTick）
 		// Read getBoundingClientRect synchronously (DOM is mounted, nextTick not needed)
@@ -180,9 +185,7 @@ export function usePortWiring(
 	function pendingLineFrom() {
 		void portVersion.value;
 		const from = connectingFrom.value;
-		return from
-			? portPositions[portKey(from.nodeId, from.isOutput, from.portIndex)]
-			: null;
+		return from ? portPositions[portKey(from.nodeId, from.isOutput, from.portIndex)] : null;
 	}
 
 	return {

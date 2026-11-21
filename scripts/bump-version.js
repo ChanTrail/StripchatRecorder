@@ -58,9 +58,7 @@ const SEM_VER = /^\d+\.\d+\.\d+(-beta)?$/;
 function validateVersion(v) {
 	if (!SEM_VER.test(v)) {
 		fail(`"${v}" 不是合法的版本号（需符合 X.Y.Z 或 X.Y.Z-beta 格式）。`);
-		fail(
-			`"${v}" is not a valid version string (must match X.Y.Z or X.Y.Z-beta).`,
-		);
+		fail(`"${v}" is not a valid version string (must match X.Y.Z or X.Y.Z-beta).`);
 		process.exit(1);
 	}
 }
@@ -79,8 +77,7 @@ function patchJson(filePath, newVersion) {
 	obj.version = newVersion;
 	// 保留原有换行符风格 / Preserve original line endings
 	const newlineChar = raw.includes("\r\n") ? "\r\n" : "\n";
-	const output =
-		JSON.stringify(obj, null, indent).replace(/\n/g, newlineChar) + newlineChar;
+	const output = JSON.stringify(obj, null, indent).replace(/\n/g, newlineChar) + newlineChar;
 	fs.writeFileSync(filePath, output, "utf8");
 	return oldVersion;
 }
@@ -202,9 +199,7 @@ let anyError = false;
 for (const t of targets) {
 	const filePath = path.join(ROOT, t.rel);
 	if (!fs.existsSync(filePath)) {
-		warn(
-			`${t.label}  ${C.gray}(文件不存在，已跳过 / file not found, skipped)${C.reset}`,
-		);
+		warn(`${t.label}  ${C.gray}(文件不存在，已跳过 / file not found, skipped)${C.reset}`);
 		continue;
 	}
 	try {
@@ -238,10 +233,5 @@ if (anyError) {
 console.log(
 	`${C.green}${C.bold}  All done!${C.reset}  版本号已统一更新为 ${C.bold}${newVersion}${C.reset}\n`,
 );
-console.log(
-	`${C.gray}  提示 / Tip: 记得提交所有变更后再构建或推送。${C.reset}`,
-);
-console.log(
-	`${C.gray}  Tip: commit all changes before building or pushing.${C.reset}\n`,
-);
-
+console.log(`${C.gray}  提示 / Tip: 记得提交所有变更后再构建或推送。${C.reset}`);
+console.log(`${C.gray}  Tip: commit all changes before building or pushing.${C.reset}\n`);

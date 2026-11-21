@@ -12,195 +12,244 @@
     - Stream URL (copyable)
 -->
 <script setup lang="ts">
-	import { ref, onMounted, onUnmounted, computed } from "vue";
-	import { call } from "@/lib/api";
-	import { Badge } from "@/components/ui/badge";
-	import { Button } from "@/components/ui/button";
-	import { Card, CardContent } from "@/components/ui/card";
-	import { Copy, Check, Radio, Wifi, WifiOff, AlertCircle, Loader, Square } from "@lucide/vue";
-	import { useI18n } from "vue-i18n";
-	import { copyToClipboard } from "@/lib/utils";
+import { ref, onMounted, onUnmounted, computed } from "vue";
+import { call } from "@/lib/api";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Copy, Check, Radio, Wifi, WifiOff, AlertCircle, Loader, Square } from "@lucide/vue";
+import { useI18n } from "vue-i18n";
+import { copyToClipboard } from "@/lib/utils";
 
-	const { t } = useI18n();
+const { t } = useI18n();
 
-	// 主播真实状态 Badge 内联样式（基于 session 里的实时数据）
-	// Streamer real status badge inline style (based on real-time data from session)
-	function streamerStatusStyle(isOnline: boolean, status: string): Record<string, string> {
-		if (!isOnline) {
-			return { backgroundColor: "rgb(39 39 42)", color: "rgb(161 161 170)", borderColor: "transparent" };
-		}
-		if (status === "公开秀") {
-			return { backgroundColor: "rgb(20 83 45)", color: "rgb(134 239 172)", borderColor: "transparent" };
-		}
-		return { backgroundColor: "rgb(120 53 15)", color: "rgb(252 211 77)", borderColor: "transparent" };
+// 主播真实状态 Badge 内联样式（基于 session 里的实时数据）
+// Streamer real status badge inline style (based on real-time data from session)
+function streamerStatusStyle(isOnline: boolean, status: string): Record<string, string> {
+	if (!isOnline) {
+		return {
+			backgroundColor: "rgb(39 39 42)",
+			color: "rgb(161 161 170)",
+			borderColor: "transparent",
+		};
 	}
-
-	// 主播真实状态文字
-	function streamerStatusLabel(isOnline: boolean, status: string): string {
-		if (!isOnline) return t("streamerCard.offline");
-		return status || t("streamerCard.offline");
+	if (status === "公开秀") {
+		return {
+			backgroundColor: "rgb(20 83 45)",
+			color: "rgb(134 239 172)",
+			borderColor: "transparent",
+		};
 	}
+	return {
+		backgroundColor: "rgb(120 53 15)",
+		color: "rgb(252 211 77)",
+		borderColor: "transparent",
+	};
+}
 
-	// Rust serde snake_case enum 序列化格式：
-	// 无字段 variant → 字符串，如 "live" | "connecting"
-	// 有字段 variant → 对象，如 { "offline": { "status": "..." } } | { "error": { "message": "..." } }
-	type RawStreamState =
-		| "connecting"
-		| "live"
-		| { offline: { status: string } }
-		| { error: { message: string } };
+// 主播真实状态文字
+function streamerStatusLabel(isOnline: boolean, status: string): string {
+	if (!isOnline) return t("streamerCard.offline");
+	return status || t("streamerCard.offline");
+}
 
-	interface StreamState {
-		type: "connecting" | "live" | "offline" | "error";
-		status?: string;
-		message?: string;
+// Rust serde snake_case enum 序列化格式：
+// 无字段 variant → 字符串，如 "live" | "connecting"
+// 有字段 variant → 对象，如 { "offline": { "status": "..." } } | { "error": { "message": "..." } }
+type RawStreamState =
+	"connecting" | "live" | { offline: { status: string } } | { error: { message: string } };
+
+interface StreamState {
+	type: "connecting" | "live" | "offline" | "error";
+	status?: string;
+	message?: string;
+}
+
+function parseStreamState(raw: RawStreamState): StreamState {
+	if (raw === "connecting") return { type: "connecting" };
+	if (raw === "live") return { type: "live" };
+	if (typeof raw === "object" && "offline" in raw)
+		return { type: "offline", status: raw.offline.status };
+	if (typeof raw === "object" && "error" in raw)
+		return { type: "error", message: raw.error.message };
+	return { type: "offline" };
+}
+
+interface RelaySession {
+	username: string;
+	stream_state: RawStreamState;
+	streamer_is_online: boolean;
+	streamer_status: string;
+	active_connections: number;
+	uptime_secs: number;
+	created_at_ms: number;
+	stream_url: string;
+}
+
+// 解析后的会话（stream_state 已转换为统一格式）/ Parsed session with normalized stream_state
+type ParsedSession = Omit<RelaySession, "stream_state"> & { stream_state: StreamState };
+
+// 解析后的会话列表（stream_state 已转换为统一格式）
+const sessions = ref<ParsedSession[]>([]);
+const loading = ref(true);
+const copiedMap = ref<Record<string, boolean>>({});
+// 本地时钟 tick，每秒递增，用于驱动运行时间的响应式更新
+// Local clock tick, increments every second to drive reactive uptime updates
+const nowMs = ref(Date.now());
+let pollTimer: ReturnType<typeof setInterval> | null = null;
+let tickTimer: ReturnType<typeof setInterval> | null = null;
+
+async function fetchSessions() {
+	try {
+		const raw = await call<RelaySession[]>("list_relay_sessions");
+		sessions.value = raw.map((s) => ({ ...s, stream_state: parseStreamState(s.stream_state) }));
+	} catch {
+		// 静默失败 / Fail silently
+	} finally {
+		loading.value = false;
 	}
+}
 
-	function parseStreamState(raw: RawStreamState): StreamState {
-		if (raw === "connecting") return { type: "connecting" };
-		if (raw === "live") return { type: "live" };
-		if (typeof raw === "object" && "offline" in raw) return { type: "offline", status: raw.offline.status };
-		if (typeof raw === "object" && "error" in raw) return { type: "error", message: raw.error.message };
-		return { type: "offline" };
+// 根据 created_at_ms 实时计算运行时长（秒），每秒更新
+// Compute live uptime in seconds from created_at_ms, updated every second
+function liveUptime(session: ParsedSession): number {
+	if (session.created_at_ms > 0) {
+		return Math.max(0, Math.floor((nowMs.value - session.created_at_ms) / 1000));
 	}
+	// 回退到服务端值（兼容旧数据）/ Fall back to server value (backward compat)
+	return session.uptime_secs;
+}
 
-	interface RelaySession {
-		username: string;
-		stream_state: RawStreamState;
-		streamer_is_online: boolean;
-		streamer_status: string;
-		active_connections: number;
-		uptime_secs: number;
-		created_at_ms: number;
-		stream_url: string;
+function formatUptime(secs: number): string {
+	if (secs < 60) return `${secs}s`;
+	if (secs < 3600) return `${Math.floor(secs / 60)}m ${secs % 60}s`;
+	const h = Math.floor(secs / 3600);
+	const m = Math.floor((secs % 3600) / 60);
+	return `${h}h ${m}m`;
+}
+
+function getStreamUrl(session: ParsedSession): string {
+	return `${window.location.origin}${session.stream_url}`;
+}
+
+async function copyUrl(username: string, url: string) {
+	try {
+		await copyToClipboard(url);
+		copiedMap.value[username] = true;
+		setTimeout(() => {
+			copiedMap.value[username] = false;
+		}, 2000);
+	} catch {}
+}
+
+const stoppingMap = ref<Record<string, boolean>>({});
+
+async function stopRelay(username: string) {
+	stoppingMap.value[username] = true;
+	try {
+		await call("stop_relay", { username });
+		// 立即从本地列表移除，无需等待下次轮询
+		// Remove from local list immediately without waiting for next poll
+		sessions.value = sessions.value.filter((s) => s.username !== username);
+	} catch {
+		// 静默失败，下次轮询会自动同步 / Fail silently; next poll will sync
+	} finally {
+		stoppingMap.value[username] = false;
 	}
+}
 
-	// 解析后的会话（stream_state 已转换为统一格式）/ Parsed session with normalized stream_state
-	type ParsedSession = Omit<RelaySession, "stream_state"> & { stream_state: StreamState };
-
-	// 解析后的会话列表（stream_state 已转换为统一格式）
-	const sessions = ref<ParsedSession[]>([]);
-	const loading = ref(true);
-	const copiedMap = ref<Record<string, boolean>>({});
-	// 本地时钟 tick，每秒递增，用于驱动运行时间的响应式更新
-	// Local clock tick, increments every second to drive reactive uptime updates
-	const nowMs = ref(Date.now());
-	let pollTimer: ReturnType<typeof setInterval> | null = null;
-	let tickTimer: ReturnType<typeof setInterval> | null = null;
-
-	async function fetchSessions() {
-		try {
-			const raw = await call<RelaySession[]>("list_relay_sessions");
-			sessions.value = raw.map(s => ({ ...s, stream_state: parseStreamState(s.stream_state) }));
-		} catch {
-			// 静默失败 / Fail silently
-		} finally {
-			loading.value = false;
-		}
+function stateVariant(state: StreamState): Record<string, string> {
+	switch (state.type) {
+		case "live":
+			return {
+				backgroundColor: "rgb(20 83 45)",
+				color: "rgb(134 239 172)",
+				borderColor: "transparent",
+			};
+		case "connecting":
+			return {
+				backgroundColor: "rgb(23 37 84)",
+				color: "rgb(147 197 253)",
+				borderColor: "transparent",
+			};
+		case "error":
+			return {
+				backgroundColor: "rgb(127 29 29)",
+				color: "rgb(252 165 165)",
+				borderColor: "transparent",
+			};
+		default:
+			return {
+				backgroundColor: "rgb(39 39 42)",
+				color: "rgb(161 161 170)",
+				borderColor: "transparent",
+			};
 	}
+}
 
-	// 根据 created_at_ms 实时计算运行时长（秒），每秒更新
-	// Compute live uptime in seconds from created_at_ms, updated every second
-	function liveUptime(session: ParsedSession): number {
-		if (session.created_at_ms > 0) {
-			return Math.max(0, Math.floor((nowMs.value - session.created_at_ms) / 1000));
-		}
-		// 回退到服务端值（兼容旧数据）/ Fall back to server value (backward compat)
-		return session.uptime_secs;
+function stateLabel(state: StreamState): string {
+	switch (state.type) {
+		case "live":
+			return t("relay.state.live");
+		case "offline":
+			return state.status || t("relay.state.offline");
+		case "connecting":
+			return t("relay.state.connecting");
+		case "error":
+			return t("relay.state.error");
+		default:
+			return state.type;
 	}
+}
 
-	function formatUptime(secs: number): string {
-		if (secs < 60) return `${secs}s`;
-		if (secs < 3600) return `${Math.floor(secs / 60)}m ${secs % 60}s`;
-		const h = Math.floor(secs / 3600);
-		const m = Math.floor((secs % 3600) / 60);
-		return `${h}h ${m}m`;
-	}
+const totalConnections = computed(() =>
+	sessions.value.reduce((sum, s) => sum + s.active_connections, 0),
+);
+const exampleUrl = computed(() => `${window.location.origin}/stream/{modelname}`);
 
-	function getStreamUrl(session: ParsedSession): string {
-		return `${window.location.origin}${session.stream_url}`;
-	}
+onMounted(() => {
+	fetchSessions();
+	// 每 5 秒轮询一次会话列表（仅更新状态/连接数，运行时间由本地计时器驱动）
+	// Poll session list every 5s (only updates state/connections; uptime driven by local timer)
+	pollTimer = setInterval(fetchSessions, 5000);
+	// 每秒更新本地时钟，驱动运行时间实时刷新
+	// Update local clock every second to drive live uptime refresh
+	tickTimer = setInterval(() => {
+		nowMs.value = Date.now();
+	}, 1000);
+});
 
-	async function copyUrl(username: string, url: string) {
-		try {
-			await copyToClipboard(url);
-			copiedMap.value[username] = true;
-			setTimeout(() => {
-				copiedMap.value[username] = false;
-			}, 2000);
-		} catch {}
-	}
-
-	const stoppingMap = ref<Record<string, boolean>>({});
-
-	async function stopRelay(username: string) {
-		stoppingMap.value[username] = true;
-		try {
-			await call("stop_relay", { username });
-			// 立即从本地列表移除，无需等待下次轮询
-			// Remove from local list immediately without waiting for next poll
-			sessions.value = sessions.value.filter(s => s.username !== username);
-		} catch {
-			// 静默失败，下次轮询会自动同步 / Fail silently; next poll will sync
-		} finally {
-			stoppingMap.value[username] = false;
-		}
-	}
-
-	function stateVariant(state: StreamState): Record<string, string> {
-		switch (state.type) {
-			case "live":       return { backgroundColor: "rgb(20 83 45)",   color: "rgb(134 239 172)", borderColor: "transparent" };
-			case "connecting": return { backgroundColor: "rgb(23 37 84)",   color: "rgb(147 197 253)", borderColor: "transparent" };
-			case "error":      return { backgroundColor: "rgb(127 29 29)",  color: "rgb(252 165 165)", borderColor: "transparent" };
-			default:           return { backgroundColor: "rgb(39 39 42)",   color: "rgb(161 161 170)", borderColor: "transparent" };
-		}
-	}
-
-	function stateLabel(state: StreamState): string {
-		switch (state.type) {
-			case "live": return t("relay.state.live");
-			case "offline": return state.status || t("relay.state.offline");
-			case "connecting": return t("relay.state.connecting");
-			case "error": return t("relay.state.error");
-			default: return state.type;
-		}
-	}
-
-	const totalConnections = computed(() =>
-		sessions.value.reduce((sum, s) => sum + s.active_connections, 0)
-	);
-	const exampleUrl = computed(() => `${window.location.origin}/stream/{modelname}`);
-
-	onMounted(() => {
-		fetchSessions();
-		// 每 5 秒轮询一次会话列表（仅更新状态/连接数，运行时间由本地计时器驱动）
-		// Poll session list every 5s (only updates state/connections; uptime driven by local timer)
-		pollTimer = setInterval(fetchSessions, 5000);
-		// 每秒更新本地时钟，驱动运行时间实时刷新
-		// Update local clock every second to drive live uptime refresh
-		tickTimer = setInterval(() => { nowMs.value = Date.now(); }, 1000);
-	});
-
-	onUnmounted(() => {
-		if (pollTimer) clearInterval(pollTimer);
-		if (tickTimer) clearInterval(tickTimer);
-	});
+onUnmounted(() => {
+	if (pollTimer) clearInterval(pollTimer);
+	if (tickTimer) clearInterval(tickTimer);
+});
 </script>
 
 <template>
 	<div class="flex flex-col gap-5 px-6 pt-6 pb-6">
-		<header>
+		<!-- 固定页头（-mx-6 px-6 让底色与底边满宽铺到容器边）/
+		     Pinned header (-mx-6 px-6 gives background + bottom border full width) -->
+		<header class="bg-background sticky top-0 z-20 -mx-6 border-b px-6 pb-4">
 			<h1 class="text-xl font-bold mb-0.5">{{ t("relay.title") }}</h1>
 			<p class="text-sm text-muted-foreground">
-				{{ t("relay.subtitle", { streams: sessions.length, connections: totalConnections }) }}
+				{{
+					t("relay.subtitle", { streams: sessions.length, connections: totalConnections })
+				}}
 			</p>
 		</header>
 
 		<!-- 转发流提示 / Relay hint -->
-		<div class="rounded-lg border border-blue-900/40 bg-blue-950/20 px-4 py-3 text-sm text-blue-300/80">
+		<div
+			class="rounded-lg border border-blue-900/40 bg-blue-950/20 px-4 py-3 text-sm text-blue-300/80"
+		>
 			<p>{{ t("relay.hint") }}</p>
-			<p class="mt-1 font-mono text-xs text-blue-400/60">
+			<!-- 示例 URL 为不可断行长串，break-all 防止窄屏溢出边框 /
+			     The example URL is an unbreakable string — break-all keeps it inside the box on narrow screens -->
+			<p class="mt-1 font-mono text-xs text-blue-400/60 break-all">
 				{{ exampleUrl }}
+			</p>
+			<p class="mt-1 text-xs text-blue-400/60 break-all">
+				{{ t("relay.hintParams") }}
 			</p>
 		</div>
 
@@ -217,12 +266,11 @@
 			<p class="text-xs">{{ t("relay.noSessionsHint", { modelname: "{modelname}" }) }}</p>
 		</div>
 
-		<div
-			v-else
-			class="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-3.5"
-		>
+		<div v-else class="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-3.5">
 			<Card
-				v-for="session in [...sessions].sort((a, b) => a.username.localeCompare(b.username))"
+				v-for="session in [...sessions].sort((a, b) =>
+					a.username.localeCompare(b.username),
+				)"
 				:key="session.username"
 				class="overflow-hidden py-0"
 				:class="{
@@ -237,31 +285,54 @@
 						<div class="flex items-center gap-2 min-w-0">
 							<!-- 状态图标 / State icon -->
 							<component
-								:is="session.stream_state.type === 'live' ? Wifi
-									: session.stream_state.type === 'connecting' ? Loader
-									: session.stream_state.type === 'error' ? AlertCircle
-									: WifiOff"
+								:is="
+									session.stream_state.type === 'live'
+										? Wifi
+										: session.stream_state.type === 'connecting'
+											? Loader
+											: session.stream_state.type === 'error'
+												? AlertCircle
+												: WifiOff
+								"
 								class="size-4 shrink-0"
 								:class="{
-									'text-green-400 animate-pulse': session.stream_state.type === 'live',
-									'text-blue-400 animate-spin': session.stream_state.type === 'connecting',
+									'text-green-400 animate-pulse':
+										session.stream_state.type === 'live',
+									'text-blue-400 animate-spin':
+										session.stream_state.type === 'connecting',
 									'text-red-400': session.stream_state.type === 'error',
 									'text-zinc-500': session.stream_state.type === 'offline',
 								}"
 							/>
-							<span class="font-semibold text-sm truncate">{{ session.username }}</span>
+							<span class="font-semibold text-sm truncate">{{
+								session.username
+							}}</span>
 						</div>
 						<div class="flex items-center gap-1.5 shrink-0">
 							<!-- 主播真实状态（后端实时查询）/ Streamer real status (real-time from backend) -->
 							<Badge
 								variant="outline"
-								:style="streamerStatusStyle(session.streamer_is_online, session.streamer_status)"
+								:style="
+									streamerStatusStyle(
+										session.streamer_is_online,
+										session.streamer_status,
+									)
+								"
 								class="text-xs"
 							>
-								{{ streamerStatusLabel(session.streamer_is_online, session.streamer_status) }}
+								{{
+									streamerStatusLabel(
+										session.streamer_is_online,
+										session.streamer_status,
+									)
+								}}
 							</Badge>
 							<!-- 转发流内部状态 / Relay stream internal state -->
-							<Badge variant="outline" :style="stateVariant(session.stream_state)" class="text-xs">
+							<Badge
+								variant="outline"
+								:style="stateVariant(session.stream_state)"
+								class="text-xs"
+							>
 								{{ stateLabel(session.stream_state) }}
 							</Badge>
 						</div>
@@ -273,7 +344,9 @@
 							<Radio class="size-3" />
 							{{ t("relay.connections", { n: session.active_connections }) }}
 						</span>
-						<span>{{ t("relay.uptime", { t: formatUptime(liveUptime(session)) }) }}</span>
+						<span>{{
+							t("relay.uptime", { t: formatUptime(liveUptime(session)) })
+						}}</span>
 					</div>
 
 					<!-- 流地址 + 复制按钮 / Stream URL + copy button -->
@@ -291,7 +364,10 @@
 							:title="t('relay.copyUrl')"
 							@click="copyUrl(session.username, getStreamUrl(session))"
 						>
-							<Check v-if="copiedMap[session.username]" class="size-3.5 text-green-400" />
+							<Check
+								v-if="copiedMap[session.username]"
+								class="size-3.5 text-green-400"
+							/>
 							<Copy v-else class="size-3.5" />
 						</Button>
 						<Button
@@ -302,7 +378,10 @@
 							:disabled="stoppingMap[session.username]"
 							@click="stopRelay(session.username)"
 						>
-							<Loader v-if="stoppingMap[session.username]" class="size-3.5 animate-spin" />
+							<Loader
+								v-if="stoppingMap[session.username]"
+								class="size-3.5 animate-spin"
+							/>
 							<Square v-else class="size-3.5" />
 						</Button>
 					</div>

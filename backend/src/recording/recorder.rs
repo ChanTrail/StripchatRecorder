@@ -33,12 +33,12 @@ use tokio::sync::mpsc;
 /// 单个录制会话的状态 / State of a single recording session
 #[derive(Debug, Clone)]
 pub struct RecordingSession {
-    /// 录制会话目录路径（存放 .ts 分片）/ Recording session directory path (stores .ts segments)
-    pub dir_path: PathBuf,
-    /// 录制开始时间 / Recording start time
-    pub started_at: chrono::DateTime<chrono::Local>,
-    /// 停止录制的信号发送端 / Sender to signal recording stop
-    stop_tx: mpsc::Sender<()>,
+	/// 录制会话目录路径（存放 .ts 分片）/ Recording session directory path (stores .ts segments)
+	pub dir_path: PathBuf,
+	/// 录制开始时间 / Recording start time
+	pub started_at: chrono::DateTime<chrono::Local>,
+	/// 停止录制的信号发送端 / Sender to signal recording stop
+	stop_tx: mpsc::Sender<()>,
 }
 
 /// "录制结束/轮转 → 后处理接手"交接状态的 RAII 守卫：drop 时把目录从 waiting_merge_dirs 移除。
@@ -48,48 +48,48 @@ pub struct RecordingSession {
 /// removes the directory from waiting_merge_dirs on drop. Covers normal return, the
 /// empty-pipeline early return and panics, so the handoff state can never leak.
 struct HandoffGuard {
-    manager: Arc<RecorderManager>,
-    dir: PathBuf,
+	manager: Arc<RecorderManager>,
+	dir: PathBuf,
 }
 
 impl Drop for HandoffGuard {
-    fn drop(&mut self) {
-        self.manager.waiting_merge_dirs.write().remove(&self.dir);
-    }
+	fn drop(&mut self) {
+		self.manager.waiting_merge_dirs.write().remove(&self.dir);
+	}
 }
 
 /// 录制管理器，管理所有主播的录制会话。
 /// Recording manager that manages all streamer recording sessions.
 pub struct RecorderManager {
-    /// 应用状态 / Application state
-    state: Arc<AppState>,
-    /// 活跃录制会话表（用户名 -> 会话）/ Active recording sessions (username -> session)
-    sessions: RwLock<HashMap<String, RecordingSession>>,
-    /// 自然结束（非手动停止）的主播集合，用于触发自动重录 / Streamers that stopped naturally (not manually), for auto-restart
-    pub naturally_stopped: RwLock<HashSet<String>>,
-    /// 正在手动停止录制的主播集合 / Streamers currently being manually stopped
-    manually_stopping: RwLock<HashSet<String>>,
-    /// 各 CDN 节点的首选 TLD 缓存（跨会话共享）/ Preferred TLD cache per CDN node (shared across sessions)
-    preferred_tld_by_node: Arc<parking_lot::Mutex<HashMap<String, String>>>,
-    /// 正在合并的会话目录集合 / Set of session directories currently being merged
-    pub merging_dirs: RwLock<HashSet<PathBuf>>,
-    /// 等待合并的会话目录集合 / Set of session directories waiting to merge
-    pub waiting_merge_dirs: RwLock<HashSet<PathBuf>>,
-    /// 活跃录制会话的实时分片统计（video_path -> (downloaded, failed)）
-    /// Real-time segment stats for active sessions (video_path -> (downloaded, failed))
-    pub segment_stats: RwLock<HashMap<String, (u64, u64)>>,
+	/// 应用状态 / Application state
+	state: Arc<AppState>,
+	/// 活跃录制会话表（用户名 -> 会话）/ Active recording sessions (username -> session)
+	sessions: RwLock<HashMap<String, RecordingSession>>,
+	/// 自然结束（非手动停止）的主播集合，用于触发自动重录 / Streamers that stopped naturally (not manually), for auto-restart
+	pub naturally_stopped: RwLock<HashSet<String>>,
+	/// 正在手动停止录制的主播集合 / Streamers currently being manually stopped
+	manually_stopping: RwLock<HashSet<String>>,
+	/// 各 CDN 节点的首选 TLD 缓存（跨会话共享）/ Preferred TLD cache per CDN node (shared across sessions)
+	preferred_tld_by_node: Arc<parking_lot::Mutex<HashMap<String, String>>>,
+	/// 正在合并的会话目录集合 / Set of session directories currently being merged
+	pub merging_dirs: RwLock<HashSet<PathBuf>>,
+	/// 等待合并的会话目录集合 / Set of session directories waiting to merge
+	pub waiting_merge_dirs: RwLock<HashSet<PathBuf>>,
+	/// 活跃录制会话的实时分片统计（video_path -> (downloaded, failed)）
+	/// Real-time segment stats for active sessions (video_path -> (downloaded, failed))
+	pub segment_stats: RwLock<HashMap<String, (u64, u64)>>,
 }
 
 /// 响应式播放列表刷新的结果 / Outcome of a reactive playlist refresh
 enum PlaylistRefresh {
-    /// 拿到（新或相同但经验证可用的）播放列表 URL / Got a playlist URL (new, or identical-but-verified)
-    Swapped(String),
-    /// 主播当前不可录制（离线/私密等）/ Streamer currently not recordable (offline/private etc.)
-    NotRecordable(String),
-    /// 可录制但没有返回播放列表 URL（附带当前状态文本）/ Recordable but no playlist URL returned (carries current status text)
-    NoUrl(String),
-    /// 刷新请求本身失败（附带错误文本）/ The refresh request itself failed (carries error text)
-    Failed(String),
+	/// 拿到（新或相同但经验证可用的）播放列表 URL / Got a playlist URL (new, or identical-but-verified)
+	Swapped(String),
+	/// 主播当前不可录制（离线/私密等）/ Streamer currently not recordable (offline/private etc.)
+	NotRecordable(String),
+	/// 可录制但没有返回播放列表 URL（附带当前状态文本）/ Recordable but no playlist URL returned (carries current status text)
+	NoUrl(String),
+	/// 刷新请求本身失败（附带错误文本）/ The refresh request itself failed (carries error text)
+	Failed(String),
 }
 
 /// 响应式播放列表刷新：先试轻量 `get_playlist_url`（CDN TLD 竞速，约 1s 完成）
@@ -109,94 +109,94 @@ enum PlaylistRefresh {
 /// not-recordable and exits cleanly instead of hot-looping on a dead URL
 /// every ~300ms). Fast-path failure also falls back to the slow path.
 async fn refresh_playlist_target(
-    api: &StripchatApi,
-    username: &str,
-    model_id: Option<i64>,
-    current_url: &str,
+	api: &StripchatApi,
+	username: &str,
+	model_id: Option<i64>,
+	current_url: &str,
 ) -> PlaylistRefresh {
-    // 快路径：model_id 已知且拿到**不同** URL 才算命中
-    // Fast path: only a DIFFERENT url (with known model_id) counts
-    if let Some(mid) = model_id
-        && let Ok(url) = api.get_playlist_url(username, mid).await
-        && url != current_url
-    {
-        return PlaylistRefresh::Swapped(url);
-    }
-    // 慢路径兜底：cam API 往返换取状态诊断 / Slow fallback: cam-API roundtrip for status diagnostics
-    match api.get_stream_info(username, true, model_id, false).await {
-        Ok(info) => match info.playlist_url {
-            Some(url) => PlaylistRefresh::Swapped(url),
-            None if !info.is_recordable => PlaylistRefresh::NotRecordable(info.status),
-            None => PlaylistRefresh::NoUrl(info.status),
-        },
-        Err(e) => PlaylistRefresh::Failed(e.to_string()),
-    }
+	// 快路径：model_id 已知且拿到**不同** URL 才算命中
+	// Fast path: only a DIFFERENT url (with known model_id) counts
+	if let Some(mid) = model_id
+		&& let Ok(url) = api.get_playlist_url(username, mid).await
+		&& url != current_url
+	{
+		return PlaylistRefresh::Swapped(url);
+	}
+	// 慢路径兜底：cam API 往返换取状态诊断 / Slow fallback: cam-API roundtrip for status diagnostics
+	match api.get_stream_info(username, true, model_id, false).await {
+		Ok(info) => match info.playlist_url {
+			Some(url) => PlaylistRefresh::Swapped(url),
+			None if !info.is_recordable => PlaylistRefresh::NotRecordable(info.status),
+			None => PlaylistRefresh::NoUrl(info.status),
+		},
+		Err(e) => PlaylistRefresh::Failed(e.to_string()),
+	}
 }
 
 impl RecorderManager {
-    /// 创建新的录制管理器实例。
-    /// Create a new recorder manager instance.
-    pub fn new(state: Arc<AppState>) -> Arc<Self> {
-        Arc::new(Self {
-            state,
-            sessions: RwLock::new(HashMap::new()),
-            naturally_stopped: RwLock::new(HashSet::new()),
-            manually_stopping: RwLock::new(HashSet::new()),
-            preferred_tld_by_node: Arc::new(parking_lot::Mutex::new(HashMap::new())),
-            merging_dirs: RwLock::new(HashSet::new()),
-            waiting_merge_dirs: RwLock::new(HashSet::new()),
-            segment_stats: RwLock::new(HashMap::new()),
-        })
-    }
+	/// 创建新的录制管理器实例。
+	/// Create a new recorder manager instance.
+	pub fn new(state: Arc<AppState>) -> Arc<Self> {
+		Arc::new(Self {
+			state,
+			sessions: RwLock::new(HashMap::new()),
+			naturally_stopped: RwLock::new(HashSet::new()),
+			manually_stopping: RwLock::new(HashSet::new()),
+			preferred_tld_by_node: Arc::new(parking_lot::Mutex::new(HashMap::new())),
+			merging_dirs: RwLock::new(HashSet::new()),
+			waiting_merge_dirs: RwLock::new(HashSet::new()),
+			segment_stats: RwLock::new(HashMap::new()),
+		})
+	}
 
-    /// 判断指定主播是否正在录制。
-    /// Check if a specific streamer is currently being recorded.
-    pub fn is_recording(&self, username: &str) -> bool {
-        self.sessions.read().contains_key(username)
-    }
+	/// 判断指定主播是否正在录制。
+	/// Check if a specific streamer is currently being recorded.
+	pub fn is_recording(&self, username: &str) -> bool {
+		self.sessions.read().contains_key(username)
+	}
 
-    /// 获取 CDN TLD 缓存的共享引用（供 StripchatApi 使用）。
-    /// Get a shared reference to the CDN TLD cache (for use by StripchatApi).
-    pub fn cdn_tld_cache(&self) -> Arc<parking_lot::Mutex<HashMap<String, String>>> {
-        Arc::clone(&self.preferred_tld_by_node)
-    }
+	/// 获取 CDN TLD 缓存的共享引用（供 StripchatApi 使用）。
+	/// Get a shared reference to the CDN TLD cache (for use by StripchatApi).
+	pub fn cdn_tld_cache(&self) -> Arc<parking_lot::Mutex<HashMap<String, String>>> {
+		Arc::clone(&self.preferred_tld_by_node)
+	}
 
-    /// 获取当前应用设置。
-    /// Get the current application settings.
-    pub fn get_settings(&self) -> crate::config::app_state::Settings {
-        self.state.get_settings()
-    }
+	/// 获取当前应用设置。
+	/// Get the current application settings.
+	pub fn get_settings(&self) -> crate::config::app_state::Settings {
+		self.state.get_settings()
+	}
 
-    /// 获取应用状态的共享引用（供 recording 模块内其他子模块，如启动扫描，复用）。
-    /// Get a shared reference to the application state (for reuse by other recording
-    /// submodules, e.g. startup scanning).
-    pub fn app_state(&self) -> Arc<AppState> {
-        Arc::clone(&self.state)
-    }
+	/// 获取应用状态的共享引用（供 recording 模块内其他子模块，如启动扫描，复用）。
+	/// Get a shared reference to the application state (for reuse by other recording
+	/// submodules, e.g. startup scanning).
+	pub fn app_state(&self) -> Arc<AppState> {
+		Arc::clone(&self.state)
+	}
 
-    /// 判断指定目录是否处于"录制结束 → 后处理接手"的交接状态（在 waiting_merge_dirs 中）。
-    /// Check whether a directory is in the "recording ended → post-processing takes over"
-    /// handoff state (present in waiting_merge_dirs).
-    pub fn is_pending_handoff(&self, path: &std::path::Path) -> bool {
-        self.waiting_merge_dirs.read().contains(path)
-    }
+	/// 判断指定目录是否处于"录制结束 → 后处理接手"的交接状态（在 waiting_merge_dirs 中）。
+	/// Check whether a directory is in the "recording ended → post-processing takes over"
+	/// handoff state (present in waiting_merge_dirs).
+	pub fn is_pending_handoff(&self, path: &std::path::Path) -> bool {
+		self.waiting_merge_dirs.read().contains(path)
+	}
 
-    /// 判断指定路径是否被某个活跃录制会话锁定（路径在会话目录下）。
-    /// Check if a path is locked by an active recording session (path is under a session directory).
-    pub fn is_file_locked(&self, path: &std::path::Path) -> bool {
-        self.sessions
-            .read()
-            .values()
-            .any(|s| path.starts_with(&s.dir_path))
-    }
+	/// 判断指定路径是否被某个活跃录制会话锁定（路径在会话目录下）。
+	/// Check if a path is locked by an active recording session (path is under a session directory).
+	pub fn is_file_locked(&self, path: &std::path::Path) -> bool {
+		self.sessions
+			.read()
+			.values()
+			.any(|s| path.starts_with(&s.dir_path))
+	}
 
-    /// 获取所有活跃录制会话的目录路径和开始时间列表。
-    /// Get a list of all active recording session directory paths and start times.
-    pub fn get_active_sessions(&self) -> Vec<(PathBuf, chrono::DateTime<chrono::Local>)> {
-        self.sessions
-            .read()
-            .values()
-            .map(|s| (s.dir_path.clone(), s.started_at))
-            .collect()
-    }
+	/// 获取所有活跃录制会话的目录路径和开始时间列表。
+	/// Get a list of all active recording session directory paths and start times.
+	pub fn get_active_sessions(&self) -> Vec<(PathBuf, chrono::DateTime<chrono::Local>)> {
+		self.sessions
+			.read()
+			.values()
+			.map(|s| (s.dir_path.clone(), s.started_at))
+			.collect()
+	}
 }

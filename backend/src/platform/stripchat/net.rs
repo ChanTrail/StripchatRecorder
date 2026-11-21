@@ -32,11 +32,11 @@ const EMULATION: wreq_util::Profile = wreq_util::Emulation::Chrome149;
 /// to TLS; `domain()` already excludes IP literals — ECH is meaningless for
 /// IP hosts).
 pub(crate) fn https_host(url: &str) -> Option<String> {
-    let u = reqwest::Url::parse(url).ok()?;
-    if u.scheme() != "https" {
-        return None;
-    }
-    u.domain().map(|s| s.to_string())
+	let u = reqwest::Url::parse(url).ok()?;
+	if u.scheme() != "https" {
+		return None;
+	}
+	u.domain().map(|s| s.to_string())
 }
 
 /// 构建用于 CDN 分片下载的 HTTP 客户端（wreq + Chrome 指纹）。
@@ -47,31 +47,31 @@ pub(crate) fn https_host(url: &str) -> Option<String> {
 /// target host pins to CF anycast IPs — called by
 /// [`crate::ech::EchClients`]' per-target rebuild closure.
 pub(super) fn build_client(
-    proxy_url: Option<&str>,
-    ech: Option<&crate::ech::EchTarget>,
+	proxy_url: Option<&str>,
+	ech: Option<&crate::ech::EchTarget>,
 ) -> Result<wreq::Client> {
-    let mut builder = wreq::Client::builder()
-        .emulation(EMULATION)
-        .user_agent(USER_AGENT)
-        .timeout(std::time::Duration::from_secs(30))
-        .tcp_keepalive(std::time::Duration::from_secs(15))
-        .connection_verbose(false);
+	let mut builder = wreq::Client::builder()
+		.emulation(EMULATION)
+		.user_agent(USER_AGENT)
+		.timeout(std::time::Duration::from_secs(30))
+		.tcp_keepalive(std::time::Duration::from_secs(15))
+		.connection_verbose(false);
 
-    if let Some(proxy) = proxy_url
-        && !proxy.is_empty()
-    {
-        builder =
-            builder.proxy(wreq::Proxy::all(proxy).map_err(|e| AppError::Other(e.to_string()))?);
-    } else {
-        builder = builder.no_proxy();
-    }
-    // ECH 的 tls_options 整组替换，必须在 emulation() 之后 /
-    // ECH's tls_options replace the whole group — must come after emulation()
-    if let Some(t) = ech {
-        builder = crate::ech::apply_ech(builder, t);
-    }
+	if let Some(proxy) = proxy_url
+		&& !proxy.is_empty()
+	{
+		builder =
+			builder.proxy(wreq::Proxy::all(proxy).map_err(|e| AppError::Other(e.to_string()))?);
+	} else {
+		builder = builder.no_proxy();
+	}
+	// ECH 的 tls_options 整组替换，必须在 emulation() 之后 /
+	// ECH's tls_options replace the whole group — must come after emulation()
+	if let Some(t) = ech {
+		builder = crate::ech::apply_ech(builder, t);
+	}
 
-    builder.build().map_err(|e| AppError::Other(e.to_string()))
+	builder.build().map_err(|e| AppError::Other(e.to_string()))
 }
 
 /// API 客户端 HTTP/2 PING 的发送间隔（连接空闲时也发送）。
@@ -106,39 +106,39 @@ const API_H2_PING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 /// [`wreq::Http2Options`] detect dead idle conns (a runtime behavior, not part
 /// of the handshake fingerprint).
 pub(super) fn build_api_client(
-    proxy_url: Option<&str>,
-    ech: Option<&crate::ech::EchTarget>,
+	proxy_url: Option<&str>,
+	ech: Option<&crate::ech::EchTarget>,
 ) -> Result<wreq::Client> {
-    // 在模拟档的完整 H2 指纹上只补 keep-alive 参数：`.http2_options()` 是
-    // 整组替换，不能拿来叠默认值——会抹掉 Chrome 的 H2 指纹。PING 帧是
-    // 运行时行为，不进握手指纹。
-    // Patch only the keep-alive fields on the profile's full H2
-    // fingerprint: `.http2_options()` replaces the whole group — layering
-    // builder defaults over it would erase the Chrome H2 fingerprint.
-    // PING frames are runtime behavior, not part of the handshake fingerprint.
-    let mut emulation = wreq::IntoEmulation::into_emulation(EMULATION);
-    if let Some(h2) = &mut emulation.http2_options {
-        h2.keep_alive_interval = Some(API_H2_PING_INTERVAL);
-        h2.keep_alive_timeout = API_H2_PING_TIMEOUT;
-        h2.keep_alive_while_idle = true;
-    }
-    let mut builder = wreq::Client::builder()
-        .emulation(emulation)
-        .user_agent(USER_AGENT)
-        .timeout(std::time::Duration::from_secs(30))
-        .tcp_keepalive(std::time::Duration::from_secs(15));
-    if let Some(proxy) = proxy_url
-        && !proxy.is_empty()
-    {
-        builder =
-            builder.proxy(wreq::Proxy::all(proxy).map_err(|e| AppError::Other(e.to_string()))?);
-    } else {
-        builder = builder.no_proxy();
-    }
-    if let Some(t) = ech {
-        builder = crate::ech::apply_ech(builder, t);
-    }
-    builder.build().map_err(|e| AppError::Other(e.to_string()))
+	// 在模拟档的完整 H2 指纹上只补 keep-alive 参数：`.http2_options()` 是
+	// 整组替换，不能拿来叠默认值——会抹掉 Chrome 的 H2 指纹。PING 帧是
+	// 运行时行为，不进握手指纹。
+	// Patch only the keep-alive fields on the profile's full H2
+	// fingerprint: `.http2_options()` replaces the whole group — layering
+	// builder defaults over it would erase the Chrome H2 fingerprint.
+	// PING frames are runtime behavior, not part of the handshake fingerprint.
+	let mut emulation = wreq::IntoEmulation::into_emulation(EMULATION);
+	if let Some(h2) = &mut emulation.http2_options {
+		h2.keep_alive_interval = Some(API_H2_PING_INTERVAL);
+		h2.keep_alive_timeout = API_H2_PING_TIMEOUT;
+		h2.keep_alive_while_idle = true;
+	}
+	let mut builder = wreq::Client::builder()
+		.emulation(emulation)
+		.user_agent(USER_AGENT)
+		.timeout(std::time::Duration::from_secs(30))
+		.tcp_keepalive(std::time::Duration::from_secs(15));
+	if let Some(proxy) = proxy_url
+		&& !proxy.is_empty()
+	{
+		builder =
+			builder.proxy(wreq::Proxy::all(proxy).map_err(|e| AppError::Other(e.to_string()))?);
+	} else {
+		builder = builder.no_proxy();
+	}
+	if let Some(t) = ech {
+		builder = crate::ech::apply_ech(builder, t);
+	}
+	builder.build().map_err(|e| AppError::Other(e.to_string()))
 }
 
 /// 格式化 HTTP 发送错误，带上完整 source 原因链：`top → source → ...`。
@@ -151,12 +151,12 @@ pub(super) fn build_api_client(
 /// reset, timeout, or proxy refusal. Generic over `Error` — reqwest and
 /// wreq share the same implementation.
 pub(crate) fn format_send_error(e: &(impl std::error::Error + ?Sized)) -> String {
-    let mut msg = e.to_string();
-    let mut src = std::error::Error::source(e);
-    while let Some(s) = src {
-        msg.push_str(" → ");
-        msg.push_str(&s.to_string());
-        src = s.source();
-    }
-    msg
+	let mut msg = e.to_string();
+	let mut src = std::error::Error::source(e);
+	while let Some(s) = src {
+		msg.push_str(" → ");
+		msg.push_str(&s.to_string());
+		src = s.source();
+	}
+	msg
 }

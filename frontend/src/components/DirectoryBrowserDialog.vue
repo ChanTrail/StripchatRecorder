@@ -29,48 +29,57 @@
     with larger touch targets. Desktop: original centered Dialog.
 -->
 <script setup lang="ts">
-	import { nextTick, watch } from "vue";
-	import { Button } from "@/components/ui/button";
-	import { Input } from "@/components/ui/input";
-	import {
-		Dialog,
-		DialogContent,
-		DialogHeader,
-		DialogTitle,
-	} from "@/components/ui/dialog";
-	import { useScrollbar } from "@/composables/useScrollbar";
-	import { useDirectoryBrowser } from "@/composables/useDirectoryBrowser";
-	import { useMobileLayout } from "@/composables/useMobileLayout";
-	import { ref } from "vue";
-	import { Folder, FolderPlus, ChevronUp, RefreshCw, Loader2, HardDrive, ArrowLeft, ChevronRight } from "@lucide/vue";
-	import { useI18n } from "vue-i18n";
+import { nextTick, watch } from "vue";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { useScrollbar } from "@/composables/useScrollbar";
+import { useDirectoryBrowser } from "@/composables/useDirectoryBrowser";
+import { useMobileLayout } from "@/composables/useMobileLayout";
+import { ref } from "vue";
+import {
+	Folder,
+	FolderPlus,
+	ChevronUp,
+	RefreshCw,
+	Loader2,
+	HardDrive,
+	ArrowLeft,
+	ChevronRight,
+} from "@lucide/vue";
+import { useI18n } from "vue-i18n";
 
-	const { t } = useI18n();
-	const { isMobile } = useMobileLayout();
-	const {
-		state,
-		enterDir,
-		goUp,
-		goToInputPath,
-		refresh,
-		showDrives,
-		toggleNewFolder,
-		createFolder,
-		confirmSelect,
-		cancel,
-	} = useDirectoryBrowser();
+const { t } = useI18n();
+const { isMobile } = useMobileLayout();
+const {
+	state,
+	enterDir,
+	goUp,
+	goToInputPath,
+	refresh,
+	showDrives,
+	toggleNewFolder,
+	createFolder,
+	confirmSelect,
+	cancel,
+} = useDirectoryBrowser();
 
-	const scrollEl = ref<HTMLElement | null>(null);
-	const mobileScrollEl = ref<HTMLElement | null>(null);
-	useScrollbar(scrollEl);
-	useScrollbar(mobileScrollEl);
+const scrollEl = ref<HTMLElement | null>(null);
+const mobileScrollEl = ref<HTMLElement | null>(null);
+useScrollbar(scrollEl);
+useScrollbar(mobileScrollEl);
 
-	// 展开新建文件夹表单时自动聚焦输入框 / Auto-focus the input when the new-folder form expands
-	watch(() => state.showNewFolder, async (show) => {
+// 展开新建文件夹表单时自动聚焦输入框 / Auto-focus the input when the new-folder form expands
+watch(
+	() => state.showNewFolder,
+	async (show) => {
 		if (!show) return;
 		await nextTick();
-		(document.getElementById("dir-browser-new-folder-input") as HTMLInputElement | null)?.focus();
-	});
+		(
+			document.getElementById("dir-browser-new-folder-input") as HTMLInputElement | null
+		)?.focus();
+	},
+);
 </script>
 
 <template>
@@ -84,10 +93,7 @@
 		leave-from-class="translate-y-0"
 		leave-to-class="translate-y-full"
 	>
-		<div
-			v-if="state.visible"
-			class="fixed inset-0 z-50 flex flex-col bg-background"
-		>
+		<div v-if="state.visible" class="fixed inset-0 z-50 flex flex-col bg-background">
 			<!-- 顶部栏 / Top bar -->
 			<div class="flex items-center gap-3 px-3 pt-4 pb-3 shrink-0 border-b">
 				<button
@@ -106,7 +112,10 @@
 				</button>
 				<button
 					class="flex items-center justify-center size-10 rounded-full bg-muted text-foreground active:bg-accent transition-colors shrink-0"
-					:class="(state.isDrives || state.parentPath == null || state.loading) && 'opacity-40 pointer-events-none'"
+					:class="
+						(state.isDrives || state.parentPath == null || state.loading) &&
+						'opacity-40 pointer-events-none'
+					"
 					@click="goUp"
 				>
 					<ChevronUp class="size-5" />
@@ -123,7 +132,7 @@
 			<!-- 当前路径显示 + 路径跳转输入框 / Current path + path jump input -->
 			<div class="px-4 py-3 shrink-0 border-b bg-muted/40">
 				<p class="text-xs text-muted-foreground mb-2 truncate font-mono">
-					{{ state.isDrives ? t("dirBrowser.thisPc") : (state.currentPath || "—") }}
+					{{ state.isDrives ? t("dirBrowser.thisPc") : state.currentPath || "—" }}
 				</p>
 				<div class="flex items-center gap-2">
 					<Input
@@ -133,7 +142,12 @@
 						autocomplete="off"
 						@keyup.enter="goToInputPath"
 					/>
-					<Button size="default" class="h-10 px-4 shrink-0" variant="secondary" @click="goToInputPath">
+					<Button
+						size="default"
+						class="h-10 px-4 shrink-0"
+						variant="secondary"
+						@click="goToInputPath"
+					>
 						{{ t("dirBrowser.go") }}
 					</Button>
 				</div>
@@ -141,22 +155,37 @@
 
 			<!-- 目录/驱动器列表 / Directory or drive listing -->
 			<div ref="mobileScrollEl" class="flex-1 min-h-0 overflow-y-auto scrollbar-overlay">
-				<div v-if="state.loading" class="flex items-center justify-center h-full text-muted-foreground text-sm gap-2">
+				<div
+					v-if="state.loading"
+					class="flex items-center justify-center h-full text-muted-foreground text-sm gap-2"
+				>
 					<Loader2 class="size-5 animate-spin" />
 					{{ t("common.loading") }}
 				</div>
-				<p v-else-if="state.error" class="text-sm text-destructive px-4 py-4">{{ state.error }}</p>
-				<div v-else-if="state.dirs.length === 0" class="text-center text-muted-foreground text-sm py-12">
+				<p v-else-if="state.error" class="text-sm text-destructive px-4 py-4">
+					{{ state.error }}
+				</p>
+				<div
+					v-else-if="state.dirs.length === 0"
+					class="text-center text-muted-foreground text-sm py-12"
+				>
 					{{ t("dirBrowser.empty") }}
 				</div>
 				<ul v-else class="py-1">
-					<li v-for="d in state.dirs" :key="d.path" class="border-b border-border/40 last:border-0">
+					<li
+						v-for="d in state.dirs"
+						:key="d.path"
+						class="border-b border-border/40 last:border-0"
+					>
 						<button
 							type="button"
 							class="w-full flex items-center gap-3 px-4 py-3.5 text-sm active:bg-accent transition-colors text-left"
 							@click="enterDir(d)"
 						>
-							<HardDrive v-if="state.isDrives" class="size-5 text-muted-foreground shrink-0" />
+							<HardDrive
+								v-if="state.isDrives"
+								class="size-5 text-muted-foreground shrink-0"
+							/>
 							<Folder v-else class="size-5 text-amber-500 shrink-0" />
 							<span class="flex-1 truncate">{{ d.name }}</span>
 							<ChevronRight class="size-4 text-muted-foreground shrink-0" />
@@ -177,21 +206,39 @@
 						@keyup.enter="createFolder"
 						@keyup.esc="state.showNewFolder = false"
 					/>
-					<Button size="default" class="h-11 px-4 shrink-0" :disabled="!state.newFolderName.trim() || state.creatingFolder" @click="createFolder">
+					<Button
+						size="default"
+						class="h-11 px-4 shrink-0"
+						:disabled="!state.newFolderName.trim() || state.creatingFolder"
+						@click="createFolder"
+					>
 						{{ t("common.confirm") }}
 					</Button>
-					<Button variant="ghost" size="default" class="h-11 px-3 shrink-0" @click="state.showNewFolder = false">
+					<Button
+						variant="ghost"
+						size="default"
+						class="h-11 px-3 shrink-0"
+						@click="state.showNewFolder = false"
+					>
 						{{ t("common.cancel") }}
 					</Button>
 				</div>
-				<Button v-else variant="ghost" size="default" class="h-11 w-full justify-start text-muted-foreground" @click="toggleNewFolder">
+				<Button
+					v-else
+					variant="ghost"
+					size="default"
+					class="h-11 w-full justify-start text-muted-foreground"
+					@click="toggleNewFolder"
+				>
 					<FolderPlus class="size-4 mr-2" />
 					{{ t("dirBrowser.newFolder") }}
 				</Button>
 			</div>
 
 			<!-- 底部确认栏 / Bottom confirm bar -->
-			<div class="flex items-center gap-3 px-4 py-4 border-t shrink-0 pb-[calc(1rem+env(safe-area-inset-bottom,0px))]">
+			<div
+				class="flex items-center gap-3 px-4 py-4 border-t shrink-0 pb-[calc(1rem+env(safe-area-inset-bottom,0px))]"
+			>
 				<Button
 					size="default"
 					class="flex-1 h-12 text-base"
@@ -206,7 +253,7 @@
 
 	<!-- ── 桌面端：居中 Dialog / Desktop: centered Dialog ── -->
 	<Dialog v-else :open="state.visible" @update:open="state.visible = $event">
-		<DialogContent class="p-0 flex flex-col w-full max-w-lg" style="height: 32rem;">
+		<DialogContent class="p-0 flex flex-col w-full max-w-lg" style="height: 32rem">
 			<DialogHeader class="px-4 pt-4 pb-2 shrink-0">
 				<DialogTitle class="text-sm font-semibold">{{ t("dirBrowser.title") }}</DialogTitle>
 			</DialogHeader>
@@ -254,12 +301,20 @@
 
 			<!-- 目录/驱动器列表 / Directory or drive listing -->
 			<div ref="scrollEl" class="flex-1 min-h-0 overflow-y-auto scrollbar-overlay border-t">
-				<div v-if="state.loading" class="flex items-center justify-center h-full text-muted-foreground text-sm gap-2">
+				<div
+					v-if="state.loading"
+					class="flex items-center justify-center h-full text-muted-foreground text-sm gap-2"
+				>
 					<Loader2 class="size-4 animate-spin" />
 					{{ t("common.loading") }}
 				</div>
-				<p v-else-if="state.error" class="text-sm text-destructive px-4 py-4">{{ state.error }}</p>
-				<div v-else-if="state.dirs.length === 0" class="text-center text-muted-foreground text-sm py-8">
+				<p v-else-if="state.error" class="text-sm text-destructive px-4 py-4">
+					{{ state.error }}
+				</p>
+				<div
+					v-else-if="state.dirs.length === 0"
+					class="text-center text-muted-foreground text-sm py-8"
+				>
 					{{ t("dirBrowser.empty") }}
 				</div>
 				<ul v-else class="py-1">
@@ -269,7 +324,10 @@
 							class="w-full flex items-center gap-2 px-4 py-1.5 text-sm hover:bg-accent transition-colors text-left"
 							@click="enterDir(d)"
 						>
-							<HardDrive v-if="state.isDrives" class="size-4 text-muted-foreground shrink-0" />
+							<HardDrive
+								v-if="state.isDrives"
+								class="size-4 text-muted-foreground shrink-0"
+							/>
 							<Folder v-else class="size-4 text-amber-500 shrink-0" />
 							<span class="truncate">{{ d.name }}</span>
 						</button>
@@ -289,14 +347,30 @@
 						@keyup.enter="createFolder"
 						@keyup.esc="state.showNewFolder = false"
 					/>
-					<Button size="sm" class="h-8" :disabled="!state.newFolderName.trim() || state.creatingFolder" @click="createFolder">
+					<Button
+						size="sm"
+						class="h-8"
+						:disabled="!state.newFolderName.trim() || state.creatingFolder"
+						@click="createFolder"
+					>
 						{{ t("common.confirm") }}
 					</Button>
-					<Button variant="ghost" size="sm" class="h-8" @click="state.showNewFolder = false">
+					<Button
+						variant="ghost"
+						size="sm"
+						class="h-8"
+						@click="state.showNewFolder = false"
+					>
 						{{ t("common.cancel") }}
 					</Button>
 				</div>
-				<Button v-else variant="ghost" size="sm" class="h-8 -ml-2 text-muted-foreground" @click="toggleNewFolder">
+				<Button
+					v-else
+					variant="ghost"
+					size="sm"
+					class="h-8 -ml-2 text-muted-foreground"
+					@click="toggleNewFolder"
+				>
 					<FolderPlus class="size-3.5 mr-1" />
 					{{ t("dirBrowser.newFolder") }}
 				</Button>
@@ -309,8 +383,14 @@
 					{{ state.isDrives ? t("dirBrowser.thisPc") : state.currentPath }}
 				</span>
 				<div class="flex items-center gap-2 shrink-0">
-					<Button variant="ghost" size="sm" @click="cancel">{{ t("dirBrowser.cancel") }}</Button>
-					<Button size="sm" :disabled="state.loading || !!state.error || state.isDrives" @click="confirmSelect">
+					<Button variant="ghost" size="sm" @click="cancel">{{
+						t("dirBrowser.cancel")
+					}}</Button>
+					<Button
+						size="sm"
+						:disabled="state.loading || !!state.error || state.isDrives"
+						@click="confirmSelect"
+					>
 						{{ t("dirBrowser.select") }}
 					</Button>
 				</div>

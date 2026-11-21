@@ -137,7 +137,7 @@ const canvasCursor = computed(() => {
 	if (isPanning.value) return "grabbing";
 	if (isMarquee.value) return "crosshair";
 	return "default";
-})
+});
 
 function onCanvasMousedown(e: MouseEvent) {
 	if ((e.target as HTMLElement).closest(".pipeline-node")) return;
@@ -267,7 +267,8 @@ onUnmounted(() => {
 function onGlobalKeydown(e: KeyboardEvent) {
 	if (e.key !== "Delete" && e.key !== "Backspace") return;
 	const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
-	if (tag === "input" || tag === "textarea" || (e.target as HTMLElement)?.isContentEditable) return;
+	if (tag === "input" || tag === "textarea" || (e.target as HTMLElement)?.isContentEditable)
+		return;
 	deleteSelectedNodes();
 }
 
@@ -286,14 +287,31 @@ function getNodeOutputTypes(moduleId: string): PortType[] {
 }
 
 /** 将 PipelineNodeCard 的端口事件转换为 PortRef 并转发给 usePortWiring / Forward PipelineNodeCard port events as a PortRef to usePortWiring */
-function onNodePortMousedown(e: MouseEvent, nodeId: string, portIndex: number, type: PortType, isOutput: boolean) {
+function onNodePortMousedown(
+	e: MouseEvent,
+	nodeId: string,
+	portIndex: number,
+	type: PortType,
+	isOutput: boolean,
+) {
 	onPortMousedown(e, { nodeId, portIndex, isOutput, type });
 }
-function onNodePortMouseup(e: MouseEvent, nodeId: string, portIndex: number, type: PortType, isOutput: boolean) {
+function onNodePortMouseup(
+	e: MouseEvent,
+	nodeId: string,
+	portIndex: number,
+	type: PortType,
+	isOutput: boolean,
+) {
 	onPortMouseup(e, { nodeId, portIndex, isOutput, type });
 }
 function onInputPortMousedown(e: MouseEvent) {
-	onPortMousedown(e, { nodeId: INPUT_NODE_ID, portIndex: 0, isOutput: true, type: "session_dir" });
+	onPortMousedown(e, {
+		nodeId: INPUT_NODE_ID,
+		portIndex: 0,
+		isOutput: true,
+		type: "session_dir",
+	});
 }
 function onInputPortMouseup(e: MouseEvent) {
 	onPortMouseup(e, { nodeId: INPUT_NODE_ID, portIndex: 0, isOutput: true, type: "session_dir" });
@@ -321,208 +339,282 @@ const inputPortConnected = computed(() =>
 		</div>
 
 		<template v-else>
-		<!-- 顶部工具栏 / Top toolbar -->
-		<header class="flex items-start justify-between gap-4 shrink-0 pb-4 bg-background sticky top-0 z-20 px-6 pt-6 border-b">
-			<div>
-				<h1 class="text-xl font-bold mb-0.5">{{ t("postprocess.title") }}</h1>
-				<p class="text-sm text-muted-foreground">{{ t("postprocess.description") }}</p>
-			</div>
-			<div class="flex items-center gap-2 shrink-0">
-				<button
-					class="flex items-center gap-1.5 px-2.5 py-1 text-xs border rounded-md transition-colors"
-					:class="snapToGrid
-						? 'bg-primary/15 border-primary/40 text-primary hover:bg-primary/25'
-						: 'text-muted-foreground border-border hover:bg-accent hover:text-foreground'"
-					:title="t('postprocess.snapToGrid')"
-					@click="snapToGrid = !snapToGrid"
-				>
-					<Grid2x2 class="size-3.5" />
-					{{ t("postprocess.snapToGrid") }}
-				</button>
-				<button
-					class="flex items-center gap-1.5 px-2.5 py-1 text-xs text-muted-foreground border rounded-md hover:bg-accent hover:text-foreground transition-colors"
-					:title="t('postprocess.fitView')"
-					@click="fitView(inputNodePos)"
-				>
-					<Maximize2 class="size-3.5" />
-					{{ t("postprocess.fitView") }}
-				</button>
-				<span class="text-sm text-muted-foreground">
-					{{ store.saving ? t("postprocess.saving") : t("postprocess.saved") }}
-				</span>
-			</div>
-		</header>
-
-		<!-- 画布区域 / Canvas area -->
-		<div
-			ref="canvasRef"
-			class="relative flex-1 overflow-hidden bg-[#0d0d0d] select-none"
-			:style="{
-				cursor: canvasCursor,
-				backgroundImage: 'radial-gradient(circle, #2a2a2a 1px, transparent 1px)',
-				backgroundSize: '24px 24px',
-			}"
-			@mousedown="onCanvasMousedown"
-			@contextmenu.prevent="openContextMenu"
-		>
-			<!-- 框选矩形覆盖层（z-50 确保在节点之上）/ Marquee selection overlay (z-50 on top of nodes) -->
-			<div
-				v-if="marquee.visible"
-				class="absolute pointer-events-none z-50 border border-primary/60 bg-primary/10"
-				:style="{
-					left: `${marquee.x}px`,
-					top: `${marquee.y}px`,
-					width: `${marquee.w}px`,
-					height: `${marquee.h}px`,
-				}"
-			/>
-			<!-- 变换层 / Transform layer -->
-			<div
-				class="absolute top-0 left-0 origin-top-left"
-				:style="{
-					transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
-				}"
+			<!-- 顶部工具栏 / Top toolbar -->
+			<header
+				class="flex items-start justify-between gap-4 shrink-0 pb-4 bg-background sticky top-0 z-20 px-6 pt-6 border-b"
 			>
-				<!-- SVG 连线层 / SVG wiring layer -->
-				<svg
-					class="absolute inset-0 overflow-visible pointer-events-none"
-					style="left:0;top:0;width:1px;height:1px;"
+				<div>
+					<h1 class="text-xl font-bold mb-0.5">{{ t("postprocess.title") }}</h1>
+					<p class="text-sm text-muted-foreground">{{ t("postprocess.description") }}</p>
+				</div>
+				<div class="flex items-center gap-2 shrink-0">
+					<button
+						class="flex items-center gap-1.5 px-2.5 py-1 text-xs border rounded-md transition-colors"
+						:class="
+							snapToGrid
+								? 'bg-primary/15 border-primary/40 text-primary hover:bg-primary/25'
+								: 'text-muted-foreground border-border hover:bg-accent hover:text-foreground'
+						"
+						:title="t('postprocess.snapToGrid')"
+						@click="snapToGrid = !snapToGrid"
+					>
+						<Grid2x2 class="size-3.5" />
+						{{ t("postprocess.snapToGrid") }}
+					</button>
+					<button
+						class="flex items-center gap-1.5 px-2.5 py-1 text-xs text-muted-foreground border rounded-md hover:bg-accent hover:text-foreground transition-colors"
+						:title="t('postprocess.fitView')"
+						@click="fitView(inputNodePos)"
+					>
+						<Maximize2 class="size-3.5" />
+						{{ t("postprocess.fitView") }}
+					</button>
+					<span class="text-sm text-muted-foreground">
+						{{ store.saving ? t("postprocess.saving") : t("postprocess.saved") }}
+					</span>
+				</div>
+			</header>
+
+			<!-- 画布区域 / Canvas area -->
+			<div
+				ref="canvasRef"
+				class="relative flex-1 overflow-hidden bg-[#0d0d0d] select-none"
+				:style="{
+					cursor: canvasCursor,
+					backgroundImage: 'radial-gradient(circle, #2a2a2a 1px, transparent 1px)',
+					backgroundSize: '24px 24px',
+				}"
+				@mousedown="onCanvasMousedown"
+				@contextmenu.prevent="openContextMenu"
+			>
+				<!-- 框选矩形覆盖层（z-50 确保在节点之上）/ Marquee selection overlay (z-50 on top of nodes) -->
+				<div
+					v-if="marquee.visible"
+					class="absolute pointer-events-none z-50 border border-primary/60 bg-primary/10"
+					:style="{
+						left: `${marquee.x}px`,
+						top: `${marquee.y}px`,
+						width: `${marquee.w}px`,
+						height: `${marquee.h}px`,
+					}"
+				/>
+				<!-- 变换层 / Transform layer -->
+				<div
+					class="absolute top-0 left-0 origin-top-left"
+					:style="{
+						transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
+					}"
 				>
-					<!-- 已有的边 / Existing edges -->
-					<g v-for="edge in edges" :key="`${edge.fromNodeId}-${edge.fromPort}-${edge.toNodeId}-${edge.toPort}`">
-						<template v-if="edgePositions(edge).from && edgePositions(edge).to">
+					<!-- SVG 连线层 / SVG wiring layer -->
+					<svg
+						class="absolute inset-0 overflow-visible pointer-events-none"
+						style="left: 0; top: 0; width: 1px; height: 1px"
+					>
+						<!-- 已有的边 / Existing edges -->
+						<g
+							v-for="edge in edges"
+							:key="`${edge.fromNodeId}-${edge.fromPort}-${edge.toNodeId}-${edge.toPort}`"
+						>
+							<template v-if="edgePositions(edge).from && edgePositions(edge).to">
+								<path
+									:d="
+										edgePath(edgePositions(edge).from!, edgePositions(edge).to!)
+									"
+									fill="none"
+									stroke="#ffffff30"
+									stroke-width="2"
+									class="pointer-events-auto cursor-pointer hover:stroke-destructive transition-colors"
+									@click.stop="
+										store.removeEdge(
+											edge.fromNodeId,
+											edge.fromPort,
+											edge.toNodeId,
+											edge.toPort,
+										)
+									"
+								/>
+							</template>
+						</g>
+						<!-- 正在拖拽的连线预览 / Pending connection preview -->
+						<template v-if="connectingFrom && pendingLine">
 							<path
-								:d="edgePath(edgePositions(edge).from!, edgePositions(edge).to!)"
+								:d="edgePath(pendingLineFrom() ?? pendingLine, pendingLine)"
 								fill="none"
-								stroke="#ffffff30"
+								:stroke="PORT_TYPE_COLORS[connectingFrom.type]"
 								stroke-width="2"
-								class="pointer-events-auto cursor-pointer hover:stroke-destructive transition-colors"
-								@click.stop="store.removeEdge(edge.fromNodeId, edge.fromPort, edge.toNodeId, edge.toPort)"
+								stroke-dasharray="6 3"
 							/>
 						</template>
-					</g>
-					<!-- 正在拖拽的连线预览 / Pending connection preview -->
-					<template v-if="connectingFrom && pendingLine">
-						<path
-							:d="edgePath(
-								pendingLineFrom() ?? pendingLine,
-								pendingLine,
-							)"
-							fill="none"
-							:stroke="PORT_TYPE_COLORS[connectingFrom.type]"
-							stroke-width="2"
-							stroke-dasharray="6 3"
-						/>
-					</template>
-				</svg>
+					</svg>
 
-				<!-- 节点 / Nodes -->
-				<!-- 虚拟录制输入节点 / Virtual recording input node -->
-				<RecordingInputNode
-					:x="inputNodePos.x"
-					:y="inputNodePos.y"
-					:register-port-el="registerPortEl"
-					:connected="inputPortConnected"
-					@header-mousedown="onInputNodeMousedown"
-					@port-mousedown="onInputPortMousedown"
-					@port-mouseup="onInputPortMouseup"
-				/>
+					<!-- 节点 / Nodes -->
+					<!-- 虚拟录制输入节点 / Virtual recording input node -->
+					<RecordingInputNode
+						:x="inputNodePos.x"
+						:y="inputNodePos.y"
+						:register-port-el="registerPortEl"
+						:connected="inputPortConnected"
+						@header-mousedown="onInputNodeMousedown"
+						@port-mousedown="onInputPortMousedown"
+						@port-mouseup="onInputPortMouseup"
+					/>
 
-				<!-- 常规节点 / Regular nodes -->
-				<PipelineNodeCard
-					v-for="node in store.pipeline.nodes"
-					:key="nodeEffectiveId(node)"
-					:node="node"
-					:module-info="getModuleInfo(node.moduleId)"
-					:input-types="getNodeInputTypes(node.moduleId)"
-					:output-types="getNodeOutputTypes(node.moduleId)"
-					:selected="selectedNodeIds.has(nodeEffectiveId(node))"
-					:register-port-el="registerPortEl"
-					@select="selectNode(nodeEffectiveId(node))"
-					@header-mousedown="onNodeMousedown($event, nodeEffectiveId(node))"
-					@toggle-enabled="node.enabled = $event"
-					@update-param="(key, value) => { node.params[key] = value; }"
-					@port-mousedown="(e, portIndex, type, isOutput) => onNodePortMousedown(e, nodeEffectiveId(node), portIndex, type, isOutput)"
-					@port-mouseup="(e, portIndex, type, isOutput) => onNodePortMouseup(e, nodeEffectiveId(node), portIndex, type, isOutput)"
-				/>
+					<!-- 常规节点 / Regular nodes -->
+					<PipelineNodeCard
+						v-for="node in store.pipeline.nodes"
+						:key="nodeEffectiveId(node)"
+						:node="node"
+						:module-info="getModuleInfo(node.moduleId)"
+						:input-types="getNodeInputTypes(node.moduleId)"
+						:output-types="getNodeOutputTypes(node.moduleId)"
+						:selected="selectedNodeIds.has(nodeEffectiveId(node))"
+						:register-port-el="registerPortEl"
+						@select="selectNode(nodeEffectiveId(node))"
+						@header-mousedown="onNodeMousedown($event, nodeEffectiveId(node))"
+						@toggle-enabled="node.enabled = $event"
+						@update-param="
+							(key, value) => {
+								node.params[key] = value;
+							}
+						"
+						@port-mousedown="
+							(e, portIndex, type, isOutput) =>
+								onNodePortMousedown(
+									e,
+									nodeEffectiveId(node),
+									portIndex,
+									type,
+									isOutput,
+								)
+						"
+						@port-mouseup="
+							(e, portIndex, type, isOutput) =>
+								onNodePortMouseup(
+									e,
+									nodeEffectiveId(node),
+									portIndex,
+									type,
+									isOutput,
+								)
+						"
+					/>
+				</div>
+
+				<!-- 空白画布提示（仅在无用户节点时显示，不含输入节点） / Canvas hint when no user nodes exist -->
+				<!-- 右键上下文菜单 / Context menu -->
+				<ModulePickerMenu
+					:visible="contextMenu.visible"
+					:x="contextMenu.x"
+					:y="contextMenu.y"
+					:modules="contextMenuModules"
+					:empty-message="t('postprocess.picker.allAdded')"
+					@select="addModuleAtCursor"
+					@close="closeContextMenu"
+				>
+					{{ t("postprocess.picker.title") }}
+				</ModulePickerMenu>
+
+				<!-- 连线释放模块选择菜单 / Wire-drop module selection menu -->
+				<ModulePickerMenu
+					:visible="wireMenu.visible"
+					:x="wireMenu.x"
+					:y="wireMenu.y"
+					:modules="wireMenuModules"
+					:empty-message="t('postprocess.picker.noCompatible')"
+					@select="addModuleFromWire"
+					@close="closeWireMenu"
+				>
+					<span>{{ t("postprocess.picker.connectTo") }}</span>
+					<span
+						v-if="wireMenu.fromPort"
+						class="px-1.5 py-0.5 rounded text-[10px] font-mono"
+						:style="{
+							background: PORT_TYPE_COLORS[wireMenu.fromPort.type] + '30',
+							color: PORT_TYPE_COLORS[wireMenu.fromPort.type],
+						}"
+						>{{ wireMenu.fromPort.type.replace(/_/g, " ") }}</span
+					>
+				</ModulePickerMenu>
 			</div>
 
-			<!-- 空白画布提示（仅在无用户节点时显示，不含输入节点） / Canvas hint when no user nodes exist -->
-			<!-- 右键上下文菜单 / Context menu -->
-			<ModulePickerMenu
-				:visible="contextMenu.visible"
-				:x="contextMenu.x"
-				:y="contextMenu.y"
-				:modules="contextMenuModules"
-				:empty-message="t('postprocess.picker.allAdded')"
-				@select="addModuleAtCursor"
-				@close="closeContextMenu"
+			<!-- 底部信息栏 / Bottom info bar -->
+			<div
+				class="px-6 py-2.5 border-t text-sm text-muted-foreground flex items-center gap-2 shrink-0 bg-background min-h-10"
 			>
-				{{ t("postprocess.picker.title") }}
-			</ModulePickerMenu>
-
-			<!-- 连线释放模块选择菜单 / Wire-drop module selection menu -->
-			<ModulePickerMenu
-				:visible="wireMenu.visible"
-				:x="wireMenu.x"
-				:y="wireMenu.y"
-				:modules="wireMenuModules"
-				:empty-message="t('postprocess.picker.noCompatible')"
-				@select="addModuleFromWire"
-				@close="closeWireMenu"
-			>
-				<span>{{ t("postprocess.picker.connectTo") }}</span>
-				<span
-					v-if="wireMenu.fromPort"
-					class="px-1.5 py-0.5 rounded text-[10px] font-mono"
-					:style="{ background: PORT_TYPE_COLORS[wireMenu.fromPort.type] + '30', color: PORT_TYPE_COLORS[wireMenu.fromPort.type] }"
-				>{{ wireMenu.fromPort.type.replace(/_/g, ' ') }}</span>
-			</ModulePickerMenu>
-		</div>
-
-		<!-- 底部信息栏 / Bottom info bar -->
-		<div class="px-6 py-2.5 border-t text-sm text-muted-foreground flex items-center gap-2 shrink-0 bg-background min-h-10">
-			<template v-if="selectedNodeIds.size > 0">
-				<!-- 多选时显示数量 / Show count when multiple selected -->
-				<template v-if="selectedNodeIds.size > 1">
-					<span class="text-xs">{{ t("postprocess.multiSelected", { count: selectedNodeIds.size }) }}</span>
-				</template>
-				<!-- 单选时显示节点描述 / Show node description when single selected -->
-				<template v-else-if="selectedNodeIds.has(INPUT_NODE_ID)">
-					<span class="font-medium text-amber-400 shrink-0">{{ t("postprocess.input.label") }}</span>
-					<span class="text-muted-foreground">{{ t("postprocess.input.description") }}</span>
-				</template>
-				<template v-else>
-					<template v-for="nodeId in selectedNodeIds" :key="nodeId">
-						<span
-							v-if="getModuleInfo(store.pipeline.nodes.find(n => nodeEffectiveId(n) === nodeId)?.moduleId ?? '')"
-							class="font-medium text-foreground shrink-0"
-						>
-							{{ getModuleInfo(store.pipeline.nodes.find(n => nodeEffectiveId(n) === nodeId)!.moduleId)?.name }}
-						</span>
-						<span class="truncate">
-							{{ getModuleInfo(store.pipeline.nodes.find(n => nodeEffectiveId(n) === nodeId)?.moduleId ?? '')?.description }}
-						</span>
-						<Badge
-							v-if="getModuleInfo(store.pipeline.nodes.find(n => nodeEffectiveId(n) === nodeId)?.moduleId ?? '')?.official"
-							class="text-[10px] px-1.5 py-0 h-4 bg-amber-500/20 text-amber-400 border-amber-500/30 shrink-0"
-						>official</Badge>
+				<template v-if="selectedNodeIds.size > 0">
+					<!-- 多选时显示数量 / Show count when multiple selected -->
+					<template v-if="selectedNodeIds.size > 1">
+						<span class="text-xs">{{
+							t("postprocess.multiSelected", { count: selectedNodeIds.size })
+						}}</span>
+					</template>
+					<!-- 单选时显示节点描述 / Show node description when single selected -->
+					<template v-else-if="selectedNodeIds.has(INPUT_NODE_ID)">
+						<span class="font-medium text-amber-400 shrink-0">{{
+							t("postprocess.input.label")
+						}}</span>
+						<span class="text-muted-foreground">{{
+							t("postprocess.input.description")
+						}}</span>
+					</template>
+					<template v-else>
+						<template v-for="nodeId in selectedNodeIds" :key="nodeId">
+							<span
+								v-if="
+									getModuleInfo(
+										store.pipeline.nodes.find(
+											(n) => nodeEffectiveId(n) === nodeId,
+										)?.moduleId ?? '',
+									)
+								"
+								class="font-medium text-foreground shrink-0"
+							>
+								{{
+									getModuleInfo(
+										store.pipeline.nodes.find(
+											(n) => nodeEffectiveId(n) === nodeId,
+										)!.moduleId,
+									)?.name
+								}}
+							</span>
+							<span class="truncate">
+								{{
+									getModuleInfo(
+										store.pipeline.nodes.find(
+											(n) => nodeEffectiveId(n) === nodeId,
+										)?.moduleId ?? "",
+									)?.description
+								}}
+							</span>
+							<Badge
+								v-if="
+									getModuleInfo(
+										store.pipeline.nodes.find(
+											(n) => nodeEffectiveId(n) === nodeId,
+										)?.moduleId ?? '',
+									)?.official
+								"
+								class="text-[10px] px-1.5 py-0 h-4 bg-amber-500/20 text-amber-400 border-amber-500/30 shrink-0"
+								>official</Badge
+							>
+						</template>
 					</template>
 				</template>
-			</template>
-			<template v-else>
-				<!-- 无选中时显示操作指南 / Show guide when nothing is selected -->
-				<span class="text-xs">{{ t("postprocess.guide") }}</span>
-			</template>
-		</div>
-		</template><!-- end v-else (desktop) -->
+				<template v-else>
+					<!-- 无选中时显示操作指南 / Show guide when nothing is selected -->
+					<span class="text-xs">{{ t("postprocess.guide") }}</span>
+				</template>
+			</div> </template
+		><!-- end v-else (desktop) -->
 	</div>
 </template>
 
 <style scoped>
 .fade-enter-active,
 .fade-leave-active {
-	transition: opacity 0.1s, transform 0.1s;
+	transition:
+		opacity 0.1s,
+		transform 0.1s;
 }
 .fade-enter-from,
 .fade-leave-to {

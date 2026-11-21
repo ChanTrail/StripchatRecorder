@@ -9,16 +9,16 @@
 
 const { execSync } = require("child_process");
 const path = require("path");
-const fs   = require("fs");
+const fs = require("fs");
 
 // ── 路径常量 / Path constants ────────────────────────────────────────────────
 
-const ROOT        = path.resolve(__dirname, "..");
-const FRONTEND    = path.join(ROOT, "frontend");
-const DESKTOP     = path.join(ROOT, "desktop");
+const ROOT = path.resolve(__dirname, "..");
+const FRONTEND = path.join(ROOT, "frontend");
+const DESKTOP = path.join(ROOT, "desktop");
 const MODULES_DIR = path.join(ROOT, "modules");
-const BUILD_TMP   = path.join(ROOT, "build_tmp");
-const BUILD_OUT   = path.join(ROOT, "build");
+const BUILD_TMP = path.join(ROOT, "build_tmp");
+const BUILD_OUT = path.join(ROOT, "build");
 
 /** 后端 Cargo.toml 路径 / Backend Cargo.toml path */
 const BACKEND_MANIFEST = path.join(ROOT, "backend", "Cargo.toml");
@@ -31,7 +31,7 @@ const DESKTOP_TARGET = path.join(BUILD_TMP, "desktop", "target");
 
 /** 指定模块的编译产物目录 / Target directory for a given module */
 function moduleTarget(name) {
-  return path.join(BUILD_TMP, "modules", name, "target");
+	return path.join(BUILD_TMP, "modules", name, "target");
 }
 
 /**
@@ -39,12 +39,12 @@ function moduleTarget(name) {
  * Read the `identifier` field from desktop/src-tauri/tauri.conf.json.
  */
 function readDesktopIdentifier() {
-  const confPath = path.join(DESKTOP, "src-tauri", "tauri.conf.json");
-  const conf = JSON.parse(fs.readFileSync(confPath, "utf8"));
-  if (!conf.identifier) {
-    throw new Error(`Missing "identifier" field in ${confPath}`);
-  }
-  return conf.identifier;
+	const confPath = path.join(DESKTOP, "src-tauri", "tauri.conf.json");
+	const conf = JSON.parse(fs.readFileSync(confPath, "utf8"));
+	if (!conf.identifier) {
+		throw new Error(`Missing "identifier" field in ${confPath}`);
+	}
+	return conf.identifier;
 }
 
 /**
@@ -64,26 +64,26 @@ function readDesktopIdentifier() {
  * see dev.desktop.js).
  */
 function desktopAppDataDir() {
-  const identifier = readDesktopIdentifier();
-  if (process.platform === "win32") {
-    const appData = process.env.APPDATA || path.join(require("os").homedir(), "AppData", "Roaming");
-    return path.join(appData, identifier);
-  }
-  if (process.platform === "darwin") {
-    return path.join(require("os").homedir(), "Library", "Application Support", identifier);
-  }
-  const xdgDataHome = process.env.XDG_DATA_HOME || path.join(require("os").homedir(), ".local", "share");
-  return path.join(xdgDataHome, identifier);
+	const identifier = readDesktopIdentifier();
+	if (process.platform === "win32") {
+		const appData =
+			process.env.APPDATA || path.join(require("os").homedir(), "AppData", "Roaming");
+		return path.join(appData, identifier);
+	}
+	if (process.platform === "darwin") {
+		return path.join(require("os").homedir(), "Library", "Application Support", identifier);
+	}
+	const xdgDataHome =
+		process.env.XDG_DATA_HOME || path.join(require("os").homedir(), ".local", "share");
+	return path.join(xdgDataHome, identifier);
 }
 
 /** 枚举所有可构建的模块名（跳过纯库 crate）/ List all buildable module names (skip pure library crates) */
 function listModules() {
-  const skip = new Set(["pp_utils"]);
-  return fs
-    .readdirSync(MODULES_DIR)
-    .filter(
-      (n) => !skip.has(n) && fs.existsSync(path.join(MODULES_DIR, n, "Cargo.toml"))
-    );
+	const skip = new Set(["pp_utils"]);
+	return fs
+		.readdirSync(MODULES_DIR)
+		.filter((n) => !skip.has(n) && fs.existsSync(path.join(MODULES_DIR, n, "Cargo.toml")));
 }
 
 /**
@@ -99,20 +99,20 @@ function listModules() {
  * @returns {string|null}
  */
 function readPackageVersion(cargoTomlPath) {
-  const content = fs.readFileSync(cargoTomlPath, "utf8");
-  let inPackage = false;
-  for (const rawLine of content.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (/^\[.*\]$/.test(line)) {
-      inPackage = line === "[package]";
-      continue;
-    }
-    if (inPackage) {
-      const m = line.match(/^version\s*=\s*"([^"]+)"/);
-      if (m) return m[1];
-    }
-  }
-  return null;
+	const content = fs.readFileSync(cargoTomlPath, "utf8");
+	let inPackage = false;
+	for (const rawLine of content.split(/\r?\n/)) {
+		const line = rawLine.trim();
+		if (/^\[.*\]$/.test(line)) {
+			inPackage = line === "[package]";
+			continue;
+		}
+		if (inPackage) {
+			const m = line.match(/^version\s*=\s*"([^"]+)"/);
+			if (m) return m[1];
+		}
+	}
+	return null;
 }
 
 /**
@@ -141,10 +141,10 @@ function readPackageVersion(cargoTomlPath) {
  * @returns {boolean}
  */
 function isStaleModuleBinary(fileName, stem) {
-  if (fileName === stem || fileName === `${stem}.exe`) return true;
-  if (!fileName.startsWith(stem)) return false;
-  const nextChar = fileName[stem.length];
-  return nextChar === "-" || nextChar === "_";
+	if (fileName === stem || fileName === `${stem}.exe`) return true;
+	if (!fileName.startsWith(stem)) return false;
+	const nextChar = fileName[stem.length];
+	return nextChar === "-" || nextChar === "_";
 }
 
 /**
@@ -155,22 +155,22 @@ function isStaleModuleBinary(fileName, stem) {
  * @param {string} stem
  */
 function removeStaleModuleBinaries(outDir, stem) {
-  if (!fs.existsSync(outDir)) return;
-  for (const f of fs.readdirSync(outDir)) {
-    if (isStaleModuleBinary(f, stem)) {
-      fs.rmSync(path.join(outDir, f), { force: true });
-    }
-  }
+	if (!fs.existsSync(outDir)) return;
+	for (const f of fs.readdirSync(outDir)) {
+		if (isStaleModuleBinary(f, stem)) {
+			fs.rmSync(path.join(outDir, f), { force: true });
+		}
+	}
 }
 
 // ── ANSI 颜色 / ANSI colors ──────────────────────────────────────────────────
 
 const C = {
-  reset:  "\x1b[0m",
-  cyan:   "\x1b[36m",   // header 边框
-  yellow: "\x1b[33m",   // step 边框
-  gray:   "\x1b[90m",   // 嵌套时的暗色
-  bold:   "\x1b[1m",
+	reset: "\x1b[0m",
+	cyan: "\x1b[36m", // header 边框
+	yellow: "\x1b[33m", // step 边框
+	gray: "\x1b[90m", // 嵌套时的暗色
+	bold: "\x1b[1m",
 };
 
 /** 是否作为子进程被嵌套调用（由 dev/release 通过环境变量注入）
@@ -184,18 +184,18 @@ const NESTED = process.env.CHECK_NESTED === "1";
  * @param {string} desc   描述 / description
  */
 function header(title, desc) {
-  if (NESTED) {
-    const indent = "    ";
-    console.log(`\n${indent}${C.gray}${"┄".repeat(52)}${C.reset}`);
-    console.log(`${indent}${C.gray}  ${title}${C.reset}`);
-    if (desc) console.log(`${indent}${C.gray}  ${desc}${C.reset}`);
-    console.log(`${indent}${C.gray}${"┄".repeat(52)}${C.reset}`);
-  } else {
-    console.log(`\n${C.cyan}${"═".repeat(60)}${C.reset}`);
-    console.log(`${C.bold}  ${title}${C.reset}`);
-    if (desc) console.log(`  ${desc}`);
-    console.log(`${C.cyan}${"═".repeat(60)}${C.reset}`);
-  }
+	if (NESTED) {
+		const indent = "    ";
+		console.log(`\n${indent}${C.gray}${"┄".repeat(52)}${C.reset}`);
+		console.log(`${indent}${C.gray}  ${title}${C.reset}`);
+		if (desc) console.log(`${indent}${C.gray}  ${desc}${C.reset}`);
+		console.log(`${indent}${C.gray}${"┄".repeat(52)}${C.reset}`);
+	} else {
+		console.log(`\n${C.cyan}${"═".repeat(60)}${C.reset}`);
+		console.log(`${C.bold}  ${title}${C.reset}`);
+		if (desc) console.log(`  ${desc}`);
+		console.log(`${C.cyan}${"═".repeat(60)}${C.reset}`);
+	}
 }
 
 /** 打印分隔线步骤标题 / Print a separator with a step title
@@ -204,14 +204,14 @@ function header(title, desc) {
  * @param {string} msg      步骤描述 / step description
  */
 function step(current, total, msg) {
-  if (NESTED) {
-    const indent = "    ";
-    console.log(`\n${indent}${C.gray}[${current}/${total}]  ${msg}${C.reset}`);
-  } else {
-    console.log(`\n${C.yellow}${"─".repeat(60)}${C.reset}`);
-    console.log(`  ${C.bold}[${current}/${total}]${C.reset}  ${msg}`);
-    console.log(`${C.yellow}${"─".repeat(60)}${C.reset}`);
-  }
+	if (NESTED) {
+		const indent = "    ";
+		console.log(`\n${indent}${C.gray}[${current}/${total}]  ${msg}${C.reset}`);
+	} else {
+		console.log(`\n${C.yellow}${"─".repeat(60)}${C.reset}`);
+		console.log(`  ${C.bold}[${current}/${total}]${C.reset}  ${msg}`);
+		console.log(`${C.yellow}${"─".repeat(60)}${C.reset}`);
+	}
 }
 
 /**
@@ -220,7 +220,7 @@ function step(current, total, msg) {
  * @param {import("child_process").ExecSyncOptions} [opts]
  */
 function run(cmd, opts = {}) {
-  execSync(cmd, { stdio: "inherit", ...opts });
+	execSync(cmd, { stdio: "inherit", ...opts });
 }
 
 // ── 二进制收集 / Binary collection ──────────────────────────────────────────
@@ -233,15 +233,15 @@ function run(cmd, opts = {}) {
  * @returns {string[]}
  */
 function collectBinaries(releaseDir) {
-  if (!fs.existsSync(releaseDir)) return [];
-  const isWindows = process.platform === "win32";
-  return fs.readdirSync(releaseDir).filter((name) => {
-    const full = path.join(releaseDir, name);
-    const stat = fs.statSync(full);
-    if (!stat.isFile()) return false;
-    if (isWindows) return name.endsWith(".exe");
-    return !path.extname(name) && (stat.mode & 0o111) !== 0;
-  });
+	if (!fs.existsSync(releaseDir)) return [];
+	const isWindows = process.platform === "win32";
+	return fs.readdirSync(releaseDir).filter((name) => {
+		const full = path.join(releaseDir, name);
+		const stat = fs.statSync(full);
+		if (!stat.isFile()) return false;
+		if (isWindows) return name.endsWith(".exe");
+		return !path.extname(name) && (stat.mode & 0o111) !== 0;
+	});
 }
 
 // ── 目录列表 / Directory listing ────────────────────────────────────────────
@@ -253,16 +253,16 @@ function collectBinaries(releaseDir) {
  * @param {string} [prefix]
  */
 function listDir(dir, prefix = "") {
-  for (const name of fs.readdirSync(dir).sort()) {
-    const full = path.join(dir, name);
-    if (fs.statSync(full).isDirectory()) {
-      console.log(`  ${prefix}${name}/`);
-      listDir(full, prefix + "  ");
-    } else {
-      const size = (fs.statSync(full).size / 1024).toFixed(0);
-      console.log(`  ${prefix}${name}  (${size} KB)`);
-    }
-  }
+	for (const name of fs.readdirSync(dir).sort()) {
+		const full = path.join(dir, name);
+		if (fs.statSync(full).isDirectory()) {
+			console.log(`  ${prefix}${name}/`);
+			listDir(full, prefix + "  ");
+		} else {
+			const size = (fs.statSync(full).size / 1024).toFixed(0);
+			console.log(`  ${prefix}${name}  (${size} KB)`);
+		}
+	}
 }
 
 // ── 模块构建与检查 / Module build & check ───────────────────────────────────
@@ -281,9 +281,9 @@ function listDir(dir, prefix = "") {
  * @returns {Record<string,string>}
  */
 function nativeCargoEnv(extra = {}) {
-  const env = { ...process.env, ...extra };
-  delete env.CARGO_BUILD_TARGET;
-  return env;
+	const env = { ...process.env, ...extra };
+	delete env.CARGO_BUILD_TARGET;
+	return env;
 }
 
 /**
@@ -291,12 +291,11 @@ function nativeCargoEnv(extra = {}) {
  * Run `cargo check` for all modules.
  */
 function checkModules() {
-  for (const name of listModules()) {
-    run(
-      `cargo check --manifest-path "${path.join(MODULES_DIR, name, "Cargo.toml")}"`,
-      { env: nativeCargoEnv({ CARGO_TARGET_DIR: moduleTarget(name) }) }
-    );
-  }
+	for (const name of listModules()) {
+		run(`cargo check --manifest-path "${path.join(MODULES_DIR, name, "Cargo.toml")}"`, {
+			env: nativeCargoEnv({ CARGO_TARGET_DIR: moduleTarget(name) }),
+		});
+	}
 }
 
 /**
@@ -304,12 +303,12 @@ function checkModules() {
  * Run `cargo clippy` for all modules (treat warnings as errors via -D warnings).
  */
 function clippyModules() {
-  for (const name of listModules()) {
-    run(
-      `cargo clippy --manifest-path "${path.join(MODULES_DIR, name, "Cargo.toml")}" -- -D warnings`,
-      { env: nativeCargoEnv({ CARGO_TARGET_DIR: moduleTarget(name) }) }
-    );
-  }
+	for (const name of listModules()) {
+		run(
+			`cargo clippy --manifest-path "${path.join(MODULES_DIR, name, "Cargo.toml")}" -- -D warnings`,
+			{ env: nativeCargoEnv({ CARGO_TARGET_DIR: moduleTarget(name) }) },
+		);
+	}
 }
 
 /**
@@ -350,43 +349,42 @@ function clippyModules() {
  *                                     null means no platform segment.
  */
 function buildModules(profile, outDir, cargoTarget = null, platform = null) {
-  const releaseFlag  = profile === "release" ? " --release" : "";
-  const targetFlag   = cargoTarget ? ` --target ${cargoTarget}` : "";
-  fs.mkdirSync(outDir, { recursive: true });
-  for (const name of listModules()) {
-    console.log(`  → ${name}`);
-    const manifestPath = path.join(MODULES_DIR, name, "Cargo.toml");
-    run(
-      `cargo build --manifest-path "${manifestPath}" --bins${releaseFlag}${targetFlag}`,
-      { env: nativeCargoEnv({ CARGO_TARGET_DIR: moduleTarget(name) }) }
-    );
-    const version = readPackageVersion(manifestPath);
-    // 交叉编译时产物在 <target_dir>/<triple>/release/，原生时在 <target_dir>/release/
-    // Cross-compiled artifacts live at <target_dir>/<triple>/release/; native at <target_dir>/release/
-    const binDir = cargoTarget
-      ? path.join(moduleTarget(name), cargoTarget, profile)
-      : path.join(moduleTarget(name), profile);
-    const bins = collectBinaries(binDir);
-    for (const bin of bins) {
-      const ext = process.platform === "win32" ? ".exe" : "";
-      const stem = ext ? bin.slice(0, -ext.length) : bin;
-      removeStaleModuleBinaries(outDir, stem);
-      // 命名格式：{stem}-{platform}-{version}{ext}，如 notify_telegram-linux-x86_64-0.5.0
-      // Naming format: {stem}-{platform}-{version}{ext}, e.g. notify_telegram-linux-x86_64-0.5.0
-      let dstName;
-      if (platform && version) {
-        dstName = `${stem}-${platform}-${version}${ext}`;
-      } else if (version) {
-        dstName = `${stem}-${version}${ext}`;
-      } else {
-        dstName = bin;
-      }
-      const dst = path.join(outDir, dstName);
-      fs.copyFileSync(path.join(binDir, bin), dst);
-      if (process.platform !== "win32") fs.chmodSync(dst, 0o755);
-    }
-    console.log(`  ✓ ${name}\n`);
-  }
+	const releaseFlag = profile === "release" ? " --release" : "";
+	const targetFlag = cargoTarget ? ` --target ${cargoTarget}` : "";
+	fs.mkdirSync(outDir, { recursive: true });
+	for (const name of listModules()) {
+		console.log(`  → ${name}`);
+		const manifestPath = path.join(MODULES_DIR, name, "Cargo.toml");
+		run(`cargo build --manifest-path "${manifestPath}" --bins${releaseFlag}${targetFlag}`, {
+			env: nativeCargoEnv({ CARGO_TARGET_DIR: moduleTarget(name) }),
+		});
+		const version = readPackageVersion(manifestPath);
+		// 交叉编译时产物在 <target_dir>/<triple>/release/，原生时在 <target_dir>/release/
+		// Cross-compiled artifacts live at <target_dir>/<triple>/release/; native at <target_dir>/release/
+		const binDir = cargoTarget
+			? path.join(moduleTarget(name), cargoTarget, profile)
+			: path.join(moduleTarget(name), profile);
+		const bins = collectBinaries(binDir);
+		for (const bin of bins) {
+			const ext = process.platform === "win32" ? ".exe" : "";
+			const stem = ext ? bin.slice(0, -ext.length) : bin;
+			removeStaleModuleBinaries(outDir, stem);
+			// 命名格式：{stem}-{platform}-{version}{ext}，如 notify_telegram-linux-x86_64-0.5.0
+			// Naming format: {stem}-{platform}-{version}{ext}, e.g. notify_telegram-linux-x86_64-0.5.0
+			let dstName;
+			if (platform && version) {
+				dstName = `${stem}-${platform}-${version}${ext}`;
+			} else if (version) {
+				dstName = `${stem}-${version}${ext}`;
+			} else {
+				dstName = bin;
+			}
+			const dst = path.join(outDir, dstName);
+			fs.copyFileSync(path.join(binDir, bin), dst);
+			if (process.platform !== "win32") fs.chmodSync(dst, 0o755);
+		}
+		console.log(`  ✓ ${name}\n`);
+	}
 }
 
 /**
@@ -398,19 +396,19 @@ function buildModules(profile, outDir, cargoTarget = null, platform = null) {
  * @param {string} [logBase] 用于日志输出的基准路径前缀 / Base path prefix for log output
  */
 function copyDir(src, dst, logBase) {
-  fs.mkdirSync(dst, { recursive: true });
-  for (const entry of fs.readdirSync(src)) {
-    const srcPath = path.join(src, entry);
-    const dstPath = path.join(dst, entry);
-    if (fs.statSync(srcPath).isDirectory()) {
-      copyDir(srcPath, dstPath, logBase);
-    } else {
-      fs.copyFileSync(srcPath, dstPath);
-      if (logBase !== undefined) {
-        console.log(`  ✓ ${logBase}${path.relative(dst, dstPath).replace(/\\/g, "/")}`);
-      }
-    }
-  }
+	fs.mkdirSync(dst, { recursive: true });
+	for (const entry of fs.readdirSync(src)) {
+		const srcPath = path.join(src, entry);
+		const dstPath = path.join(dst, entry);
+		if (fs.statSync(srcPath).isDirectory()) {
+			copyDir(srcPath, dstPath, logBase);
+		} else {
+			fs.copyFileSync(srcPath, dstPath);
+			if (logBase !== undefined) {
+				console.log(`  ✓ ${logBase}${path.relative(dst, dstPath).replace(/\\/g, "/")}`);
+			}
+		}
+	}
 }
 
 // ── 前端依赖安装 / Frontend dependency install ──────────────────────────────
@@ -420,8 +418,8 @@ function copyDir(src, dst, logBase) {
  * Install frontend npm dependencies (called before each script runs).
  */
 function installFrontend() {
-  console.log("Installing frontend dependencies...");
-  run("npm install", { cwd: FRONTEND });
+	console.log("Installing frontend dependencies...");
+	run("npm install", { cwd: FRONTEND });
 }
 
 /**
@@ -429,40 +427,40 @@ function installFrontend() {
  * Install desktop npm dependencies (called before each desktop script runs).
  */
 function installDesktop() {
-  console.log("Installing desktop dependencies...");
-  run("npm install", { cwd: DESKTOP });
+	console.log("Installing desktop dependencies...");
+	run("npm install", { cwd: DESKTOP });
 }
 
 // ── 导出 / Exports ───────────────────────────────────────────────────────────
 
 module.exports = {
-  ROOT,
-  FRONTEND,
-  DESKTOP,
-  MODULES_DIR,
-  BUILD_TMP,
-  BUILD_OUT,
-  BACKEND_MANIFEST,
-  BACKEND_TARGET,
-  DESKTOP_TARGET,
-  NESTED,
-  moduleTarget,
-  readDesktopIdentifier,
-  desktopAppDataDir,
-  listModules,
-  readPackageVersion,
-  isStaleModuleBinary,
-  removeStaleModuleBinaries,
-  nativeCargoEnv,
-  step,
-  header,
-  run,
-  collectBinaries,
-  listDir,
-  checkModules,
-  clippyModules,
-  buildModules,
-  copyDir,
-  installFrontend,
-  installDesktop,
+	ROOT,
+	FRONTEND,
+	DESKTOP,
+	MODULES_DIR,
+	BUILD_TMP,
+	BUILD_OUT,
+	BACKEND_MANIFEST,
+	BACKEND_TARGET,
+	DESKTOP_TARGET,
+	NESTED,
+	moduleTarget,
+	readDesktopIdentifier,
+	desktopAppDataDir,
+	listModules,
+	readPackageVersion,
+	isStaleModuleBinary,
+	removeStaleModuleBinaries,
+	nativeCargoEnv,
+	step,
+	header,
+	run,
+	collectBinaries,
+	listDir,
+	checkModules,
+	clippyModules,
+	buildModules,
+	copyDir,
+	installFrontend,
+	installDesktop,
 };

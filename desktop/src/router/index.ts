@@ -17,17 +17,17 @@ import type { Settings } from "@/stores/settings";
 const router = createRouter({
 	history: createWebHistory(),
 	routes: [
-		{ path: "/setup",       component: () => import("../views/SetupView.vue") },
-		{ path: "/",            component: () => import("../views/HomeView.vue") },
-		{ path: "/recordings",  component: () => import("../views/RecordingsView.vue") },
+		{ path: "/setup", component: () => import("../views/SetupView.vue") },
+		{ path: "/", component: () => import("../views/HomeView.vue") },
+		{ path: "/recordings", component: () => import("../views/RecordingsView.vue") },
 		{ path: "/postprocess", component: () => import("../views/PostprocessView.vue") },
-		{ path: "/community",   component: () => import("../views/CommunityView.vue") },
-		{ path: "/settings",    component: () => import("../views/SettingsView.vue") },
-		{ path: "/usage",       component: () => import("../views/UsageView.vue") },
-		{ path: "/status",      component: () => import("../views/StatusView.vue") },
-		{ path: "/finder",      component: () => import("../views/FinderView.vue") },
-		{ path: "/stripchat",   component: () => import("../views/StripchatView.vue") },
-		{ path: "/about",       component: () => import("../views/AboutView.vue") },
+		{ path: "/community", component: () => import("../views/CommunityView.vue") },
+		{ path: "/settings", component: () => import("../views/SettingsView.vue") },
+		{ path: "/usage", component: () => import("../views/UsageView.vue") },
+		{ path: "/status", component: () => import("../views/StatusView.vue") },
+		{ path: "/finder", component: () => import("../views/FinderView.vue") },
+		{ path: "/stripchat", component: () => import("../views/StripchatView.vue") },
+		{ path: "/about", component: () => import("../views/AboutView.vue") },
 	],
 });
 

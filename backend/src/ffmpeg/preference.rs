@@ -52,7 +52,7 @@ static FFMPEG_PREFERENCE: RwLock<Option<u8>> = RwLock::new(None);
 /// Sync the FFmpeg location preference mirror (called by `AppState` when
 /// settings load or are saved).
 pub fn set_preference(preference: Option<u8>) {
-    *FFMPEG_PREFERENCE.write() = preference;
+	*FFMPEG_PREFERENCE.write() = preference;
 }
 
 /// 镜像中的原始选择（无存在性门控）：仅用于"用户是否选择了 PATH"这类
@@ -64,7 +64,7 @@ pub fn set_preference(preference: Option<u8>) {
 /// tools auto-download even while PATH lacks components; use [`preference`]
 /// for program resolution.
 pub(crate) fn raw_preference() -> Option<u8> {
-    *FFMPEG_PREFERENCE.read()
+	*FFMPEG_PREFERENCE.read()
 }
 
 /// 判断指定位置的 ffmpeg / ffprobe / ffplay 三组件是否齐全：
@@ -75,15 +75,15 @@ pub(crate) fn raw_preference() -> Option<u8> {
 /// `0` = system PATH (all three found via [`find_on_path`]), `1` = the tools
 /// directory (all three executables present).
 pub(crate) fn location_complete(location: u8) -> bool {
-    const BINS: [&str; 3] = ["ffmpeg", "ffprobe", "ffplay"];
-    match location {
-        0 => BINS.iter().all(|b| find_on_path(b).is_some()),
-        1 => {
-            let tools = tools_dir();
-            BINS.iter().all(|b| tools.join(exe_name(b)).is_file())
-        }
-        _ => false,
-    }
+	const BINS: [&str; 3] = ["ffmpeg", "ffprobe", "ffplay"];
+	match location {
+		0 => BINS.iter().all(|b| find_on_path(b).is_some()),
+		1 => {
+			let tools = tools_dir();
+			BINS.iter().all(|b| tools.join(exe_name(b)).is_file())
+		}
+		_ => false,
+	}
 }
 
 /// 当前 FFmpeg 位置首选项的**生效值**（`0` = 系统 PATH，`1` = tools，
@@ -100,10 +100,10 @@ pub(crate) fn location_complete(location: u8) -> bool {
 /// e.g. during a tools download the old resolution keeps working instead of
 /// jumping to the not-yet-complete tools copy.
 pub fn preference() -> Option<u8> {
-    match *FFMPEG_PREFERENCE.read() {
-        Some(loc) if !location_complete(loc) => None,
-        p => p,
-    }
+	match *FFMPEG_PREFERENCE.read() {
+		Some(loc) if !location_complete(loc) => None,
+		p => p,
+	}
 }
 
 /// 解析要使用的程序路径，按 [`preference`] 决定来源：
@@ -127,32 +127,32 @@ pub fn preference() -> Option<u8> {
 /// Preference and existence are checked on every call, so new settings or a
 /// completed download take effect immediately without restarting.
 pub fn ffmpeg_program() -> OsString {
-    program_by_preference("ffmpeg")
+	program_by_preference("ffmpeg")
 }
 
 /// 同 [`ffmpeg_program`]，解析 ffprobe。/ Same as [`ffmpeg_program`], for ffprobe.
 pub fn ffprobe_program() -> OsString {
-    program_by_preference("ffprobe")
+	program_by_preference("ffprobe")
 }
 
 /// 同 [`ffmpeg_program`]，解析 ffplay。/ Same as [`ffmpeg_program`], for ffplay.
 pub fn ffplay_program() -> OsString {
-    program_by_preference("ffplay")
+	program_by_preference("ffplay")
 }
 
 /// [`ffmpeg_program`] / [`ffprobe_program`] / [`ffplay_program`] 的公共实现。
 /// Shared implementation of [`ffmpeg_program`] / [`ffprobe_program`] / [`ffplay_program`].
 fn program_by_preference(base: &str) -> OsString {
-    let tools_path = tools_dir().join(exe_name(base));
-    match preference() {
-        // 仅系统 PATH / system PATH only
-        Some(0) => OsString::from(base),
-        // 仅 tools 目录（缺失也返回该路径）/ tools dir only (path returned even when absent)
-        Some(1) => tools_path.into_os_string(),
-        // 未设置：tools 存在优先，否则 PATH / unset: tools when present, else PATH
-        _ if tools_path.exists() => tools_path.into_os_string(),
-        _ => OsString::from(base),
-    }
+	let tools_path = tools_dir().join(exe_name(base));
+	match preference() {
+		// 仅系统 PATH / system PATH only
+		Some(0) => OsString::from(base),
+		// 仅 tools 目录（缺失也返回该路径）/ tools dir only (path returned even when absent)
+		Some(1) => tools_path.into_os_string(),
+		// 未设置：tools 存在优先，否则 PATH / unset: tools when present, else PATH
+		_ if tools_path.exists() => tools_path.into_os_string(),
+		_ => OsString::from(base),
+	}
 }
 
 /// 返回一份把 `tools_dir()` 前置到 PATH 的环境变量值，仅当 tools 中存在
@@ -164,34 +164,34 @@ fn program_by_preference(base: &str) -> OsString {
 /// is the system PATH (`0`) — modules (including community modules) spawning
 /// plain `ffmpeg` should then resolve the system copy too.
 pub fn path_env_with_tools() -> Option<OsString> {
-    if preference() == Some(0) {
-        return None;
-    }
-    let tools = tools_dir();
-    if !["ffmpeg", "ffprobe", "ffplay"]
-        .iter()
-        .any(|b| tools.join(exe_name(b)).exists())
-    {
-        return None;
-    }
-    let current = std::env::var_os("PATH").unwrap_or_default();
-    let merged = std::iter::once(tools)
-        .chain(std::env::split_paths(&current))
-        .collect::<Vec<_>>();
-    std::env::join_paths(merged).ok()
+	if preference() == Some(0) {
+		return None;
+	}
+	let tools = tools_dir();
+	if !["ffmpeg", "ffprobe", "ffplay"]
+		.iter()
+		.any(|b| tools.join(exe_name(b)).exists())
+	{
+		return None;
+	}
+	let current = std::env::var_os("PATH").unwrap_or_default();
+	let merged = std::iter::once(tools)
+		.chain(std::env::split_paths(&current))
+		.collect::<Vec<_>>();
+	std::env::join_paths(merged).ok()
 }
 
 /// 检查 ffmpeg 与 ffprobe 是否都可用（两者都能成功启动 `-version`）。
 /// Check whether both ffmpeg and ffprobe are usable (each can launch `-version`).
 pub fn ffmpeg_available() -> bool {
-    fn runs(prog: &OsString) -> bool {
-        Command::new(prog)
-            .arg("-version")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .no_window()
-            .status()
-            .is_ok()
-    }
-    runs(&ffmpeg_program()) && runs(&ffprobe_program())
+	fn runs(prog: &OsString) -> bool {
+		Command::new(prog)
+			.arg("-version")
+			.stdout(Stdio::null())
+			.stderr(Stdio::null())
+			.no_window()
+			.status()
+			.is_ok()
+	}
+	runs(&ffmpeg_program()) && runs(&ffprobe_program())
 }

@@ -27,233 +27,233 @@
 -->
 
 <script setup lang="ts">
-	import { computed, onMounted, onUnmounted, ref } from "vue";
-	import { useRoute } from "vue-router";
-	import { useI18n } from "vue-i18n";
-	import { call, on, onSseReconnect } from "@/lib/api";
-	import { formatSize } from "@/utils/format";
-	import {
-		Dialog,
-		DialogContent,
-		DialogDescription,
-		DialogFooter,
-		DialogHeader,
-		DialogTitle,
-	} from "@/components/ui/dialog";
-	import { Button } from "@/components/ui/button";
-	import { AlertCircle, Check, Loader2 } from "@lucide/vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
+import { useRoute } from "vue-router";
+import { useI18n } from "vue-i18n";
+import { call, on, onSseReconnect } from "@/lib/api";
+import { formatSize } from "@/utils/format";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { AlertCircle, Check, Loader2 } from "@lucide/vue";
 
-	const { t } = useI18n();
-	const route = useRoute();
+const { t } = useI18n();
+const route = useRoute();
 
-	/** ffmpeg-progress 事件载荷（与后端 `FfmpegProgress` 的 serde 输出一致）/ `ffmpeg-progress` event payload (matches the backend `FfmpegProgress` serde output) */
-	interface FfmpegProgressPayload {
-		state: "idle" | "downloading" | "installing" | "done" | "error";
-		kind?: "install" | "update";
-		downloaded?: number;
-		total?: number;
-		pct?: number | null;
-		message?: string;
+/** ffmpeg-progress 事件载荷（与后端 `FFmpegProgress` 的 serde 输出一致）/ `ffmpeg-progress` event payload (matches the backend `FFmpegProgress` serde output) */
+interface FFmpegProgressPayload {
+	state: "idle" | "downloading" | "installing" | "done" | "error";
+	kind?: "install" | "update";
+	downloaded?: number;
+	total?: number;
+	pct?: number | null;
+	message?: string;
+}
+
+/** 当前展示的进度；非 null 时窗口显示 / Progress currently shown; the window is visible while non-null */
+const progress = ref<FFmpegProgressPayload | null>(null);
+// setup 向导页不弹强制窗口——进度由向导步骤内联展示 /
+// No forced window on the /setup wizard page — progress renders inline in the step
+const open = computed(() => progress.value !== null && route.path !== "/setup");
+
+/** 标题随阶段同步：下载 / 校验并安装 / 安装完成 / 下载失败 /
+ * Title synced with the phase: download / verify & install / done / failed */
+const titleKey = computed(() => {
+	switch (progress.value?.state) {
+		case "installing":
+			return "ffmpeg.downloadDialog.titleInstalling";
+		case "done":
+			return "ffmpeg.downloadDialog.titleDone";
+		case "error":
+			return "ffmpeg.downloadDialog.titleFailed";
+		default:
+			return "ffmpeg.downloadDialog.title";
 	}
+});
 
-	/** 当前展示的进度；非 null 时窗口显示 / Progress currently shown; the window is visible while non-null */
-	const progress = ref<FfmpegProgressPayload | null>(null);
-	// setup 向导页不弹强制窗口——进度由向导步骤内联展示 /
-	// No forced window on the /setup wizard page — progress renders inline in the step
-	const open = computed(() => progress.value !== null && route.path !== "/setup");
+/** 下载速度文本（`5.2 MB/s`）；非下载态清空 / Download speed text (`5.2 MB/s`); cleared outside the downloading state */
+const speedText = ref("");
+/** 速度采样点：相邻事件的字节数与时间戳 / Speed sample: bytes + timestamp of the previous event */
+let lastSample: { bytes: number; at: number } | null = null;
 
-	/** 标题随阶段同步：下载 / 校验并安装 / 安装完成 / 下载失败 /
-	 * Title synced with the phase: download / verify & install / done / failed */
-	const titleKey = computed(() => {
-		switch (progress.value?.state) {
-			case "installing":
-				return "ffmpeg.downloadDialog.titleInstalling";
-			case "done":
-				return "ffmpeg.downloadDialog.titleDone";
-			case "error":
-				return "ffmpeg.downloadDialog.titleFailed";
-			default:
-				return "ffmpeg.downloadDialog.title";
-		}
-	});
+/** ffmpeg-progress 事件的取消订阅函数 / Unsubscriber for the ffmpeg-progress event */
+let unlistenProgress: (() => void) | null = null;
+/** SSE 重连回调的取消注册函数 / Unsubscriber for the SSE-reconnect callback */
+let unlistenReconnect: (() => void) | null = null;
+/** 完成态的自动关闭定时器 / Auto-close timer for the done state */
+let doneTimer: ReturnType<typeof setTimeout> | null = null;
 
-	/** 下载速度文本（`5.2 MB/s`）；非下载态清空 / Download speed text (`5.2 MB/s`); cleared outside the downloading state */
-	const speedText = ref("");
-	/** 速度采样点：相邻事件的字节数与时间戳 / Speed sample: bytes + timestamp of the previous event */
-	let lastSample: { bytes: number; at: number } | null = null;
-
-	/** ffmpeg-progress 事件的取消订阅函数 / Unsubscriber for the ffmpeg-progress event */
-	let unlistenProgress: (() => void) | null = null;
-	/** SSE 重连回调的取消注册函数 / Unsubscriber for the SSE-reconnect callback */
-	let unlistenReconnect: (() => void) | null = null;
-	/** 完成态的自动关闭定时器 / Auto-close timer for the done state */
-	let doneTimer: ReturnType<typeof setTimeout> | null = null;
-
-	/** 下载进度条：`pct` 驱动宽度（0–100）；`indeterminate` 为总大小未知且
-	 * 已有数据时的 1/3 宽脉冲；尚未收到任何数据（准备中）显示空轨道即 0%。
-	 * 文本为 `37% · a / b` 或已下载大小。
-	 * Download bar: `pct` drives the width (0–100); `indeterminate` is a 1/3-wide
-	 * pulse for real downloads with unknown total; with no bytes yet (preparing)
-	 * the track stays empty at 0%. Text is `37% · a / b` or just the downloaded size. */
-	const downloadBar = computed(() => {
-		const p = progress.value;
-		const empty = {
-			pct: 0 as number | null,
-			indeterminate: false,
-			size: "",
-			pctText: "",
-		};
-		if (!p || p.state !== "downloading") return empty;
-		const downloaded = p.downloaded ?? 0;
-		const total = p.total ?? 0;
-		if (total > 0) {
-			const pct = p.pct ?? 0;
-			return {
-				pct,
-				indeterminate: false,
-				size: `${formatSize(downloaded)} / ${formatSize(total)}`,
-				pctText: `${pct}%`,
-			};
-		}
-		// 总大小未知：无已下载量 = 准备中显示 0%；有数据 = 不确定态脉冲 /
-		// Unknown total: no bytes yet = preparing → 0%; bytes flowing = indeterminate pulse
-		if (downloaded === 0) return empty;
+/** 下载进度条：`pct` 驱动宽度（0–100）；`indeterminate` 为总大小未知且
+ * 已有数据时的 1/3 宽脉冲；尚未收到任何数据（准备中）显示空轨道即 0%。
+ * 文本为 `37% · a / b` 或已下载大小。
+ * Download bar: `pct` drives the width (0–100); `indeterminate` is a 1/3-wide
+ * pulse for real downloads with unknown total; with no bytes yet (preparing)
+ * the track stays empty at 0%. Text is `37% · a / b` or just the downloaded size. */
+const downloadBar = computed(() => {
+	const p = progress.value;
+	const empty = {
+		pct: 0 as number | null,
+		indeterminate: false,
+		size: "",
+		pctText: "",
+	};
+	if (!p || p.state !== "downloading") return empty;
+	const downloaded = p.downloaded ?? 0;
+	const total = p.total ?? 0;
+	if (total > 0) {
+		const pct = p.pct ?? 0;
 		return {
-			pct: null,
-			indeterminate: true,
-			size: formatSize(downloaded),
-			pctText: "",
+			pct,
+			indeterminate: false,
+			size: `${formatSize(downloaded)} / ${formatSize(total)}`,
+			pctText: `${pct}%`,
 		};
-	});
+	}
+	// 总大小未知：无已下载量 = 准备中显示 0%；有数据 = 不确定态脉冲 /
+	// Unknown total: no bytes yet = preparing → 0%; bytes flowing = indeterminate pulse
+	if (downloaded === 0) return empty;
+	return {
+		pct: null,
+		indeterminate: true,
+		size: formatSize(downloaded),
+		pctText: "",
+	};
+});
 
-	onMounted(async () => {
-		unlistenProgress = await on("ffmpeg-progress", (payload) =>
-			applyProgress(payload as FfmpegProgressPayload),
-		);
-		unlistenReconnect = onSseReconnect(() => void restoreStatus());
-		await restoreStatus();
-	});
+onMounted(async () => {
+	unlistenProgress = await on("ffmpeg-progress", (payload) =>
+		applyProgress(payload as FFmpegProgressPayload),
+	);
+	unlistenReconnect = onSseReconnect(() => void restoreStatus());
+	await restoreStatus();
+});
 
-	onUnmounted(() => {
-		unlistenProgress?.();
-		unlistenReconnect?.();
-		if (doneTimer) clearTimeout(doneTimer);
-	});
+onUnmounted(() => {
+	unlistenProgress?.();
+	unlistenReconnect?.();
+	if (doneTimer) clearTimeout(doneTimer);
+});
 
-	/**
-	 * 处理 ffmpeg-progress 事件；只接管 `kind === "install"` 的任务
-	 * （update 交给全局 toast）。终态由事件驱动：Done 1.5 秒后自动关闭，
-	 * Error 展示重试/关闭按钮，Idle 保持关闭。
-	 * Handle a ffmpeg-progress event; only `kind === "install"` tasks are
-	 * taken over (updates stay on the global toast). Terminal states are
-	 * event-driven: Done auto-closes after 1.5 s, Error shows retry/close,
-	 * Idle keeps the window closed.
-	 *
-	 * @param p - 事件载荷 / Event payload
-	 */
-	function applyProgress(p: FfmpegProgressPayload) {
-		if (p.kind !== "install") return;
-		switch (p.state) {
-			case "downloading": {
-				if (doneTimer) {
-					clearTimeout(doneTimer);
-					doneTimer = null;
-				}
-				// 速度 = 相邻事件的字节差/时间差（事件约 200ms 一跳）/
-				// Speed = byte/time delta between events (~200 ms apart)
-				const bytes = p.downloaded ?? 0;
-				const now = Date.now();
-				if (lastSample && bytes > lastSample.bytes) {
-					const dt = (now - lastSample.at) / 1000;
-					if (dt > 0.05) {
-						speedText.value = `${formatSize((bytes - lastSample.bytes) / dt)}/s`;
-					}
-				}
-				lastSample = { bytes, at: now };
-				progress.value = p;
-				break;
+/**
+ * 处理 ffmpeg-progress 事件；只接管 `kind === "install"` 的任务
+ * （update 交给全局 toast）。终态由事件驱动：Done 1.5 秒后自动关闭，
+ * Error 展示重试/关闭按钮，Idle 保持关闭。
+ * Handle a ffmpeg-progress event; only `kind === "install"` tasks are
+ * taken over (updates stay on the global toast). Terminal states are
+ * event-driven: Done auto-closes after 1.5 s, Error shows retry/close,
+ * Idle keeps the window closed.
+ *
+ * @param p - 事件载荷 / Event payload
+ */
+function applyProgress(p: FFmpegProgressPayload) {
+	if (p.kind !== "install") return;
+	switch (p.state) {
+		case "downloading": {
+			if (doneTimer) {
+				clearTimeout(doneTimer);
+				doneTimer = null;
 			}
-			case "installing":
-			case "error":
-				if (doneTimer) {
-					clearTimeout(doneTimer);
-					doneTimer = null;
+			// 速度 = 相邻事件的字节差/时间差（事件约 200ms 一跳）/
+			// Speed = byte/time delta between events (~200 ms apart)
+			const bytes = p.downloaded ?? 0;
+			const now = Date.now();
+			if (lastSample && bytes > lastSample.bytes) {
+				const dt = (now - lastSample.at) / 1000;
+				if (dt > 0.05) {
+					speedText.value = `${formatSize((bytes - lastSample.bytes) / dt)}/s`;
 				}
-				speedText.value = "";
-				lastSample = null;
-				progress.value = p;
-				break;
-			case "done":
-				progress.value = p;
-				if (doneTimer) clearTimeout(doneTimer);
-				doneTimer = setTimeout(() => {
-					doneTimer = null;
-					progress.value = null;
-				}, 1500);
-				break;
-			case "idle":
-				break;
-		}
-	}
-
-	/**
-	 * 拉取当前进度状态，恢复进行中的安装任务显示（页面刷新、SSE 重连时调用）。
-	 * Fetch the current progress to restore an in-flight install task (page
-	 * refresh, SSE reconnect).
-	 */
-	async function restoreStatus() {
-		try {
-			const cur = await call<FfmpegProgressPayload>("get_ffmpeg_status");
-			if (cur.state === "downloading" || cur.state === "installing") {
-				applyProgress(cur);
 			}
-		} catch {
-			// 状态接口失败忽略：等下一个 SSE 事件 / Ignore: wait for the next SSE event
+			lastSample = { bytes, at: now };
+			progress.value = p;
+			break;
 		}
+		case "installing":
+		case "error":
+			if (doneTimer) {
+				clearTimeout(doneTimer);
+				doneTimer = null;
+			}
+			speedText.value = "";
+			lastSample = null;
+			progress.value = p;
+			break;
+		case "done":
+			progress.value = p;
+			if (doneTimer) clearTimeout(doneTimer);
+			doneTimer = setTimeout(() => {
+				doneTimer = null;
+				progress.value = null;
+			}, 1500);
+			break;
+		case "idle":
+			break;
 	}
+}
 
-	/**
-	 * 下载失败后的重试：重新触发后台安装，SSE 事件随后覆盖占位状态。
-	 * Retry after a failed download: re-triggers the background install; SSE
-	 * events then overwrite the placeholder state.
-	 */
-	async function retry() {
-		progress.value = { state: "downloading", kind: "install", downloaded: 0, total: 0, pct: null };
-		try {
-			await call("download_ffmpeg");
-		} catch {
-			progress.value = {
-				state: "error",
-				kind: "install",
-				message: t("ffmpeg.downloadDialog.retryFailed"),
-			};
+/**
+ * 拉取当前进度状态，恢复进行中的安装任务显示（页面刷新、SSE 重连时调用）。
+ * Fetch the current progress to restore an in-flight install task (page
+ * refresh, SSE reconnect).
+ */
+async function restoreStatus() {
+	try {
+		const cur = await call<FFmpegProgressPayload>("get_ffmpeg_status");
+		if (cur.state === "downloading" || cur.state === "installing") {
+			applyProgress(cur);
 		}
+	} catch {
+		// 状态接口失败忽略：等下一个 SSE 事件 / Ignore: wait for the next SSE event
 	}
+}
 
-	/**
-	 * 错误态关闭窗口（后端终态已把进度重置为 Idle，这里只清本地状态）。
-	 * Close the window on the error state (the backend already reset progress
-	 * to Idle — this only clears local state).
-	 */
-	function close() {
-		if (doneTimer) {
-			clearTimeout(doneTimer);
-			doneTimer = null;
-		}
-		speedText.value = "";
-		lastSample = null;
-		progress.value = null;
+/**
+ * 下载失败后的重试：重新触发后台安装，SSE 事件随后覆盖占位状态。
+ * Retry after a failed download: re-triggers the background install; SSE
+ * events then overwrite the placeholder state.
+ */
+async function retry() {
+	progress.value = { state: "downloading", kind: "install", downloaded: 0, total: 0, pct: null };
+	try {
+		await call("download_ffmpeg");
+	} catch {
+		progress.value = {
+			state: "error",
+			kind: "install",
+			message: t("ffmpeg.downloadDialog.retryFailed"),
+		};
 	}
+}
 
-	/**
-	 * 阻止对话框关闭（Esc / 点击遮罩）：错误态请用"关闭"按钮。
-	 * Block dialog dismissal (Esc / overlay click): on error use the Close button.
-	 *
-	 * @param e - 待拦截的键盘/指针事件 / Keyboard or pointer event to intercept
-	 */
-	function blockDismiss(e: Event | KeyboardEvent) {
-		e.preventDefault();
+/**
+ * 错误态关闭窗口（后端终态已把进度重置为 Idle，这里只清本地状态）。
+ * Close the window on the error state (the backend already reset progress
+ * to Idle — this only clears local state).
+ */
+function close() {
+	if (doneTimer) {
+		clearTimeout(doneTimer);
+		doneTimer = null;
 	}
+	speedText.value = "";
+	lastSample = null;
+	progress.value = null;
+}
+
+/**
+ * 阻止对话框关闭（Esc / 点击遮罩）：错误态请用"关闭"按钮。
+ * Block dialog dismissal (Esc / overlay click): on error use the Close button.
+ *
+ * @param e - 待拦截的键盘/指针事件 / Keyboard or pointer event to intercept
+ */
+function blockDismiss(e: Event | KeyboardEvent) {
+	e.preventDefault();
+}
 </script>
 
 <template>
@@ -282,10 +282,16 @@
 						<div
 							class="h-full bg-primary transition-all"
 							:class="downloadBar.indeterminate ? 'w-1/3 animate-pulse' : ''"
-							:style="downloadBar.indeterminate ? undefined : { width: `${downloadBar.pct}%` }"
+							:style="
+								downloadBar.indeterminate
+									? undefined
+									: { width: `${downloadBar.pct}%` }
+							"
 						/>
 					</div>
-					<p class="flex min-h-4 items-baseline justify-between text-xs tabular-nums text-muted-foreground">
+					<p
+						class="flex min-h-4 items-baseline justify-between text-xs tabular-nums text-muted-foreground"
+					>
 						<span>{{ downloadBar.size }}{{ speedText ? " · " + speedText : "" }}</span>
 						<span>{{ downloadBar.pctText }}</span>
 					</p>
@@ -301,7 +307,9 @@
 							:style="{ width: `${progress.pct ?? 0}%` }"
 						/>
 					</div>
-					<p class="flex min-h-4 items-baseline justify-end text-xs tabular-nums text-muted-foreground">
+					<p
+						class="flex min-h-4 items-baseline justify-end text-xs tabular-nums text-muted-foreground"
+					>
 						<span>{{ progress.pct != null ? `${progress.pct}%` : "" }}</span>
 					</p>
 				</template>
@@ -317,7 +325,10 @@
 						<AlertCircle class="size-4 shrink-0" />
 						{{ t("ffmpeg.downloadDialog.failed") }}
 					</div>
-					<p v-if="progress.message" class="max-h-24 overflow-y-auto break-all text-xs text-muted-foreground">
+					<p
+						v-if="progress.message"
+						class="max-h-24 overflow-y-auto break-all text-xs text-muted-foreground"
+					>
 						{{ progress.message }}
 					</p>
 				</template>

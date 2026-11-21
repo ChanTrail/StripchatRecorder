@@ -18,8 +18,15 @@
 const path = require("path");
 
 const {
-  ROOT, FRONTEND, BACKEND_MANIFEST, BACKEND_TARGET,
-  step, header, run, buildModules, installFrontend,
+	ROOT,
+	FRONTEND,
+	BACKEND_MANIFEST,
+	BACKEND_TARGET,
+	step,
+	header,
+	run,
+	buildModules,
+	installFrontend,
 } = require("./common");
 
 /** 模块二进制的目标目录（后端运行时从此处加载）
@@ -29,10 +36,10 @@ const MODULES_OUT = path.join(BACKEND_TARGET, "debug", "modules");
 // 平台标识符：按当前宿主机推导（dev 模式始终为原生编译，无需读环境变量）
 // Platform identifier: detected from the current host (dev always compiles natively)
 function detectPlatform() {
-  const archStr = process.arch === "arm64" ? "aarch64" : "x86_64";
-  if (process.platform === "win32")  return `windows-${archStr}`;
-  if (process.platform === "darwin") return `darwin-${archStr}`;
-  return `linux-${archStr}`;
+	const archStr = process.arch === "arm64" ? "aarch64" : "x86_64";
+	if (process.platform === "win32") return `windows-${archStr}`;
+	if (process.platform === "darwin") return `darwin-${archStr}`;
+	return `linux-${archStr}`;
 }
 const platform = detectPlatform();
 
@@ -42,8 +49,8 @@ header("Dev", "check → frontend → modules → run backend (debug)");
 // ── Step 1: 检查 / Check ─────────────────────────────────────────────────────
 step(1, TOTAL, "Running checks");
 run("node scripts/check.js", {
-  cwd: ROOT,
-  env: { ...process.env, CHECK_NESTED: "1" },
+	cwd: ROOT,
+	env: { ...process.env, CHECK_NESTED: "1" },
 });
 
 // ── Step 2: 构建前端 / Build frontend ────────────────────────────────────────
@@ -58,5 +65,5 @@ buildModules("debug", MODULES_OUT, null, platform);
 // ── Step 4: 启动后端 / Start backend ─────────────────────────────────────────
 step(4, TOTAL, "Starting backend (debug)");
 run(`cargo run --manifest-path "${BACKEND_MANIFEST}"`, {
-  env: { ...process.env, CARGO_TARGET_DIR: BACKEND_TARGET },
+	env: { ...process.env, CARGO_TARGET_DIR: BACKEND_TARGET },
 });

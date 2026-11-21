@@ -25,115 +25,116 @@
         toggle-select - 用户切换选中状态 / User toggles selection state
 -->
 <script setup lang="ts">
-	import type { StreamerEntry } from "../stores/streamers";
-	import { Card, CardContent } from "@/components/ui/card";
-	import { Badge } from "@/components/ui/badge";
-	import { Button } from "@/components/ui/button";
-	import { Switch } from "@/components/ui/switch";
-	import { Label } from "@/components/ui/label";
-	import { ref, watch, computed } from "vue";
-	import { useFastThumbnail } from "@/composables/useFastThumbnail";
-	import { copyToClipboard } from "@/lib/utils";
-	import { X, Circle, Check, Copy, Eye, EyeOff } from "@lucide/vue";
-	import { useI18n } from "vue-i18n";
+import type { StreamerEntry } from "../stores/streamers";
+import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import { ref, watch, computed } from "vue";
+import { useFastThumbnail } from "@/composables/useFastThumbnail";
+import { copyToClipboard } from "@/lib/utils";
+import { X, Circle, Check, Copy, Eye, EyeOff } from "@lucide/vue";
+import { useI18n } from "vue-i18n";
 
-	const props = defineProps<{
-		streamer: StreamerEntry;
-		selectMode?: boolean;
-		selected?: boolean;
-		/**
-		 * 隐私模式：off 不模糊；live 仅模糊在线（直播）预览图；all 在线与离线图都模糊。
-		 * Privacy mode: off = no blur; live = blur online (live) previews only;
-		 * all = blur both online previews and offline images.
-		 */
-		privacyMode?: "off" | "live" | "all";
-	}>();
-	const emit = defineEmits<{
-		remove: [];
-		start: [];
-		stop: [];
-		"toggle-auto": [enabled: boolean];
-		"toggle-select": [];
-	}>();
-	const { t } = useI18n();
-
-	const autoRecord = ref(props.streamer.auto_record);
-	watch(
-		() => props.streamer.auto_record,
-		(val) => { autoRecord.value = val; },
-	);
-
-	const thumbnailSrc = computed(() => props.streamer.thumbnail_url ?? null);
-	const fastThumbnail = useFastThumbnail(thumbnailSrc);
-
+const props = defineProps<{
+	streamer: StreamerEntry;
+	selectMode?: boolean;
+	selected?: boolean;
 	/**
-	 * 本张卡片被用户手动解除模糊的会话级标记（不持久化，组件销毁即复位）。
-	 * Per-card session flag set when the user manually unblurs this thumbnail
-	 * (not persisted; resets when the component is destroyed).
+	 * 隐私模式：off 不模糊；live 仅模糊在线（直播）预览图；all 在线与离线图都模糊。
+	 * Privacy mode: off = no blur; live = blur online (live) previews only;
+	 * all = blur both online previews and offline images.
 	 */
-	const unblurred = ref(false);
+	privacyMode?: "off" | "live" | "all";
+}>();
+const emit = defineEmits<{
+	remove: [];
+	start: [];
+	stop: [];
+	"toggle-auto": [enabled: boolean];
+	"toggle-select": [];
+}>();
+const { t } = useI18n();
 
-	/**
-	 * 隐私模式是否作用于本卡片：all 对所有卡片生效；live 仅作用于在线卡片。
-	 * Whether the privacy mode applies to this card: `all` affects every card;
-	 * `live` only affects online (live-preview) cards.
-	 */
-	const privacyApplies = computed(
-		() =>
-			props.privacyMode === "all" ||
-			(props.privacyMode === "live" && props.streamer.is_online),
-	);
-
-	/** 当前是否处于模糊状态（模式适用且未被手动解除）/ Whether the thumbnail is currently blurred (mode applies and not manually unblurred) */
-	const shouldBlur = computed(() => privacyApplies.value && !unblurred.value);
-
-	const copied = ref(false);
-
-	// 转发流地址 / Stream relay URL
-	const streamUrl = computed(
-		() => `${window.location.origin}/stream/${props.streamer.username}`,
-	);
-
-	async function copyStreamUrl() {
-		try {
-			await copyToClipboard(streamUrl.value);
-			copied.value = true;
-			setTimeout(() => { copied.value = false; }, 2000);
-		} catch {}
-	}
-
-	function onAutoChange(val: boolean) {
+const autoRecord = ref(props.streamer.auto_record);
+watch(
+	() => props.streamer.auto_record,
+	(val) => {
 		autoRecord.value = val;
-		emit("toggle-auto", val);
-	}
+	},
+);
 
-	// 将后端返回的中文 status 值映射为 i18n key（home.filter.*）
-	// Map backend Chinese status value to i18n key (home.filter.*)
-	const STATUS_KEY_MAP: Record<string, string> = {
-		"公开秀": "home.filter.public",
-		"私密秀": "home.filter.private",
-		"群组秀": "home.filter.group",
-		"票务秀": "home.filter.ticket",
-		"计时秀": "home.filter.perMinute",
-		"P2P":   "home.filter.p2p",
-		"虚拟私密": "home.filter.virtualPrivate",
-		"等待":   "home.filter.waiting",
-	};
+const thumbnailSrc = computed(() => props.streamer.thumbnail_url ?? null);
+const fastThumbnail = useFastThumbnail(thumbnailSrc);
 
-	function statusLabel(s: StreamerEntry): string {
-		if (!s.is_online) return t("streamerCard.offline");
-		return t(STATUS_KEY_MAP[s.status] ?? "home.filter.online");
-	}
+/**
+ * 本张卡片被用户手动解除模糊的会话级标记（不持久化，组件销毁即复位）。
+ * Per-card session flag set when the user manually unblurs this thumbnail
+ * (not persisted; resets when the component is destroyed).
+ */
+const unblurred = ref(false);
 
-	function statusClass(s: StreamerEntry): string {
-		if (!s.is_online) return "bg-zinc-800 text-zinc-400 border-transparent";
-		if (STATUS_KEY_MAP[s.status] === "home.filter.public") return "bg-green-900 text-green-300 border-transparent";
-		return "bg-amber-900 text-amber-300 border-transparent";
-	}
+/**
+ * 隐私模式是否作用于本卡片：all 对所有卡片生效；live 仅作用于在线卡片。
+ * Whether the privacy mode applies to this card: `all` affects every card;
+ * `live` only affects online (live-preview) cards.
+ */
+const privacyApplies = computed(
+	() => props.privacyMode === "all" || (props.privacyMode === "live" && props.streamer.is_online),
+);
 
-	function onCardClick() {
-		if (props.selectMode) emit("toggle-select");
-	}
+/** 当前是否处于模糊状态（模式适用且未被手动解除）/ Whether the thumbnail is currently blurred (mode applies and not manually unblurred) */
+const shouldBlur = computed(() => privacyApplies.value && !unblurred.value);
+
+const copied = ref(false);
+
+// 转发流地址 / Stream relay URL
+const streamUrl = computed(() => `${window.location.origin}/stream/${props.streamer.username}`);
+
+async function copyStreamUrl() {
+	try {
+		await copyToClipboard(streamUrl.value);
+		copied.value = true;
+		setTimeout(() => {
+			copied.value = false;
+		}, 2000);
+	} catch {}
+}
+
+function onAutoChange(val: boolean) {
+	autoRecord.value = val;
+	emit("toggle-auto", val);
+}
+
+// 将后端返回的中文 status 值映射为 i18n key（home.filter.*）
+// Map backend Chinese status value to i18n key (home.filter.*)
+const STATUS_KEY_MAP: Record<string, string> = {
+	公开秀: "home.filter.public",
+	私密秀: "home.filter.private",
+	群组秀: "home.filter.group",
+	票务秀: "home.filter.ticket",
+	计时秀: "home.filter.perMinute",
+	P2P: "home.filter.p2p",
+	虚拟私密: "home.filter.virtualPrivate",
+	等待: "home.filter.waiting",
+};
+
+function statusLabel(s: StreamerEntry): string {
+	if (!s.is_online) return t("streamerCard.offline");
+	return t(STATUS_KEY_MAP[s.status] ?? "home.filter.online");
+}
+
+function statusClass(s: StreamerEntry): string {
+	if (!s.is_online) return "bg-zinc-800 text-zinc-400 border-transparent";
+	if (STATUS_KEY_MAP[s.status] === "home.filter.public")
+		return "bg-green-900 text-green-300 border-transparent";
+	return "bg-amber-900 text-amber-300 border-transparent";
+}
+
+function onCardClick() {
+	if (props.selectMode) emit("toggle-select");
+}
 </script>
 
 <template>
@@ -199,9 +200,11 @@
 			<!-- checkbox 覆盖层：选中时常驻，未选中时悬停显示 / Checkbox overlay: always visible when selected, shown on hover when not -->
 			<div
 				class="absolute inset-0 flex items-start justify-start p-2 transition-opacity cursor-pointer"
-				:class="selected
-					? 'opacity-100 bg-primary/15'
-					: 'opacity-0 group-hover:opacity-100 group-hover:bg-black/25'"
+				:class="
+					selected
+						? 'opacity-100 bg-primary/15'
+						: 'opacity-0 group-hover:opacity-100 group-hover:bg-black/25'
+				"
 				@click.stop="emit('toggle-select')"
 			>
 				<!-- 自绘受控 checkbox，避免 reka-ui CheckboxRoot 内部状态与父组件状态冲突 / -->
@@ -234,7 +237,9 @@
 				<Badge :class="statusClass(streamer)">
 					{{ statusLabel(streamer) }}
 				</Badge>
-				<Badge v-if="streamer.is_recording" variant="destructive">{{ t("streamerCard.recording") }}</Badge>
+				<Badge v-if="streamer.is_recording" variant="destructive">{{
+					t("streamerCard.recording")
+				}}</Badge>
 			</div>
 
 			<div class="flex items-center gap-2 mt-0.5">
@@ -258,7 +263,10 @@
 					{{ t("streamerCard.stopRecording") }}
 				</Button>
 
-				<div class="flex items-center gap-1.5 shrink-0" :title="t('streamerCard.autoRecordTitle')">
+				<div
+					class="flex items-center gap-1.5 shrink-0"
+					:title="t('streamerCard.autoRecordTitle')"
+				>
 					<Switch
 						:id="`auto-${streamer.username}`"
 						:model-value="autoRecord"

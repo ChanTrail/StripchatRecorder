@@ -13,12 +13,7 @@ import { ref, watch, type Ref } from "vue";
 /** 缩略图竞速用的 CDN 顶级域名列表（与后端 CDN_TLDS 不同：无 .media，
  * 且顺序即生产竞速顺序）/ CDN TLDs raced for thumbnails (differs from
  * the backend CDN_TLDS: no .media; order mirrors production racing) */
-export const THUMB_CDN_TLDS = [
-	"doppiocdn.com",
-	"doppiocdn.org",
-	"doppiocdn.live",
-	"doppiocdn.net",
-];
+export const THUMB_CDN_TLDS = ["doppiocdn.com", "doppiocdn.org", "doppiocdn.live", "doppiocdn.net"];
 
 /**
  * 对给定的缩略图 URL 进行多 CDN 竞速，返回最快加载成功的 URL。

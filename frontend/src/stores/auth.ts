@@ -20,7 +20,11 @@ export const useAuthStore = defineStore("auth", () => {
 
 	async function fetchStatus(): Promise<{ password_set: boolean; password_disabled: boolean }> {
 		const res = await fetch("/api/auth/status");
-		const data = await res.json() as { password_set: boolean; logged_in: boolean; password_disabled?: boolean };
+		const data = (await res.json()) as {
+			password_set: boolean;
+			logged_in: boolean;
+			password_disabled?: boolean;
+		};
 		passwordSet.value = data.password_set;
 		passwordDisabled.value = data.password_disabled === true;
 		return { password_set: data.password_set, password_disabled: passwordDisabled.value };
@@ -79,7 +83,7 @@ export const useAuthStore = defineStore("auth", () => {
 			const text = await res.text().catch(() => res.statusText);
 			throw new Error(text);
 		}
-		const data = await res.json() as { token: string };
+		const data = (await res.json()) as { token: string };
 		token.value = data.token;
 		isLoggedIn.value = true;
 		localStorage.setItem(TOKEN_KEY, data.token);
@@ -100,5 +104,15 @@ export const useAuthStore = defineStore("auth", () => {
 		}
 	}
 
-	return { token, isLoggedIn, passwordSet, passwordDisabled, fetchStatus, initPassword, removePassword, login, logout };
+	return {
+		token,
+		isLoggedIn,
+		passwordSet,
+		passwordDisabled,
+		fetchStatus,
+		initPassword,
+		removePassword,
+		login,
+		logout,
+	};
 });

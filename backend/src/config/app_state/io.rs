@@ -40,7 +40,7 @@ static EXE_DIR_OVERRIDE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new
 /// [`crate::config::app_state::AppState::new`], `log_dir`, `meta_dir`, etc.), and only once;
 /// subsequent calls are silently ignored (per [`OnceLock::set`] semantics).
 pub fn set_exe_dir_override(dir: PathBuf) {
-    let _ = EXE_DIR_OVERRIDE.set(dir);
+	let _ = EXE_DIR_OVERRIDE.set(dir);
 }
 
 /// 返回数据根目录：Desktop 端为 [`set_exe_dir_override`] 设置的每用户数据目录；
@@ -50,13 +50,13 @@ pub fn set_exe_dir_override(dir: PathBuf) {
 /// [`set_exe_dir_override`]; on Server (no override set), the directory containing the
 /// executable — used to locate config files and module directories.
 pub fn exe_dir() -> PathBuf {
-    if let Some(dir) = EXE_DIR_OVERRIDE.get() {
-        return dir.clone();
-    }
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+	if let Some(dir) = EXE_DIR_OVERRIDE.get() {
+		return dir.clone();
+	}
+	std::env::current_exe()
+		.ok()
+		.and_then(|p| p.parent().map(|p| p.to_path_buf()))
+		.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
 }
 
 /// 去掉字符串开头的 UTF-8 BOM（`U+FEFF`）。
@@ -70,37 +70,37 @@ pub fn exe_dir() -> PathBuf {
 /// as an invalid character, failing the whole file. Call this before parsing any JSON the user
 /// may edit by hand (`config/`, `locale/`).
 pub fn strip_utf8_bom(s: &str) -> &str {
-    s.strip_prefix('\u{FEFF}').unwrap_or(s)
+	s.strip_prefix('\u{FEFF}').unwrap_or(s)
 }
 
 /// 读取 `config/` 下 JSON 配置文件的结果 / Result of reading a JSON config file under `config/`
 pub(super) enum ConfigFile<T> {
-    /// 文件不存在，或内容为空白（含只有 BOM）/ File missing, or blank (including BOM only)
-    Missing,
-    /// 解析成功 / Parsed successfully
-    Parsed(T),
-    /// 文件存在但无法读取（如不是 UTF-8 编码）或解析失败，附错误信息
-    /// File exists but can't be read (e.g. not UTF-8) or fails to parse, with the error
-    Invalid(String),
+	/// 文件不存在，或内容为空白（含只有 BOM）/ File missing, or blank (including BOM only)
+	Missing,
+	/// 解析成功 / Parsed successfully
+	Parsed(T),
+	/// 文件存在但无法读取（如不是 UTF-8 编码）或解析失败，附错误信息
+	/// File exists but can't be read (e.g. not UTF-8) or fails to parse, with the error
+	Invalid(String),
 }
 
 /// 读取并解析 JSON 配置文件：先去掉 UTF-8 BOM，空白文件视为不存在。
 /// Read and parse a JSON config file: the UTF-8 BOM is stripped first and a blank file counts
 /// as missing.
 pub(super) fn load_config_file<T: DeserializeOwned>(path: &Path) -> ConfigFile<T> {
-    let content = match fs::read_to_string(path) {
-        Ok(c) => c,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return ConfigFile::Missing,
-        Err(e) => return ConfigFile::Invalid(e.to_string()),
-    };
-    let content = strip_utf8_bom(&content);
-    if content.trim().is_empty() {
-        return ConfigFile::Missing;
-    }
-    match serde_json::from_str(content) {
-        Ok(v) => ConfigFile::Parsed(v),
-        Err(e) => ConfigFile::Invalid(e.to_string()),
-    }
+	let content = match fs::read_to_string(path) {
+		Ok(c) => c,
+		Err(e) if e.kind() == std::io::ErrorKind::NotFound => return ConfigFile::Missing,
+		Err(e) => return ConfigFile::Invalid(e.to_string()),
+	};
+	let content = strip_utf8_bom(&content);
+	if content.trim().is_empty() {
+		return ConfigFile::Missing;
+	}
+	match serde_json::from_str(content) {
+		Ok(v) => ConfigFile::Parsed(v),
+		Err(e) => ConfigFile::Invalid(e.to_string()),
+	}
 }
 
 /// 配置文件无法读取或解析时：把原文件复制为 `{文件名}.invalid-{时间}` 备份并记录警告。
@@ -114,107 +114,107 @@ pub(super) fn load_config_file<T: DeserializeOwned>(path: &Path) -> ConfigFile<T
 /// This run uses defaults for that file; any later save (`save()` writes every config file)
 /// overwrites the original with defaults, so the backup keeps hand-edited content from being lost.
 pub(super) fn backup_invalid_config(path: &Path, error: &str) {
-    let file_name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("config.json");
-    let backup = path.with_file_name(format!(
-        "{}.invalid-{}",
-        file_name,
-        chrono::Local::now().format("%Y%m%d_%H%M%S")
-    ));
-    match fs::copy(path, &backup) {
-        Ok(_) => tracing::warn!(
-            "{}",
-            crate::tl!(
-                "startup.configInvalidBackedUp",
-                path = path.display(),
-                error = error,
-                backup = backup.display()
-            )
-        ),
-        Err(e) => tracing::warn!(
-            "{}",
-            crate::tl!(
-                "startup.configInvalidBackupFailed",
-                path = path.display(),
-                error = error,
-                backup_error = e
-            )
-        ),
-    }
+	let file_name = path
+		.file_name()
+		.and_then(|n| n.to_str())
+		.unwrap_or("config.json");
+	let backup = path.with_file_name(format!(
+		"{}.invalid-{}",
+		file_name,
+		chrono::Local::now().format("%Y%m%d_%H%M%S")
+	));
+	match fs::copy(path, &backup) {
+		Ok(_) => tracing::warn!(
+			"{}",
+			crate::tl!(
+				"startup.configInvalidBackedUp",
+				path = path.display(),
+				error = error,
+				backup = backup.display()
+			)
+		),
+		Err(e) => tracing::warn!(
+			"{}",
+			crate::tl!(
+				"startup.configInvalidBackupFailed",
+				path = path.display(),
+				error = error,
+				backup_error = e
+			)
+		),
+	}
 }
 
 /// [`crate::config::app_state::AppState::apply_settings_overrides`] 的实现，作用于指定的 settings.json 路径。
 /// Implementation of [`crate::config::app_state::AppState::apply_settings_overrides`] for the given settings.json path.
 pub(super) fn apply_settings_overrides_in(
-    path: &Path,
-    language: Option<&str>,
-    server_port: Option<u16>,
+	path: &Path,
+	language: Option<&str>,
+	server_port: Option<u16>,
 ) -> bool {
-    let (mut settings, missing) = match load_config_file::<Settings>(path) {
-        ConfigFile::Parsed(s) => (s, false),
-        ConfigFile::Missing => (Settings::default(), true),
-        ConfigFile::Invalid(err) => {
-            tracing::warn!(
-                "{}",
-                crate::tl!(
-                    "startup.envOverrideSkippedInvalid",
-                    path = path.display(),
-                    error = err
-                )
-            );
-            return false;
-        }
-    };
+	let (mut settings, missing) = match load_config_file::<Settings>(path) {
+		ConfigFile::Parsed(s) => (s, false),
+		ConfigFile::Missing => (Settings::default(), true),
+		ConfigFile::Invalid(err) => {
+			tracing::warn!(
+				"{}",
+				crate::tl!(
+					"startup.envOverrideSkippedInvalid",
+					path = path.display(),
+					error = err
+				)
+			);
+			return false;
+		}
+	};
 
-    let mut applied: Vec<String> = Vec::new();
-    let mut language_changed = false;
-    if let Some(lang) = language
-        && settings.language != lang
-    {
-        settings.language = lang.to_string();
-        language_changed = true;
-        applied.push(format!("LANGUAGE={lang}"));
-    }
-    if let Some(port) = server_port
-        && settings.server_port != port
-    {
-        settings.server_port = port;
-        applied.push(format!("PORT={port}"));
-    }
-    if applied.is_empty() && !missing {
-        return false;
-    }
+	let mut applied: Vec<String> = Vec::new();
+	let mut language_changed = false;
+	if let Some(lang) = language
+		&& settings.language != lang
+	{
+		settings.language = lang.to_string();
+		language_changed = true;
+		applied.push(format!("LANGUAGE={lang}"));
+	}
+	if let Some(port) = server_port
+		&& settings.server_port != port
+	{
+		settings.server_port = port;
+		applied.push(format!("PORT={port}"));
+	}
+	if applied.is_empty() && !missing {
+		return false;
+	}
 
-    let write_result = path
-        .parent()
-        .map_or(Ok(()), fs::create_dir_all)
-        .map_err(|e| e.to_string())
-        .and_then(|_| serde_json::to_string_pretty(&settings).map_err(|e| e.to_string()))
-        .and_then(|json| fs::write(path, json).map_err(|e| e.to_string()));
-    if let Err(e) = write_result {
-        tracing::warn!(
-            "{}",
-            crate::tl!(
-                "startup.envOverrideWriteFailed",
-                path = path.display(),
-                error = e
-            )
-        );
-        return false;
-    }
-    if !applied.is_empty() {
-        tracing::info!(
-            "{}",
-            crate::tl!(
-                "startup.envOverrideApplied",
-                path = path.display(),
-                values = applied.join(", ")
-            )
-        );
-    }
-    language_changed
+	let write_result = path
+		.parent()
+		.map_or(Ok(()), fs::create_dir_all)
+		.map_err(|e| e.to_string())
+		.and_then(|_| serde_json::to_string_pretty(&settings).map_err(|e| e.to_string()))
+		.and_then(|json| fs::write(path, json).map_err(|e| e.to_string()));
+	if let Err(e) = write_result {
+		tracing::warn!(
+			"{}",
+			crate::tl!(
+				"startup.envOverrideWriteFailed",
+				path = path.display(),
+				error = e
+			)
+		);
+		return false;
+	}
+	if !applied.is_empty() {
+		tracing::info!(
+			"{}",
+			crate::tl!(
+				"startup.envOverrideApplied",
+				path = path.display(),
+				values = applied.join(", ")
+			)
+		);
+	}
+	language_changed
 }
 
 /// 读取配置文件；无法读取或解析时先备份原文件（见 [`backup_invalid_config`]）。
@@ -222,12 +222,12 @@ pub(super) fn apply_settings_overrides_in(
 /// Read a config file, backing it up first when it can't be read or parsed (see
 /// [`backup_invalid_config`]). Returns `None` when missing, blank or invalid.
 pub(super) fn load_config_or_backup<T: DeserializeOwned>(path: &Path) -> Option<T> {
-    match load_config_file(path) {
-        ConfigFile::Parsed(v) => Some(v),
-        ConfigFile::Missing => None,
-        ConfigFile::Invalid(err) => {
-            backup_invalid_config(path, &err);
-            None
-        }
-    }
+	match load_config_file(path) {
+		ConfigFile::Parsed(v) => Some(v),
+		ConfigFile::Missing => None,
+		ConfigFile::Invalid(err) => {
+			backup_invalid_config(path, &err);
+			None
+		}
+	}
 }

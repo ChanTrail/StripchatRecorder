@@ -12,10 +12,10 @@ use crate::core::error::Result;
 /// 目录浏览返回的单个条目 / Single entry returned by directory browsing
 #[derive(serde::Serialize)]
 pub struct DirEntryInfo {
-    /// 条目名称（不含路径）/ Entry name (without path)
-    pub name: String,
-    /// 完整路径 / Full path
-    pub path: String,
+	/// 条目名称（不含路径）/ Entry name (without path)
+	pub name: String,
+	/// 完整路径 / Full path
+	pub path: String,
 }
 
 /// 目录浏览响应：当前路径、父路径（到达根时为 None）、子目录列表。
@@ -28,16 +28,16 @@ pub struct DirEntryInfo {
 /// file-picking mode can select a bundle).
 #[derive(serde::Serialize)]
 pub struct ListDirResult {
-    pub path: String,
-    pub parent: Option<String>,
-    pub dirs: Vec<DirEntryInfo>,
-    /// 文件条目（仅 include_files 请求时填充）/ File entries (populated only on include_files requests)
-    #[serde(default)]
-    pub files: Vec<DirEntryInfo>,
-    /// 是否为"驱动器/根列表"视图（此时 path 无实际意义，不可直接选择）
-    /// Whether this is a "drives/roots" listing view (path has no real meaning, not directly selectable)
-    #[serde(default)]
-    pub is_drives: bool,
+	pub path: String,
+	pub parent: Option<String>,
+	pub dirs: Vec<DirEntryInfo>,
+	/// 文件条目（仅 include_files 请求时填充）/ File entries (populated only on include_files requests)
+	#[serde(default)]
+	pub files: Vec<DirEntryInfo>,
+	/// 是否为"驱动器/根列表"视图（此时 path 无实际意义，不可直接选择）
+	/// Whether this is a "drives/roots" listing view (path has no real meaning, not directly selectable)
+	#[serde(default)]
+	pub is_drives: bool,
 }
 
 /// 去除 Windows `canonicalize()` 产生的 `\\?\` 扩展长度路径前缀（以及 UNC 变体
@@ -50,19 +50,19 @@ pub struct ListDirResult {
 /// platforms or when the prefix is absent.
 #[cfg(target_os = "windows")]
 fn strip_verbatim_prefix(p: &std::path::Path) -> std::path::PathBuf {
-    let s = p.to_string_lossy();
-    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
-        std::path::PathBuf::from(format!(r"\\{}", rest))
-    } else if let Some(rest) = s.strip_prefix(r"\\?\") {
-        std::path::PathBuf::from(rest)
-    } else {
-        p.to_path_buf()
-    }
+	let s = p.to_string_lossy();
+	if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+		std::path::PathBuf::from(format!(r"\\{}", rest))
+	} else if let Some(rest) = s.strip_prefix(r"\\?\") {
+		std::path::PathBuf::from(rest)
+	} else {
+		p.to_path_buf()
+	}
 }
 
 #[cfg(not(target_os = "windows"))]
 fn strip_verbatim_prefix(p: &std::path::Path) -> std::path::PathBuf {
-    p.to_path_buf()
+	p.to_path_buf()
 }
 
 /// 列出指定路径下的子目录（以及 `include_files` 时的非隐藏文件），用于前端
@@ -82,79 +82,79 @@ fn strip_verbatim_prefix(p: &std::path::Path) -> std::path::PathBuf {
 /// bundles land in `files` (a program is a "file" to pick, not a directory to
 /// enter) and bypass the exec_only filter.
 pub fn list_dir_inner(path: &str, include_files: bool, exec_only: bool) -> Result<ListDirResult> {
-    let requested = std::path::Path::new(path);
+	let requested = std::path::Path::new(path);
 
-    let dir = if path.trim().is_empty() || !requested.is_dir() {
-        dirs::home_dir().unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
-    } else {
-        requested.to_path_buf()
-    };
+	let dir = if path.trim().is_empty() || !requested.is_dir() {
+		dirs::home_dir().unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
+	} else {
+		requested.to_path_buf()
+	};
 
-    let canonical_raw = dir
-        .canonicalize()
-        .map_err(|e| crate::core::error::AppError::Other(format!("无法访问目录: {}", e)))?;
-    let canonical_clean = strip_verbatim_prefix(&canonical_raw);
+	let canonical_raw = dir
+		.canonicalize()
+		.map_err(|e| crate::core::error::AppError::Other(format!("无法访问目录: {}", e)))?;
+	let canonical_clean = strip_verbatim_prefix(&canonical_raw);
 
-    let mut dirs_list: Vec<DirEntryInfo> = Vec::new();
-    let mut files_list: Vec<DirEntryInfo> = Vec::new();
-    match std::fs::read_dir(&canonical_raw) {
-        Ok(entries) => {
-            for entry in entries.flatten() {
-                let name = entry.file_name().to_string_lossy().to_string();
-                if name.starts_with('.') {
-                    continue;
-                }
-                let is_dir = entry.path().is_dir();
-                // macOS：`.app` 包是目录，但对"选程序"场景它是可选中的文件
-                // macOS: `.app` bundles are directories, but for picking a
-                // program they're the selectable file
-                #[cfg(target_os = "macos")]
-                let is_app_bundle = name.ends_with(".app");
-                #[cfg(not(target_os = "macos"))]
-                let is_app_bundle = false;
-                let is_dir = is_dir && !is_app_bundle;
-                if is_dir {
-                    dirs_list.push(DirEntryInfo {
-                        path: canonical_clean.join(&name).to_string_lossy().to_string(),
-                        name,
-                    });
-                } else if include_files {
-                    // exec_only：只保留可执行项——Unix 看执行位，Windows 看
-                    // 可执行扩展名；.app 包本身就是程序不受过滤 /
-                    // exec_only: keep executables only — execute bits on Unix,
-                    // executable extensions on Windows; .app bundles are
-                    // programs by definition and bypass the filter
-                    if exec_only && !is_app_bundle && !is_executable(&entry.path()) {
-                        continue;
-                    }
-                    files_list.push(DirEntryInfo {
-                        path: canonical_clean.join(&name).to_string_lossy().to_string(),
-                        name,
-                    });
-                }
-            }
-        }
-        Err(e) => {
-            return Err(crate::core::error::AppError::Other(format!(
-                "无法读取目录: {}",
-                e
-            )));
-        }
-    }
-    dirs_list.sort_by_key(|a| a.name.to_lowercase());
-    files_list.sort_by_key(|a| a.name.to_lowercase());
+	let mut dirs_list: Vec<DirEntryInfo> = Vec::new();
+	let mut files_list: Vec<DirEntryInfo> = Vec::new();
+	match std::fs::read_dir(&canonical_raw) {
+		Ok(entries) => {
+			for entry in entries.flatten() {
+				let name = entry.file_name().to_string_lossy().to_string();
+				if name.starts_with('.') {
+					continue;
+				}
+				let is_dir = entry.path().is_dir();
+				// macOS：`.app` 包是目录，但对"选程序"场景它是可选中的文件
+				// macOS: `.app` bundles are directories, but for picking a
+				// program they're the selectable file
+				#[cfg(target_os = "macos")]
+				let is_app_bundle = name.ends_with(".app");
+				#[cfg(not(target_os = "macos"))]
+				let is_app_bundle = false;
+				let is_dir = is_dir && !is_app_bundle;
+				if is_dir {
+					dirs_list.push(DirEntryInfo {
+						path: canonical_clean.join(&name).to_string_lossy().to_string(),
+						name,
+					});
+				} else if include_files {
+					// exec_only：只保留可执行项——Unix 看执行位，Windows 看
+					// 可执行扩展名；.app 包本身就是程序不受过滤 /
+					// exec_only: keep executables only — execute bits on Unix,
+					// executable extensions on Windows; .app bundles are
+					// programs by definition and bypass the filter
+					if exec_only && !is_app_bundle && !is_executable(&entry.path()) {
+						continue;
+					}
+					files_list.push(DirEntryInfo {
+						path: canonical_clean.join(&name).to_string_lossy().to_string(),
+						name,
+					});
+				}
+			}
+		}
+		Err(e) => {
+			return Err(crate::core::error::AppError::Other(format!(
+				"无法读取目录: {}",
+				e
+			)));
+		}
+	}
+	dirs_list.sort_by_key(|a| a.name.to_lowercase());
+	files_list.sort_by_key(|a| a.name.to_lowercase());
 
-    let parent = canonical_clean
-        .parent()
-        .map(|p| p.to_string_lossy().to_string());
+	let parent = canonical_clean
+		.parent()
+		.map(|p| p.to_string_lossy().to_string());
 
-    Ok(ListDirResult {
-        path: canonical_clean.to_string_lossy().to_string(),
-        parent,
-        dirs: dirs_list,
-        files: files_list,
-        is_drives: false,
-    })
+	Ok(ListDirResult {
+		path: canonical_clean.to_string_lossy().to_string(),
+		parent,
+		dirs: dirs_list,
+		files: files_list,
+		is_drives: false,
+	})
 }
 
 /// 列出系统所有可用驱动器（Windows：存在的盘符 A:\~Z:\；Unix：文件系统根 /），
@@ -164,36 +164,36 @@ pub fn list_dir_inner(path: &str, include_files: bool, exec_only: bool) -> Resul
 /// Unix: filesystem root /), used as the top-level navigation entry ("This PC")
 /// of the directory browser.
 pub fn list_drives_inner() -> Result<ListDirResult> {
-    let mut dirs_list: Vec<DirEntryInfo> = Vec::new();
+	let mut dirs_list: Vec<DirEntryInfo> = Vec::new();
 
-    #[cfg(target_os = "windows")]
-    {
-        for letter in b'A'..=b'Z' {
-            let letter = letter as char;
-            let root = format!("{}:\\", letter);
-            if std::path::Path::new(&root).is_dir() {
-                dirs_list.push(DirEntryInfo {
-                    name: format!("{}:", letter),
-                    path: root,
-                });
-            }
-        }
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        dirs_list.push(DirEntryInfo {
-            name: "/".to_string(),
-            path: "/".to_string(),
-        });
-    }
+	#[cfg(target_os = "windows")]
+	{
+		for letter in b'A'..=b'Z' {
+			let letter = letter as char;
+			let root = format!("{}:\\", letter);
+			if std::path::Path::new(&root).is_dir() {
+				dirs_list.push(DirEntryInfo {
+					name: format!("{}:", letter),
+					path: root,
+				});
+			}
+		}
+	}
+	#[cfg(not(target_os = "windows"))]
+	{
+		dirs_list.push(DirEntryInfo {
+			name: "/".to_string(),
+			path: "/".to_string(),
+		});
+	}
 
-    Ok(ListDirResult {
-        path: String::new(),
-        parent: None,
-        dirs: dirs_list,
-        files: Vec::new(),
-        is_drives: true,
-    })
+	Ok(ListDirResult {
+		path: String::new(),
+		parent: None,
+		dirs: dirs_list,
+		files: Vec::new(),
+		is_drives: true,
+	})
 }
 
 /// 判断路径是否为可执行项：Unix 按任一执行位，Windows 按 `.exe`/`.bat`/
@@ -204,41 +204,46 @@ pub fn list_drives_inner() -> Result<ListDirResult> {
 /// failure counts as non-executable.
 #[cfg(unix)]
 fn is_executable(path: &std::path::Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    path.metadata()
-        .map(|m| m.permissions().mode() & 0o111 != 0)
-        .unwrap_or(false)
+	use std::os::unix::fs::PermissionsExt;
+	path.metadata()
+		.map(|m| m.permissions().mode() & 0o111 != 0)
+		.unwrap_or(false)
 }
 
 #[cfg(target_os = "windows")]
 fn is_executable(path: &std::path::Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .map(|e| matches!(e.to_ascii_lowercase().as_str(), "exe" | "bat" | "cmd" | "com"))
-        .unwrap_or(false)
+	path.extension()
+		.and_then(|e| e.to_str())
+		.map(|e| {
+			matches!(
+				e.to_ascii_lowercase().as_str(),
+				"exe" | "bat" | "cmd" | "com"
+			)
+		})
+		.unwrap_or(false)
 }
 
 #[cfg(not(any(unix, target_os = "windows")))]
 fn is_executable(_path: &std::path::Path) -> bool {
-    true
+	true
 }
 
 /// 在指定路径下创建一个新子目录（用于目录浏览器的"新建文件夹"操作）。
 /// Create a new subdirectory under the given path (for the directory browser's "new folder" action).
 pub fn create_dir_inner(parent: &str, name: &str) -> Result<String> {
-    let trimmed = name.trim();
-    if trimmed.is_empty() {
-        return Err(crate::core::error::AppError::Other(
-            "目录名不能为空".to_string(),
-        ));
-    }
-    if trimmed.contains(['/', '\\']) || trimmed == ".." {
-        return Err(crate::core::error::AppError::Other(
-            "目录名不能包含路径分隔符".to_string(),
-        ));
-    }
-    let new_dir = std::path::Path::new(parent).join(trimmed);
-    std::fs::create_dir_all(&new_dir)
-        .map_err(|e| crate::core::error::AppError::Other(format!("创建目录失败: {}", e)))?;
-    Ok(new_dir.to_string_lossy().to_string())
+	let trimmed = name.trim();
+	if trimmed.is_empty() {
+		return Err(crate::core::error::AppError::Other(
+			"目录名不能为空".to_string(),
+		));
+	}
+	if trimmed.contains(['/', '\\']) || trimmed == ".." {
+		return Err(crate::core::error::AppError::Other(
+			"目录名不能包含路径分隔符".to_string(),
+		));
+	}
+	let new_dir = std::path::Path::new(parent).join(trimmed);
+	std::fs::create_dir_all(&new_dir)
+		.map_err(|e| crate::core::error::AppError::Other(format!("创建目录失败: {}", e)))?;
+	Ok(new_dir.to_string_lossy().to_string())
 }

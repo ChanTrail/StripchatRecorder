@@ -28,26 +28,26 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// 探活结果。/ Probe outcome.
 pub(super) enum ProbeOutcome {
-    /// ECH 被接受且边缘能回源该主机 / ECH accepted and the edge can route the host
-    Good,
-    /// 连接、TLS 或回源失败——目标按非 ECH 主机处理（负缓存回退）。
-    /// 注意：CF 边缘对任意 inner SNI 都会接受共享 ECH 密钥的 offer，因此
-    /// 「握手成功」不代表「边缘能回源该主机」——zone-miss 主机会在请求层
-    /// 返回 HTTP 530，探活必须看过回源结果才算通过。
-    /// Connect, TLS, or origin failure — treat the target as non-ECH
-    /// (negative-cache fallback). Note: the CF edge accepts the shared ECH
-    /// key for ANY inner SNI, so a "successful handshake" does NOT mean the
-    /// host can be routed — zone-miss hosts return HTTP 530 at request time;
-    /// the probe must see a real origin response to pass.
-    Bad,
-    /// 服务端拒绝 ECH：`Some(bytes)` = 附了 retry_configs 的原始
-    /// ECHConfigList（借来的密钥已轮换，可就地换新）；`None` = 未附
-    /// （经 `ech_name_override` 判定为拒绝），只能经 DoH 重新解析。
-    /// Server rejected ECH: `Some(bytes)` = the raw retry_configs
-    /// ECHConfigList (the borrowed key rotated — can be swapped in place);
-    /// `None` = none sent (identified as rejection via `ech_name_override`),
-    /// so the borrowed config must be re-resolved via DoH.
-    Rejected(Option<Vec<u8>>),
+	/// ECH 被接受且边缘能回源该主机 / ECH accepted and the edge can route the host
+	Good,
+	/// 连接、TLS 或回源失败——目标按非 ECH 主机处理（负缓存回退）。
+	/// 注意：CF 边缘对任意 inner SNI 都会接受共享 ECH 密钥的 offer，因此
+	/// 「握手成功」不代表「边缘能回源该主机」——zone-miss 主机会在请求层
+	/// 返回 HTTP 530，探活必须看过回源结果才算通过。
+	/// Connect, TLS, or origin failure — treat the target as non-ECH
+	/// (negative-cache fallback). Note: the CF edge accepts the shared ECH
+	/// key for ANY inner SNI, so a "successful handshake" does NOT mean the
+	/// host can be routed — zone-miss hosts return HTTP 530 at request time;
+	/// the probe must see a real origin response to pass.
+	Bad,
+	/// 服务端拒绝 ECH：`Some(bytes)` = 附了 retry_configs 的原始
+	/// ECHConfigList（借来的密钥已轮换，可就地换新）；`None` = 未附
+	/// （经 `ech_name_override` 判定为拒绝），只能经 DoH 重新解析。
+	/// Server rejected ECH: `Some(bytes)` = the raw retry_configs
+	/// ECHConfigList (the borrowed key rotated — can be swapped in place);
+	/// `None` = none sent (identified as rejection via `ech_name_override`),
+	/// so the borrowed config must be re-resolved via DoH.
+	Rejected(Option<Vec<u8>>),
 }
 
 /// 构造一次探活握手用的 `Ssl`：ECH config + http/1.1 ALPN，证书不验证
@@ -56,33 +56,33 @@ pub(super) enum ProbeOutcome {
 /// certificate verification off (the probe only cares about ECH
 /// acceptance/edge routability; the real wreq data legs verify normally).
 fn ech_ssl(ech_list: &[u8], host: &str) -> Option<Ssl> {
-    let connector = SslConnector::bare_builder(SslMethod::tls()).ok()?.build();
-    let mut cfg = connector.configure().ok()?;
-    cfg.set_verify(SslVerifyMode::NONE);
-    cfg.set_verify_hostname(false);
-    // ALPN 只报 http/1.1：裸写 GET / 后只需解析一行状态码 /
-    // offer only http/1.1: after a raw GET / just the status line needs parsing
-    cfg.set_alpn_protos(b"\x08http/1.1").ok()?;
-    let mut ssl = cfg.into_ssl(host).ok()?;
-    // `SSL_set1_ech_config_list`：外层 SNI 变为 public_name，真实主机进入
-    // 加密的 inner ClientHello / `SSL_set1_ech_config_list`: the outer SNI
-    // becomes public_name while the true host goes into the encrypted inner
-    // ClientHello
-    ssl.set_ech_config_list(ech_list).ok()?;
-    Some(ssl)
+	let connector = SslConnector::bare_builder(SslMethod::tls()).ok()?.build();
+	let mut cfg = connector.configure().ok()?;
+	cfg.set_verify(SslVerifyMode::NONE);
+	cfg.set_verify_hostname(false);
+	// ALPN 只报 http/1.1：裸写 GET / 后只需解析一行状态码 /
+	// offer only http/1.1: after a raw GET / just the status line needs parsing
+	cfg.set_alpn_protos(b"\x08http/1.1").ok()?;
+	let mut ssl = cfg.into_ssl(host).ok()?;
+	// `SSL_set1_ech_config_list`：外层 SNI 变为 public_name，真实主机进入
+	// 加密的 inner ClientHello / `SSL_set1_ech_config_list`: the outer SNI
+	// becomes public_name while the true host goes into the encrypted inner
+	// ClientHello
+	ssl.set_ech_config_list(ech_list).ok()?;
+	Some(ssl)
 }
 
 /// 单地址握手尝试的结果 / Outcome of one per-address handshake attempt
 enum Shake {
-    /// 握手完成且 `SSL_ech_accepted`——已建立可用连接 /
-    /// handshake done and `SSL_ech_accepted` — usable connection
-    Accepted(SslStream<TcpStream>),
-    /// 服务端拒绝 ECH：retry_configs（有则携带）/
-    /// server rejected ECH: retry_configs when provided
-    Rejected(Option<Vec<u8>>),
-    /// 其他失败（TCP/TLS/超时或握手完成但 ECH 未被接受）/
-    /// anything else (TCP/TLS/timeout, or handshake done without ECH acceptance)
-    Other,
+	/// 握手完成且 `SSL_ech_accepted`——已建立可用连接 /
+	/// handshake done and `SSL_ech_accepted` — usable connection
+	Accepted(SslStream<TcpStream>),
+	/// 服务端拒绝 ECH：retry_configs（有则携带）/
+	/// server rejected ECH: retry_configs when provided
+	Rejected(Option<Vec<u8>>),
+	/// 其他失败（TCP/TLS/超时或握手完成但 ECH 未被接受）/
+	/// anything else (TCP/TLS/timeout, or handshake done without ECH acceptance)
+	Other,
 }
 
 /// 对单个地址做 TCP + TLS/ECH 握手分类。ECH 拒绝在 BoringSSL 里表现
@@ -94,30 +94,30 @@ enum Shake {
 /// object (the latter is the name the server tells the client to verify
 /// against on rejection).
 async fn shake(ech_list: &[u8], host: &str, addr: SocketAddr) -> Shake {
-    let Some(ssl) = ech_ssl(ech_list, host) else {
-        return Shake::Other;
-    };
-    tokio::time::timeout(PROBE_TIMEOUT, async {
-        let tcp = TcpStream::connect(addr).await.ok()?;
-        let mut stream = SslStream::new(ssl, tcp).ok()?;
-        match Pin::new(&mut stream).connect().await {
-            Ok(()) if stream.ssl().ech_accepted() => Some(Shake::Accepted(stream)),
-            Ok(()) => Some(Shake::Other), // 握手完成但 ECH 未接受 / handshake done, ECH not accepted
-            Err(_) => {
-                let ssl = stream.ssl();
-                if let Some(rc) = ssl.get_ech_retry_configs() {
-                    return Some(Shake::Rejected(Some(rc.to_vec())));
-                }
-                if ssl.get_ech_name_override().is_some() {
-                    return Some(Shake::Rejected(None));
-                }
-                Some(Shake::Other)
-            }
-        }
-    })
-    .await
-    .unwrap_or(Some(Shake::Other))
-    .unwrap_or(Shake::Other)
+	let Some(ssl) = ech_ssl(ech_list, host) else {
+		return Shake::Other;
+	};
+	tokio::time::timeout(PROBE_TIMEOUT, async {
+		let tcp = TcpStream::connect(addr).await.ok()?;
+		let mut stream = SslStream::new(ssl, tcp).ok()?;
+		match Pin::new(&mut stream).connect().await {
+			Ok(()) if stream.ssl().ech_accepted() => Some(Shake::Accepted(stream)),
+			Ok(()) => Some(Shake::Other), // 握手完成但 ECH 未接受 / handshake done, ECH not accepted
+			Err(_) => {
+				let ssl = stream.ssl();
+				if let Some(rc) = ssl.get_ech_retry_configs() {
+					return Some(Shake::Rejected(Some(rc.to_vec())));
+				}
+				if ssl.get_ech_name_override().is_some() {
+					return Some(Shake::Rejected(None));
+				}
+				Some(Shake::Other)
+			}
+		}
+	})
+	.await
+	.unwrap_or(Some(Shake::Other))
+	.unwrap_or(Shake::Other)
 }
 
 /// 探活：握手 + `ech_accepted` 断言 + 一次 `GET /` 回源检查（状态码 <500 才算
@@ -128,21 +128,21 @@ async fn shake(ech_list: &[u8], host: &str, addr: SocketAddr) -> Shake {
 /// such as 530 zone-miss). Redirects are not followed — any HTTP response
 /// proves the edge routes the host; where it leads is the app's business.
 pub(super) async fn probe_ech(ech_list: &[u8], host: &str, addrs: &[SocketAddr]) -> ProbeOutcome {
-    let mut rejected: Option<Option<Vec<u8>>> = None;
-    for addr in addrs {
-        match shake(ech_list, host, *addr).await {
-            Shake::Accepted(mut stream) => return http_probe(&mut stream, host).await,
-            // ECH 被拒：记下 retry_configs（若有），继续试下个地址 /
-            // ECH rejected: record retry_configs (if any) and keep trying
-            // the next address
-            Shake::Rejected(rc) => rejected = Some(rc),
-            Shake::Other => {}
-        }
-    }
-    match rejected {
-        Some(rc) => ProbeOutcome::Rejected(rc),
-        None => ProbeOutcome::Bad,
-    }
+	let mut rejected: Option<Option<Vec<u8>>> = None;
+	for addr in addrs {
+		match shake(ech_list, host, *addr).await {
+			Shake::Accepted(mut stream) => return http_probe(&mut stream, host).await,
+			// ECH 被拒：记下 retry_configs（若有），继续试下个地址 /
+			// ECH rejected: record retry_configs (if any) and keep trying
+			// the next address
+			Shake::Rejected(rc) => rejected = Some(rc),
+			Shake::Other => {}
+		}
+	}
+	match rejected {
+		Some(rc) => ProbeOutcome::Rejected(rc),
+		None => ProbeOutcome::Bad,
+	}
 }
 
 /// 竞速测速目标：CF 自带测速端点。任何 CF 边缘都能按 inner SNI 路由它
@@ -170,12 +170,12 @@ const RACE_TIMEOUT: Duration = Duration::from_secs(8);
 /// bytes → a real throughput sample for scoring; a small body (e.g. a 404
 /// error page) degrades to a handshake-latency sample.
 pub(super) async fn probe_addr_speed(
-    ech_list: &[u8],
-    addr: SocketAddr,
+	ech_list: &[u8],
+	addr: SocketAddr,
 ) -> Option<(Duration, usize)> {
-    let ssl = ech_ssl(ech_list, RACE_PROBE_HOST)?;
-    let t0 = Instant::now();
-    tokio::time::timeout(RACE_TIMEOUT, async {
+	let ssl = ech_ssl(ech_list, RACE_PROBE_HOST)?;
+	let t0 = Instant::now();
+	tokio::time::timeout(RACE_TIMEOUT, async {
         let tcp = TcpStream::connect(addr).await?;
         let mut stream = SslStream::new(ssl, tcp)?;
         Pin::new(&mut stream)
@@ -212,28 +212,28 @@ pub(super) async fn probe_addr_speed(
 /// ECH connection: a status <500 means `Good` (the edge routes), ≥500 or any
 /// IO/parse failure means `Bad`.
 async fn http_probe(stream: &mut SslStream<TcpStream>, host: &str) -> ProbeOutcome {
-    let req = format!(
-        "GET / HTTP/1.1\r\nHost: {host}\r\nUser-Agent: curl/8.0\r\nAccept: */*\r\nConnection: close\r\n\r\n"
-    );
-    let mut buf = [0u8; 512];
-    let io = async {
-        stream.write_all(req.as_bytes()).await?;
-        stream.read(&mut buf).await
-    };
-    let Ok(Ok(n)) = tokio::time::timeout(PROBE_TIMEOUT, io).await else {
-        return ProbeOutcome::Bad;
-    };
-    let head = String::from_utf8_lossy(&buf[..n]);
-    let Some(line) = head.lines().next() else {
-        return ProbeOutcome::Bad;
-    };
-    // 解析 "HTTP/1.1 NNN" / parse "HTTP/1.1 NNN"
-    let code = line
-        .split_whitespace()
-        .nth(1)
-        .and_then(|s| s.parse::<u16>().ok());
-    match code {
-        Some(c) if c < 500 => ProbeOutcome::Good,
-        _ => ProbeOutcome::Bad,
-    }
+	let req = format!(
+		"GET / HTTP/1.1\r\nHost: {host}\r\nUser-Agent: curl/8.0\r\nAccept: */*\r\nConnection: close\r\n\r\n"
+	);
+	let mut buf = [0u8; 512];
+	let io = async {
+		stream.write_all(req.as_bytes()).await?;
+		stream.read(&mut buf).await
+	};
+	let Ok(Ok(n)) = tokio::time::timeout(PROBE_TIMEOUT, io).await else {
+		return ProbeOutcome::Bad;
+	};
+	let head = String::from_utf8_lossy(&buf[..n]);
+	let Some(line) = head.lines().next() else {
+		return ProbeOutcome::Bad;
+	};
+	// 解析 "HTTP/1.1 NNN" / parse "HTTP/1.1 NNN"
+	let code = line
+		.split_whitespace()
+		.nth(1)
+		.and_then(|s| s.parse::<u16>().ok());
+	match code {
+		Some(c) if c < 500 => ProbeOutcome::Good,
+		_ => ProbeOutcome::Bad,
+	}
 }

@@ -21,9 +21,7 @@ function check(): boolean {
 	// Client Hints: when a mobile browser requests "desktop site" the UA is
 	// spoofed as desktop but userAgentData.mobile stays true — so a `false`
 	// value must not override a positive UA-regex hit.
-	const ch = (
-		navigator as Navigator & { userAgentData?: { mobile?: boolean } }
-	).userAgentData;
+	const ch = (navigator as Navigator & { userAgentData?: { mobile?: boolean } }).userAgentData;
 
 	const ua = navigator.userAgent;
 	// iPadOS 13+ 默认桌面 UA，靠 Macintosh + maxTouchPoints 识别 /

@@ -73,9 +73,7 @@ export interface LoadLocaleResult {
  * @param localeCode - BCP 47 语言标签 / BCP 47 language tag
  * @returns LoadLocaleResult，失败时 modules 为空对象 / modules is {} on failure
  */
-export async function loadLocaleFromServer(
-	localeCode: string,
-): Promise<LoadLocaleResult> {
+export async function loadLocaleFromServer(localeCode: string): Promise<LoadLocaleResult> {
 	try {
 		const data = await invoke<Record<string, unknown>>("get_locale", {
 			localeCode,
@@ -83,9 +81,15 @@ export async function loadLocaleFromServer(
 
 		if (data.app && typeof data.app === "object") {
 			if (!i18n.global.availableLocales.includes(localeCode as never)) {
-				i18n.global.setLocaleMessage(localeCode as never, data.app as Record<string, unknown>);
+				i18n.global.setLocaleMessage(
+					localeCode as never,
+					data.app as Record<string, unknown>,
+				);
 			} else {
-				i18n.global.mergeLocaleMessage(localeCode as never, data.app as Record<string, unknown>);
+				i18n.global.mergeLocaleMessage(
+					localeCode as never,
+					data.app as Record<string, unknown>,
+				);
 			}
 		}
 

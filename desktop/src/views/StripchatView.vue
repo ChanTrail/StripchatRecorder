@@ -19,6 +19,7 @@ import { Check, Eye, EyeOff, Loader2, Play, Plus, Users, Vibrate } from "@lucide
 import { call } from "@/lib/api";
 import { toast } from "@/composables/useNotify";
 import { useStreamersStore } from "@/stores/streamers";
+import { useSettingsStore } from "@/stores/settings";
 import { Button } from "@/components/ui/button";
 import {
 	Select,
@@ -30,6 +31,7 @@ import {
 
 const { t } = useI18n();
 const streamersStore = useStreamersStore();
+const settingsStore = useSettingsStore();
 
 // ─── 类型 / Types ───────────────────────────────────────────────────────────
 
@@ -69,35 +71,64 @@ const PRIMARY_TAGS = ["girls", "couples", "men", "trans"] as const;
 /** 二级标签 slug：外观/特质组（全部对线上接口实测返回非空）/
  * Second-level tag slugs — traits group (all verified non-empty against the live API) */
 const TAG_SLUGS = [
-	"ageTeen", "ageYoung", "ageMilf", "ageMature",
-	"ethnicityAsian", "ethnicityWhite", "ethnicityEbony", "ethnicityLatino",
-	"ethnicityIndian", "ethnicityMiddleEastern",
-	"bodyTypePetite", "bodyTypeAthletic", "bodyTypeCurvy", "bodyTypeBBW",
-	"specificsBigTits", "specificsBigAss", "specificsBigCock",
-	"hairColorBlonde", "hairColorBlack", "hairColorRed",
-	"subcultureGoth", "subcultureRomantic", "subcultureAnime", "subcultureStudent",
+	"ageTeen",
+	"ageYoung",
+	"ageMilf",
+	"ageMature",
+	"ethnicityAsian",
+	"ethnicityWhite",
+	"ethnicityEbony",
+	"ethnicityLatino",
+	"ethnicityIndian",
+	"ethnicityMiddleEastern",
+	"bodyTypePetite",
+	"bodyTypeAthletic",
+	"bodyTypeCurvy",
+	"bodyTypeBBW",
+	"specificsBigTits",
+	"specificsBigAss",
+	"specificsBigCock",
+	"hairColorBlonde",
+	"hairColorBlack",
+	"hairColorRed",
+	"subcultureGoth",
+	"subcultureRomantic",
+	"subcultureAnime",
+	"subcultureStudent",
 ] as const;
 
 /** 二级标签 slug：语言组（tagLanguage 前缀，实测在线数>0 的有效 slug）/
  * Second-level tag slugs — language group (tagLanguage-prefixed; only slugs
  * verified to return nonzero counts against the live API) */
 const LANG_SLUGS = [
-	"tagLanguageChinese", "tagLanguageJapanese", "tagLanguageKorean",
-	"tagLanguageTaiwanese", "tagLanguageVietnamese", "tagLanguageThai",
+	"tagLanguageChinese",
+	"tagLanguageJapanese",
+	"tagLanguageKorean",
+	"tagLanguageTaiwanese",
+	"tagLanguageVietnamese",
+	"tagLanguageThai",
 	"tagLanguageFilipino",
-	"tagLanguageHindi", "tagLanguageBengali",
-	"tagLanguageUkrainian", "tagLanguageRomanian", "tagLanguageFrench",
-	"tagLanguageItalian", "tagLanguageTurkish", "tagLanguageSpanish",
-	"tagLanguageHungarian", "tagLanguageDutch", "tagLanguagePolish",
-	"tagLanguageCzech", "tagLanguagePortuguese", "tagLanguageGreek",
+	"tagLanguageHindi",
+	"tagLanguageBengali",
+	"tagLanguageUkrainian",
+	"tagLanguageRomanian",
+	"tagLanguageFrench",
+	"tagLanguageItalian",
+	"tagLanguageTurkish",
+	"tagLanguageSpanish",
+	"tagLanguageHungarian",
+	"tagLanguageDutch",
+	"tagLanguagePolish",
+	"tagLanguageCzech",
+	"tagLanguagePortuguese",
+	"tagLanguageGreek",
 ] as const;
 
 /** 直播状态 → 状态点颜色 / Live status → status-dot color */
 function statusColor(status: string): string {
 	if (status === "public") return "bg-green-500";
 	if (status === "groupShow" || status === "ticketShow") return "bg-amber-500";
-	if (status === "private" || status === "p2p" || status === "spy")
-		return "bg-violet-500";
+	if (status === "private" || status === "p2p" || status === "spy") return "bg-violet-500";
 	return "bg-muted-foreground";
 }
 
@@ -313,10 +344,65 @@ async function playRelay(m: ScModel) {
 	}
 }
 
+// ─── 状态轮询 / Status polling ──────────────────────────────────────────────
+
+/** 单轮最多回刷的页数（逐页请求上游；限制深滚动时的请求量）/
+ * Max pages refreshed per tick (fetched page-by-page upstream; bounds request
+ * volume for deeply scrolled lists) */
+const MAX_REFRESH_PAGES = 5;
+
+/** 静默回刷已加载卡片的直播状态：按 username 合并字段，不重排列表、不动
+ * 滚动位置（顺带更新预览图——缩略图本身随直播画面变化，等同「画面刷新」）。
+ * Silently refresh live status of loaded cards: merge fresh fields by
+ * username — no reordering, scroll position untouched (previews update too,
+ * effectively a thumbnail refresh since they follow the live feed). */
+async function refreshStatuses() {
+	if (loading.value || loadingMore.value || models.value.length === 0) return;
+	const pages = Math.min(Math.ceil(models.value.length / PAGE_SIZE), MAX_REFRESH_PAGES);
+	const results = await Promise.allSettled(
+		Array.from({ length: pages }, (_, i) =>
+			call<ScModelsResp>("list_sc_models", {
+				primaryTag: primaryTag.value,
+				tag: tag.value,
+				sortBy: sortBy.value,
+				offset: i * PAGE_SIZE,
+				limit: PAGE_SIZE,
+			}),
+		),
+	);
+	const fresh = new Map<string, ScModel>();
+	for (const r of results) {
+		if (r.status === "fulfilled") {
+			for (const m of r.value.models ?? []) fresh.set(m.username, m);
+		}
+	}
+	if (fresh.size === 0) return;
+	models.value = models.value.map((m) => fresh.get(m.username) ?? m);
+}
+
+let statusPollTimer: ReturnType<typeof setInterval> | null = null;
+
+/** 按设置的轮询间隔（秒）重启定时器 / Restart the timer per the configured poll interval (seconds) */
+function restartStatusPoll() {
+	if (statusPollTimer) clearInterval(statusPollTimer);
+	// 下限 10s 防止误配过密请求上游 / 10s floor guards against over-frequent upstream requests
+	const secs = Math.max(10, settingsStore.settings.poll_interval_secs || 30);
+	statusPollTimer = setInterval(() => void refreshStatuses(), secs * 1000);
+}
+
+/** 轮询间隔被改动（含设置跨端同步）→ 重启定时器 /
+ * Poll interval changed (incl. settings synced from another client) → restart */
+watch(() => settingsStore.settings.poll_interval_secs, restartStatusPoll);
+
 // ─── 无限滚动 / Infinite scroll ─────────────────────────────────────────────
 
 onMounted(() => {
 	loadPage(true);
+	// 直接进入本页时设置可能尚未加载——先取设置再按其间隔启动轮询 /
+	// Settings may be unloaded when landing here directly — fetch first so the
+	// configured interval is used for the status poll
+	if (!settingsStore.loaded) void settingsStore.fetchSettings();
+	restartStatusPoll();
 	observer = new IntersectionObserver(
 		(entries) => {
 			if (entries[0]?.isIntersecting) loadPage(false);
@@ -326,66 +412,91 @@ onMounted(() => {
 	if (sentinel.value) observer.observe(sentinel.value);
 });
 
-onUnmounted(() => observer?.disconnect());
+onUnmounted(() => {
+	observer?.disconnect();
+	if (statusPollTimer) clearInterval(statusPollTimer);
+});
 </script>
 
 <template>
 	<div class="flex h-full min-h-0 flex-col gap-4 overflow-y-auto px-6 pt-6 pb-6">
-		<!-- 页头：窄屏（<640px）改纵向——标题行在上、控件逐行全宽在下，
-			标题不被挤压；宽屏保持左右布局 / Header: vertical below 640 px —
-			title on top, controls stacked full-width below so the title isn't
-			squeezed; wide screens keep the side-by-side layout -->
-		<header class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-			<div>
-				<h1 class="text-xl font-bold mb-0.5">{{ t("stripchat.title") }}</h1>
-				<p class="text-sm text-muted-foreground">
-					{{ t("stripchat.description") }}
-				</p>
-			</div>
-			<div class="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center">
-				<Select v-model="privacyMode">
-					<SelectTrigger class="w-full cursor-pointer sm:w-auto sm:shrink-0" :title="t('home.privacy.label')">
-						<SelectValue />
-					</SelectTrigger>
-					<SelectContent>
-						<SelectItem value="off" class="cursor-pointer">{{ t("home.privacy.off") }}</SelectItem>
-						<SelectItem value="live" class="cursor-pointer">{{ t("home.privacy.live") }}</SelectItem>
-						<SelectItem value="all" class="cursor-pointer">{{ t("home.privacy.all") }}</SelectItem>
-					</SelectContent>
-				</Select>
-				<Select v-model="sortBy">
-					<SelectTrigger class="w-full cursor-pointer gap-2 sm:w-auto sm:shrink-0">
-						<SelectValue />
-					</SelectTrigger>
-					<SelectContent>
-						<SelectItem value="stripRanking" class="cursor-pointer">
-							{{ t("stripchat.sort.stripRanking") }}
-						</SelectItem>
-						<SelectItem value="trending" class="cursor-pointer">
-							{{ t("stripchat.sort.trending") }}
-						</SelectItem>
-					</SelectContent>
-				</Select>
-			</div>
-		</header>
+		<!-- 固定页头区：标题+一级页签随滚动钉在顶部。滚动容器带 pt-6 时，
+			sticky top:0 钉在 padding 下缘，滑过的内容会在上方 padding 条带
+		 透出——-top-6（钉点上移）+ -mt-6（吃掉容器 padding）+ pt-6（内部
+		 补回）让底色向上铺满该条带；横向同理 -mx-6 px-6 /
+			Pinned header zone: title + primary tabs stick while content
+			scrolls. With a padded scroll container, sticky top:0 anchors below
+			the padding band, letting scrolled content bleed through that strip —
+			-top-6 (raises the anchor) + -mt-6 (absorbs the container padding)
+			+ pt-6 (restores inner spacing) extends the background over it;
+			-mx-6 px-6 does the same horizontally -->
+		<div class="bg-background sticky -top-6 z-20 -mx-6 -mt-6 flex flex-col gap-4 px-6 pt-6">
+			<!-- 页头：窄屏（<640px）改纵向——标题行在上、控件逐行全宽在下，
+				标题不被挤压；宽屏保持左右布局 / Header: vertical below 640 px —
+				title on top, controls stacked full-width below so the title isn't
+				squeezed; wide screens keep the side-by-side layout -->
+			<header class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+				<div>
+					<h1 class="text-xl font-bold mb-0.5">{{ t("stripchat.title") }}</h1>
+					<p class="text-sm text-muted-foreground">
+						{{ t("stripchat.description") }}
+					</p>
+				</div>
+				<div class="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center">
+					<Select v-model="privacyMode">
+						<SelectTrigger
+							class="w-full cursor-pointer sm:w-auto sm:shrink-0"
+							:title="t('home.privacy.label')"
+						>
+							<SelectValue />
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value="off" class="cursor-pointer">{{
+								t("home.privacy.off")
+							}}</SelectItem>
+							<SelectItem value="live" class="cursor-pointer">{{
+								t("home.privacy.live")
+							}}</SelectItem>
+							<SelectItem value="all" class="cursor-pointer">{{
+								t("home.privacy.all")
+							}}</SelectItem>
+						</SelectContent>
+					</Select>
+					<Select v-model="sortBy">
+						<SelectTrigger class="w-full cursor-pointer gap-2 sm:w-auto sm:shrink-0">
+							<SelectValue />
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value="stripRanking" class="cursor-pointer">
+								{{ t("stripchat.sort.stripRanking") }}
+							</SelectItem>
+							<SelectItem value="trending" class="cursor-pointer">
+								{{ t("stripchat.sort.trending") }}
+							</SelectItem>
+						</SelectContent>
+					</Select>
+				</div>
+			</header>
 
-		<!-- 一级分类页签 / Primary-category tabs -->
-		<div class="flex gap-1 border-b border-border shrink-0">
-			<Button
-				v-for="pt in PRIMARY_TAGS"
-				:key="pt"
-				variant="ghost"
-				class="px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px rounded-none cursor-pointer"
-				:class="
-					primaryTag === pt
-						? 'border-primary text-foreground'
-						: 'border-transparent text-muted-foreground hover:text-foreground'
-				"
-				@click="primaryTag = pt"
-			>
-				{{ t(`stripchat.tabs.${pt}`) }}
-			</Button>
+			<!-- 一级分类页签 / Primary-category tabs -->
+			<div class="flex gap-1 border-b border-border shrink-0">
+				<Button
+					v-for="pt in PRIMARY_TAGS"
+					:key="pt"
+					variant="ghost"
+					class="px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px rounded-none cursor-pointer"
+					:class="
+						primaryTag === pt
+							? 'border-primary text-foreground'
+							: 'border-transparent text-muted-foreground hover:text-foreground'
+					"
+					@click="primaryTag = pt"
+				>
+					{{ t(`stripchat.tabs.${pt}`) }}
+				</Button>
+			</div>
 		</div>
+		<!-- /固定页头区 sticky header zone -->
 
 		<!-- 二级标签（flex-wrap 换行平铺——桌面端横滚不易用，全部 chip 直接可见可点）
 		     Second-level tags (flex-wrap layout — horizontal scrolling is awkward on
@@ -393,7 +504,9 @@ onUnmounted(() => observer?.disconnect());
 		<div class="flex shrink-0 flex-col gap-1.5 pb-1">
 			<!-- 特征组 / Traits group -->
 			<div class="flex flex-wrap items-center gap-1.5">
-				<span class="text-xs text-muted-foreground">{{ t("stripchat.groups.traits") }}</span>
+				<span class="text-xs text-muted-foreground">{{
+					t("stripchat.groups.traits")
+				}}</span>
 				<button
 					class="shrink-0 cursor-pointer rounded-full border px-3 py-1 text-xs transition-colors"
 					:class="
@@ -444,10 +557,7 @@ onUnmounted(() => observer?.disconnect());
 		</p>
 
 		<!-- 初次加载 / Initial loading -->
-		<div
-			v-if="loading"
-			class="flex flex-1 items-center justify-center text-muted-foreground"
-		>
+		<div v-if="loading" class="flex flex-1 items-center justify-center text-muted-foreground">
 			<Loader2 class="h-6 w-6 animate-spin" />
 		</div>
 
@@ -460,10 +570,7 @@ onUnmounted(() => observer?.disconnect());
 		</div>
 
 		<!-- 网格 / Grid -->
-		<div
-			v-else
-			class="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3"
-		>
+		<div v-else class="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
 			<div
 				v-for="m in models"
 				:key="`${m.model_id}-${m.username}`"
@@ -499,8 +606,6 @@ onUnmounted(() => observer?.disconnect());
 						</div>
 					</div>
 
-
-
 					<!-- 播放浮层：悬停浮现的中央播放键；pointer-events-none 不拦截
 						点击（整卡可点），唤起期间转圈 / Play overlay: a center play
 						button fading in on hover; pointer-events-none keeps the whole
@@ -508,7 +613,9 @@ onUnmounted(() => observer?.disconnect());
 					<div
 						class="pointer-events-none absolute inset-0 z-10 flex items-center justify-center opacity-0 transition-opacity group-hover:opacity-100"
 					>
-						<span class="flex size-12 items-center justify-center rounded-full bg-black/60 text-white">
+						<span
+							class="flex size-12 items-center justify-center rounded-full bg-black/60 text-white"
+						>
 							<Loader2
 								v-if="playingSet.has(m.username)"
 								class="size-6 animate-spin"
@@ -526,7 +633,11 @@ onUnmounted(() => observer?.disconnect());
 						v-if="privacyApplies"
 						type="button"
 						class="absolute bottom-2 right-11 z-10 size-7 rounded-md bg-black/55 text-white/90 flex items-center justify-center opacity-100 transition-opacity hover:bg-black/75 cursor-pointer"
-						:title="shouldBlur(m) ? t('streamerCard.revealImage') : t('streamerCard.blurImage')"
+						:title="
+							shouldBlur(m)
+								? t('streamerCard.revealImage')
+								: t('streamerCard.blurImage')
+						"
 						@click.stop.prevent="toggleBlur(m)"
 					>
 						<Eye v-if="shouldBlur(m)" class="size-4" />
@@ -537,10 +648,7 @@ onUnmounted(() => observer?.disconnect());
 					<div
 						class="absolute left-2 top-2 flex items-center gap-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[11px] text-white"
 					>
-						<span
-							class="h-1.5 w-1.5 rounded-full"
-							:class="statusColor(m.status)"
-						/>
+						<span class="h-1.5 w-1.5 rounded-full" :class="statusColor(m.status)" />
 						{{ statusLabel(m.status) }}
 					</div>
 
@@ -550,19 +658,23 @@ onUnmounted(() => observer?.disconnect());
 							v-if="m.has_toy"
 							class="flex items-center gap-0.5 rounded bg-pink-600/90 px-1.5 py-0.5 text-[10px] font-semibold text-white"
 							:title="t('stripchat.toy')"
-						><Vibrate class="h-3 w-3" />TOY</span>
+							><Vibrate class="h-3 w-3" />TOY</span
+						>
 						<span
 							v-if="m.is_new"
 							class="rounded bg-emerald-600/90 px-1.5 py-0.5 text-[10px] font-semibold text-white"
-						>NEW</span>
+							>NEW</span
+						>
 						<span
 							v-if="m.is_hd"
 							class="rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-semibold text-white"
-						>HD</span>
+							>HD</span
+						>
 						<span
 							v-if="m.is_vr"
 							class="rounded bg-violet-600/90 px-1.5 py-0.5 text-[10px] font-semibold text-white"
-						>VR</span>
+							>VR</span
+						>
 					</div>
 
 					<!-- 底部信息条 / Bottom info bar -->
@@ -576,9 +688,7 @@ onUnmounted(() => observer?.disconnect());
 							<p class="flex items-center gap-1 text-[11px] text-white/80">
 								<Eye class="h-3 w-3" />
 								{{ m.viewers.toLocaleString() }}
-								<span v-if="m.country" class="uppercase">
-									· {{ m.country }}
-								</span>
+								<span v-if="m.country" class="uppercase"> · {{ m.country }} </span>
 							</p>
 						</div>
 						<Button
@@ -610,10 +720,7 @@ onUnmounted(() => observer?.disconnect());
 		<!-- 无限滚动哨兵 / Infinite-scroll sentinel -->
 		<div ref="sentinel" class="flex h-10 shrink-0 items-center justify-center">
 			<Loader2 v-if="loadingMore" class="h-5 w-5 animate-spin text-muted-foreground" />
-			<span
-				v-else-if="!hasMore && models.length > 0"
-				class="text-xs text-muted-foreground"
-			>
+			<span v-else-if="!hasMore && models.length > 0" class="text-xs text-muted-foreground">
 				{{ t("stripchat.end") }}
 			</span>
 		</div>

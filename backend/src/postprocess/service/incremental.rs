@@ -20,16 +20,16 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 /// must receive session_dir as its input.
 /// Otherwise (session_dir already deleted or never existed), use video_path directly.
 pub fn infer_initial_path(video_path: &std::path::Path) -> std::path::PathBuf {
-    if let (Some(parent), Some(stem)) = (
-        video_path.parent(),
-        video_path.file_stem().and_then(|s| s.to_str()),
-    ) {
-        let session_dir = parent.join(stem);
-        if session_dir.is_dir() {
-            return session_dir;
-        }
-    }
-    video_path.to_path_buf()
+	if let (Some(parent), Some(stem)) = (
+		video_path.parent(),
+		video_path.file_stem().and_then(|s| s.to_str()),
+	) {
+		let session_dir = parent.join(stem);
+		if session_dir.is_dir() {
+			return session_dir;
+		}
+	}
+	video_path.to_path_buf()
 }
 
 /// 计算节点当前参数 + 连线的指纹（sha256 十六进制字符串），用于与上次执行记录比较
@@ -44,37 +44,37 @@ pub fn infer_initial_path(video_path: &std::path::Path) -> std::path::PathBuf {
 /// change detection is kept. BTreeMap guarantees stable key ordering so the fingerprint
 /// doesn't depend on HashMap iteration order.
 pub(super) fn node_config_fingerprint(node: &PipelineNode) -> String {
-    let params: BTreeMap<&String, &serde_json::Value> = node.params.iter().collect();
-    let wiring: BTreeMap<usize, (String, usize)> = node
-        .inputs
-        .iter()
-        .map(|(port, input_ref)| (*port, (input_ref.node_id.clone(), input_ref.port)))
-        .collect();
-    // enabled 纳入指纹：禁用节点现在会被执行引擎当作"跳过并透传"处理（见
-    // exec.rs 的文档说明），这是一种与"正常执行"截然不同的行为，因此启用/禁用
-    // 状态的切换必须被视为"自身配置变更"，强制重新评估——否则在启用状态切换后
-    // 重新触发后处理时，指纹不变会导致该节点被误判为"未变更"而跳过重新执行，
-    // 继续复用切换前的旧结果（如把"已禁用透传"的旧输出当作"现在应该真正执行"
-    // 的结果直接复用）。
-    //
-    // enabled is included in the fingerprint: a disabled node is now treated by the
-    // execution engine as "skip and pass through" (see exec.rs's doc comments), a
-    // fundamentally different behavior from "run normally" — so toggling enabled must
-    // count as a "self config change" and force re-evaluation. Otherwise, re-triggering
-    // post-processing after flipping enabled would see an unchanged fingerprint and
-    // wrongly treat the node as "unchanged", skipping re-execution and continuing to
-    // reuse the stale pre-toggle result (e.g. reusing an old "disabled pass-through"
-    // output as if it were the result of "now actually running").
-    let combined =
-        serde_json::json!({ "params": params, "wiring": wiring, "enabled": node.enabled });
-    let serialized = serde_json::to_string(&combined).unwrap_or_default();
-    let mut hasher = Sha256::new();
-    hasher.update(serialized.as_bytes());
-    hasher
-        .finalize()
-        .iter()
-        .map(|b| format!("{:02x}", b))
-        .collect::<String>()
+	let params: BTreeMap<&String, &serde_json::Value> = node.params.iter().collect();
+	let wiring: BTreeMap<usize, (String, usize)> = node
+		.inputs
+		.iter()
+		.map(|(port, input_ref)| (*port, (input_ref.node_id.clone(), input_ref.port)))
+		.collect();
+	// enabled 纳入指纹：禁用节点现在会被执行引擎当作"跳过并透传"处理（见
+	// exec.rs 的文档说明），这是一种与"正常执行"截然不同的行为，因此启用/禁用
+	// 状态的切换必须被视为"自身配置变更"，强制重新评估——否则在启用状态切换后
+	// 重新触发后处理时，指纹不变会导致该节点被误判为"未变更"而跳过重新执行，
+	// 继续复用切换前的旧结果（如把"已禁用透传"的旧输出当作"现在应该真正执行"
+	// 的结果直接复用）。
+	//
+	// enabled is included in the fingerprint: a disabled node is now treated by the
+	// execution engine as "skip and pass through" (see exec.rs's doc comments), a
+	// fundamentally different behavior from "run normally" — so toggling enabled must
+	// count as a "self config change" and force re-evaluation. Otherwise, re-triggering
+	// post-processing after flipping enabled would see an unchanged fingerprint and
+	// wrongly treat the node as "unchanged", skipping re-execution and continuing to
+	// reuse the stale pre-toggle result (e.g. reusing an old "disabled pass-through"
+	// output as if it were the result of "now actually running").
+	let combined =
+		serde_json::json!({ "params": params, "wiring": wiring, "enabled": node.enabled });
+	let serialized = serde_json::to_string(&combined).unwrap_or_default();
+	let mut hasher = Sha256::new();
+	hasher.update(serialized.as_bytes());
+	hasher
+		.finalize()
+		.iter()
+		.map(|b| format!("{:02x}", b))
+		.collect::<String>()
 }
 
 /// 判断某节点相对于上次执行记录是否"自身发生变更"（模块 ID、参数、连线任意
@@ -106,33 +106,33 @@ pub(super) fn node_config_fingerprint(node: &PipelineNode) -> String {
 /// is gone"). Folding this into "self-changed" makes the node re-execute (regenerating
 /// the missing output) instead of pretending it's still successful.
 fn node_self_changed(node: &PipelineNode, prev_execution: &[PpExecutionEntry]) -> bool {
-    // effective_id 缺省即 module_id：按它先找到同一节点的上次执行记录。
-    // effective_id defaults to module_id: look up the node's previous
-    // execution record by it first.
-    let eid = node.effective_id();
-    let Some(prev) = prev_execution.iter().find(|e| e.effective_id() == eid) else {
-        return true;
-    };
-    let was_success = matches!(
-        prev.result.as_ref().map(|r| &r.code),
-        Some(PpExecCode::Ok | PpExecCode::Done | PpExecCode::Skipped)
-    );
-    if !was_success {
-        return true;
-    }
-    // 模块 ID 一致才继续比较参数，不同模块一律视为"配置变更"。
-    // Only compare params when the module ID matches; a different module
-    // always counts as a "config change".
-    if prev.module_id != node.module_id {
-        return true;
-    }
-    if prev.config_fingerprint != node_config_fingerprint(node) {
-        return true;
-    }
-    if !all_recorded_outputs_exist(&prev.outputs) {
-        return true;
-    }
-    false
+	// effective_id 缺省即 module_id：按它先找到同一节点的上次执行记录。
+	// effective_id defaults to module_id: look up the node's previous
+	// execution record by it first.
+	let eid = node.effective_id();
+	let Some(prev) = prev_execution.iter().find(|e| e.effective_id() == eid) else {
+		return true;
+	};
+	let was_success = matches!(
+		prev.result.as_ref().map(|r| &r.code),
+		Some(PpExecCode::Ok | PpExecCode::Done | PpExecCode::Skipped)
+	);
+	if !was_success {
+		return true;
+	}
+	// 模块 ID 一致才继续比较参数，不同模块一律视为"配置变更"。
+	// Only compare params when the module ID matches; a different module
+	// always counts as a "config change".
+	if prev.module_id != node.module_id {
+		return true;
+	}
+	if prev.config_fingerprint != node_config_fingerprint(node) {
+		return true;
+	}
+	if !all_recorded_outputs_exist(&prev.outputs) {
+		return true;
+	}
+	false
 }
 
 /// 检查 meta 中按端口分组记录的输出路径（`Vec<Vec<String>>`，见 [`PpExecutionEntry::outputs`]
@@ -142,10 +142,10 @@ fn node_self_changed(node: &PipelineNode, prev_execution: &[PpExecutionEntry]) -
 /// (`Vec<Vec<String>>`, see [`PpExecutionEntry::outputs`]'s doc comment), still actually
 /// exists on disk. An empty list (node produced no output) is considered passing.
 fn all_recorded_outputs_exist(outputs: &[Vec<String>]) -> bool {
-    outputs
-        .iter()
-        .flatten()
-        .all(|p| std::path::Path::new(p).exists())
+	outputs
+		.iter()
+		.flatten()
+		.all(|p| std::path::Path::new(p).exists())
 }
 
 /// 将执行引擎按端口顺序返回的扁平路径列表（`inputs`/`outputs`）转换为 meta 存储格式：
@@ -164,15 +164,15 @@ fn all_recorded_outputs_exist(outputs: &[Vec<String>]) -> bool {
 /// makes the meta JSON representation clearer so callers can index into the array
 /// directly instead of each re-implementing `\n`-splitting themselves.
 pub(super) fn group_paths_by_bundle(paths: &[std::path::PathBuf]) -> Vec<Vec<String>> {
-    paths
-        .iter()
-        .map(|p| {
-            p.to_string_lossy()
-                .split(crate::postprocess::builtin_nodes::BUNDLE_SEP)
-                .map(|s| s.to_string())
-                .collect()
-        })
-        .collect()
+	paths
+		.iter()
+		.map(|p| {
+			p.to_string_lossy()
+				.split(crate::postprocess::builtin_nodes::BUNDLE_SEP)
+				.map(|s| s.to_string())
+				.collect()
+		})
+		.collect()
 }
 
 /// `group_paths_by_bundle` 的逆操作：将 meta 中按端口分组的二维数组重新合并为
@@ -184,11 +184,11 @@ pub(super) fn group_paths_by_bundle(paths: &[std::path::PathBuf]) -> Vec<Vec<Str
 /// `BUNDLE_SEP`), for feeding historical meta records back into the execution engine
 /// (e.g. `build_pre_collected`/`merge_with_prev_results`).
 fn ungroup_paths_from_bundle(grouped: &[Vec<String>]) -> Vec<std::path::PathBuf> {
-    let sep = crate::postprocess::builtin_nodes::BUNDLE_SEP.to_string();
-    grouped
-        .iter()
-        .map(|port_paths| std::path::PathBuf::from(port_paths.join(&sep)))
-        .collect()
+	let sep = crate::postprocess::builtin_nodes::BUNDLE_SEP.to_string();
+	grouped
+		.iter()
+		.map(|port_paths| std::path::PathBuf::from(port_paths.join(&sep)))
+		.collect()
 }
 
 /// 计算本次需要（重新）执行的"脏"节点集合：自身配置变更的节点，加上所有
@@ -200,30 +200,30 @@ fn ungroup_paths_from_bundle(grouped: &[Vec<String>]) -> Vec<std::path::PathBuf>
 /// (propagated along DAG edges, since their actual input also changes even if their
 /// own params didn't).
 pub(super) fn compute_dirty_nodes(
-    pipeline: &PipelineConfig,
-    prev_execution: &[PpExecutionEntry],
+	pipeline: &PipelineConfig,
+	prev_execution: &[PpExecutionEntry],
 ) -> HashSet<String> {
-    let edges = pipeline.resolved_edges();
-    let mut dirty: HashSet<String> = pipeline
-        .nodes
-        .iter()
-        .filter(|n| n.enabled && node_self_changed(n, prev_execution))
-        .map(|n| n.effective_id().to_string())
-        .collect();
+	let edges = pipeline.resolved_edges();
+	let mut dirty: HashSet<String> = pipeline
+		.nodes
+		.iter()
+		.filter(|n| n.enabled && node_self_changed(n, prev_execution))
+		.map(|n| n.effective_id().to_string())
+		.collect();
 
-    loop {
-        let mut added = false;
-        for edge in &edges {
-            if dirty.contains(&edge.from_node_id) && !dirty.contains(&edge.to_node_id) {
-                dirty.insert(edge.to_node_id.clone());
-                added = true;
-            }
-        }
-        if !added {
-            break;
-        }
-    }
-    dirty
+	loop {
+		let mut added = false;
+		for edge in &edges {
+			if dirty.contains(&edge.from_node_id) && !dirty.contains(&edge.to_node_id) {
+				dirty.insert(edge.to_node_id.clone());
+				added = true;
+			}
+		}
+		if !added {
+			break;
+		}
+	}
+	dirty
 }
 
 /// 构建本次实际要执行的流水线副本：只保留禁用节点（透传）与脏节点，
@@ -234,28 +234,28 @@ pub(super) fn compute_dirty_nodes(
 /// unchanged config are dropped (their outputs are pre-filled via
 /// `build_pre_collected`).
 pub(super) fn build_effective_pipeline(
-    pipeline: &PipelineConfig,
-    dirty_nodes: &HashSet<String>,
+	pipeline: &PipelineConfig,
+	dirty_nodes: &HashSet<String>,
 ) -> PipelineConfig {
-    let mut p = pipeline.clone();
-    p.nodes.retain(|n| {
-        if !n.enabled {
-            return true;
-        }
-        let skip = !dirty_nodes.contains(n.effective_id());
-        if skip {
-            tracing::info!(
-                "{}",
-                crate::tl!(
-                    "postprocess.serviceSkipNode",
-                    id = n.effective_id(),
-                    module = n.module_id
-                )
-            );
-        }
-        !skip
-    });
-    p
+	let mut p = pipeline.clone();
+	p.nodes.retain(|n| {
+		if !n.enabled {
+			return true;
+		}
+		let skip = !dirty_nodes.contains(n.effective_id());
+		if skip {
+			tracing::info!(
+				"{}",
+				crate::tl!(
+					"postprocess.serviceSkipNode",
+					id = n.effective_id(),
+					module = n.module_id
+				)
+			);
+		}
+		!skip
+	});
+	p
 }
 
 /// 构建预填输入槽：将上次已成功且未变更节点的输出沿边传给下游节点，
@@ -265,62 +265,62 @@ pub(super) fn build_effective_pipeline(
 /// unchanged nodes along edges to downstream nodes, so newly added or
 /// affected nodes still receive the correct inputs.
 pub(super) fn build_pre_collected(
-    pipeline: &PipelineConfig,
-    prev_execution: &[PpExecutionEntry],
-    dirty_nodes: &HashSet<String>,
+	pipeline: &PipelineConfig,
+	prev_execution: &[PpExecutionEntry],
+	dirty_nodes: &HashSet<String>,
 ) -> HashMap<String, Vec<(usize, std::path::PathBuf)>> {
-    let mut pre: HashMap<String, Vec<(usize, std::path::PathBuf)>> = HashMap::new();
-    let edges = pipeline.resolved_edges();
+	let mut pre: HashMap<String, Vec<(usize, std::path::PathBuf)>> = HashMap::new();
+	let edges = pipeline.resolved_edges();
 
-    for entry in prev_execution {
-        if dirty_nodes.contains(entry.effective_id()) {
-            continue;
-        }
-        let is_success = matches!(
-            entry.result.as_ref().map(|r| &r.code),
-            Some(PpExecCode::Ok | PpExecCode::Done | PpExecCode::Skipped)
-        );
-        if !is_success {
-            continue;
-        }
-        if entry.outputs.is_empty() {
-            continue;
-        }
-        // 二次防御：只信任"仍然存在于磁盘上"的历史输出路径，不能仅凭 meta 中
-        // 记录过就当作现在依然有效——`node_self_changed` 已经会把输出缺失的
-        // 节点标记为脏节点并从这里排除（见其文档说明），此处是防止未来改动
-        // 绕过那层判断而重新引入同一个 bug 的保险。
-        //
-        // Defense in depth: only trust historical output paths that "still exist on
-        // disk" — meta having recorded a path once doesn't mean it's still valid now.
-        // `node_self_changed` already marks nodes with missing outputs as dirty and
-        // excludes them from reaching here (see its doc comment); this is a safety net
-        // against a future change accidentally bypassing that check and reintroducing
-        // the same bug.
-        if !all_recorded_outputs_exist(&entry.outputs) {
-            tracing::warn!(
-                "{}",
-                crate::tl!(
-                    "postprocess.serviceStalePreFill",
-                    id = entry.effective_id(),
-                    module = entry.module_id
-                )
-            );
-            continue;
-        }
-        let outputs = ungroup_paths_from_bundle(&entry.outputs);
-        for edge in edges
-            .iter()
-            .filter(|e| e.from_node_id == entry.effective_id())
-        {
-            if let Some(output_path) = outputs.get(edge.from_port) {
-                pre.entry(edge.to_node_id.clone())
-                    .or_default()
-                    .push((edge.to_port, output_path.clone()));
-            }
-        }
-    }
-    pre
+	for entry in prev_execution {
+		if dirty_nodes.contains(entry.effective_id()) {
+			continue;
+		}
+		let is_success = matches!(
+			entry.result.as_ref().map(|r| &r.code),
+			Some(PpExecCode::Ok | PpExecCode::Done | PpExecCode::Skipped)
+		);
+		if !is_success {
+			continue;
+		}
+		if entry.outputs.is_empty() {
+			continue;
+		}
+		// 二次防御：只信任"仍然存在于磁盘上"的历史输出路径，不能仅凭 meta 中
+		// 记录过就当作现在依然有效——`node_self_changed` 已经会把输出缺失的
+		// 节点标记为脏节点并从这里排除（见其文档说明），此处是防止未来改动
+		// 绕过那层判断而重新引入同一个 bug 的保险。
+		//
+		// Defense in depth: only trust historical output paths that "still exist on
+		// disk" — meta having recorded a path once doesn't mean it's still valid now.
+		// `node_self_changed` already marks nodes with missing outputs as dirty and
+		// excludes them from reaching here (see its doc comment); this is a safety net
+		// against a future change accidentally bypassing that check and reintroducing
+		// the same bug.
+		if !all_recorded_outputs_exist(&entry.outputs) {
+			tracing::warn!(
+				"{}",
+				crate::tl!(
+					"postprocess.serviceStalePreFill",
+					id = entry.effective_id(),
+					module = entry.module_id
+				)
+			);
+			continue;
+		}
+		let outputs = ungroup_paths_from_bundle(&entry.outputs);
+		for edge in edges
+			.iter()
+			.filter(|e| e.from_node_id == entry.effective_id())
+		{
+			if let Some(output_path) = outputs.get(edge.from_port) {
+				pre.entry(edge.to_node_id.clone())
+					.or_default()
+					.push((edge.to_port, output_path.clone()));
+			}
+		}
+	}
+	pre
 }
 
 /// 将本次执行结果与上次已成功且未变更的历史结果按拓扑序合并，
@@ -329,87 +329,87 @@ pub(super) fn build_pre_collected(
 /// Merge this run's results with previously succeeded, unchanged results in
 /// topological order, producing the final result set to write back to meta.
 pub(super) fn merge_with_prev_results(
-    new_results: Vec<NodeResult>,
-    prev_execution: &[PpExecutionEntry],
-    pipeline: &PipelineConfig,
-    dirty_nodes: &HashSet<String>,
+	new_results: Vec<NodeResult>,
+	prev_execution: &[PpExecutionEntry],
+	pipeline: &PipelineConfig,
+	dirty_nodes: &HashSet<String>,
 ) -> Vec<NodeResult> {
-    let mut merged: Vec<NodeResult> = Vec::new();
-    // 按连线拓扑顺序遍历（由 model 层的 topological_order 保证，顺序由连线决定
-    // 而非节点存储顺序），使 pp_execution 记录顺序与实际执行顺序一致。
-    // 过滤掉禁用节点——它们不应出现在 meta.pp_execution 中。
-    //
-    // Iterate in wiring-defined topological order (guaranteed by model's topological_order,
-    // which is determined by wiring, not node storage order) so pp_execution entries are
-    // recorded in actual execution order. Filter out disabled nodes — they must not appear
-    // in meta.pp_execution.
-    let enabled_ids: HashSet<&str> = pipeline
-        .nodes
-        .iter()
-        .filter(|n| n.enabled)
-        .map(|n| n.effective_id())
-        .collect();
-    let topo: Vec<String> = pipeline
-        .topological_order()
-        .into_iter()
-        .filter(|id| enabled_ids.contains(id.as_str()))
-        .collect();
-    for eid in &topo {
-        if let Some(r) = new_results.iter().find(|r| &r.effective_id == eid) {
-            merged.push(r.clone());
-            continue;
-        }
-        if dirty_nodes.contains(eid.as_str()) {
-            continue;
-        }
-        if let Some(prev) = prev_execution.iter().find(|e| {
-            e.effective_id() == eid.as_str()
-                && matches!(
-                    e.result.as_ref().map(|r| &r.code),
-                    Some(PpExecCode::Ok | PpExecCode::Done | PpExecCode::Skipped)
-                )
-        }) {
-            // 二次防御：与 build_pre_collected 的同名检查一样——`node_self_changed`
-            // 已经会把输出缺失的节点标记为脏并从这里排除（`dirty_nodes.contains`
-            // 判断在上面已经 `continue` 掉了），这里只是防止未来改动绕过那层
-            // 判断后，最终写回 meta 的 pp_execution 里出现一条"结果码是 ok，但
-            // 输出文件其实已经不存在"的记录。
-            //
-            // Defense in depth, mirroring the same check in build_pre_collected —
-            // `node_self_changed` already marks nodes with missing outputs as dirty and
-            // excludes them from reaching here (the `dirty_nodes.contains` check above
-            // already `continue`s past them); this only guards against a future change
-            // bypassing that check and letting a "result code is ok, but the output file
-            // no longer actually exists" record end up in the final pp_execution
-            // written back to meta.
-            if !all_recorded_outputs_exist(&prev.outputs) {
-                tracing::warn!(
-                    "{}",
-                    crate::tl!(
-                        "postprocess.serviceStaleMerge",
-                        id = eid,
-                        module = prev.module_id
-                    )
-                );
-                continue;
-            }
-            merged.push(NodeResult {
-                effective_id: prev.effective_id().to_string(),
-                module_id: prev.module_id.clone(),
-                code: prev
-                    .result
-                    .as_ref()
-                    .map(|r| r.code.clone())
-                    .unwrap_or(PpExecCode::Ok),
-                message: prev
-                    .result
-                    .as_ref()
-                    .and_then(|r| r.message.clone())
-                    .unwrap_or_default(),
-                outputs: ungroup_paths_from_bundle(&prev.outputs),
-                inputs: ungroup_paths_from_bundle(&prev.inputs),
-            });
-        }
-    }
-    merged
+	let mut merged: Vec<NodeResult> = Vec::new();
+	// 按连线拓扑顺序遍历（由 model 层的 topological_order 保证，顺序由连线决定
+	// 而非节点存储顺序），使 pp_execution 记录顺序与实际执行顺序一致。
+	// 过滤掉禁用节点——它们不应出现在 meta.pp_execution 中。
+	//
+	// Iterate in wiring-defined topological order (guaranteed by model's topological_order,
+	// which is determined by wiring, not node storage order) so pp_execution entries are
+	// recorded in actual execution order. Filter out disabled nodes — they must not appear
+	// in meta.pp_execution.
+	let enabled_ids: HashSet<&str> = pipeline
+		.nodes
+		.iter()
+		.filter(|n| n.enabled)
+		.map(|n| n.effective_id())
+		.collect();
+	let topo: Vec<String> = pipeline
+		.topological_order()
+		.into_iter()
+		.filter(|id| enabled_ids.contains(id.as_str()))
+		.collect();
+	for eid in &topo {
+		if let Some(r) = new_results.iter().find(|r| &r.effective_id == eid) {
+			merged.push(r.clone());
+			continue;
+		}
+		if dirty_nodes.contains(eid.as_str()) {
+			continue;
+		}
+		if let Some(prev) = prev_execution.iter().find(|e| {
+			e.effective_id() == eid.as_str()
+				&& matches!(
+					e.result.as_ref().map(|r| &r.code),
+					Some(PpExecCode::Ok | PpExecCode::Done | PpExecCode::Skipped)
+				)
+		}) {
+			// 二次防御：与 build_pre_collected 的同名检查一样——`node_self_changed`
+			// 已经会把输出缺失的节点标记为脏并从这里排除（`dirty_nodes.contains`
+			// 判断在上面已经 `continue` 掉了），这里只是防止未来改动绕过那层
+			// 判断后，最终写回 meta 的 pp_execution 里出现一条"结果码是 ok，但
+			// 输出文件其实已经不存在"的记录。
+			//
+			// Defense in depth, mirroring the same check in build_pre_collected —
+			// `node_self_changed` already marks nodes with missing outputs as dirty and
+			// excludes them from reaching here (the `dirty_nodes.contains` check above
+			// already `continue`s past them); this only guards against a future change
+			// bypassing that check and letting a "result code is ok, but the output file
+			// no longer actually exists" record end up in the final pp_execution
+			// written back to meta.
+			if !all_recorded_outputs_exist(&prev.outputs) {
+				tracing::warn!(
+					"{}",
+					crate::tl!(
+						"postprocess.serviceStaleMerge",
+						id = eid,
+						module = prev.module_id
+					)
+				);
+				continue;
+			}
+			merged.push(NodeResult {
+				effective_id: prev.effective_id().to_string(),
+				module_id: prev.module_id.clone(),
+				code: prev
+					.result
+					.as_ref()
+					.map(|r| r.code.clone())
+					.unwrap_or(PpExecCode::Ok),
+				message: prev
+					.result
+					.as_ref()
+					.and_then(|r| r.message.clone())
+					.unwrap_or_default(),
+				outputs: ungroup_paths_from_bundle(&prev.outputs),
+				inputs: ungroup_paths_from_bundle(&prev.inputs),
+			});
+		}
+	}
+	merged
 }

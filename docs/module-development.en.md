@@ -50,27 +50,27 @@ In execute mode, the host passes a JSON object to the module via stdin:
 
 ```json
 {
-  "inputs": ["/recordings/alice_20240101_120000.ts"],
-  "params": {
-    "param_key": "param_value"
-  },
-  "exe_dir": "/app/stripchat-recorder",
-  "max_tmp_mb": 51200,
-  "recording": {
-    "video_path": "/recordings/alice_20240101_120000.ts",
-    "started_at": "2024-01-01T12:00:00Z",
-    "username": "alice"
-  }
+	"inputs": ["/recordings/alice_20240101_120000.ts"],
+	"params": {
+		"param_key": "param_value"
+	},
+	"exe_dir": "/app/stripchat-recorder",
+	"max_tmp_mb": 51200,
+	"recording": {
+		"video_path": "/recordings/alice_20240101_120000.ts",
+		"started_at": "2024-01-01T12:00:00Z",
+		"username": "alice"
+	}
 }
 ```
 
-| Field        | Description                                                                                  |
-| ------------ | -------------------------------------------------------------------------------------------- |
-| `inputs`     | Input path list, indexed by port order; single-input modules read `inputs[0]`                |
-| `params`     | Module parameter key-value pairs (corresponding to `params[].key` in `--describe`)           |
-| `exe_dir`    | Backend executable's own directory (`pp_utils::tmp_dir()` uses this to locate the tmp dir)  |
-| `max_tmp_mb` | Max tmp directory size in MB; `pp_utils::tmp_dir()` auto-prunes old files based on this      |
-| `recording`  | Recording context (`video_path`, `started_at`, `username`; used by notification modules)    |
+| Field        | Description                                                                                |
+| ------------ | ------------------------------------------------------------------------------------------ |
+| `inputs`     | Input path list, indexed by port order; single-input modules read `inputs[0]`              |
+| `params`     | Module parameter key-value pairs (corresponding to `params[].key` in `--describe`)         |
+| `exe_dir`    | Backend executable's own directory (`pp_utils::tmp_dir()` uses this to locate the tmp dir) |
+| `max_tmp_mb` | Max tmp directory size in MB; `pp_utils::tmp_dir()` auto-prunes old files based on this    |
+| `recording`  | Recording context (`video_path`, `started_at`, `username`; used by notification modules)   |
 
 > **Legacy protocol fallback:** If stdin is empty or fails to parse, `pp_utils::ModuleInput::read()` automatically falls back to the legacy environment variable protocol (`PP_INPUT`, `PP_PARAM_<KEY>`, `PP_EXE_DIR`), preserving backward compatibility.
 
@@ -78,10 +78,10 @@ In execute mode, the host passes a JSON object to the module via stdin:
 
 In execution mode, the host additionally injects these environment variables into the module process:
 
-| Variable     | Description                                                                                                                      |
-| ------------ | -------------------------------------------------------------------------------------------------------------------------------- |
-| `PP_FFMPEG`  | The ffmpeg path resolved by the host per the `ffmpeg_preference` setting (absolute path or bare command name)                     |
-| `PP_FFPROBE` | Same as above, for ffprobe                                                                                                        |
+| Variable     | Description                                                                                                                             |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `PP_FFMPEG`  | The ffmpeg path resolved by the host per the `ffmpeg_preference` setting (absolute path or bare command name)                           |
+| `PP_FFPROBE` | Same as above, for ffprobe                                                                                                              |
 | `PATH`       | Unless the system PATH is selected, `<exe_dir>/tools/` is prepended — a module spawning plain `ffmpeg` still hits the host-managed copy |
 
 Modules that invoke ffmpeg/ffprobe should prefer `PP_FFMPEG`/`PP_FFPROBE` (Rust modules: `pp_utils::ffmpeg_program()`/`ffprobe_program()`, which fall back to bare command names when unset). Modules that don't read these variables still resolve the host-configured copy through the PATH injection as long as they spawn the bare command name.
@@ -92,23 +92,23 @@ Modules communicate with the host by writing to stdout. There are two output typ
 
 **Progress lines** (can be emitted at any time, multiple):
 
-| Output line               | Description                                                                                 |
-| ------------------------- | ------------------------------------------------------------------------------------------- |
-| `PROGRESS:<done>/<total>` | Progress report; both values are integers, `total` is always `10000` (50% = `done=5000`)   |
-| `STATUS:<text>`           | Optional status text (e.g. upload speed), shown next to the progress bar in the UI         |
+| Output line               | Description                                                                              |
+| ------------------------- | ---------------------------------------------------------------------------------------- |
+| `PROGRESS:<done>/<total>` | Progress report; both values are integers, `total` is always `10000` (50% = `done=5000`) |
+| `STATUS:<text>`           | Optional status text (e.g. upload speed), shown next to the progress bar in the UI       |
 
 **Final result line** (last line, must be emitted exactly once):
 
 ```json
-{"code": "ok", "message": "Done", "outputs": ["/recordings/alice_20240101_120000.ts"]}
+{ "code": "ok", "message": "Done", "outputs": ["/recordings/alice_20240101_120000.ts"] }
 ```
 
-| `code` value | Description                                                                                        |
-| ------------ | -------------------------------------------------------------------------------------------------- |
-| `"ok"`       | Success; paths in `outputs` are passed as input to downstream nodes                               |
-| `"done"`     | Success and pipeline terminates here (e.g. `cleanup` deletes the file); `outputs` is empty        |
-| `"skipped"`  | Processing skipped (e.g. output already exists); path is still passed through via `outputs`       |
-| `"error"`    | Failure; pipeline aborts, subsequent nodes are not executed                                        |
+| `code` value | Description                                                                                 |
+| ------------ | ------------------------------------------------------------------------------------------- |
+| `"ok"`       | Success; paths in `outputs` are passed as input to downstream nodes                         |
+| `"done"`     | Success and pipeline terminates here (e.g. `cleanup` deletes the file); `outputs` is empty  |
+| `"skipped"`  | Processing skipped (e.g. output already exists); path is still passed through via `outputs` |
+| `"error"`    | Failure; pipeline aborts, subsequent nodes are not executed                                 |
 
 > `pp_utils` provides `output_ok()`, `output_done()`, and `output_skipped()` to emit the correct format.
 
@@ -118,10 +118,10 @@ All diagnostic messages, warnings, and errors should be written to stderr. The h
 
 ### Exit Code
 
-| Exit code | Meaning                                                                      |
-| --------- | ---------------------------------------------------------------------------- |
-| `0`       | Success (combine with the final JSON `code` field for full status)           |
-| Non-zero  | Failure; pipeline aborts, subsequent modules are not executed                |
+| Exit code | Meaning                                                            |
+| --------- | ------------------------------------------------------------------ |
+| `0`       | Success (combine with the final JSON `code` field for full status) |
+| Non-zero  | Failure; pipeline aborts, subsequent modules are not executed      |
 
 ---
 
@@ -133,35 +133,35 @@ When invoked with `--describe`, the module must print a JSON object to stdout an
 
 ```jsonc
 {
-  "id": "my_module",              // Unique identifier, lowercase letters, digits, underscores only
-  "name": "My Module",            // Display name shown in the UI
-  "description": "Does X",        // Short description shown in the UI
-  "version": "1.0.0",             // Version (injected by pp_utils::describe_with_version; don't hardcode)
-  "inputTypes": ["video_file"],   // Input port types; see Port Type System
-  "outputTypes": ["video_file"],  // Output port types; empty means pipeline terminates here
-  "official": false,              // Whether this is an official module (UI hint to place after segment_merge)
-  "params": [
-    {
-      "key": "param_key",         // Parameter key; maps to params.param_key in the input JSON
-      "label": "Param Label",     // Label shown in the UI
-      "type": "string",           // Parameter type; see Parameter Types
-      "default": ""               // Default value
-    }
-  ]
+	"id": "my_module", // Unique identifier, lowercase letters, digits, underscores only
+	"name": "My Module", // Display name shown in the UI
+	"description": "Does X", // Short description shown in the UI
+	"version": "1.0.0", // Version (injected by pp_utils::describe_with_version; don't hardcode)
+	"inputTypes": ["video_file"], // Input port types; see Port Type System
+	"outputTypes": ["video_file"], // Output port types; empty means pipeline terminates here
+	"official": false, // Whether this is an official module (UI hint to place after segment_merge)
+	"params": [
+		{
+			"key": "param_key", // Parameter key; maps to params.param_key in the input JSON
+			"label": "Param Label", // Label shown in the UI
+			"type": "string", // Parameter type; see Parameter Types
+			"default": "", // Default value
+		},
+	],
 }
 ```
 
 ### Field Reference
 
-| Field         | Type    | Required | Description                                                                          |
-| ------------- | ------- | -------- | ------------------------------------------------------------------------------------ |
-| `id`          | string  | Yes      | Unique module ID, must not conflict within the same instance                         |
-| `name`        | string  | Yes      | Display name in the UI                                                               |
-| `description` | string  | Yes      | Description in the UI                                                                |
+| Field         | Type    | Required | Description                                                                           |
+| ------------- | ------- | -------- | ------------------------------------------------------------------------------------- |
+| `id`          | string  | Yes      | Unique module ID, must not conflict within the same instance                          |
+| `name`        | string  | Yes      | Display name in the UI                                                                |
+| `description` | string  | Yes      | Description in the UI                                                                 |
 | `inputTypes`  | array   | Yes      | Input port types (indexed with `inputs[]`); see [Port Type System](#port-type-system) |
-| `outputTypes` | array   | Yes      | Output port types (indexed with `outputs[]`); empty array means pipeline terminates  |
-| `official`    | boolean | No       | Whether this is an official module; defaults to `false`                              |
-| `params`      | array   | Yes      | Parameter definitions; pass empty array if none                                      |
+| `outputTypes` | array   | Yes      | Output port types (indexed with `outputs[]`); empty array means pipeline terminates   |
+| `official`    | boolean | No       | Whether this is an official module; defaults to `false`                               |
+| `params`      | array   | Yes      | Parameter definitions; pass empty array if none                                       |
 
 > **Version number:** Do not hardcode `"version"` in the `DESCRIBE` constant. Call `pp_utils::describe_with_version(DESCRIBE, env!("CARGO_PKG_VERSION"))` to inject the version from `Cargo.toml` at runtime, keeping it in one place.
 
@@ -171,23 +171,23 @@ When invoked with `--describe`, the module must print a JSON object to stdout an
 
 The `type` field of each param object determines how the UI renders it:
 
-| Type      | UI Control      | Value format                          |
-| --------- | --------------- | ------------------------------------- |
-| `string`  | Text input      | Any string                            |
-| `number`  | Number input    | Decimal integer or float string       |
-| `boolean` | Toggle switch   | `true` or `false` (JSON)              |
-| `select`  | Dropdown select | One of the option value strings       |
-| `dir`     | Directory picker| Absolute directory path string        |
+| Type      | UI Control       | Value format                    |
+| --------- | ---------------- | ------------------------------- |
+| `string`  | Text input       | Any string                      |
+| `number`  | Number input     | Decimal integer or float string |
+| `boolean` | Toggle switch    | `true` or `false` (JSON)        |
+| `select`  | Dropdown select  | One of the option value strings |
+| `dir`     | Directory picker | Absolute directory path string  |
 
 `select` type requires an additional `options` field:
 
 ```jsonc
 {
-  "key": "format",
-  "label": "Output Format",
-  "type": "select",
-  "default": "mkv",
-  "options": ["mp4", "mkv", "ts"]
+	"key": "format",
+	"label": "Output Format",
+	"type": "select",
+	"default": "mkv",
+	"options": ["mp4", "mkv", "ts"],
 }
 ```
 
@@ -195,12 +195,12 @@ The `type` field of each param object determines how the UI renders it:
 
 ```jsonc
 {
-  "key": "quality",
-  "label": "Image Quality",
-  "type": "number",
-  "default": 85,
-  "min": 1,
-  "max": 100
+	"key": "quality",
+	"label": "Image Quality",
+	"type": "number",
+	"default": 85,
+	"min": 1,
+	"max": 100,
 }
 ```
 
@@ -210,18 +210,19 @@ The `type` field of each param object determines how the UI renders it:
 
 Each module declares its input/output port data types via `inputTypes` and `outputTypes`. In the visual pipeline editor, only ports with compatible types can be connected.
 
-| Identifier      | Description                                                                              |
-| --------------- | ---------------------------------------------------------------------------------------- |
-| `session_dir`| Segment recording directory (fMP4 .m4s; legacy recordings may hold TS .ts; produced by the recording system, input to `segment_merge`)   |
-| `video_file`    | Single video file (mp4 / mkv / ts etc.)                                                  |
-| `image_file`    | Single image file (webp / jpg / png etc.)                                                |
-| `media_bundle`  | Media bundle (video path + image path separated by `\n`, passed as a single path string) |
-| `any_file`      | Any file type (accepts any upstream file type, including `media_bundle`)                 |
-| `any_dir`       | Any directory type (accepts any upstream directory type)                                 |
+| Identifier     | Description                                                                                                                            |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `session_dir`  | Segment recording directory (fMP4 .m4s; legacy recordings may hold TS .ts; produced by the recording system, input to `segment_merge`) |
+| `video_file`   | Single video file (mp4 / mkv / ts etc.)                                                                                                |
+| `image_file`   | Single image file (webp / jpg / png etc.)                                                                                              |
+| `media_bundle` | Media bundle (video path + image path separated by `\n`, passed as a single path string)                                               |
+| `any_file`     | Any file type (accepts any upstream file type, including `media_bundle`)                                                               |
+| `any_dir`      | Any directory type (accepts any upstream directory type)                                                                               |
 
 > Rename note: `session_dir` was previously named `ts_session_dir` (and the merge module `ts_merge` is now `segment_merge`). The rename keeps no backward compatibility — older modules must update their `--describe` declaration before use.
 
 **Compatibility rules:**
+
 - Identical types can always connect
 - Any file type (including `media_bundle`) can connect to `any_file`
 - Any directory type can connect to `any_dir`
@@ -240,27 +241,27 @@ Modules can declare an optional `i18n` field in their describe JSON to provide t
 
 ```jsonc
 {
-  "id": "my_module",
-  "name": "我的模块",           // default language (Chinese)
-  "description": "模块功能描述",
-  "params": [
-    {
-      "key": "dest_dir",
-      "label": "目标目录路径",
-      "type": "dir",
-      "default": ""
-    }
-  ],
-  "i18n": {
-    "en-US": {
-      "name": "My Module",
-      "description": "Module description",
-      "params": {
-        "dest_dir": { "label": "Destination Directory" }
-      }
-    }
-    // additional locales can be added, e.g. "ja-JP": { ... }
-  }
+	"id": "my_module",
+	"name": "我的模块", // default language (Chinese)
+	"description": "模块功能描述",
+	"params": [
+		{
+			"key": "dest_dir",
+			"label": "目标目录路径",
+			"type": "dir",
+			"default": "",
+		},
+	],
+	"i18n": {
+		"en-US": {
+			"name": "My Module",
+			"description": "Module description",
+			"params": {
+				"dest_dir": { "label": "Destination Directory" },
+			},
+		},
+		// additional locales can be added, e.g. "ja-JP": { ... }
+	},
 }
 ```
 
@@ -620,10 +621,10 @@ After copying, the module will appear in the Web UI under Post-processing Pipeli
 
 For installed Desktop builds (NSIS, deb, dmg), modules go into the per-user data directory's `modules` subdirectory:
 
-| Platform | Path                                                                              |
-| -------- | --------------------------------------------------------------------------------- |
-| Windows  | `%APPDATA%\com.chantrail.stripchat-recorder\modules\`                             |
-| macOS    | `~/Library/Application Support/com.chantrail.stripchat-recorder/modules/`         |
+| Platform | Path                                                                             |
+| -------- | -------------------------------------------------------------------------------- |
+| Windows  | `%APPDATA%\com.chantrail.stripchat-recorder\modules\`                            |
+| macOS    | `~/Library/Application Support/com.chantrail.stripchat-recorder/modules/`        |
 | Linux    | `~/.local/share/com.chantrail.stripchat-recorder/modules/` (or `$XDG_DATA_HOME`) |
 
 For portable builds (Windows `*-portable.zip`, Linux AppImage), modules go into the `modules/` directory next to the program itself (next to the exe on Windows, next to the `.AppImage` file on Linux).
@@ -642,74 +643,75 @@ For the full publishing workflow, CI template setup, and central index registrat
 
 The project ships the following official modules:
 
-| Module ID         | Input Type       | Output Type       | Description                                                                                     |
-| ----------------- | ---------------- | ----------------- | ----------------------------------------------------------------------------------------------- |
-| `segment_merge`        | `session_dir` | `video_file`      | Merges a recorded segment directory into a single video file; **the first node in an official pipeline** |
-| `filter_short`    | `video_file`     | `video_file`      | Deletes videos shorter than a threshold and terminates the pipeline; supports `dry_run` preview mode |
-| `contact_sheet`   | `video_file`     | `media_bundle`    | Extracts frames at an interval and tiles them into a preview image; outputs a media_bundle       |
-| `notify_discord`  | `media_bundle`   | `media_bundle`    | Sends recording info and cover image to Discord via Webhook; supports HTTP/SOCKS5 proxy          |
-| `notify_telegram` | `media_bundle`   | `media_bundle`    | Sends recording info, cover image, and video to Telegram via MTProto; auto-splits files >2 GB   |
-| `cleanup`         | `any_file`       | — (terminates)    | Cleans up recording-related files: optionally deletes video/preview/meta, and tmp cache files   |
+| Module ID         | Input Type     | Output Type    | Description                                                                                              |
+| ----------------- | -------------- | -------------- | -------------------------------------------------------------------------------------------------------- |
+| `segment_merge`   | `session_dir`  | `video_file`   | Merges a recorded segment directory into a single video file; **the first node in an official pipeline** |
+| `filter_short`    | `video_file`   | `video_file`   | Deletes videos shorter than a threshold and terminates the pipeline; supports `dry_run` preview mode     |
+| `contact_sheet`   | `video_file`   | `media_bundle` | Extracts frames at an interval and tiles them into a preview image; outputs a media_bundle               |
+| `notify_discord`  | `media_bundle` | `media_bundle` | Sends recording info and cover image to Discord via Webhook; supports HTTP/SOCKS5 proxy                  |
+| `notify_telegram` | `media_bundle` | `media_bundle` | Sends recording info, cover image, and video to Telegram via MTProto; auto-splits files >2 GB            |
+| `cleanup`         | `any_file`     | — (terminates) | Cleans up recording-related files: optionally deletes video/preview/meta, and tmp cache files            |
 
 > **Built-in DAG nodes** (not executables; handled directly by the backend):
+>
 > - `recording_input`: virtual recording input node, always present and non-deletable, outputs `session_dir`
 > - `unpack`: splits a `media_bundle` into `video_file` (port 0) and `image_file` (port 1)
 
 ### segment_merge parameters
 
-| Parameter          | Type    | Default | Description                                                                |
-| ------------------ | ------- | ------- | -------------------------------------------------------------------------- |
-| `format`           | select  | `mp4`   | Output format: `mp4`, `mkv`, or `ts`                                       |
-| `output_dir`       | dir     | `""`    | Output directory for merged video; empty = parent of the TS session dir    |
-| `split_by_streamer`| boolean | `true`  | Create a per-streamer subdirectory under `output_dir` (only meaningful when `output_dir` is set) |
+| Parameter           | Type    | Default | Description                                                                                      |
+| ------------------- | ------- | ------- | ------------------------------------------------------------------------------------------------ |
+| `format`            | select  | `mp4`   | Output format: `mp4`, `mkv`, or `ts`                                                             |
+| `output_dir`        | dir     | `""`    | Output directory for merged video; empty = parent of the TS session dir                          |
+| `split_by_streamer` | boolean | `true`  | Create a per-streamer subdirectory under `output_dir` (only meaningful when `output_dir` is set) |
 
 ### filter_short parameters
 
-| Parameter      | Type    | Default | Description                                    |
-| -------------- | ------- | ------- | ---------------------------------------------- |
+| Parameter      | Type    | Default | Description                                            |
+| -------------- | ------- | ------- | ------------------------------------------------------ |
 | `min_duration` | number  | `60`    | Minimum duration in seconds; shorter files are deleted |
-| `dry_run`      | boolean | `false` | Preview only, no actual deletion               |
+| `dry_run`      | boolean | `false` | Preview only, no actual deletion                       |
 
 ### contact_sheet parameters
 
-| Parameter    | Type   | Default | Description                                      |
-| ------------ | ------ | ------- | ------------------------------------------------ |
-| `interval`   | number | `30`    | Frame extraction interval (seconds)              |
-| `thumb_width`| number | `320`   | Thumbnail width (px)                             |
-| `format`     | select | `webp`  | Image format: `webp`, `jpg`, or `png`            |
-| `quality`    | number | `100`   | Image quality (1–100, applies to jpg/webp)       |
-| `cols`       | number | `0`     | Number of columns; `0` = auto                   |
-| `rows`       | number | `0`     | Number of rows; `0` = auto                      |
-| `fontfile`   | string | `""`    | Font file path; leave empty for auto-detection  |
-| `fontsize`   | number | `18`    | Timestamp font size                              |
+| Parameter     | Type   | Default | Description                                    |
+| ------------- | ------ | ------- | ---------------------------------------------- |
+| `interval`    | number | `30`    | Frame extraction interval (seconds)            |
+| `thumb_width` | number | `320`   | Thumbnail width (px)                           |
+| `format`      | select | `webp`  | Image format: `webp`, `jpg`, or `png`          |
+| `quality`     | number | `100`   | Image quality (1–100, applies to jpg/webp)     |
+| `cols`        | number | `0`     | Number of columns; `0` = auto                  |
+| `rows`        | number | `0`     | Number of rows; `0` = auto                     |
+| `fontfile`    | string | `""`    | Font file path; leave empty for auto-detection |
+| `fontsize`    | number | `18`    | Timestamp font size                            |
 
 ### notify_discord parameters
 
-| Parameter     | Type   | Default        | Description                                      |
-| ------------- | ------ | -------------- | ------------------------------------------------ |
-| `webhook_url` | string | `""`           | Discord Webhook URL (required)                   |
-| `proxy`       | string | `""`           | Proxy address; supports `http://` and `socks5://`|
-| `username`    | string | `Recorder Bot` | Bot display name                                 |
+| Parameter     | Type   | Default        | Description                                       |
+| ------------- | ------ | -------------- | ------------------------------------------------- |
+| `webhook_url` | string | `""`           | Discord Webhook URL (required)                    |
+| `proxy`       | string | `""`           | Proxy address; supports `http://` and `socks5://` |
+| `username`    | string | `Recorder Bot` | Bot display name                                  |
 
 ### notify_telegram parameters
 
-| Parameter    | Type    | Default | Description                                                                                          |
-| ------------ | ------- | ------- | ---------------------------------------------------------------------------------------------------- |
-| `api_id`     | string  | `""`    | Telegram API ID from my.telegram.org (required)                                                      |
-| `api_hash`   | string  | `""`    | Telegram API Hash (required)                                                                         |
-| `bot_token`  | string  | `""`    | Bot Token from @BotFather (required)                                                                 |
-| `chat_id`    | string  | `""`    | Chat ID, used for private groups/channels (supergroup format: `-100xxxxxxxxxx`)                     |
+| Parameter    | Type    | Default | Description                                                                                                                       |
+| ------------ | ------- | ------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `api_id`     | string  | `""`    | Telegram API ID from my.telegram.org (required)                                                                                   |
+| `api_hash`   | string  | `""`    | Telegram API Hash (required)                                                                                                      |
+| `bot_token`  | string  | `""`    | Bot Token from @BotFather (required)                                                                                              |
+| `chat_id`    | string  | `""`    | Chat ID, used for private groups/channels (supergroup format: `-100xxxxxxxxxx`)                                                   |
 | `username`   | string  | `""`    | Public group/channel username (without `@`); at least one of `username`/`chat_id` is required — `username` wins when both are set |
-| `proxy`      | string  | `""`    | Proxy address; supports `http://` and `socks5://`                                                    |
-| `send_video` | boolean | `true`  | Also send the video file                                                                             |
+| `proxy`      | string  | `""`    | Proxy address; supports `http://` and `socks5://`                                                                                 |
+| `send_video` | boolean | `true`  | Also send the video file                                                                                                          |
 
 ### cleanup parameters
 
-| Parameter                | Type    | Default | Description                                                                              |
-| ------------------------ | ------- | ------- | ---------------------------------------------------------------------------------------- |
-| `delete_recording_data`  | boolean | `false` | Delete recording data (video + preview image + meta record) as an atomic unit           |
-| `delete_tmp_files`       | boolean | `true`  | Delete leftover same-named cache files in the shared tmp directory from other modules   |
-| `dry_run`                | boolean | `false` | Preview only, no actual deletion                                                        |
+| Parameter               | Type    | Default | Description                                                                           |
+| ----------------------- | ------- | ------- | ------------------------------------------------------------------------------------- |
+| `delete_recording_data` | boolean | `false` | Delete recording data (video + preview image + meta record) as an atomic unit         |
+| `delete_tmp_files`      | boolean | `true`  | Delete leftover same-named cache files in the shared tmp directory from other modules |
+| `dry_run`               | boolean | `false` | Preview only, no actual deletion                                                      |
 
 ---
 

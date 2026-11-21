@@ -15,7 +15,7 @@
  * - error / idle：仅关闭 toast——后端已推送持久化错误通知
  *   （通知面板与通知 toast 都会展示），不再重复弹错误 toast
  *
- * `setupFfmpegProgressToast` 注册事件监听后还会拉一次 `get_ffmpeg_status`，
+ * `setupFFmpegProgressToast` 注册事件监听后还会拉一次 `get_ffmpeg_status`，
  * 让晚接入的客户端能恢复一个正在进行中的下载显示；返回取消订阅函数。
  *
  * Subscribes to the backend `ffmpeg-progress` event and shows the download/install
@@ -36,7 +36,7 @@
  *   persistent error notification (shown by both the panel and notification
  *   toasts), so no second error toast
  *
- * `setupFfmpegProgressToast` registers the listener, then fetches
+ * `setupFFmpegProgressToast` registers the listener, then fetches
  * `get_ffmpeg_status` once so late-connecting clients can restore an in-progress
  * download display; returns the unsubscribe function.
  */
@@ -68,12 +68,12 @@ const DONE_TOAST_ID = "ffmpeg-progress-done";
 const ALL_TOAST_IDS = [TOAST_ID, INSTALLING_TOAST_ID, DONE_TOAST_ID];
 
 /**
- * `ffmpeg-progress` 事件载荷（与后端 `FfmpegProgress` 的 serde 输出一致；
+ * `ffmpeg-progress` 事件载荷（与后端 `FFmpegProgress` 的 serde 输出一致；
  * `{"state":"idle"}` 之外的状态都带 `kind`）。
- * Payload of the `ffmpeg-progress` event (matches the backend `FfmpegProgress`
+ * Payload of the `ffmpeg-progress` event (matches the backend `FFmpegProgress`
  * serde output; every non-`idle` state carries `kind`).
  */
-interface FfmpegProgressPayload {
+interface FFmpegProgressPayload {
 	state: "idle" | "downloading" | "installing" | "done" | "error";
 	kind?: "install" | "update";
 	downloaded?: number;
@@ -106,7 +106,7 @@ let lastSample: { bytes: number; at: number } | null = null;
  * 110.5 MB · 5.2 MB/s` on the left, `37%` on the right; when total is 0
  * (unknown size) only the downloaded size shows and the bar pulses.
  */
-function updateBar(p: FfmpegProgressPayload) {
+function updateBar(p: FFmpegProgressPayload) {
 	const downloaded = p.downloaded ?? 0;
 	const total = p.total ?? 0;
 	bar.pct = total > 0 ? (p.pct ?? null) : null;
@@ -145,7 +145,9 @@ const ProgressBody = () =>
 		]),
 		h(
 			"div",
-			{ class: "flex items-baseline justify-between text-xs text-muted-foreground tabular-nums" },
+			{
+				class: "flex items-baseline justify-between text-xs text-muted-foreground tabular-nums",
+			},
 			[
 				h("span", bar.speed ? `${bar.size} · ${bar.speed}` : bar.size),
 				h("span", bar.pctText),
@@ -164,10 +166,10 @@ const ProgressBody = () =>
  * @param t - vue-i18n 的翻译函数 / the vue-i18n translate function
  * @returns 取消订阅函数 / unsubscribe function
  */
-export async function setupFfmpegProgressToast(
+export async function setupFFmpegProgressToast(
 	t: (key: string, named?: Record<string, unknown>) => string,
 ): Promise<() => void> {
-	const apply = (p: FfmpegProgressPayload) => {
+	const apply = (p: FFmpegProgressPayload) => {
 		// install 类下载由全局强制进度窗口（FFmpegDownloadDialog）展示，
 		// 不走 toast；update 自动更新仍用 toast / Install-kind downloads are
 		// shown by the global forced window (FFmpegDownloadDialog), never a
@@ -241,14 +243,14 @@ export async function setupFfmpegProgressToast(
 	};
 
 	const unlisten = await on("ffmpeg-progress", (payload) =>
-		apply(payload as FfmpegProgressPayload),
+		apply(payload as FFmpegProgressPayload),
 	);
 
 	// 晚接入的客户端：拉一次当前状态，恢复正在进行中的下载/安装显示
 	// Late-connecting clients: fetch current state once to restore an in-progress
 	// download/install display
 	try {
-		const current = await call<FfmpegProgressPayload>("get_ffmpeg_status");
+		const current = await call<FFmpegProgressPayload>("get_ffmpeg_status");
 		if (current.state === "downloading" || current.state === "installing") {
 			apply(current);
 		}

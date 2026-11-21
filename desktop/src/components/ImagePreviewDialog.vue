@@ -6,77 +6,72 @@
     通过 openPreview(url, title) 暴露给父组件调用。
 -->
 <script setup lang="ts">
-	import { onMounted, onUnmounted, watchEffect } from "vue";
-	import { useImagePreview } from "@/composables/useImagePreview";
-	import { useMobileLayout } from "@/composables/useMobileLayout";
-	import { Button } from "@/components/ui/button";
-	import {
-		Dialog,
-		DialogContent,
-		DialogHeader,
-		DialogTitle,
-	} from "@/components/ui/dialog";
-	import { ArrowLeft } from "@lucide/vue";
-	import { useI18n } from "vue-i18n";
+import { onMounted, onUnmounted, watchEffect } from "vue";
+import { useImagePreview } from "@/composables/useImagePreview";
+import { useMobileLayout } from "@/composables/useMobileLayout";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ArrowLeft } from "@lucide/vue";
+import { useI18n } from "vue-i18n";
 
-	const { t } = useI18n();
-	const { isMobile } = useMobileLayout();
+const { t } = useI18n();
+const { isMobile } = useMobileLayout();
 
-	const {
-		previewOpen,
-		previewUrl,
-		isLoadingPreview,
-		previewTitle,
-		previewScale,
-		previewTranslate,
-		previewViewportRef,
-		previewImageRef,
-		isDragging,
-		viewportSize,
-		resetPreviewTransform,
-		onPreviewImageLoad,
-		onPreviewWheel,
-		onPreviewMousedown,
-		onDocMousemove,
-		onDocMouseup,
-		onViewportTouchstart,
-		onViewportTouchmove,
-		onViewportTouchend,
-		openPreview,
-	} = useImagePreview();
+const {
+	previewOpen,
+	previewUrl,
+	isLoadingPreview,
+	previewTitle,
+	previewScale,
+	previewTranslate,
+	previewViewportRef,
+	previewImageRef,
+	isDragging,
+	viewportSize,
+	resetPreviewTransform,
+	onPreviewImageLoad,
+	onPreviewWheel,
+	onPreviewMousedown,
+	onDocMousemove,
+	onDocMouseup,
+	onViewportTouchstart,
+	onViewportTouchmove,
+	onViewportTouchend,
+	openPreview,
+} = useImagePreview();
 
-	onMounted(() => {
-		document.addEventListener("mousemove", onDocMousemove);
-		document.addEventListener("mouseup", onDocMouseup);
-	});
+onMounted(() => {
+	document.addEventListener("mousemove", onDocMousemove);
+	document.addEventListener("mouseup", onDocMouseup);
+});
 
-	let _touchEl: HTMLElement | null = null;
-	watchEffect(() => {
-		const el = previewViewportRef.value;
-		if (el && el !== _touchEl) {
-			if (_touchEl) {
-				_touchEl.removeEventListener("touchstart", onViewportTouchstart);
-				_touchEl.removeEventListener("touchmove", onViewportTouchmove);
-				_touchEl.removeEventListener("touchend", onViewportTouchend);
-			}
-			el.addEventListener("touchstart", onViewportTouchstart, { passive: false });
-			el.addEventListener("touchmove", onViewportTouchmove, { passive: false });
-			el.addEventListener("touchend", onViewportTouchend);
-			_touchEl = el;
-		}
-	});
-
-	onUnmounted(() => {
-		document.removeEventListener("mousemove", onDocMousemove);
-		document.removeEventListener("mouseup", onDocMouseup);
+let _touchEl: HTMLElement | null = null;
+watchEffect(() => {
+	const el = previewViewportRef.value;
+	if (el && el !== _touchEl) {
 		if (_touchEl) {
 			_touchEl.removeEventListener("touchstart", onViewportTouchstart);
 			_touchEl.removeEventListener("touchmove", onViewportTouchmove);
 			_touchEl.removeEventListener("touchend", onViewportTouchend);
 		}
-	});
+		el.addEventListener("touchstart", onViewportTouchstart, { passive: false });
+		el.addEventListener("touchmove", onViewportTouchmove, { passive: false });
+		el.addEventListener("touchend", onViewportTouchend);
+		_touchEl = el;
+	}
+});
 
-	defineExpose({ openPreview });
+onUnmounted(() => {
+	document.removeEventListener("mousemove", onDocMousemove);
+	document.removeEventListener("mouseup", onDocMouseup);
+	if (_touchEl) {
+		_touchEl.removeEventListener("touchstart", onViewportTouchstart);
+		_touchEl.removeEventListener("touchmove", onViewportTouchmove);
+		_touchEl.removeEventListener("touchend", onViewportTouchend);
+	}
+});
+
+defineExpose({ openPreview });
 </script>
 
 <template>
@@ -90,10 +85,7 @@
 		leave-from-class="opacity-100"
 		leave-to-class="opacity-0"
 	>
-		<div
-			v-if="previewOpen"
-			class="fixed inset-0 z-50 bg-black flex flex-col"
-		>
+		<div v-if="previewOpen" class="fixed inset-0 z-50 bg-black flex flex-col">
 			<div class="flex items-center gap-3 px-3 pt-4 pb-2 shrink-0">
 				<button
 					class="flex items-center justify-center w-9 h-9 rounded-full bg-white/10 text-white active:bg-white/20 transition-colors shrink-0"
@@ -212,17 +204,29 @@
 </template>
 
 <style scoped>
-	.fade-enter-active,
-	.fade-leave-active { transition: opacity 0.15s; }
-	.fade-enter-from,
-	.fade-leave-to { opacity: 0; }
+.fade-enter-active,
+.fade-leave-active {
+	transition: opacity 0.15s;
+}
+.fade-enter-from,
+.fade-leave-to {
+	opacity: 0;
+}
 
-	@keyframes indeterminate-bar {
-		0% { transform: translateX(-100%); width: 40%; }
-		50% { width: 60%; }
-		100% { transform: translateX(260%); width: 40%; }
+@keyframes indeterminate-bar {
+	0% {
+		transform: translateX(-100%);
+		width: 40%;
 	}
-	.animate-indeterminate-bar {
-		animation: indeterminate-bar 1.4s ease-in-out infinite;
+	50% {
+		width: 60%;
 	}
+	100% {
+		transform: translateX(260%);
+		width: 40%;
+	}
+}
+.animate-indeterminate-bar {
+	animation: indeterminate-bar 1.4s ease-in-out infinite;
+}
 </style>

@@ -29,61 +29,59 @@
         delete           - 删除文件 / Delete the file
 -->
 <script setup lang="ts">
-	import { computed } from "vue";
-	import { Button } from "@/components/ui/button";
-	import { Badge } from "@/components/ui/badge";
-	import { Checkbox } from "@/components/ui/checkbox";
-	import { Tooltip } from "@/components/ui/tooltip";
-	import { TableRow, TableCell } from "@/components/ui/table";
-	import { Loader2, Image } from "@lucide/vue";
-	import SegmentStatsBadges from "@/components/SegmentStatsBadges.vue";
-	import PostprocessProgressCell from "@/components/PostprocessProgressCell.vue";
-	import type { RecordingFile } from "@/types/recordings";
-	import type { PpProgress, PpStatus } from "@/composables/usePostprocess";
-	import { formatSize, formatDuration } from "@/utils/format";
-	import { useI18n } from "vue-i18n";
+import { computed } from "vue";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Tooltip } from "@/components/ui/tooltip";
+import { TableRow, TableCell } from "@/components/ui/table";
+import { Loader2, Image } from "@lucide/vue";
+import SegmentStatsBadges from "@/components/SegmentStatsBadges.vue";
+import PostprocessProgressCell from "@/components/PostprocessProgressCell.vue";
+import type { RecordingFile } from "@/types/recordings";
+import type { PpProgress, PpStatus } from "@/composables/usePostprocess";
+import { formatSize, formatDuration } from "@/utils/format";
+import { useI18n } from "vue-i18n";
 
-	const props = defineProps<{
-		file: RecordingFile;
-		checked: boolean;
-		elapsedSecs: number;
-		speedBps: number | null;
-		segmentStats: { downloaded: number; failed: number } | null;
-		ppStatus?: PpStatus;
-		ppProgress?: PpProgress;
-		hasContactSheet: boolean;
-		hasPipelineNodes: boolean;
-	}>();
+const props = defineProps<{
+	file: RecordingFile;
+	checked: boolean;
+	elapsedSecs: number;
+	speedBps: number | null;
+	segmentStats: { downloaded: number; failed: number } | null;
+	ppStatus?: PpStatus;
+	ppProgress?: PpProgress;
+	hasContactSheet: boolean;
+	hasPipelineNodes: boolean;
+}>();
 
-	defineEmits<{
-		"toggle-checked": [];
-		open: [];
-		"open-contact-sheet": [];
-		"run-postprocess": [];
-		delete: [];
-	}>();
+defineEmits<{
+	"toggle-checked": [];
+	open: [];
+	"open-contact-sheet": [];
+	"run-postprocess": [];
+	delete: [];
+}>();
 
-	const { t } = useI18n();
+const { t } = useI18n();
 
-	/**
-	 * 分片统计的已下载/失败数：录制中优先用实时内存态（segmentStats prop，来自
-	 * recording-file-update 事件，更新频率高于 meta 落盘），否则回退到 meta 的
-	 * 持久化字段（file.segments_downloaded/segments_failed）——该字段在录制结束后
-	 * 依然保留最终值，使分片统计列不再仅限于"录制中"才显示。
-	 *
-	 * Segment stats downloaded/failed counts: prefer the real-time in-memory value
-	 * while recording (segmentStats prop, from recording-file-update events, updated
-	 * more frequently than meta is persisted to disk), otherwise fall back to the
-	 * meta-persisted fields (file.segments_downloaded/segments_failed) — which retain
-	 * their final values after recording ends, so the segment stats column is no
-	 * longer limited to "while recording" only.
-	 */
-	const segmentDownloaded = computed(
-		() => props.segmentStats?.downloaded ?? props.file.segments_downloaded ?? null,
-	);
-	const segmentFailed = computed(
-		() => props.segmentStats?.failed ?? props.file.segments_failed ?? 0,
-	);
+/**
+ * 分片统计的已下载/失败数：录制中优先用实时内存态（segmentStats prop，来自
+ * recording-file-update 事件，更新频率高于 meta 落盘），否则回退到 meta 的
+ * 持久化字段（file.segments_downloaded/segments_failed）——该字段在录制结束后
+ * 依然保留最终值，使分片统计列不再仅限于"录制中"才显示。
+ *
+ * Segment stats downloaded/failed counts: prefer the real-time in-memory value
+ * while recording (segmentStats prop, from recording-file-update events, updated
+ * more frequently than meta is persisted to disk), otherwise fall back to the
+ * meta-persisted fields (file.segments_downloaded/segments_failed) — which retain
+ * their final values after recording ends, so the segment stats column is no
+ * longer limited to "while recording" only.
+ */
+const segmentDownloaded = computed(
+	() => props.segmentStats?.downloaded ?? props.file.segments_downloaded ?? null,
+);
+const segmentFailed = computed(() => props.segmentStats?.failed ?? props.file.segments_failed ?? 0);
 </script>
 
 <template>
@@ -97,12 +95,9 @@
 		</TableCell>
 		<TableCell class="font-medium w-px whitespace-nowrap pl-7">
 			{{ file.name }}
-			<Badge
-				v-if="file.is_recording"
-				variant="destructive"
-				class="ml-1.5 text-[10px]"
-				>{{ t("recordings.status.recording") }}</Badge
-			>
+			<Badge v-if="file.is_recording" variant="destructive" class="ml-1.5 text-[10px]">{{
+				t("recordings.status.recording")
+			}}</Badge>
 		</TableCell>
 		<TableCell class="tabular-nums">{{ formatSize(file.size_bytes) }}</TableCell>
 		<TableCell class="tabular-nums text-muted-foreground">{{
