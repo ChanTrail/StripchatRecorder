@@ -225,11 +225,10 @@
 	},
 	"ffmpeg": {
 		"alreadyAvailable": "FFmpeg 可用：{path}",
-		"missingDownload": "未检测到 FFmpeg，将自动下载到 {dir}",
+		"choiceNeeded": "已选的 tools FFmpeg 组件不齐——提示用户选择要下载的构建版本",
 		"systemPreferenceMissing": "FFmpeg 首选项为系统环境变量，但 PATH 中未找到可用的 FFmpeg；已跳过自动下载到 tools",
 		"unsupportedPlatform": "当前平台（{os}/{arch}）不支持自动下载 FFmpeg",
 		"downloadStarted": "开始下载 FFmpeg：{url}",
-		"downloadAttemptFailed": "FFmpeg 自动下载失败（第 {attempt}/{max} 次）：{error}",
 		"manualDownloadFailed": "FFmpeg 手动下载失败：{error}",
 		"installDone": "FFmpeg 安装完成：{version}",
 		"updateCheckFailed": "FFmpeg 更新检查失败：{error}",

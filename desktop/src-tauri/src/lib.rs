@@ -225,9 +225,359 @@ async fn setup_app(app_handle: tauri::AppHandle) {
 
 	// ── 阶段一结束：显示主窗口 / Phase 1 complete: show the main window ────────
 	if let Some(window) = app_handle.get_webview_window("main") {
-		let _ = window.show();
-		let _ = window.set_focus();
+		// 期望的最小逻辑尺寸取自 tauri.conf.json 里 main 窗口的
+		// minWidth/minHeight（缺省回退 1600×720）；
+		// config() 是内存读取，不经过事件循环，任何线程都安全。
+		// The desired minimum logical size comes from the main window's
+		// minWidth/minHeight in tauri.conf.json (falling back to
+		// 1600×720); config() is an in-memory read with no event-loop
+		// round trip, so it is safe on any thread.
+		let desired_min = app_handle
+			.config()
+			.app
+			.windows
+			.iter()
+			.find(|w| w.label == "main")
+			.map(|w| (w.min_width.unwrap_or(1600.0), w.min_height.unwrap_or(720.0)))
+			.unwrap_or((1600.0, 720.0));
+
+		// 运行中的 DPI 变化（修改系统缩放、把窗口拖到另一台显示器）会使
+		// 工作区与窗口的实际尺寸再次失配，此时按新工作区重新收紧。
+		// 事件回调在事件循环线程上同步执行，而 fit 内部 inner_size 等
+		// getter 需要事件循环线程回包，回调里直接调用会死锁，因此转到
+		// 独立线程执行。
+		//
+		// 但不能在收到 ScaleFactorChanged 就立刻适配：鼠标拖拽时窗口
+		// 矩形由 WM_MOVING 模态循环接管，期间外部 set_size 会被下一次
+		// 拖动事件整体回滚（实测拖拽中收缩被立即撤销，松手后窗口保持
+		// 越界）。改为几何事件去抖驱动——Resized/ScaleFactorChanged 喂
+		// 给专用 worker，事件静默 ~120ms 且左键已松开（拖拽结束）才执
+		// 行适配；拖拽中的任何回滚都会再产生事件重新喂饱去抖，松手后
+		// 的最后一次适配必然生效。
+		// A runtime DPI change (system scaling changed, window dragged to
+		// another monitor) re-breaks the fit between work area and window
+		// size, so the fit is re-applied to the new work area. The event
+		// callback runs on the event-loop thread while fit's getters
+		// (inner_size, ...) round-trip through that same loop — calling
+		// them inline would deadlock, so the work goes to a separate
+		// thread.
+		//
+		// The fit must NOT run right when ScaleFactorChanged arrives:
+		// during a mouse drag the window rect is owned by the WM_MOVING
+		// modal loop, which reverts any external set_size on the next
+		// move event (observed: a mid-drag shrink was undone instantly,
+		// leaving the window overflowing after the drop). Instead the
+		// fit is debounce-driven — Resized/ScaleFactorChanged feed a
+		// dedicated worker that runs the fit once events have been quiet
+		// for ~120ms and the left button is up (drag finished). Any
+		// mid-drag revert produces more events that re-arm the debounce,
+		// so the post-drop fit always lands and sticks.
+		// 收缩/恢复的跨调用尺寸记忆：worker 与首次适配共用一份，
+		// 显示器往返才能恢复出同一目标尺寸
+		// Shared cross-call size memory for shrink/restore — the worker
+		// and the first fit share one instance so monitor round-trips
+		// restore to the same remembered size
+		let fit_memory = std::sync::Arc::new(parking_lot::Mutex::new(FitMemory::default()));
+		let (fit_tx, fit_rx) = std::sync::mpsc::channel::<()>();
+		let window_for_fit = window.clone();
+		let memory_for_worker = fit_memory.clone();
+		std::thread::spawn(move || {
+			use std::sync::mpsc::RecvTimeoutError;
+			while fit_rx.recv().is_ok() {
+				// 静默 ~120ms 且无拖拽进行（左键松开）后适配一次；
+				// 按住左键说明拖拽模态循环仍在接管窗口矩形，继续等待
+				// 上限 ~10s 兜底异常挂住的场景。
+				// Fit once events are quiet for ~120ms and no drag is in
+				// progress (left button released); while the button is
+				// held the drag's modal loop still owns the window rect,
+				// so keep waiting — capped at ~10s for stuck-input
+				// edge cases.
+				let mut waited_ms = 0u64;
+				loop {
+					match fit_rx.recv_timeout(std::time::Duration::from_millis(120)) {
+						Ok(()) => continue,
+						Err(RecvTimeoutError::Timeout) => {
+							if drag_in_progress() && waited_ms < 10_000 {
+								waited_ms += 120;
+								continue;
+							}
+							break;
+						}
+						Err(RecvTimeoutError::Disconnected) => return,
+					}
+				}
+				fit_window_to_work_area(&window_for_fit, desired_min, &memory_for_worker);
+			}
+		});
+
+		window.on_window_event(move |event| {
+			if matches!(
+				event,
+				tauri::WindowEvent::ScaleFactorChanged { .. } | tauri::WindowEvent::Resized(_)
+			) {
+				let _ = fit_tx.send(());
+			}
+		});
+
+		// 首次适配同样不能在当前线程做：本函数经 block_on 跑在事件循环
+		// 主线程上，getter 回包要等循环空闲才送达，直接调用会永久阻塞；
+		// set_min_size / set_size / set_position / show / set_focus 只是
+		// 投递消息，任何线程都安全。把 适配→显示→聚焦 整段交给 runtime
+		// worker 线程：setup 返回、事件循环开始泵送后其 getter 才解
+		// 阻塞，天然保证“先适配、后显示”——窗口创建时是隐藏的，
+		// 用户看不到适配前的越界瞬间。
+		// The first fit cannot run on the current thread either: this
+		// function is driven by block_on on the event-loop main thread,
+		// and getter replies only arrive once the loop is free — calling
+		// them here would block forever. set_min_size / set_size /
+		// set_position / show / set_focus only enqueue messages and are
+		// safe on any thread. Hand the whole fit → show → focus sequence
+		// to a runtime worker thread: its getters unblock once setup()
+		// returns and the loop starts pumping, which naturally orders
+		// "fit first, show after" — the window is created hidden, so
+		// users never see the pre-fit overflow.
+		tokio::task::spawn_blocking(move || {
+			fit_window_to_work_area(&window, desired_min, &fit_memory);
+			let _ = window.show();
+			let _ = window.set_focus();
+		});
 	}
+}
+
+/// 把主窗口收紧到所在显示器的可用工作区内。
+///
+/// `tauri.conf.json` 中的 `width`/`height`/`minWidth`/`minHeight` 都是逻辑
+/// 像素；Windows 开启系统缩放（如 150%）后同样的逻辑尺寸映射成更多
+/// 物理像素——1920×1080 屏幕在 150% 下工作区仅约 1280×693 逻辑像素，
+/// 1600 逻辑像素宽的最小尺寸（2400 物理像素）必然把窗口推出屏幕外。
+/// 本函数把最小尺寸收紧到 `min(期望值, 工作区可容纳)`，并把超出工作区
+/// 的窗口收缩后贴回工作区边缘，保证任何缩放比例下窗口都不越出屏幕；
+/// 收缩前的尺寸记入 `memory`，回到容得下的显示器时自动恢复（用户
+/// 手动改过的尺寸不会被回扭）。显示器解析失败时静默返回（沿用配置
+/// 文件的 minWidth/minHeight），不阻断启动。
+///
+/// 注意：只能在非事件循环线程上调用——内部的 `inner_size` /
+/// `outer_size` / `current_monitor` 等 getter 需要事件循环线程回包，
+/// 在事件循环线程（setup 回调、window 事件回调）上调用会死锁。
+///
+/// Fit the main window inside its monitor's available work area.
+///
+/// `width`/`height`/`minWidth`/`minHeight` in `tauri.conf.json` are logical
+/// pixels; with Windows display scaling (e.g. 150%) the same logical size
+/// maps to more physical pixels — a 1920×1080 screen at 150% only has a
+/// ~1280×693 logical work area, so a 1600-logical-pixel minimum width
+/// (2400 physical pixels) inevitably pushes the window off screen. This
+/// function caps the minimum at `min(desired, work-area-fittable)` and
+/// shrinks an overflowing window back onto the work-area edge, keeping
+/// the window on-screen at any scale factor. The pre-shrink size is kept
+/// in `memory` and restored automatically when a monitor can hold it
+/// again (a user-chosen size is never wrestled back). It returns silently
+/// (leaving the config-file minWidth/minHeight in effect) when the
+/// monitor cannot be resolved, so startup is never blocked.
+///
+/// Note: must only be called off the event-loop thread — the blocking
+/// getters inside (`inner_size`, `outer_size`, `current_monitor`, ...)
+/// require the event-loop thread to answer, so calling this on it
+/// (setup callback, window event callback) deadlocks.
+///
+/// @param window 目标主窗口 / The main window to fit.
+/// @param desired_min 期望的最小逻辑尺寸 (宽, 高)，通常来自
+///   `tauri.conf.json` / The desired minimum logical size (width,
+///   height), usually from `tauri.conf.json`.
+/// @param memory 跨调用的尺寸记忆（收缩前的应有尺寸与收缩落地值）；
+///   多显示器往返恢复依赖它 / Cross-call size memory (the intended
+///   pre-shrink size and the landed shrink size) — needed to restore
+///   when the window returns to a monitor that can hold it again.
+fn fit_window_to_work_area(
+	window: &tauri::WebviewWindow,
+	desired_min: (f64, f64),
+	memory: &parking_lot::Mutex<FitMemory>,
+) {
+	// 找不到窗口所在显示器时不做调整，配置文件的最小尺寸兜底
+	// Keep the config-file minimum when no monitor resolves
+	let Some(monitor) = window.current_monitor().ok().flatten() else {
+		return;
+	};
+	let scale = monitor.scale_factor();
+	let work_area = monitor.work_area();
+
+	// inner 尺寸不含标题栏与边框：工作区换算逻辑像素前先把这部分
+	// 物理厚度扣除，否则 inner 填满工作区时 outer 仍会略微越界
+	// （例如盖住任务栏）。
+	// The inner size excludes the title bar and borders: subtract that
+	// physical thickness before converting the work area, otherwise the
+	// outer frame would still slightly overflow (e.g. covering the
+	// taskbar) when the inner area fills the work area.
+	let inner = window.inner_size().ok();
+	let frame = match (inner, window.outer_size()) {
+		(Some(inner), Ok(outer)) => (
+			f64::from(outer.width.saturating_sub(inner.width)),
+			f64::from(outer.height.saturating_sub(inner.height)),
+		),
+		_ => (0.0, 0.0),
+	};
+
+	// 工作区扣除边框厚度后换算成逻辑像素，得到 inner 可容纳的最大尺寸
+	// Subtract the frame thickness and convert to logical pixels — the
+	// maximum inner size the work area can hold
+	let fit_w = (f64::from(work_area.size.width) - frame.0) / scale;
+	let fit_h = (f64::from(work_area.size.height) - frame.1) / scale;
+
+	// 最小尺寸取期望与可容纳的较小者：缩放使工作区小于期望时以可容纳
+	// 为准，否则最小尺寸本身就把窗口推出屏幕
+	// Minimum = min(desired, fittable): when scaling shrinks the work
+	// area below the desired size, the fittable size wins — otherwise
+	// the minimum alone would push the window off screen
+	let min_w = desired_min.0.min(fit_w).max(0.0);
+	let min_h = desired_min.1.min(fit_h).max(0.0);
+	let _ = window.set_min_size(Some(tauri::LogicalSize::new(min_w, min_h)));
+
+	// 尺寸记忆决定本轮动作：
+	// - 当前尺寸越界 → 收缩；收缩前的尺寸若不是上一次收缩的产物，
+	//   记为"应有尺寸"（用户自持意图）
+	// - 当前尺寸仍是收缩产物（≈上次收缩落地值）→ 说明小窗口是适配
+	//   小显示器的权宜结果；新显示器容得下记忆尺寸时恢复
+	// - 其余情况（用户手动改过的尺寸）→ 直接采纳为新的应有尺寸，
+	//   绝不回扭用户的选择
+	// The size memory decides this round's action:
+	// - Current size overflows → shrink; if the pre-shrink size isn't
+	//   the last landed shrink value, adopt it as the "intended" size
+	// - Current size is still our shrink artifact (≈ last landed
+	//   shrink) → the small size is just the small-monitor compromise;
+	//   restore the remembered size when this monitor can hold it
+	// - Anything else (a user-chosen size) → adopt it as the new
+	//   intended size; never wrestle the user's choice back
+	let Some(inner) = inner else { return };
+	let cur_w = f64::from(inner.width) / scale;
+	let cur_h = f64::from(inner.height) / scale;
+	let cur = (cur_w, cur_h);
+	// 逻辑↔物理换算有 ±几 px 取整漂移，比较尺寸需带容差
+	// Logical↔physical conversion drifts by a few px — compare sizes
+	// with tolerance
+	const TOL: f64 = 4.0;
+	let approx = |b: Option<(f64, f64)>| {
+		b.is_some_and(|(w, h)| (cur_w - w).abs() <= TOL && (cur_h - h).abs() <= TOL)
+	};
+
+	let mut st = memory.lock();
+	if cur_w > fit_w || cur_h > fit_h {
+		if !approx(st.clamped) {
+			st.unclamped = Some(cur);
+		}
+		let target = (cur_w.min(fit_w).max(0.0), cur_h.min(fit_h).max(0.0));
+		st.clamped = Some(target);
+		drop(st); // 先放锁再走消息往返 / release the lock before the message round-trips
+		let _ = window.set_size(tauri::LogicalSize::new(target.0, target.1));
+		if let Ok(pos) = window.outer_position() {
+			let x = if cur_w > fit_w { work_area.position.x } else { pos.x };
+			let y = if cur_h > fit_h { work_area.position.y } else { pos.y };
+			let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+		}
+	} else if approx(st.clamped) {
+		// 恢复目标夹在 [min, fit]；只在两轴都不缩的前提下放大
+		// Restore target clamped to [min, fit]; grow only when neither
+		// axis shrinks
+		let Some(mem) = st.unclamped else { return };
+		let target = (mem.0.clamp(min_w, fit_w), mem.1.clamp(min_h, fit_h));
+		let grows = target.0 >= cur_w - TOL
+			&& target.1 >= cur_h - TOL
+			&& (target.0 > cur_w + TOL || target.1 > cur_h + TOL);
+		if !grows {
+			return;
+		}
+		// 恢复落地值同样标记为"我们的产物"：若恢复的是被 fit 截断的
+		// 中间尺寸（记忆尺寸仍放不下），不能让它在下一次 fit 里被
+		// 采纳为新的应有尺寸——否则链式跨屏会丢更大的原始记忆
+		// The landed restore is also our artifact: when it is a
+		// fit-truncated mid size (the remembered size still doesn't
+		// fit), it must not be adopted as the new intended size on the
+		// next fit — chained monitor hops would lose the larger memory
+		st.clamped = Some(target);
+		drop(st);
+		let _ = window.set_size(tauri::LogicalSize::new(target.0, target.1));
+		// 放大后的 outer 若越过工作区右/下边缘则回拉，保持整体在屏内
+		// Pull the enlarged outer rect back inside when it would spill
+		// past the work area's right/bottom edge
+		if let Ok(pos) = window.outer_position() {
+			let outer_w = target.0 * scale + frame.0;
+			let outer_h = target.1 * scale + frame.1;
+			let pos_x = f64::from(pos.x);
+			let pos_y = f64::from(pos.y);
+			let right = f64::from(work_area.position.x) + f64::from(work_area.size.width);
+			let bottom = f64::from(work_area.position.y) + f64::from(work_area.size.height);
+			let x = if pos_x + outer_w > right {
+				(right - outer_w).max(f64::from(work_area.position.x))
+			} else {
+				pos_x
+			};
+			let y = if pos_y + outer_h > bottom {
+				(bottom - outer_h).max(f64::from(work_area.position.y))
+			} else {
+				pos_y
+			};
+			if (x - pos_x).abs() > 0.5 || (y - pos_y).abs() > 0.5 {
+				let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+			}
+		}
+	} else {
+		st.unclamped = Some(cur);
+		st.clamped = None;
+	}
+}
+
+/// 工作区适配的跨调用尺寸记忆。
+/// Cross-call size memory for the work-area fit.
+#[derive(Default)]
+struct FitMemory {
+	/// 最近一次未被工作区挤压的尺寸（逻辑像素）——回到容得下的显示
+	/// 器时恢复的目标 / The last size not squashed by the work area —
+	/// the restore target once a monitor can hold it again
+	unclamped: Option<(f64, f64)>,
+	/// 我们上一次改尺寸落地值（逻辑像素，含收缩与恢复）——当前尺寸
+	/// 仍等于它时，该尺寸是我们的产物而非用户选择 / The size our last
+	/// correction landed (shrink or restore) — while the current size
+	/// still equals it, that size is our artifact, not user intent
+	clamped: Option<(f64, f64)>,
+}
+
+/// 判断是否可能有拖拽/缩放的模态循环正在接管窗口矩形。
+///
+/// Windows 上鼠标按下标题栏/边框后，系统在 WM_ENTERSIZEMOVE 与
+/// WM_EXITSIZEMOVE 之间运行嵌套模态循环并跟踪拖动矩形，期间外部
+/// `set_size`/`set_position` 会被下一次 WM_MOVING 回滚。以左键按住
+/// 作为启发式判定（鼠标拖动必按住左键）；键盘移动（Alt+Space→M）
+/// 等无按键场景返回 false——此时适配可直接执行。
+/// 非 Windows 平台无此模态循环语义，恒为 false。
+///
+/// Whether a drag/resize modal loop may currently own the window rect.
+///
+/// On Windows, grabbing the title bar or a border starts a nested
+/// modal loop between WM_ENTERSIZEMOVE/WM_EXITSIZEMOVE that tracks its
+/// own drag rectangle and reverts external set_size/set_position on
+/// the next WM_MOVING. Holding the left button is used as the
+/// heuristic (a mouse drag necessarily holds it); button-free moves
+/// (Alt+Space → M) return false so the fit can apply right away.
+/// Always false off Windows, where this modal-loop semantics doesn't
+/// apply.
+///
+/// @returns 可能处于拖拽模态循环中时为 true / true when a drag modal
+///   loop may be active.
+#[cfg(target_os = "windows")]
+fn drag_in_progress() -> bool {
+	// GetAsyncKeyState 返回值的最高位表示按键当前处于按下状态
+	// The high bit of GetAsyncKeyState's return marks the key as down
+	unsafe {
+		windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(
+			windows_sys::Win32::UI::Input::KeyboardAndMouse::VK_LBUTTON as i32,
+		) < 0
+	}
+}
+
+/// 非 Windows 平台的拖拽判定占位，恒为 false。
+/// Non-Windows placeholder for the drag check — always false.
+#[cfg(not(target_os = "windows"))]
+fn drag_in_progress() -> bool {
+	false
 }
 
 /// 便携版的数据根目录定位（`portable` feature，配合 `tauri build --no-bundle` /

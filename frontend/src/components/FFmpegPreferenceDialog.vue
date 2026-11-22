@@ -39,6 +39,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { call, on } from "@/lib/api";
+import { requestFFmpegDownload } from "@/composables/useFFmpegDownload";
 import { useSettingsStore } from "@/stores/settings";
 import { useNotify } from "@/composables/useNotify";
 import {
@@ -307,9 +308,9 @@ async function confirm() {
 			// PATH preference (explicit intent), so no pre-save is needed.
 			downloadPending.value = true;
 			try {
-				await call("download_ffmpeg", {
-					platform: downloadPlatform.value || undefined,
-					variant: downloadVariant.value || undefined,
+				await requestFFmpegDownload({
+					platform: downloadPlatform.value,
+					variant: downloadVariant.value,
 				});
 			} catch {
 				downloadPending.value = false;

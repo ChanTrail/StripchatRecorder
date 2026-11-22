@@ -13,7 +13,7 @@
  * (filterGroupTags — every slug below was verified live) + sort, with
  * IntersectionObserver-driven infinite scroll.
  */
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { Check, Eye, EyeOff, Loader2, Play, Plus, Users, Vibrate } from "@lucide/vue";
 import { call } from "@/lib/api";
@@ -284,10 +284,11 @@ async function loadPage(reset: boolean) {
 	}
 }
 
-/** 过滤条件变化 → 重置并从头加载 / Filter changed → reset and reload from scratch */
+/** 过滤条件变化 → 重置并从头加载；完成后同样补一次续载检查 /
+ * Filter changed → reset and reload from scratch, then re-run the fill check */
 watch([primaryTag, tag, sortBy], () => {
 	hasMore.value = true;
-	loadPage(true);
+	void loadPage(true).then(() => fillViewport());
 });
 
 // ─── 添加 / Add ─────────────────────────────────────────────────────────────
@@ -396,8 +397,54 @@ watch(() => settingsStore.settings.poll_interval_secs, restartStatusPoll);
 
 // ─── 无限滚动 / Infinite scroll ─────────────────────────────────────────────
 
+/** 无限滚动预载边距（px，与 IntersectionObserver 的 rootMargin 一致）/
+ * Infinite-scroll prefetch margin in px (matches the observer's rootMargin) */
+const PRELOAD_MARGIN = 600;
+
+/** 哨兵是否仍在预载边距内：以滚动容器（哨兵的父元素）下缘为根计算，
+ *  等价于 Observer 的 isIntersecting 判定 / Whether the sentinel is still
+ *  inside the prefetch margin — measured against the bottom edge of the
+ *  scroll container (the sentinel's parent), matching the observer's
+ *  isIntersecting semantics */
+function sentinelInMargin(): boolean {
+	const el = sentinel.value;
+	if (!el) return false;
+	const rootBottom =
+		el.parentElement?.getBoundingClientRect().bottom ?? window.innerHeight;
+	return el.getBoundingClientRect().top <= rootBottom + PRELOAD_MARGIN;
+}
+
+/** 哨兵还压在预载边距内就续载下一页，直到被顶出边距或数据到底。
+ *  IntersectionObserver 只在「交叉状态变化」时回调：首屏加载期间其首次
+ *  回调被 `loading` 守卫早退后不会再触发；内容撑不满视口（大窗口/缩小
+ *  页面）时哨兵始终留在边距内同样无回调——即「无法滚动 → 无法续载」的
+ *  断档。滚动路径仍由 Observer 驱动，本函数兜住断档并统一续载逻辑。
+ * Keep loading pages while the sentinel stays inside the prefetch margin,
+ * until it is pushed out or the data is exhausted. IntersectionObserver only
+ * reports crossing *changes*: its first callback can be early-returned by the
+ * `loading` guard during the initial load and never refires, and when content
+ * can't overflow the viewport (large window / zoomed-out page) the sentinel
+ * stays inside the margin with no callbacks at all — the "can't scroll →
+ * can't load" dead end. Scrolling stays observer-driven; this covers the gap
+ * and unifies the continue-loading logic. */
+async function fillViewport() {
+	await nextTick();
+	while (
+		hasMore.value &&
+		!loading.value &&
+		!loadingMore.value &&
+		sentinelInMargin()
+	) {
+		await loadPage(false);
+		await nextTick();
+	}
+}
+
 onMounted(() => {
-	loadPage(true);
+	// 首屏后补一次续载：IO 首次回调可能已在 loading 中被消耗 /
+	// Post-first-load fill: the IO's first callback may already have been
+	// consumed while loading was true
+	void loadPage(true).then(() => fillViewport());
 	// 直接进入本页时设置可能尚未加载——先取设置再按其间隔启动轮询 /
 	// Settings may be unloaded when landing here directly — fetch first so the
 	// configured interval is used for the status poll
@@ -405,15 +452,19 @@ onMounted(() => {
 	restartStatusPoll();
 	observer = new IntersectionObserver(
 		(entries) => {
-			if (entries[0]?.isIntersecting) loadPage(false);
+			if (entries[0]?.isIntersecting) void fillViewport();
 		},
-		{ rootMargin: "600px" },
+		{ rootMargin: `${PRELOAD_MARGIN}px` },
 	);
 	if (sentinel.value) observer.observe(sentinel.value);
+	// 窗口尺寸/页面缩放变化可能让内容重新装得下 → 补一次续载检查 /
+	// Window resizes / page zoom can make content fit again → re-run the fill check
+	window.addEventListener("resize", fillViewport);
 });
 
 onUnmounted(() => {
 	observer?.disconnect();
+	window.removeEventListener("resize", fillViewport);
 	if (statusPollTimer) clearInterval(statusPollTimer);
 });
 </script>

@@ -177,20 +177,24 @@
 	background-color: oklch(0.5 0 0 / 65%);
 }
 
-/* 页面切换淡入淡出 / Page transition fade */
+/* 页面切换淡入淡出——纯透明度过渡，不做位移：进入/离开的 translateY 会
+ * 把根元素的可滚动溢出推高/拉低 ~6px，overflow:auto 滚动容器因此瞬时出现
+ * 竖向滚动条 gutter（clientWidth 抖动 ~10px），按父宽 % 定位的内容（如
+ * 关于页右列卡片）随之水平跳变 / Page transition fade — opacity only,
+ * no translation: enter/leave translateY grows/shrinks the scroller's
+ * scrollable overflow by ~6px, so an overflow:auto scroller briefly shows
+ * a vertical scrollbar gutter (~10px clientWidth jitter) — content laid out
+ * as a % of the parent width (e.g. the About page's right column) then
+ * snaps horizontally mid-transition */
 .page-enter-active,
 .page-leave-active {
-	transition:
-		opacity 0.15s ease,
-		transform 0.15s ease;
+	transition: opacity 0.15s ease;
 }
 .page-enter-from {
 	opacity: 0;
-	transform: translateY(6px);
 }
 .page-leave-to {
 	opacity: 0;
-	transform: translateY(-4px);
 }
 
 /* setup ↔ 主布局切换（稍慢，更有仪式感）/ Setup ↔ main layout transition */

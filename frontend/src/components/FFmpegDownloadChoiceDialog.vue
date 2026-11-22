@@ -38,6 +38,10 @@ const props = defineProps<{
 	open: boolean;
 	/** 可选构建矩阵（后端 download_options）/ Available build matrix (backend download_options) */
 	downloadOptions: { platforms: string[]; variants: string[] } | null;
+	/** 自定义标题（缺省用设置页 tools 缺失文案）/ Custom title (defaults to the settings tools-missing text) */
+	title?: string;
+	/** 自定义描述（缺省用设置页 tools 缺失文案——"取消回退 PATH"）/ Custom description (defaults to the settings tools-missing text — "cancel reverts to PATH") */
+	desc?: string;
 }>();
 
 const emit = defineEmits<{
@@ -97,9 +101,11 @@ function confirm() {
 			text) can't inflate the auto column and push all content right -->
 		<DialogContent class="sm:max-w-md grid-cols-[minmax(0,1fr)]">
 			<DialogHeader>
-				<DialogTitle>{{ t("settings.ffmpegPreference.toolsMissingTitle") }}</DialogTitle>
+				<DialogTitle>{{
+					title ?? t("settings.ffmpegPreference.toolsMissingTitle")
+				}}</DialogTitle>
 				<DialogDescription>{{
-					t("settings.ffmpegPreference.toolsMissingDesc")
+					desc ?? t("settings.ffmpegPreference.toolsMissingDesc")
 				}}</DialogDescription>
 			</DialogHeader>
 

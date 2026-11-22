@@ -225,11 +225,10 @@
 	},
 	"ffmpeg": {
 		"alreadyAvailable": "FFmpeg available: {path}",
-		"missingDownload": "FFmpeg not detected, will auto-download to {dir}",
+		"choiceNeeded": "The chosen tools FFmpeg set is incomplete — prompting the user to pick a download build",
 		"systemPreferenceMissing": "FFmpeg preference is the system PATH but no usable FFmpeg was found; auto-download to tools skipped",
 		"unsupportedPlatform": "Auto-download of FFmpeg is not supported on this platform ({os}/{arch})",
 		"downloadStarted": "Downloading FFmpeg: {url}",
-		"downloadAttemptFailed": "FFmpeg auto-download failed (attempt {attempt}/{max}): {error}",
 		"manualDownloadFailed": "FFmpeg manual download failed: {error}",
 		"installDone": "FFmpeg installed: {version}",
 		"updateCheckFailed": "FFmpeg update check failed: {error}",

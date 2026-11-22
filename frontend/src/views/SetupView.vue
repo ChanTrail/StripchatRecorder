@@ -36,6 +36,7 @@ import {
 } from "@/components/ui/select";
 import SchemeUrlInput from "@/components/SchemeUrlInput.vue";
 import FFmpegBuildSelect from "@/components/FFmpegBuildSelect.vue";
+import { requestFFmpegDownload } from "@/composables/useFFmpegDownload";
 import { Switch } from "@/components/ui/switch";
 import { loadLocaleFromServer } from "@/i18n";
 import { useModuleLocaleStore } from "@/stores/moduleLocale";
@@ -265,9 +266,9 @@ async function startFFmpegDownload() {
 	ffmpegSaving.value = true;
 	error.value = "";
 	try {
-		await call("download_ffmpeg", {
-			platform: downloadPlatform.value || undefined,
-			variant: downloadVariant.value || undefined,
+		await requestFFmpegDownload({
+			platform: downloadPlatform.value,
+			variant: downloadVariant.value,
 		});
 	} catch {
 		error.value = t("ffmpeg.preferenceWizard.downloadStartFailed");

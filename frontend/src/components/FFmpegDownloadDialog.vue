@@ -31,6 +31,7 @@ import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { call, on, onSseReconnect } from "@/lib/api";
+import { lastFFmpegDownloadChoice, requestFFmpegDownload } from "@/composables/useFFmpegDownload";
 import { formatSize } from "@/utils/format";
 import {
 	Dialog,
@@ -213,14 +214,16 @@ async function restoreStatus() {
 }
 
 /**
- * 下载失败后的重试：重新触发后台安装，SSE 事件随后覆盖占位状态。
- * Retry after a failed download: re-triggers the background install; SSE
- * events then overwrite the placeholder state.
+ * 下载失败后的重试：沿用上次记录的构建选择重新触发后台安装
+ * （无记录时按后端缺省解析），SSE 事件随后覆盖占位状态。
+ * Retry after a failed download: re-triggers the install with the recorded
+ * build choice (backend auto-resolution when none was recorded); SSE events
+ * then overwrite the placeholder state.
  */
 async function retry() {
 	progress.value = { state: "downloading", kind: "install", downloaded: 0, total: 0, pct: null };
 	try {
-		await call("download_ffmpeg");
+		await requestFFmpegDownload(lastFFmpegDownloadChoice());
 	} catch {
 		progress.value = {
 			state: "error",

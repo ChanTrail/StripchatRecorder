@@ -39,6 +39,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { call, on } from "@/lib/api";
+import { requestFFmpegDownload } from "@/composables/useFFmpegDownload";
 import { useSettingsStore } from "@/stores/settings";
 import { useNotify } from "@/composables/useNotify";
 import {
@@ -51,6 +52,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { AlertCircle, Check, Info, Loader2, RefreshCw, X } from "@lucide/vue";
+import FFmpegBuildSelect from "@/components/FFmpegBuildSelect.vue";
 
 /** 单个位置的探测结果（与后端 `FFmpegLocationProbe` 一致）/ Probe result for one location (matches backend `FFmpegLocationProbe`) */
 interface FFmpegLocationProbe {
@@ -74,6 +76,14 @@ interface FFmpegLocationProbe {
 	ffplay_version: string | null;
 }
 
+/** 当前主机可下载的构建选项（与后端 `FFmpegDownloadOptions` 一致）/ Downloadable build choices for this host (matches backend `FFmpegDownloadOptions`) */
+interface FFmpegDownloadOptions {
+	/** 可选平台轨（首元素 = 宿主默认轨）/ Selectable platform tracks (first = host default) */
+	platforms: string[];
+	/** 可选变体后缀（`""` = 静态）/ Selectable variant suffixes (`""` = static) */
+	variants: string[];
+}
+
 /** 两个位置的探测结果汇总（与后端 `FFmpegLocations` 一致）/ Combined probe results (matches backend `FFmpegLocations`) */
 interface FFmpegLocations {
 	/** tools 目录的绝对路径 / Absolute tools directory path */
@@ -82,6 +92,8 @@ interface FFmpegLocations {
 	system: FFmpegLocationProbe;
 	/** tools 目录探测结果 / Tools directory probe result */
 	tools: FFmpegLocationProbe;
+	/** 可下载构建选项（不支持下载的平台为 null）/ Downloadable build options (null on unsupported platforms) */
+	download_options?: FFmpegDownloadOptions | null;
 }
 
 const { t } = useI18n();
@@ -106,6 +118,10 @@ const saving = ref(false);
  * Download is clicked; the preference is only persisted on the install
  * `done` event (failures/retries never touch the config) */
 const downloadPending = ref(false);
+/** 下载构建选择：平台轨（默认取 options 首元素即宿主默认轨）/ Download build pick: platform track (defaults to first option = host default) */
+const downloadPlatform = ref("");
+/** 下载构建选择：变体后缀（默认 `""` = 静态）/ Download build pick: variant suffix (defaults to `""` = static) */
+const downloadVariant = ref("");
 /** ffmpeg-progress 事件载荷（此处只需 state/kind）/ ffmpeg-progress payload (only state/kind needed here) */
 interface FFmpegProgressLite {
 	state: string;
@@ -224,6 +240,11 @@ async function probe() {
 	try {
 		const res = await call<FFmpegLocations>("get_ffmpeg_locations");
 		locations.value = res;
+		// 构建选择回填宿主默认轨（用户已手动改过则不动）/ Default the build
+		// pick to the host's default track (leave a manual pick untouched)
+		if (!downloadPlatform.value && res.download_options?.platforms.length) {
+			downloadPlatform.value = res.download_options.platforms[0];
+		}
 		if (selected.value === "") {
 			const count = (p: FFmpegLocationProbe) =>
 				[p.ffmpeg, p.ffprobe, p.ffplay].filter(Boolean).length;
@@ -286,7 +307,10 @@ async function confirm() {
 			// PATH preference (explicit intent), so no pre-save is needed.
 			downloadPending.value = true;
 			try {
-				await call("download_ffmpeg");
+				await requestFFmpegDownload({
+					platform: downloadPlatform.value,
+					variant: downloadVariant.value,
+				});
 			} catch {
 				downloadPending.value = false;
 				toast(t("ffmpeg.preferenceWizard.downloadStartFailed"), "error");
@@ -498,6 +522,16 @@ function preventClose(e: Event) {
 					</div>
 				</div>
 			</div>
+
+			<!-- 下载构建选择（选中 tools 且不齐 + 主机支持下载时出现）/
+			Build selection (shown when tools is picked but incomplete and the
+			host supports downloads) -->
+			<FFmpegBuildSelect
+				v-if="locations && isDownload && locations.download_options"
+				v-model:platform="downloadPlatform"
+				v-model:variant="downloadVariant"
+				:download-options="locations.download_options"
+			/>
 
 			<!-- 所选位置不完整时给出提示；始终渲染（invisible 占位）避免出现时对话框高度跳动 / Hint for an incomplete selection; always rendered (invisible placeholder) so the dialog height doesn't jump when it appears -->
 			<p

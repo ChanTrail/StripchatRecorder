@@ -32,6 +32,8 @@ import {
 	SelectValue,
 } from "@/components/ui/select";
 import SchemeUrlInput from "@/components/SchemeUrlInput.vue";
+import FFmpegBuildSelect from "@/components/FFmpegBuildSelect.vue";
+import { requestFFmpegDownload } from "@/composables/useFFmpegDownload";
 import { Switch } from "@/components/ui/switch";
 import { loadLocaleFromServer } from "@/i18n";
 import { useModuleLocaleStore } from "@/stores/moduleLocale";
@@ -107,6 +109,13 @@ interface FFmpegLocationProbe {
 	/** ffplay -version 的版本号字段 / Version token from `ffplay -version` */
 	ffplay_version: string | null;
 }
+/** 当前主机可下载的构建选项（与后端 `FFmpegDownloadOptions` 一致）/ Downloadable build choices for this host (matches backend `FFmpegDownloadOptions`) */
+interface FFmpegDownloadOptions {
+	/** 可选平台轨（首元素 = 宿主默认轨）/ Selectable platform tracks (first = host default) */
+	platforms: string[];
+	/** 可选变体后缀（`""` = 静态）/ Selectable variant suffixes (`""` = static) */
+	variants: string[];
+}
 /** 两个位置的探测结果汇总（与后端 `FFmpegLocations` 一致）/ Combined probe results (matches backend `FFmpegLocations`) */
 interface FFmpegLocations {
 	/** tools 目录的绝对路径 / Absolute tools directory path */
@@ -115,7 +124,13 @@ interface FFmpegLocations {
 	system: FFmpegLocationProbe;
 	/** 程序目录下 tools/ / tools dir next to the binary */
 	tools: FFmpegLocationProbe;
+	/** 可下载构建选项（不支持下载的平台为 null）/ Downloadable build options (null on unsupported platforms) */
+	download_options?: FFmpegDownloadOptions | null;
 }
+/** 下载构建选择：平台轨（默认取 options 首元素即宿主默认轨）/ Download build pick: platform track (defaults to the first option = host default) */
+const downloadPlatform = ref("");
+/** 下载构建选择：变体后缀（默认 `""` = 静态）/ Download build pick: variant suffix (defaults to `""` = static) */
+const downloadVariant = ref("");
 const ffmpegLocations = ref<FFmpegLocations | null>(null);
 const ffmpegChecking = ref(false);
 const ffmpegCheckFailed = ref(false);
@@ -208,6 +223,11 @@ async function probeFFmpeg() {
 	try {
 		const res = await call<FFmpegLocations>("get_ffmpeg_locations");
 		ffmpegLocations.value = res;
+		// 构建选择回填宿主默认轨（用户已手动改过则不动）/ Default the build
+		// pick to the host's default track (leave a manual pick untouched)
+		if (!downloadPlatform.value && res.download_options?.platforms.length) {
+			downloadPlatform.value = res.download_options.platforms[0];
+		}
 		if (ffmpegSelected.value === "") {
 			const count = (p: FFmpegLocationProbe) =>
 				[p.ffmpeg, p.ffprobe, p.ffplay].filter(Boolean).length;
@@ -238,7 +258,10 @@ async function startFFmpegDownload() {
 	ffmpegSaving.value = true;
 	error.value = "";
 	try {
-		await call("download_ffmpeg");
+		await requestFFmpegDownload({
+			platform: downloadPlatform.value,
+			variant: downloadVariant.value,
+		});
 	} catch {
 		error.value = t("ffmpeg.preferenceWizard.downloadStartFailed");
 	} finally {
@@ -1103,6 +1126,16 @@ async function finish() {
 										</div>
 									</div>
 								</div>
+
+								<!-- 下载构建选择（选中 tools 且不齐 + 主机支持下载时出现）/
+								Build selection (shown when tools is picked but incomplete and the
+								host supports downloads) -->
+								<FFmpegBuildSelect
+									v-if="ffmpegNeedsDownload && ffmpegLocations?.download_options"
+									v-model:platform="downloadPlatform"
+									v-model:variant="downloadVariant"
+									:download-options="ffmpegLocations.download_options"
+								/>
 
 								<!-- 所选位置不完整时的提示（invisible 常驻占位避免布局跳动）/ Hint for
 								an incomplete selection (always rendered so the layout doesn't jump) -->

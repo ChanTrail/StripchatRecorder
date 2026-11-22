@@ -22,12 +22,14 @@
     - Global DirectoryBrowserDialog singleton mount
 -->
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, computed } from "vue";
+import { onMounted, onUnmounted, ref, computed, watch } from "vue";
 import { RouterView, useRouter, useRoute } from "vue-router";
 import NotifyLayer from "./components/NotifyLayer.vue";
 import DirectoryBrowserDialog from "./components/DirectoryBrowserDialog.vue";
 import FFmpegPreferenceDialog from "./components/FFmpegPreferenceDialog.vue";
 import FFmpegDownloadDialog from "./components/FFmpegDownloadDialog.vue";
+import FFmpegDownloadChoiceDialog from "./components/FFmpegDownloadChoiceDialog.vue";
+import { requestFFmpegDownload } from "@/composables/useFFmpegDownload";
 import { Button } from "@/components/ui/button";
 import { call, on, onSseReconnect } from "@/lib/api";
 import {
@@ -178,6 +180,76 @@ let unlistenWarnings: (() => void) | null = null;
 let unlistenLocaleWarnings: (() => void) | null = null;
 let unlistenNotification: (() => void) | null = null;
 let unlistenFFmpegProgress: (() => void) | null = null;
+let unlistenFFmpegChoice: (() => void) | null = null;
+
+// ── "已选 tools 但组件不齐"的全局构建选择对话框 / Global pick-a-build dialog for "tools chosen but incomplete" ──
+/** 对话框开关 / Dialog open state */
+const ffmpegChoiceOpen = ref(false);
+/** 可下载构建矩阵（打开前探测时顺带确认 tools 仍不完整）/ Build matrix (the pre-open probe also confirms tools is still incomplete) */
+const ffmpegChoiceOptions = ref<{ platforms: string[]; variants: string[] } | null>(null);
+
+/**
+ * 打开 FFmpeg 构建选择对话框（`ffmpeg-choice-needed` 事件与挂载/路由补查
+ * 共用入口）：全量拉取判定，条件与后端 `refill_tools` 对齐——
+ * 1. 设置里 `ffmpeg_preference === 1`（用户已选 tools）；
+ * 2. 无进行中的下载/安装（强制进度窗口占屏时不叠加）；
+ * 3. 探测两位置：`download_options` 非空且 tools 三组件不齐。
+ * 任一不满足即不弹；/setup（向导内联处理）与 /login 路由下抑制。
+ * 挂载补查的必要性：启动期的 emit 早于 `listen()` 注册会被丢弃
+ * （Tauri 事件无重放），只靠事件就得等下一次循环轮补发。
+ * Open the FFmpeg pick-a-build dialog (shared entry for the
+ * `ffmpeg-choice-needed` event and the mount/route rechecks): pulls all
+ * state itself, mirroring the backend's `refill_tools` condition —
+ * 1. `ffmpeg_preference === 1` in settings (tools was chosen);
+ * 2. no download/install in progress (the forced progress dialog owns the screen);
+ * 3. probe both locations: `download_options` present and the tools set incomplete.
+ * Any unmet condition skips the prompt; suppressed on /setup (the wizard
+ * handles it inline) and /login. The mount recheck is needed because the
+ * startup emit fires before `listen()` registers and is dropped (Tauri
+ * doesn't replay events) — event-only would wait for the next loop round.
+ */
+async function openFFmpegChoice() {
+	if (route.path === "/setup" || route.path === "/login" || ffmpegChoiceOpen.value) return;
+	try {
+		// 仅用户已选 tools 首选项时才弹（后端只在 raw_preference==1 时发事件）/
+		// Only when the tools preference is chosen (the backend only emits when raw_preference==1)
+		const settings = await call<{ ffmpeg_preference?: number | null }>("get_settings");
+		if (settings.ffmpeg_preference !== 1) return;
+		// 下载/安装进行中 → 强制进度窗口已占屏，不再叠加选择框 /
+		// A download/install is running — the forced progress dialog owns the screen
+		const status = await call<{ state: string }>("get_ffmpeg_status");
+		if (status.state === "downloading" || status.state === "installing") return;
+		const res = await call<{
+			tools: { ffmpeg: boolean; ffprobe: boolean; ffplay: boolean };
+			download_options?: { platforms: string[]; variants: string[] } | null;
+		}>("get_ffmpeg_locations");
+		// 已补齐或平台不支持下载 → 无可弹内容 / Complete already or downloads unsupported → nothing to show
+		if (!res.download_options) return;
+		if (res.tools.ffmpeg && res.tools.ffprobe && res.tools.ffplay) return;
+		ffmpegChoiceOptions.value = res.download_options;
+		ffmpegChoiceOpen.value = true;
+	} catch {
+		// 任一步失败放弃弹窗，等下一次事件 / Any failed step skips the prompt — wait for the next event
+	}
+}
+
+/**
+ * 全局选择对话框确认：携带所选构建触发下载（进度由强制窗口
+ * FFmpegDownloadDialog 接管；首选项本就是 tools，安装完成即自动生效，
+ * 无需再写设置）。
+ * Global choice-dialog confirm: download with the chosen build (the forced
+ * FFmpegDownloadDialog shows progress; the preference is already tools so a
+ * finished install takes effect automatically — nothing to persist).
+ *
+ * @param choice - 构建选择（平台轨 + 变体后缀）/ Build choice (platform track + variant suffix)
+ */
+async function onFFmpegChoiceConfirm(choice: { platform: string; variant: string }) {
+	try {
+		await requestFFmpegDownload(choice);
+	} catch {
+		toast(t("ffmpeg.preferenceWizard.downloadStartFailed"), "error");
+	}
+}
 
 /**
  * 执行通知面板中的操作按钮。
@@ -348,7 +420,28 @@ onMounted(async () => {
 	// FFmpeg download/install progress toast (fetches current state once to
 	// restore an in-progress download)
 	unlistenFFmpegProgress = await setupFFmpegProgressToast(t);
+
+	// 已选 tools 但组件不齐 → 弹"选择构建版本"对话框（不自动装默认版）/
+	// Chosen tools set incomplete → pop the pick-a-build dialog (never auto-installs the default)
+	unlistenFFmpegChoice = await on("ffmpeg-choice-needed", () => {
+		void openFFmpegChoice();
+	});
+
+	// 启动期的 ffmpeg-choice-needed 早于 listen 注册会被丢弃——挂载后主动补查一次
+	// The startup ffmpeg-choice-needed emit precedes listen() registration and
+	// is dropped — recheck once after mount
+	void openFFmpegChoice();
 });
+
+// /login → 其它路由补查一次（挂载时点在 /login 会被抑制；desktop 无该路由，仅与
+// web 版对齐保持对称）/ Re-run the check when leaving /login (a mount-time check
+// on /login is suppressed; desktop has no such route — kept for parity with the web app)
+watch(
+	() => route.path,
+	(_to, from) => {
+		if (from === "/login") void openFFmpegChoice();
+	},
+);
 
 onUnmounted(() => {
 	mq.removeEventListener("change", onThemeChange);
@@ -358,6 +451,7 @@ onUnmounted(() => {
 	unlistenLocaleWarnings?.();
 	unlistenNotification?.();
 	unlistenFFmpegProgress?.();
+	unlistenFFmpegChoice?.();
 });
 </script>
 
@@ -703,6 +797,16 @@ onUnmounted(() => {
 			<!-- FFmpeg 首选项向导：ffmpeg_preference 未设置时自动弹出 / FFmpeg preference wizard: auto-opens while ffmpeg_preference is unset -->
 			<FFmpegPreferenceDialog />
 			<FFmpegDownloadDialog />
+
+			<!-- tools 组件不齐时的全局"选择构建"对话框（ffmpeg-choice-needed 事件驱动；取消仅关闭、不改首选项）/
+				Global pick-a-build dialog for an incomplete tools set (driven by ffmpeg-choice-needed; cancelling only closes — the preference is untouched) -->
+			<FFmpegDownloadChoiceDialog
+				v-model:open="ffmpegChoiceOpen"
+				:download-options="ffmpegChoiceOptions"
+				:title="t('ffmpeg.choiceNeeded.title')"
+				:desc="t('ffmpeg.choiceNeeded.desc')"
+				@confirm="onFFmpegChoiceConfirm"
+			/>
 
 			<NotifyLayer />
 		</div>

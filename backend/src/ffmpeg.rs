@@ -14,8 +14,9 @@
 //!   与进度状态存储（SSE 广播 + 重连恢复）
 //! - [`probe`]：system（PATH）与 tools 两个位置中 ffmpeg/ffprobe/ffplay 的
 //!   存在性与 `-version` 版本探测，供"FFmpeg 首选项"向导与设置页展示
-//! - [`download`]：缺失时的启动自动下载、手动下载、多线程分段下载、解压
-//!   安装、下载副本的定期自动更新，以及 `tools/ffmpeg-build.json` 安装标记
+//! - [`download`]：手动下载、多线程分段下载、解压安装、下载副本的定期
+//!   自动更新（沿用标记里的已选轨）、tools 不齐时的"选择构建"事件，
+//!   以及 `tools/ffmpeg-build.json` 安装标记
 //!
 //! This module centrally manages ffmpeg / ffprobe / ffplay lookup, availability
 //! checks and automatic installation, split into submodules by concern (the
@@ -36,9 +37,10 @@
 //! - [`probe`]: presence + `-version` probing for ffmpeg/ffprobe/ffplay on the
 //!   system PATH and in the tools directory, shown by the FFmpeg preference
 //!   wizard and the settings page
-//! - [`download`]: startup auto-download when missing, manual download,
-//!   multi-threaded ranged download, extraction, periodic auto-update of the
-//!   managed copy and the `tools/ffmpeg-build.json` install marker
+//! - [`download`]: manual download, multi-threaded ranged download,
+//!   extraction, periodic auto-update of the managed copy (keeping the
+//!   marker's chosen track), the pick-a-build event for an incomplete tools
+//!   set and the `tools/ffmpeg-build.json` install marker
 
 // ─── 子模块 / Submodules ─────────────────────────────────────────────────────
 

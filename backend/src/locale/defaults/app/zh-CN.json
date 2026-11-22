@@ -501,7 +501,16 @@
 			"toolsMissingDesc": "tools 文件夹中未检测到完整的 FFmpeg 组件（ffmpeg、ffprobe、ffplay）。是否现在下载 FFmpeg 到 tools 文件夹？取消则改用系统环境变量（PATH）。",
 			"download": "下载",
 			"downloadStartFailed": "下载启动失败，请稍后重试",
-			"notInstalled": "未安装"
+			"notInstalled": "未安装",
+			"currentVersion": "当前版本"
+		},
+		"ffmpegDownload": {
+			"label": "FFmpeg 版本",
+			"hint": "手动下载 FFmpeg 到 tools 文件夹：可替换已安装的构建版本，也可在组件缺失时补装。",
+			"download": "下载",
+			"replace": "更换版本",
+			"dialogTitle": "下载 FFmpeg",
+			"dialogDesc": "选择要下载到 tools 文件夹的构建版本；tools 中已安装的版本会被替换。"
 		},
 		"apiProxy": {
 			"label": "API 代理（访问 stripchat.com，留空不使用）",
@@ -695,7 +704,6 @@
 		},
 		"backend": {
 			"ffmpegMissing": "未检测到 ffmpeg，录制和后处理功能将无法使用。请安装 ffmpeg 并确保其在 PATH 中，或放入程序目录的 tools 文件夹。",
-			"ffmpegDownloadFailed": "FFmpeg 自动下载失败：{error}。录制和后处理功能将无法使用，请手动安装 ffmpeg 并确保其在 PATH 中，或放入程序目录的 tools 文件夹。",
 			"ffmpegUpdateFailed": "FFmpeg 自动更新失败：{error}（将继续使用当前版本）",
 			"ffmpegUpdateAvailable": "检测到 FFmpeg 新版本，将在程序空闲时自动更新",
 			"ffmpegInstallStarted": "FFmpeg 下载安装已开始",
@@ -973,6 +981,10 @@
 			"retry": "重试下载",
 			"retryFailed": "下载启动失败，请稍后重试",
 			"close": "关闭"
+		},
+		"choiceNeeded": {
+			"title": "需要下载 FFmpeg",
+			"desc": "FFmpeg 已设置为使用 tools 文件夹，但其中没有找到完整的 ffmpeg / ffprobe / ffplay 组件。请选择要下载的构建版本，或关闭对话框稍后处理。"
 		}
 	}
 }

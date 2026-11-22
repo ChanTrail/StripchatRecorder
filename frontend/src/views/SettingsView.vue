@@ -37,6 +37,7 @@ import { Switch } from "@/components/ui/switch";
 import SchemeUrlInput from "@/components/SchemeUrlInput.vue";
 import DurationHmsInput from "@/components/DurationHmsInput.vue";
 import FFmpegDownloadChoiceDialog from "@/components/FFmpegDownloadChoiceDialog.vue";
+import { requestFFmpegDownload } from "@/composables/useFFmpegDownload";
 import {
 	NumberField,
 	NumberFieldContent,
@@ -65,7 +66,7 @@ import {
 	DialogFooter,
 } from "@/components/ui/dialog";
 import { useDirectoryBrowser } from "@/composables/useDirectoryBrowser";
-import { FolderOpen, Eye, EyeOff, Check, Loader2 } from "@lucide/vue";
+import { FolderOpen, Eye, EyeOff, Check, Loader2, Download } from "@lucide/vue";
 
 const store = useSettingsStore();
 const systemStore = useSystemStore();
@@ -341,6 +342,9 @@ interface FFmpegLocationsLite {
 	tools: FFmpegLocationProbeLite;
 	/** 可下载构建选项（不支持下载的平台为 null/缺省）/ Downloadable build options (null/absent on unsupported platforms) */
 	download_options?: { platforms: string[]; variants: string[] } | null;
+	/** tools 副本的已安装构建信息（本程序下载的标记；手动放置/标记损坏为 null/缺省）/
+	 *  Build info of the installed tools copy (our download marker; absent/null for manual or corrupt-marked copies) */
+	tools_build?: { platform: string; variant: string } | null;
 }
 
 /** 位置是否组件齐全（ffmpeg + ffprobe + ffplay 都在）/ Whether a location has the full component set (ffmpeg + ffprobe + ffplay) */
@@ -381,6 +385,53 @@ const pendingToolsDownload = ref(false);
 const ffmpegDownloadChoiceOpen = ref(false);
 /** 随对话框透传的可下载构建矩阵（来自切换首选项时的探测）/ Build matrix passed into the dialog (from the probe made when switching preference) */
 const pendingDownloadOptions = ref<{ platforms: string[]; variants: string[] } | null>(null);
+/** 下载对话框模式：false=首选项切换（取消回退 PATH、install done 才提交 tools），
+ *  true=手动下载（取消仅关闭；首选项本就是 tools，不涉及提交）/
+ *  Choice-dialog mode: false = preference-switch flow (cancel reverts to PATH,
+ *  tools committed on install done), true = manual download (cancel only
+ *  closes — the preference is already tools, nothing to persist) */
+const manualDownloadMode = ref(false);
+/** tools 三组件是否齐全（决定按钮文案「下载 / 更换版本」）/ Whether the tools set is complete (drives the button label Download / Change version) */
+const toolsComplete = computed(
+	() => ffmpegLocations.value != null && locationComplete(ffmpegLocations.value.tools),
+);
+/**
+ * 当前生效的 FFmpeg 版本标签——镜像后端 `program_by_preference` 的解析：
+ * 所选位置组件齐全时用所选位置；所选不齐或未设置时回落
+ * 「tools 有 ffmpeg 用 tools，否则 PATH」。探测中为「…」；
+ * 生效位置无 ffmpeg 显示「未安装」；有 ffmpeg 但 -version 失败只显示来源。
+ * Label for the currently effective FFmpeg version — mirrors the backend's
+ * `program_by_preference` resolution: the chosen location when its set is
+ * complete; an incomplete choice or an unset preference falls back to
+ * "tools when ffmpeg exists there, else PATH". "…" while probing;
+ * "not installed" when the resolved location has no ffmpeg; source only
+ * when ffmpeg exists but `-version` failed.
+ */
+const currentFFmpegLabel = computed(() => {
+	const loc = ffmpegLocations.value;
+	if (!loc) return "…";
+	const pref = form.ffmpeg_preference;
+	const useTools =
+		pref === 1 && locationComplete(loc.tools)
+			? true
+			: pref === 0 && locationComplete(loc.system)
+				? false
+				: loc.tools.ffmpeg;
+	const probe = useTools ? loc.tools : loc.system;
+	if (!probe.ffmpeg) return t("settings.ffmpegPreference.notInstalled");
+	const src = t(
+		useTools ? "settings.ffmpegPreference.tools" : "settings.ffmpegPreference.system",
+	);
+	// 本程序下载的 tools 副本附带构建轨×形态（如 windows-x86_64-legacy-shared）；
+	// 手动放置的副本无标记不附 / Our downloaded tools copy also shows its
+	// track×variant (e.g. windows-x86_64-legacy-shared); manually placed
+	// copies carry no marker and show nothing extra
+	const build =
+		useTools && loc.tools_build
+			? ` · ${loc.tools_build.platform}${loc.tools_build.variant}`
+			: "";
+	return probe.ffmpeg_version ? `${probe.ffmpeg_version}（${src}${build}）` : `${src}${build}`;
+});
 /** ffmpeg-progress 事件载荷（与后端 serde 输出一致，此处只需 state/kind）/ ffmpeg-progress payload (matches backend serde; only state/kind needed here) */
 interface FFmpegProgressLite {
 	state: string;
@@ -447,6 +498,7 @@ async function onFFmpegPreferenceChange(v: unknown) {
 		// tools 缺组件 → 弹下载确认对话框（含构建选择）；确认→下载，取消→改回 PATH
 		// tools incomplete → open the download-confirm dialog (with build
 		// selection); confirm downloads, cancel reverts to PATH
+		manualDownloadMode.value = false;
 		pendingDownloadOptions.value = probe.download_options ?? null;
 		ffmpegDownloadChoiceOpen.value = true;
 		return;
@@ -467,22 +519,50 @@ async function onFFmpegPreferenceChange(v: unknown) {
  * @param choice - 对话框中选定的构建（platform 轨 + variant 后缀）/ build choice from the dialog (platform track + variant suffix)
  */
 async function onFFmpegDownloadConfirm(choice: { platform: string; variant: string }) {
+	// 手动模式：首选项已是 tools，只按所选构建下载，不涉及首选项提交/Select 弹回 /
+	// Manual mode: the preference is already tools — just download the chosen
+	// build, no preference commit or Select snap-back involved
+	if (manualDownloadMode.value) {
+		manualDownloadMode.value = false;
+		try {
+			await requestFFmpegDownload(choice);
+		} catch {
+			toast(t("settings.ffmpegPreference.downloadStartFailed"), "error");
+		}
+		return;
+	}
 	pendingToolsDownload.value = true;
 	ffmpegPrefSelectKey.value += 1;
 	try {
-		await call("download_ffmpeg", {
-			platform: choice.platform || undefined,
-			variant: choice.variant || undefined,
-		});
+		await requestFFmpegDownload(choice);
 	} catch {
 		pendingToolsDownload.value = false;
 		toast(t("settings.ffmpegPreference.downloadStartFailed"), "error");
 	}
 }
 
-/** 下载确认对话框取消 → 回退 PATH 首选项（与原确认框取消行为一致）/ Choice-dialog cancel → revert to the PATH preference (same as the old confirm cancel) */
+/** 下载确认对话框取消 → 回退 PATH 首选项（手动模式仅关闭）/ Choice-dialog cancel → revert to the PATH preference (manual mode only closes) */
 function onFFmpegDownloadCancel() {
+	if (manualDownloadMode.value) {
+		manualDownloadMode.value = false;
+		return;
+	}
 	commitFFmpegPreference(0);
+}
+
+/**
+ * 手动下载入口（仅 tools 首选项下显示）：把已探测的构建矩阵透传给共用的
+ * 下载确认对话框并标记手动模式。覆盖两个场景——替换已安装的构建版本，
+ * 以及 tools 组件缺失时（如关掉了启动/首选项弹窗）的补救下载。
+ * Manual download entry (shown only under the tools preference): hands the
+ * probed build matrix to the shared choice dialog in manual mode. Covers
+ * both cases — replacing the installed build and refilling a missing tools
+ * set (e.g. after dismissing the startup/preference prompt).
+ */
+function openFFmpegManualDownload() {
+	manualDownloadMode.value = true;
+	pendingDownloadOptions.value = ffmpegLocations.value?.download_options ?? null;
+	ffmpegDownloadChoiceOpen.value = true;
 }
 
 // 监听 store.settings 变化（来自其他客户端），同步到表单
@@ -1230,6 +1310,14 @@ async function submitSetPassword() {
 							>
 								{{ t("settings.ffmpegPreference.systemNoAutoUpdate") }}
 							</p>
+							<!-- 当前生效的 FFmpeg 版本与来源（随首选项解析；探测中显示省略号）/
+								Currently effective FFmpeg version and its source (follows
+								the resolved preference; ellipsis while probing) -->
+							<p class="text-xs text-muted-foreground">
+								{{ t("settings.ffmpegPreference.currentVersion") }}：{{
+									currentFFmpegLabel
+								}}
+							</p>
 						</div>
 						<Select
 							:key="ffmpegPrefSelectKey"
@@ -1287,6 +1375,35 @@ async function submitSetPassword() {
 								</SelectItem>
 							</SelectContent>
 						</Select>
+					</div>
+
+					<!-- 手动下载 FFmpeg（仅 tools 首选项且主机支持下载时显示）：替换已装版本
+						或补装缺失组件 / Manual FFmpeg download (shown only under the tools
+						preference on a downloadable host): replace the installed build
+						or refill missing components -->
+					<div
+						v-if="form.ffmpeg_preference === 1 && ffmpegLocations?.download_options"
+						class="flex items-center justify-between gap-4"
+					>
+						<div class="flex min-w-0 flex-col gap-0.5">
+							<Label>{{ t("settings.ffmpegDownload.label") }}</Label>
+							<p class="text-xs text-muted-foreground">
+								{{ t("settings.ffmpegDownload.hint") }}
+							</p>
+						</div>
+						<Button
+							variant="outline"
+							size="sm"
+							class="shrink-0"
+							@click="openFFmpegManualDownload"
+						>
+							<Download class="size-3.5" />
+							{{
+								toolsComplete
+									? t("settings.ffmpegDownload.replace")
+									: t("settings.ffmpegDownload.download")
+							}}
+						</Button>
 					</div>
 
 					<div class="flex items-center justify-between gap-4">
@@ -1967,11 +2084,15 @@ async function submitSetPassword() {
 			</DialogContent>
 		</Dialog>
 
-		<!-- tools 缺组件时的 FFmpeg 下载确认（含构建选择）/ FFmpeg download confirm
-			with build selection when the tools set is incomplete -->
+		<!-- tools 缺组件的首选项确认 + 手动下载共用的 FFmpeg 下载对话框（含构建选择）；
+			手动模式换标题/描述（取消不回退 PATH）/ Shared FFmpeg download dialog for
+			the incomplete-tools preference confirm and manual downloads (with build
+			selection); manual mode swaps title/desc (cancel doesn't revert to PATH) -->
 		<FFmpegDownloadChoiceDialog
 			v-model:open="ffmpegDownloadChoiceOpen"
 			:download-options="pendingDownloadOptions"
+			:title="manualDownloadMode ? t('settings.ffmpegDownload.dialogTitle') : undefined"
+			:desc="manualDownloadMode ? t('settings.ffmpegDownload.dialogDesc') : undefined"
 			@confirm="onFFmpegDownloadConfirm"
 			@cancel="onFFmpegDownloadCancel"
 		/>

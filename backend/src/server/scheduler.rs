@@ -416,19 +416,21 @@ pub fn start_pp_load_monitor(app_state: Arc<AppState>) {
 	});
 }
 
-/// 启动 FFmpeg 自动更新循环（启动 5 分钟后首轮，之后每 6 小时一轮）。
+/// 启动 FFmpeg 自动更新循环（启动 5 分钟后首轮，之后每小时一轮）。
 ///
-/// 每轮逻辑见 `ffmpeg::download::auto_update_loop`：ffmpeg 缺失时静默重试安装；
-/// tools 中是本程序下载的受管副本（带 ffmpeg-build.json 标记）且设置开启时，
-/// 比对远端校验文件并在空闲时替换二进制。
+/// 每轮逻辑见 `ffmpeg::download::auto_update_loop`：已选 tools 不齐时广播
+/// `ffmpeg-choice-needed` 提醒用户选择构建（不自动安装）；tools 中是本程序
+/// 下载的受管副本（带 ffmpeg-build.json 标记）且设置开启时，比对远端校验
+/// 文件并在空闲时替换二进制。
 ///
 /// Start the FFmpeg auto-update loop (first round 5 minutes after launch, then
-/// every 6 hours).
+/// every hour).
 ///
-/// See `ffmpeg::download::auto_update_loop` for the per-round logic: silently
-/// retry the install when ffmpeg is missing; when tools holds our managed copy
-/// (carrying the ffmpeg-build.json marker) and the setting is on, compare the
-/// remote checksum and swap binaries while idle.
+/// See `ffmpeg::download::auto_update_loop` for the per-round logic: an
+/// incomplete chosen tools set broadcasts `ffmpeg-choice-needed` reminding the
+/// user to pick a build (never auto-installs); when tools holds our managed
+/// copy (carrying the ffmpeg-build.json marker) and the setting is on, compare
+/// the remote checksum and swap binaries while idle.
 pub fn start_ffmpeg_update(app_state: Arc<AppState>, emitter: Arc<dyn Emitter>) {
 	tokio::spawn(crate::ffmpeg::download::auto_update_loop(
 		app_state, emitter,

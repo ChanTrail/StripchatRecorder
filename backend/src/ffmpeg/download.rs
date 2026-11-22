@@ -10,11 +10,12 @@
 //! - [`progress`]：`ffmpeg-progress` SSE 事件广播与状态存储写入/重置
 //! - [`pipeline`]：下载-安装流水线——校验、下载、空闲等待、解压、冒烟、
 //!   `.old` 备份式换入与回滚；经 `INSTALL_MUTEX` 保证同时只有一个安装
-//! - [`tasks`]：入口任务——遗留清理、启动自动安装、手动安装、定期自动更新
-//!   循环（缺失补装 + 远端哈希比对换新版，仅空闲时替换）
+//! - [`tasks`]：入口任务——遗留清理、tools 不齐时的"选择构建"提示、手动
+//!   安装、定期自动更新循环（远端哈希比对换新版，仅空闲时替换）
 //!
 //! 只有带安装标记的 tools 副本会被自动更新：用户手动放入 tools 的 ffmpeg、
-//! 或 PATH 上的 ffmpeg，永远不会被替换。
+//! 或 PATH 上的 ffmpeg，永远不会被替换。缺失场景不自动安装——由用户选择
+//! 要下载的构建版本；唯一直接自动下载是受管副本的更新（沿用标记已选轨）。
 //!
 //! The single entry point for fetching and maintaining the tools copy, split
 //! into submodules by concern (the parent keeps only shared constants, the
@@ -31,12 +32,14 @@
 //! - [`pipeline`]: the download-install pipeline — checksum, download, idle
 //!   wait, extraction, smoke test, `.old`-backup swap with rollback;
 //!   `INSTALL_MUTEX` keeps it to one install at a time
-//! - [`tasks`]: entry tasks — leftover cleanup, startup auto-install, manual
-//!   install and the periodic auto-update loop (refill missing components +
-//!   remote-hash-driven upgrades, swapping only while idle)
+//! - [`tasks`]: entry tasks — leftover cleanup, the pick-a-build prompt for
+//!   an incomplete tools set, manual install and the periodic auto-update
+//!   loop (remote-hash-driven upgrades, swapping only while idle)
 //!
 //! Only marker-bearing tools copies are auto-updated: a user-placed ffmpeg in
-//! tools, or a PATH ffmpeg, is never replaced.
+//! tools, or a PATH ffmpeg, is never replaced. Missing installs are never
+//! auto-downloaded — the user picks the build; the only direct auto-download
+//! is updating a managed copy (keeping the marker's chosen track).
 
 use std::time::Duration;
 
@@ -61,6 +64,33 @@ pub use tasks::{
 	auto_update_loop, cleanup_leftovers, current_progress, spawn_manual_install,
 	spawn_startup_install,
 };
+
+/// tools 副本的已安装构建信息（平台轨 × 变体后缀，serde 下发前端展示）。
+/// Build info of the installed tools copy (platform track × variant
+/// suffix), serialized for the frontend.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FFmpegBuildInfo {
+	/// 平台轨标识（如 `windows-x86_64-legacy`）/ Platform track id (e.g. `windows-x86_64-legacy`)
+	pub platform: String,
+	/// 变体后缀（`""` = 静态）/ Variant suffix (`""` = static)
+	pub variant: String,
+}
+
+/// 读取 tools 安装标记中的构建轨/形态；手动放置（无标记）或标记损坏时
+/// 返回 `None`——此时前端只显示探测到的版本号，不附构建信息。
+/// 供 [`crate::ffmpeg::probe`] 组装 `FFmpegLocations` 用，`BuildMarker`
+/// 其余字段不外泄。
+/// Read the tools install marker's track/variant; `None` for manually
+/// placed (markerless) copies or a corrupt marker — the frontend then
+/// shows just the probed version without build details. Used by
+/// [`crate::ffmpeg::probe`] when assembling `FFmpegLocations`; the rest of
+/// `BuildMarker` stays private.
+pub(crate) fn tools_build_info() -> Option<FFmpegBuildInfo> {
+	release::read_marker().map(|m| FFmpegBuildInfo {
+		platform: m.platform,
+		variant: m.variant,
+	})
+}
 
 // ─── 共享常量 / Shared constants ─────────────────────────────────────────────
 
@@ -95,7 +125,7 @@ const SMALL_TIMEOUT_SECS: u64 = 30;
 const AUTO_UPDATE_FIRST_DELAY: Duration = Duration::from_secs(5 * 60);
 /// 自动更新检查的固定间隔。
 /// Fixed interval between auto-update checks.
-const AUTO_UPDATE_INTERVAL: Duration = Duration::from_secs(6 * 3600);
+const AUTO_UPDATE_INTERVAL: Duration = Duration::from_secs(3600);
 /// 等待空闲的轮询间隔。
 /// Idle-wait poll interval.
 const IDLE_POLL_INTERVAL: Duration = Duration::from_secs(30);

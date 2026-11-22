@@ -501,7 +501,16 @@
 			"toolsMissingDesc": "A complete set of FFmpeg components (ffmpeg, ffprobe, ffplay) was not found in the tools folder. Download FFmpeg into the tools folder now? Cancel to use the system PATH instead.",
 			"download": "Download",
 			"downloadStartFailed": "Failed to start the download, please try again later",
-			"notInstalled": "not installed"
+			"notInstalled": "not installed",
+			"currentVersion": "Current version"
+		},
+		"ffmpegDownload": {
+			"label": "FFmpeg version",
+			"hint": "Download FFmpeg into the tools folder manually: replace the installed build or fill in missing components.",
+			"download": "Download",
+			"replace": "Change version",
+			"dialogTitle": "Download FFmpeg",
+			"dialogDesc": "Pick the build to download into the tools folder; an installed version there will be replaced."
 		},
 		"apiProxy": {
 			"label": "API Proxy (for accessing stripchat.com, leave empty to disable)",
@@ -695,7 +704,6 @@
 		},
 		"backend": {
 			"ffmpegMissing": "ffmpeg not detected. Recording and post-process features will not work. Please install ffmpeg and ensure it is in PATH, or place it in the tools folder next to the program.",
-			"ffmpegDownloadFailed": "FFmpeg auto-download failed: {error}. Recording and post-processing will be unavailable. Please install ffmpeg manually and ensure it is in PATH, or place it in the tools folder next to the program.",
 			"ffmpegUpdateFailed": "FFmpeg auto-update failed: {error} (the current version will keep being used)",
 			"ffmpegUpdateAvailable": "A new FFmpeg version was detected and will be installed automatically when the program is idle",
 			"ffmpegInstallStarted": "FFmpeg download and installation started",
@@ -973,6 +981,10 @@
 			"retry": "Retry download",
 			"retryFailed": "Failed to start the download, please try again",
 			"close": "Close"
+		},
+		"choiceNeeded": {
+			"title": "FFmpeg download required",
+			"desc": "FFmpeg is set to use the tools folder, but a complete ffmpeg / ffprobe / ffplay set was not found there. Pick a build to download, or close this dialog and handle it later."
 		}
 	}
 }

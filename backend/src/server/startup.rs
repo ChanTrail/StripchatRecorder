@@ -79,9 +79,9 @@ pub fn init_logging_and_locale() {
 /// 1. 清理上次中断遗留的 `.download` / `.staging` / `*.old`
 /// 2. ffmpeg/ffprobe 可用（tools 副本优先，其次 PATH）→ 再做一次更新检查
 ///    （`check_and_update`，条件不满足时内部短路）后结束
-/// 3. 不可用且平台不支持自动下载 → `ffmpegMissing` 错误通知
-/// 4. 不可用且支持下载 → 最多 3 次自动安装（5s/15s 退避），
-///    全部失败推送 `ffmpegDownloadFailed` 错误通知
+/// 3. 已选 tools 但组件不齐且平台支持下载 → `ffmpeg-choice-needed` 事件，
+///    前端引导用户选择构建版本下载（不自动安装默认版）
+/// 4. 不可用 → `ffmpegMissing` 错误通知
 ///
 /// Startup FFmpeg check entry: the real work happens in the background task
 /// spawned by `ffmpeg::download::spawn_startup_install` (this function returns
@@ -89,9 +89,10 @@ pub fn init_logging_and_locale() {
 /// 1. clean up `.download` / `.staging` / `*.old` leftovers from an interrupted run
 /// 2. ffmpeg/ffprobe usable (tools copy first, then PATH) → also run an update
 ///    check (`check_and_update`, short-circuits internally), then done
-/// 3. unusable on an unsupported platform → `ffmpegMissing` error notification
-/// 4. unusable on a supported platform → up to 3 auto-install attempts (5s/15s
-///    backoff); on final failure push the `ffmpegDownloadFailed` error notification
+/// 3. the chosen tools set incomplete on a downloadable platform →
+///    `ffmpeg-choice-needed` event so the frontend guides the user through
+///    picking a build (the default build is never auto-installed)
+/// 4. unusable → `ffmpegMissing` error notification
 pub fn check_ffmpeg(app_state: &Arc<AppState>, emitter: &Arc<dyn Emitter>) {
 	crate::ffmpeg::download::spawn_startup_install(Arc::clone(app_state), Arc::clone(emitter));
 }

@@ -17,7 +17,7 @@
 //! - [`find_on_path`]: PATH lookup for an executable (also used by the
 //!   preference existence gate)
 
-use super::download::FFmpegDownloadOptions;
+use super::download::{FFmpegBuildInfo, FFmpegDownloadOptions};
 use super::paths::{exe_name, tools_dir};
 use crate::core::no_window::NoWindowExt;
 use serde::Serialize;
@@ -67,6 +67,13 @@ pub struct FFmpegLocations {
 	/// `null` on platforms without downloads — the frontend uses it to decide
 	/// whether to render the build selectors
 	pub download_options: Option<FFmpegDownloadOptions>,
+	/// tools 副本的已安装构建信息（平台轨 × 变体后缀）；仅本程序下载的
+	/// 副本有标记，手动放置/标记损坏时为 `null`——前端据此在版本号旁
+	/// 追加构建形态展示
+	/// Build info of the installed tools copy (platform track × variant
+	/// suffix); `null` for manually placed copies or a corrupt marker —
+	/// the frontend uses it to annotate the version with the build shape
+	pub tools_build: Option<FFmpegBuildInfo>,
 }
 
 /// 沿 PATH 查找指定可执行文件，返回第一个命中的完整路径。
@@ -96,6 +103,7 @@ pub fn ffmpeg_locations() -> FFmpegLocations {
 		system: probe_system(),
 		tools: probe_dir(&tools),
 		download_options: super::download::download_options(),
+		tools_build: super::download::tools_build_info(),
 	}
 }
 
