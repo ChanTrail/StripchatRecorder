@@ -3,101 +3,175 @@ name: Release
 on:
   push:
     tags:
-      - 'v*.*.*'
+      - "v*.*.*" # 稳定版，例如 v0.4.0 / Stable releases, e.g. v0.4.0
+      - "v*.*.*-*" # 预发布版，例如 v0.4.0-beta / Pre-releases, e.g. v0.4.0-beta
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # ── 主程序构建（多平台）/ Server build (multi-platform) ──────────────────────
-  build-server:
+  # ── 主程序构建（linux-x86_64）/ Server build (linux-x86_64) ──────────────────
+  # 单独成为一个 job：needs 只能等待整个 job（matrix 的所有平台），拆出来后 docker job
+  # 只需等这个平台构建成功即可开始，不必等其他平台。仍用单项 matrix，构建步骤通过 YAML
+  # 锚点（&build-server-steps）与下方其他平台共用同一份，matrix.* 引用保持一致。
+  #
+  # A separate job: `needs` can only wait for a whole job (every matrix platform), so splitting
+  # this out lets the docker job start as soon as this platform succeeds, without waiting for
+  # the others. It still uses a single-entry matrix so the build steps can be shared with the
+  # other platforms below via a YAML anchor (&build-server-steps) with identical matrix.* refs.
+  build-server-linux-x86_64:
     name: Build server (${{ matrix.platform }})
     runs-on: ${{ matrix.os }}
     strategy:
-      fail-fast: false
       matrix:
         include:
           - platform: linux-x86_64
             os: ubuntu-22.04
             artifact-name: StripchatRecorder-server-linux-x86_64
             archive-name: StripchatRecorder-server-linux-x86_64.zip
-          - platform: windows-x86_64
-            os: windows-latest
-            artifact-name: StripchatRecorder-server-windows-x86_64
-            archive-name: StripchatRecorder-server-windows-x86_64.zip
 
-    steps:
+    steps: &build-server-steps
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # ── Node.js ──
+      # pnpm 版本取自根 package.json 的 packageManager / pnpm version comes from the root package.json packageManager
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: lts/*
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
 
       - name: Install frontend dependencies
-        run: npm i
+        run: pnpm install --frozen-lockfile
         working-directory: frontend
 
       # ── Rust 工具链 / Rust toolchain ──
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.98"
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
             backend -> ../build_tmp/backend/target
+            modules/cleanup -> ../../build_tmp/modules/cleanup/target
             modules/contact_sheet -> ../../build_tmp/modules/contact_sheet/target
             modules/filter_short -> ../../build_tmp/modules/filter_short/target
             modules/notify_discord -> ../../build_tmp/modules/notify_discord/target
             modules/notify_telegram -> ../../build_tmp/modules/notify_telegram/target
             modules/pp_utils -> ../../build_tmp/modules/pp_utils/target
+            modules/segment_merge -> ../../build_tmp/modules/segment_merge/target
           key: server-${{ matrix.platform }}
 
       # ── 系统依赖（仅 Linux）/ System libraries (Linux only) ──
       - name: Install Linux dependencies
-        if: matrix.os == 'ubuntu-22.04'
+        if: startsWith(matrix.os, 'ubuntu')
         run: |
           sudo apt-get update
           sudo apt-get install -y pkg-config build-essential libssl-dev
 
+      - name: Install macOS system dependencies
+        if: startsWith(matrix.os, 'macos')
+        run: brew install pkg-config
+
+      # ── Windows ARM64 BoringSSL 回避 / Windows ARM64 BoringSSL workaround ──
+      # btls-sys 在原生 aarch64-pc-windows-msvc 构建（host == target）时提前
+      # 返回，不会定义 OPENSSL_NO_ASM；BoringSSL 于是启用 GAS 语法 .S 汇编源，
+      # MSVC armasm64 无法编译导致 LNK1181。通过 CMAKE_TOOLCHAIN_FILE 注入
+      # cmake/boringssl-win-arm64.cmake 关闭汇编（详见该文件注释）。
+      #
+      # On native aarch64-pc-windows-msvc builds (host == target) btls-sys
+      # returns early and never defines OPENSSL_NO_ASM, so BoringSSL enables
+      # GAS-syntax .S sources that MSVC's armasm64 cannot assemble (LNK1181).
+      # CMAKE_TOOLCHAIN_FILE injects cmake/boringssl-win-arm64.cmake which
+      # disables assembly (see that file for details).
+      - name: Configure BoringSSL no-asm toolchain (windows-11-arm)
+        if: matrix.os == 'windows-11-arm'
+        shell: pwsh
+        run: |
+          $toolchain = ($env:GITHUB_WORKSPACE -replace '\\', '/') + '/cmake/boringssl-win-arm64.cmake'
+          "CMAKE_TOOLCHAIN_FILE=$toolchain" >> $env:GITHUB_ENV
+
       # ── 构建 / Build ──
       - name: Full release build
         run: node scripts/release.js
+        env:
+          CARGO_BUILD_PLATFORM: ${{ matrix.platform }}
 
-      # ── 打包（Linux）/ Assemble package (Linux) ──
-      - name: Assemble package (Linux)
-        if: matrix.os == 'ubuntu-22.04'
+      # ── 打包（Linux / macOS）/ Assemble package (Linux / macOS) ──
+      - name: Assemble package (Unix)
+        if: runner.os != 'Windows'
         run: |
-          PKG="${{ matrix.artifact-name }}"
+          VER="${GITHUB_REF_NAME#v}"
+          PKG="${{ matrix.artifact-name }}-${VER}"
+          ARCHIVE="${{ matrix.artifact-name }}-${VER}.zip"
           mkdir -p "$PKG"
           cp -r build/. "$PKG/"
           echo "=== Package contents ==="
           find "$PKG" -type f | sort
-          zip -r "${{ matrix.archive-name }}" "$PKG"
+          zip -r "$ARCHIVE" "$PKG"
+          echo "archive=$ARCHIVE" >> "$GITHUB_ENV"
 
       # ── 打包（Windows）/ Assemble package (Windows) ──
       - name: Assemble package (Windows)
-        if: matrix.os == 'windows-latest'
+        if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $PKG = "${{ matrix.artifact-name }}"
+          $VER  = ($env:GITHUB_REF_NAME -replace '^v', '')
+          $PKG  = "${{ matrix.artifact-name }}-${VER}"
+          $ARCHIVE = "${{ matrix.artifact-name }}-${VER}.zip"
           New-Item -ItemType Directory -Force -Path $PKG | Out-Null
           Copy-Item -Recurse build\* $PKG\
           Write-Host "=== Package contents ==="
           Get-ChildItem -Recurse $PKG | Select-Object FullName
-          Compress-Archive -Path $PKG -DestinationPath "${{ matrix.archive-name }}"
+          Compress-Archive -Path $PKG -DestinationPath $ARCHIVE
+          "archive=$ARCHIVE" >> $env:GITHUB_ENV
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact-name }}
-          path: ${{ matrix.archive-name }}
+          path: ${{ env.archive }}
           retention-days: 7
+
+  # ── 主程序构建（其他平台）/ Server build (other platforms) ────────────────────
+  # 步骤与 build-server-linux-x86_64 完全相同（YAML 锚点引用）。
+  # Steps are identical to build-server-linux-x86_64 (YAML anchor reference).
+  build-server-others:
+    name: Build server (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-arm64
+            os: ubuntu-22.04-arm
+            artifact-name: StripchatRecorder-server-linux-arm64
+            archive-name: StripchatRecorder-server-linux-arm64.zip
+
+          - platform: windows-x86_64
+            os: windows-latest
+            artifact-name: StripchatRecorder-server-windows-x86_64
+            archive-name: StripchatRecorder-server-windows-x86_64.zip
+
+          - platform: windows-arm64
+            os: windows-11-arm
+            artifact-name: StripchatRecorder-server-windows-arm64
+            archive-name: StripchatRecorder-server-windows-arm64.zip
+
+          - platform: macos-arm64
+            os: macos-latest
+            artifact-name: StripchatRecorder-server-macos-arm64
+            archive-name: StripchatRecorder-server-macos-arm64.zip
+
+    steps: *build-server-steps
 
   # ── 桌面端构建（多平台）/ Desktop build (multi-platform) ────────────────────
   build-desktop:
@@ -107,88 +181,225 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # variants：见 scripts/release.desktop.js——分号分隔的 tauri build 参数组。
+          # Linux 的 AppImage 单独带 portable feature（deb 仍为安装版）；
+          # Windows 在 NSIS 之外追加 --no-bundle 便携版并收集裸 exe。
+          #
+          # variants: see scripts/release.desktop.js — semicolon-separated
+          # `tauri build` arg sets. On Linux the AppImage alone gets the portable
+          # feature (deb stays an installed build); on Windows a --no-bundle
+          # portable build is added after NSIS and the bare exe is collected.
           - platform: linux-x86_64
             os: ubuntu-22.04
             artifact-name: StripchatRecorder-desktop-linux-x86_64
+            variants: "--bundles deb;--bundles appimage -- --features portable"
+          - platform: linux-arm64
+            os: ubuntu-22.04-arm
+            artifact-name: StripchatRecorder-desktop-linux-arm64
+            variants: "--bundles deb;--bundles appimage -- --features portable"
           - platform: windows-x86_64
             os: windows-latest
             artifact-name: StripchatRecorder-desktop-windows-x86_64
-          - platform: macos-aarch64
+            variants: "--bundles nsis;--no-bundle -- --features portable"
+            collect-no-bundle: "1"
+          - platform: windows-arm64
+            os: windows-11-arm
+            artifact-name: StripchatRecorder-desktop-windows-arm64
+            variants: "--bundles nsis;--no-bundle -- --features portable"
+            collect-no-bundle: "1"
+          - platform: macos-arm64
             os: macos-latest
-            artifact-name: StripchatRecorder-desktop-macos-aarch64
+            artifact-name: StripchatRecorder-desktop-macos-arm64
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # ── Node.js ──
+      # pnpm 版本取自根 package.json 的 packageManager / pnpm version comes from the root package.json packageManager
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: lts/*
-          cache: npm
-          cache-dependency-path: desktop/package-lock.json
+          cache: pnpm
+          cache-dependency-path: desktop/pnpm-lock.yaml
 
       - name: Install desktop dependencies
-        run: npm i
+        run: pnpm install --frozen-lockfile
         working-directory: desktop
 
       # ── Rust 工具链 / Rust toolchain ──
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.98"
 
       - name: Cache Rust dependencies (desktop)
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
             desktop/src-tauri -> ../../../build_tmp/desktop/target
+            modules/cleanup -> ../../build_tmp/modules/cleanup/target
             modules/contact_sheet -> ../../build_tmp/modules/contact_sheet/target
             modules/filter_short -> ../../build_tmp/modules/filter_short/target
             modules/notify_discord -> ../../build_tmp/modules/notify_discord/target
             modules/notify_telegram -> ../../build_tmp/modules/notify_telegram/target
             modules/pp_utils -> ../../build_tmp/modules/pp_utils/target
+            modules/segment_merge -> ../../build_tmp/modules/segment_merge/target
           key: desktop-${{ matrix.platform }}
 
       # ── 平台系统依赖 / Platform-specific system dependencies ──
       - name: Install Linux system dependencies
-        if: matrix.os == 'ubuntu-22.04'
+        if: startsWith(matrix.os, 'ubuntu')
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             pkg-config build-essential libssl-dev \
-            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
+            xdg-utils
 
       - name: Install macOS system dependencies
         if: startsWith(matrix.os, 'macos')
         run: brew install pkg-config
+
+      # ── Windows ARM64 BoringSSL 回避 / Windows ARM64 BoringSSL workaround ──
+      # 与上方 server 构建相同：btls-sys 原生构建早退不定义 OPENSSL_NO_ASM，
+      # 注入 no-asm toolchain 文件规避 LNK1181（详见 cmake/ 下该文件注释）。
+      #
+      # Same as the server build above: btls-sys returns early on native
+      # builds without defining OPENSSL_NO_ASM; inject the no-asm toolchain
+      # file to avoid LNK1181 (see comments in the cmake/ file).
+      - name: Configure BoringSSL no-asm toolchain (windows-11-arm)
+        if: matrix.os == 'windows-11-arm'
+        shell: pwsh
+        run: |
+          $toolchain = ($env:GITHUB_WORKSPACE -replace '\\', '/') + '/cmake/boringssl-win-arm64.cmake'
+          "CMAKE_TOOLCHAIN_FILE=$toolchain" >> $env:GITHUB_ENV
 
       # ── 构建 / Build ──
       - name: Full desktop release build
         run: node scripts/release.desktop.js
         env:
           CARGO_TARGET_DIR: build_tmp/desktop/target
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAURI_BUILD_VARIANTS: ${{ matrix.variants }}
+          DESKTOP_COLLECT_NO_BUNDLE: ${{ matrix.collect-no-bundle }}
 
       # ── 打包模块 / Pack modules ──
       - name: Pack modules (Linux/macOS)
-        if: matrix.os != 'windows-latest'
+        if: runner.os != 'Windows'
         run: |
           zip -j build/desktop/modules-${{ matrix.platform }}.zip build/desktop/modules/*
 
       - name: Pack modules (Windows)
-        if: matrix.os == 'windows-latest'
+        if: runner.os == 'Windows'
         shell: pwsh
         run: |
           Compress-Archive -Path build\desktop\modules\* `
             -DestinationPath build\desktop\modules-${{ matrix.platform }}.zip
 
+      # ── 重命名产物为统一格式 StripchatRecorder-desktop-{platform}-{version}.ext
+      #    模块 zip 保持原名不变 / Rename artifacts to unified format; modules zip unchanged
+      - name: Rename Linux artifacts
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PLAT="${{ matrix.platform }}"
+          BASE="StripchatRecorder-desktop-${PLAT}-${TAG}"
+
+          # AppImage + sig
+          for f in build/desktop/appimage/*.AppImage; do
+            [ -f "$f" ] || continue
+            mv "$f" "build/desktop/appimage/${BASE}.AppImage"
+          done
+          for f in build/desktop/appimage/*.AppImage.sig; do
+            [ -f "$f" ] || continue
+            mv "$f" "build/desktop/appimage/${BASE}.AppImage.sig"
+          done
+
+          # deb
+          for f in build/desktop/deb/*.deb; do
+            [ -f "$f" ] || continue
+            mv "$f" "build/desktop/deb/${BASE}.deb"
+          done
+
+          # rpm
+          for f in build/desktop/rpm/*.rpm; do
+            [ -f "$f" ] || continue
+            mv "$f" "build/desktop/rpm/${BASE}.rpm"
+          done
+
+      - name: Rename macOS artifacts
+        if: startsWith(matrix.os, 'macos')
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PLAT="${{ matrix.platform }}"
+          BASE="StripchatRecorder-desktop-${PLAT}-${TAG}"
+
+          # dmg
+          for f in build/desktop/dmg/*.dmg; do
+            [ -f "$f" ] || continue
+            mv "$f" "build/desktop/dmg/${BASE}.dmg"
+          done
+
+          # app.tar.gz + sig
+          for f in build/desktop/macos/*.app.tar.gz; do
+            [ -f "$f" ] || continue
+            mv "$f" "build/desktop/macos/${BASE}.app.tar.gz"
+          done
+          for f in build/desktop/macos/*.app.tar.gz.sig; do
+            [ -f "$f" ] || continue
+            mv "$f" "build/desktop/macos/${BASE}.app.tar.gz.sig"
+          done
+
+      - name: Rename Windows artifacts
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $TAG  = ($env:GITHUB_REF_NAME -replace '^v', '')
+          $PLAT = "${{ matrix.platform }}"
+          $BASE = "StripchatRecorder-desktop-${PLAT}-${TAG}"
+
+          Get-ChildItem build\desktop\nsis\*-setup.exe | ForEach-Object {
+            Rename-Item $_.FullName "${BASE}.exe"
+          }
+          Get-ChildItem build\desktop\nsis\*-setup.exe.sig | ForEach-Object {
+            Rename-Item $_.FullName "${BASE}.exe.sig"
+          }
+
+      # ── 便携版打包（Windows）：--no-bundle 裸 exe + modules/ → {BASE}-portable.zip ──
+      #    zip 内含同名目录，解压即用：config/、modules/、tools/ 等都落在 exe 旁边 /
+      #    Portable zip (Windows): --no-bundle bare exe + modules/ → {BASE}-portable.zip.
+      #    The zip wraps a same-named folder ready to run — config/, modules/,
+      #    tools/ all live next to the exe.
+      - name: Pack portable zip (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $TAG  = ($env:GITHUB_REF_NAME -replace '^v', '')
+          $BASE = "StripchatRecorder-desktop-${{ matrix.platform }}-${TAG}"
+          $STAGE = "build\desktop\${BASE}-portable"
+          New-Item -ItemType Directory -Force "$STAGE\modules" | Out-Null
+          Copy-Item build\desktop\portable\*.exe $STAGE\
+          if (Test-Path build\desktop\modules) {
+            Copy-Item build\desktop\modules\* "$STAGE\modules\"
+          }
+          Compress-Archive -Path $STAGE -DestinationPath "build\desktop\${BASE}-portable.zip"
+          Remove-Item -Recurse -Force $STAGE, build\desktop\portable
+
       # ── 上传 Linux 产物 / Upload Linux artifacts ──
       - name: Upload Linux installers
-        if: matrix.os == 'ubuntu-22.04'
-        uses: actions/upload-artifact@v4
+        if: startsWith(matrix.os, 'ubuntu')
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact-name }}
           path: |
             build/desktop/appimage/*.AppImage
+            build/desktop/appimage/*.AppImage.sig
             build/desktop/deb/*.deb
             build/desktop/rpm/*.rpm
             build/desktop/modules-${{ matrix.platform }}.zip
@@ -197,40 +408,43 @@ jobs:
       # ── 上传 macOS 产物 / Upload macOS artifacts ──
       - name: Upload macOS installers
         if: startsWith(matrix.os, 'macos')
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact-name }}
           path: |
             build/desktop/dmg/*.dmg
+            build/desktop/macos/*.app.tar.gz
+            build/desktop/macos/*.app.tar.gz.sig
             build/desktop/modules-${{ matrix.platform }}.zip
           retention-days: 7
 
       # ── 上传 Windows 产物 / Upload Windows artifacts ──
       - name: Upload Windows installers
-        if: matrix.os == 'windows-latest'
-        uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact-name }}
           path: |
-            build/desktop/msi/*.msi
             build/desktop/nsis/*.exe
+            build/desktop/nsis/*.exe.sig
+            build/desktop/*-portable.zip
             build/desktop/modules-${{ matrix.platform }}.zip
           retention-days: 7
 
   # ── 创建 GitHub Release / Create GitHub Release ──────────────────────────────
   release:
     name: Create Release
-    needs: [build-server, build-desktop]
+    needs: [build-server-linux-x86_64, build-server-others, build-desktop]
     runs-on: ubuntu-22.04
     permissions:
       contents: write
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts/
           merge-multiple: true
@@ -243,12 +457,401 @@ jobs:
         id: tag
         run: echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
 
+      # ── 生成 latest.json（tauri-plugin-updater 检查更新的 manifest）──────────
+      # 遍历各平台的 .sig 签名文件，提取签名内容与对应安装包 URL，
+      # 组装成 tauri-plugin-updater 所要求的 latest.json 格式。
+      # 平台键名规则：插件按 `{os}-{arch}` 查找条目，其中 arch 用的是 Rust target
+      # 命名（aarch64），所以 ARM 平台必须写成 windows-aarch64 / linux-aarch64 /
+      # darwin-aarch64，写成 arm64 的键插件永远匹配不到。
+      #
+      # Build latest.json (the update manifest consumed by tauri-plugin-updater).
+      # For each platform we locate the .sig file, read its signature, and pair it
+      # with the GitHub release download URL of the corresponding installer.
+      # Platform key convention: the plugin looks entries up by `{os}-{arch}` where
+      # arch uses the Rust target name (aarch64), so ARM platforms must be written
+      # as windows-aarch64 / linux-aarch64 / darwin-aarch64 — arm64 keys never match.
+      - name: Generate latest.json
+        run: |
+          TAG="${{ github.ref_name }}"
+          VER="${TAG#v}"
+          REPO="${{ github.repository }}"
+          BASE="https://github.com/${REPO}/releases/download/${TAG}"
+          NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+          # ── Windows x86_64 ──
+          WIN_X64_SIG=""; WIN_X64_URL=""
+          f=$(find artifacts -name "StripchatRecorder-desktop-windows-x86_64-*.exe.sig" | head -1)
+          e=$(find artifacts -name "StripchatRecorder-desktop-windows-x86_64-*.exe" ! -name "*.sig" | head -1)
+          if [ -n "$f" ] && [ -n "$e" ]; then WIN_X64_SIG=$(cat "$f"); WIN_X64_URL="${BASE}/$(basename $e)"; fi
+
+          # ── Windows arm64 ──
+          WIN_ARM64_SIG=""; WIN_ARM64_URL=""
+          f=$(find artifacts -name "StripchatRecorder-desktop-windows-arm64-*.exe.sig" | head -1)
+          e=$(find artifacts -name "StripchatRecorder-desktop-windows-arm64-*.exe" ! -name "*.sig" | head -1)
+          if [ -n "$f" ] && [ -n "$e" ]; then WIN_ARM64_SIG=$(cat "$f"); WIN_ARM64_URL="${BASE}/$(basename $e)"; fi
+
+          # ── Linux x86_64: AppImage ──
+          LINUX_X64_SIG=""; LINUX_X64_URL=""
+          f=$(find artifacts -name "StripchatRecorder-desktop-linux-x86_64-*.AppImage.sig" | head -1)
+          e=$(find artifacts -name "StripchatRecorder-desktop-linux-x86_64-*.AppImage" ! -name "*.sig" | head -1)
+          if [ -n "$f" ] && [ -n "$e" ]; then LINUX_X64_SIG=$(cat "$f"); LINUX_X64_URL="${BASE}/$(basename $e)"; fi
+
+          # ── Linux arm64: AppImage ──
+          LINUX_ARM64_SIG=""; LINUX_ARM64_URL=""
+          f=$(find artifacts -name "StripchatRecorder-desktop-linux-arm64-*.AppImage.sig" | head -1)
+          e=$(find artifacts -name "StripchatRecorder-desktop-linux-arm64-*.AppImage" ! -name "*.sig" | head -1)
+          if [ -n "$f" ] && [ -n "$e" ]; then LINUX_ARM64_SIG=$(cat "$f"); LINUX_ARM64_URL="${BASE}/$(basename $e)"; fi
+
+          # ── macOS arm64 (macos-arm64 platform): .app.tar.gz ──
+          MAC_ARM64_SIG=""; MAC_ARM64_URL=""
+          f=$(find artifacts -name "StripchatRecorder-desktop-macos-arm64-*.app.tar.gz.sig" | head -1)
+          e=$(find artifacts -name "StripchatRecorder-desktop-macos-arm64-*.app.tar.gz" ! -name "*.sig" | head -1)
+          if [ -n "$f" ] && [ -n "$e" ]; then MAC_ARM64_SIG=$(cat "$f"); MAC_ARM64_URL="${BASE}/$(basename $e)"; fi
+
+          # ── 组装 JSON / Assemble JSON ──
+          python3 - <<PYEOF
+          import json, sys
+
+          platforms = {}
+          if "${WIN_X64_SIG}" and "${WIN_X64_URL}":
+              platforms["windows-x86_64"] = {"signature": """${WIN_X64_SIG}""", "url": "${WIN_X64_URL}"}
+          if "${WIN_ARM64_SIG}" and "${WIN_ARM64_URL}":
+              platforms["windows-aarch64"] = {"signature": """${WIN_ARM64_SIG}""", "url": "${WIN_ARM64_URL}"}
+          if "${LINUX_X64_SIG}" and "${LINUX_X64_URL}":
+              platforms["linux-x86_64"] = {"signature": """${LINUX_X64_SIG}""", "url": "${LINUX_X64_URL}"}
+          if "${LINUX_ARM64_SIG}" and "${LINUX_ARM64_URL}":
+              platforms["linux-aarch64"] = {"signature": """${LINUX_ARM64_SIG}""", "url": "${LINUX_ARM64_URL}"}
+          if "${MAC_ARM64_SIG}" and "${MAC_ARM64_URL}":
+              platforms["darwin-aarch64"] = {"signature": """${MAC_ARM64_SIG}""", "url": "${MAC_ARM64_URL}"}
+
+          manifest = {
+              "version": "${VER}",
+              "notes": "See https://github.com/${REPO}/releases/tag/${TAG} for release notes.",
+              "pub_date": "${NOW}",
+              "platforms": platforms
+          }
+          with open("artifacts/latest.json", "w") as f:
+              json.dump(manifest, f, indent=2)
+          print("Generated latest.json:")
+          print(json.dumps(manifest, indent=2))
+          PYEOF
+
+      # ── 生成 release 正文（中英双语 + 产物直链表格，参考
+      #    ChanTrail/FFmpeg-Builds-Full 的发布格式；beta 与正式版通用）──
+      #    按列（平台）×行（产物类型）组织：桌面安装包/服务端/后处理模块；
+      #    单元格内多个产物用 <br> 连接，缺失显示 —。
+      #
+      # Generate the release body (bilingual + a direct-link artifact table,
+      # following ChanTrail/FFmpeg-Builds-Full's format; shared by beta and
+      # stable releases). Columns = platforms, rows = artifact type
+      # (desktop installer / server / post-process modules); multiple files
+      # in a cell are joined by <br>, missing ones show —.
+      - name: Generate release body
+        env:
+          # gh api 查上一个 release 的 tag 用（checkout 深度 1 拿不到本地
+          # tag 历史）/ gh api for the previous release tag (depth-1
+          # checkout has no local tag history)
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.ref_name }}"
+          VER="${TAG#v}"
+          REPO="${{ github.repository }}"
+          BASE="https://github.com/${REPO}/releases/download/${TAG}"
+
+          # 单元格：按文件名模式找产物（不含 .sig），输出 [名](链接)，
+          # 多个 <br> 相连，无匹配输出 — / Cell: find artifacts by name
+          # pattern (excl .sig), emit [name](link) joined by <br>, or —
+          cell() {
+            local out="" f b
+            for pat in "$@"; do
+              while IFS= read -r f; do
+                b="$(basename "$f")"
+                out+="${out:+<br>}[${b}](${BASE}/${b})"
+              done < <(find artifacts -type f -name "$pat" ! -name "*.sig" | sort)
+            done
+            echo "${out:-—}"
+          }
+
+          DESK_WIN_X64=$(cell 'StripchatRecorder-desktop-windows-x86_64-*.exe')
+          DESK_WIN_A64=$(cell 'StripchatRecorder-desktop-windows-arm64-*.exe')
+          # Linux 桌面端只放 deb（安装版）；AppImage 带 portable feature
+          # 构建，归便携行 / Linux desktop row is deb-only (installed build);
+          # the AppImage is built with the portable feature and belongs
+          # in the Portable row
+          DESK_LIN_X64=$(cell 'StripchatRecorder-desktop-linux-x86_64-*.deb')
+          DESK_LIN_A64=$(cell 'StripchatRecorder-desktop-linux-arm64-*.deb')
+          DESK_MAC_A64=$(cell 'StripchatRecorder-desktop-macos-arm64-*.dmg' 'StripchatRecorder-desktop-macos-arm64-*.app.tar.gz')
+
+          PORT_WIN_X64=$(cell 'StripchatRecorder-desktop-windows-x86_64-*-portable.zip')
+          PORT_WIN_A64=$(cell 'StripchatRecorder-desktop-windows-arm64-*-portable.zip')
+          PORT_LIN_X64=$(cell 'StripchatRecorder-desktop-linux-x86_64-*.AppImage')
+          PORT_LIN_A64=$(cell 'StripchatRecorder-desktop-linux-arm64-*.AppImage')
+
+          SRV_WIN_X64=$(cell 'StripchatRecorder-server-windows-x86_64-*.zip')
+          SRV_WIN_A64=$(cell 'StripchatRecorder-server-windows-arm64-*.zip')
+          SRV_LIN_X64=$(cell 'StripchatRecorder-server-linux-x86_64-*.zip')
+          SRV_LIN_A64=$(cell 'StripchatRecorder-server-linux-arm64-*.zip')
+          SRV_MAC_A64=$(cell 'StripchatRecorder-server-macos-arm64-*.zip')
+
+          MOD_WIN_X64=$(cell 'modules-windows-x86_64.zip')
+          MOD_WIN_A64=$(cell 'modules-windows-arm64.zip')
+          MOD_LIN_X64=$(cell 'modules-linux-x86_64.zip')
+          MOD_LIN_A64=$(cell 'modules-linux-arm64.zip')
+          MOD_MAC_A64=$(cell 'modules-macos-arm64.zip')
+
+          # Docker 标签：beta tag 只推 beta；正式版推 semver + latest /
+          # Docker tags: beta pushes only "beta"; stable pushes semver + latest
+          if [[ "$TAG" == *-* ]]; then DOCKER_TAGS="beta"; else DOCKER_TAGS="${VER} / latest"; fi
+
+          # 上一个 release 的 tag（新 release 此刻还没建，latest 即上一个）/
+          # Previous release tag (the new one doesn't exist yet, so `latest`
+          # is still the previous one)
+          PREV=$(gh api "repos/${REPO}/releases/latest" --jq .tag_name 2>/dev/null || true)
+          if [ -n "$PREV" ]; then CHANGELOG="**Full Changelog**: https://github.com/${REPO}/compare/${PREV}...${TAG}"; else CHANGELOG=""; fi
+
+          {
+            # 不写 H1 标题——release name（StripchatRecorder {TAG} 构建 /
+            # Build）即页面标题，body 内再写一遍会重复 / No H1 here —
+            # the release name (… 构建 / Build) is already the page title;
+            # repeating it inside the body would duplicate it
+            echo "StripchatRecorder \`${TAG}\` 版本构建：桌面端、服务端包、后处理模块与多架构 Docker 镜像。"
+            echo "<br>StripchatRecorder \`${TAG}\` build — desktop app, server bundles, post-process modules and multi-arch Docker images."
+            echo
+            echo "| 产物 Artifact | windows-x86_64 | windows-arm64 | linux-x86_64 | linux-arm64 | macos-arm64 |"
+            echo "|---|---|---|---|---|---|"
+            echo "| **桌面端 Desktop** | ${DESK_WIN_X64} | ${DESK_WIN_A64} | ${DESK_LIN_X64} | ${DESK_LIN_A64} | ${DESK_MAC_A64} |"
+            echo "| **便携版 Portable** | ${PORT_WIN_X64} | ${PORT_WIN_A64} | ${PORT_LIN_X64} | ${PORT_LIN_A64} | — |"
+            echo "| **服务端 Server** | ${SRV_WIN_X64} | ${SRV_WIN_A64} | ${SRV_LIN_X64} | ${SRV_LIN_A64} | ${SRV_MAC_A64} |"
+            echo "| **后处理模块 Modules** | ${MOD_WIN_X64} | ${MOD_WIN_A64} | ${MOD_LIN_X64} | ${MOD_LIN_A64} | ${MOD_MAC_A64} |"
+            echo
+            echo "便携版 zip 解压即用（已含模块），配置/模块/工具目录在 exe 旁边；Linux 的 AppImage 同为便携形态（数据目录在 .AppImage 文件旁边），deb 仍为安装版。"
+            echo "<br>The portable zip is ready to run after extraction (modules included); config/modules/tools live next to the exe. The Linux AppImage is portable too (data dir next to the .AppImage file), while deb remains an installed build."
+            echo
+            echo "桌面安装包均附同名 \`.sig\` 签名文件（Tauri 自动更新校验用）；\`latest.json\` 为 updater manifest。Docker 镜像：\`chantrail/stripchat-recorder:${DOCKER_TAGS}\`、\`ghcr.io/chantrail/stripchat-recorder:${DOCKER_TAGS}\`（多架构 manifest）。"
+            echo "<br>Every desktop installer ships a same-named \`.sig\` signature (for Tauri auto-update); \`latest.json\` is the updater manifest. Docker images: \`chantrail/stripchat-recorder:${DOCKER_TAGS}\`, \`ghcr.io/chantrail/stripchat-recorder:${DOCKER_TAGS}\` (multi-arch manifest)."
+            echo
+            echo "${CHANGELOG}"
+          } > body.md
+          cat body.md
+
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
-          name: Release ${{ steps.tag.outputs.tag }}
+          name: StripchatRecorder ${{ steps.tag.outputs.tag }} 构建 / Build
+          # 正文由上一步生成：双语标题 + 产物直链表格，beta 与正式版通用 /
+          # Body generated above: bilingual title + direct-link artifact
+          # table, shared by beta and stable releases
+          body_path: body.md
           draft: false
           prerelease: ${{ contains(steps.tag.outputs.tag, '-') }}
-          generate_release_notes: true
-          files: artifacts/**/*
+          # 白名单挂载：仅正式产物（服务端/桌面安装包+签名、模块 zip、
+          # updater manifest）。`**` 必须跨目录——desktop artifact 由多路径
+          # 上传（公共祖先 build/desktop/），解压后安装包落在
+          # appimage/deb/dmg/macos/nsis/ 子目录而非根目录。docker-digests-*
+          # 与 *.dockerbuild 是内部中转产物（64 位 hex / 证明文件），
+          # merge-multiple 会合进 artifacts/，不能用 artifacts/**/* 全收 /
+          # Whitelist assets: shipping artifacts only (server/desktop
+          # installers + sigs, module zips, the updater manifest). `**`
+          # must span directories — desktop artifacts are uploaded from
+          # multiple paths (common ancestor build/desktop/), so installers
+          # land in appimage/deb/dmg/macos/nsis/ subdirs, not the root.
+          # docker-digests-* and *.dockerbuild are internal intermediates
+          # (64-hex digest / attestation files) merged into artifacts/ —
+          # artifacts/**/* would attach them to the release
+          files: |
+            artifacts/**/StripchatRecorder-*
+            artifacts/modules-*.zip
+            artifacts/latest.json
+
+  # ── Docker 多架构镜像构建与推送 / Docker multi-arch image build and push ─────
+  # 镜像在两个原生 runner 上分别从源码构建：amd64 用 ubuntu-22.04、arm64 用
+  # ubuntu-22.04-arm（不用 QEMU 模拟——Rust+Node 构建在模拟下要数小时），并以
+  # push-by-digest 方式推送到 Docker Hub 与 GHCR；随后的 docker-merge 用
+  # `buildx imagetools` 把两个架构的 digest 合并成一个多架构 manifest 标签。
+  # 前置条件仍只有 Server linux-x86_64 构建成功（用它确认代码可在 amd64 编译通过；
+  # arm64 镜像在 arm runner 上原生构建，不依赖 x86_64 结果），不等待 Server 其他平台
+  # 和桌面端，与 release job 并行。
+  # 标签策略不变：beta tag 仅推 "beta"；稳定版推 semver 版本号、major.minor 与 latest。
+  #
+  # The image is built from source on two native runners — amd64 on ubuntu-22.04
+  # and arm64 on ubuntu-22.04-arm (no QEMU emulation — a Rust+Node build under
+  # emulation would take hours) — and pushed to Docker Hub and GHCR by digest;
+  # docker-merge then combines both arch digests into one multi-arch manifest tag
+  # via `buildx imagetools`. Its only prerequisite is still a successful Server
+  # linux-x86_64 build (confirming the code compiles for amd64; the arm64 image
+  # builds natively on the arm runner and doesn't depend on x86_64 results); it
+  # doesn't wait for other Server platforms or desktop, and runs in parallel with
+  # the release job. Tag policy unchanged: beta tags push only "beta"; stable
+  # releases also get semver, major.minor, and latest.
+  docker-build:
+    name: Build Docker image (${{ matrix.platform }})
+    needs: [build-server-linux-x86_64]
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-22.04
+            arch: amd64
+          - platform: linux/arm64
+            runner: ubuntu-22.04-arm
+            arch: arm64
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # GHCR 要求镜像名全小写；Docker Hub 用户名也统一转小写。
+      # secrets 不能直接用在 run: 里，经 env: 传入。
+      # GHCR requires lowercase image names; the Docker Hub username is lowercased
+      # the same way. Secrets can't be used in run: directly, so pass via env:.
+      - name: Compute lowercase image names
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          echo "DH_IMAGE=${DOCKERHUB_USERNAME,,}/stripchat-recorder" >> "$GITHUB_ENV"
+          echo "GHCR_IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/stripchat-recorder" >> "$GITHUB_ENV"
+
+      # 标签与 docker-merge 的 metadata 保持一致（本 job 只用其中的 labels）
+      # Tag list identical to docker-merge's metadata step (this job only consumes labels)
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: |
+            ${{ env.DH_IMAGE }}
+            ${{ env.GHCR_IMAGE }}
+          tags: |
+            type=semver,pattern={{version}},enable=${{ !contains(github.ref_name, '-') }}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ !contains(github.ref_name, '-') }}
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+            type=raw,value=beta,enable=${{ contains(github.ref_name, '-') }}
+
+      # 按 digest 推送（无标签），两个 registry 名各推一份；digest 由 docker-merge 合并
+      # Push by digest (no tags) under both registry names; digests are merged by docker-merge
+      - name: Build and push (by digest)
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,"name=${{ env.DH_IMAGE }},${{ env.GHCR_IMAGE }}",push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=docker-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=docker-${{ matrix.arch }}
+
+      # 把 digest 文件名导出为 artifact，供 docker-merge 合并 manifest
+      # Export the digest as a filename artifact for docker-merge's manifest merge
+      - name: Export digest
+        run: |
+          mkdir -p "${{ runner.temp }}/digests"
+          digest="${{ steps.build.outputs.digest }}"
+          touch "${{ runner.temp }}/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v7
+        with:
+          name: docker-digests-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # ── 合并多架构 manifest / Merge the multi-arch manifest ─────────────────────
+  docker-merge:
+    name: Publish Docker manifest
+    needs: [docker-build]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v8
+        with:
+          pattern: docker-digests-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/digests
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute lowercase image names
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          echo "DH_IMAGE=${DOCKERHUB_USERNAME,,}/stripchat-recorder" >> "$GITHUB_ENV"
+          echo "GHCR_IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/stripchat-recorder" >> "$GITHUB_ENV"
+
+      # 稳定版：semver 版本号 + major.minor + latest；beta（tag 含 '-'）：仅 "beta"
+      # Stable: semver version + major.minor + latest; beta (tag contains '-'): only "beta"
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: |
+            ${{ env.DH_IMAGE }}
+            ${{ env.GHCR_IMAGE }}
+          tags: |
+            type=semver,pattern={{version}},enable=${{ !contains(github.ref_name, '-') }}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ !contains(github.ref_name, '-') }}
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+            type=raw,value=beta,enable=${{ contains(github.ref_name, '-') }}
+
+      # 按 registry 分别合并：digest 已用两个名字各推一份，blobs 各自在对应 registry 里
+      # Merge per registry: the digest was pushed under both names, so each registry
+      # holds its own copy of the blobs
+      - name: Create and push manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/digests"
+          for IMG in "$DH_IMAGE" "$GHCR_IMAGE"; do
+            TAGS=$(echo "$DOCKER_METADATA_OUTPUT_JSON" | jq -r --arg img "$IMG" '.tags | map(select(startswith($img + ":"))) | map("-t " + .) | join(" ")')
+            # shellcheck disable=SC2086
+            docker buildx imagetools create $TAGS $(printf "$IMG@sha256:%s " *)
+          done
+
+      # 打印合并结果（平台列表）/ Print the merged result (platform list)
+      - name: Inspect manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          for IMG in "$DH_IMAGE" "$GHCR_IMAGE"; do
+            FIRST=$(echo "$DOCKER_METADATA_OUTPUT_JSON" | jq -r --arg img "$IMG" '.tags | map(select(startswith($img + ":"))) | .[0]')
+            docker buildx imagetools inspect "$FIRST"
+          done

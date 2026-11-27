@@ -41,17 +41,7 @@ export interface Group {
 export function usernameFromFile(f: RecordingFile): string {
 	const stem = f.name.replace(/\.[^.]+$/, "");
 	const parts = stem.split("_");
-	const username = parts.slice(0, -2).join("_");
-	// Group legacy rotations by folder.
-	const pathParts = f.path.split(/[\\/]/);
-	const folder = pathParts[pathParts.length - 2];
-	if (
-		folder && username.startsWith(folder + "_part")
-		&& /^\d+$/.test(username.slice(folder.length + 5))
-	) {
-		return folder;
-	}
-	return username;
+	return parts.slice(0, -2).join("_");
 }
 
 /**
@@ -135,14 +125,7 @@ export function useRecordings() {
 		return result;
 	});
 
-	const allSelectableFiles = computed(() =>
-		files.value.filter(
-			(f) =>
-				!f.is_recording &&
-				f.status !== "merging_waiting" &&
-				f.status !== "merging",
-		),
-	);
+	const allSelectableFiles = computed(() => files.value.filter((f) => !f.is_recording));
 	const selectedCount = computed(() => selected.value.size);
 
 	function getFileChecked(path: string) {
@@ -155,12 +138,7 @@ export function useRecordings() {
 	}
 
 	function getGroupChecked(group: Group): boolean | "indeterminate" {
-		const selectable = group.files.filter(
-			(f) =>
-				!f.is_recording &&
-				f.status !== "merging_waiting" &&
-				f.status !== "merging",
-		);
+		const selectable = group.files.filter((f) => !f.is_recording);
 		if (selectable.length === 0) return false;
 		const n = selectable.filter((f) => selected.value.has(f.path)).length;
 		if (n === 0) return false;
@@ -169,12 +147,7 @@ export function useRecordings() {
 	}
 
 	function setGroupChecked(group: Group) {
-		const selectable = group.files.filter(
-			(f) =>
-				!f.is_recording &&
-				f.status !== "merging_waiting" &&
-				f.status !== "merging",
-		);
+		const selectable = group.files.filter((f) => !f.is_recording);
 		const allSel = selectable.every((f) => selected.value.has(f.path));
 		if (allSel) selectable.forEach((f) => selected.value.delete(f.path));
 		else selectable.forEach((f) => selected.value.add(f.path));
@@ -197,8 +170,7 @@ export function useRecordings() {
 	}
 
 	function toggleGroup(username: string) {
-		if (collapsedGroups.value.has(username))
-			collapsedGroups.value.delete(username);
+		if (collapsedGroups.value.has(username)) collapsedGroups.value.delete(username);
 		else collapsedGroups.value.add(username);
 	}
 

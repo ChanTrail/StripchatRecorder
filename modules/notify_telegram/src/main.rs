@@ -14,8 +14,8 @@
 //! - 标准输出 `PROGRESS:{done}/{total}`: 进度上报 / Progress reporting
 //! - 标准输出 `STATUS:{speed}`: 上传速度上报 / Upload speed reporting
 
-use std::env;
 use std::fs;
+use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -23,74 +23,55 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use grammers_client::Client;
-use grammers_client::client::{ClientConfiguration, AutoSleep};
-use grammers_client::media::{InputMedia, Uploaded};
-use grammers_client::message::InputMessage;
-use grammers_client::sender::{ConnectionParams, SenderPool};
+use grammers_client::client::ClientConfiguration;
+use grammers_client::media::Uploaded;
+use grammers_client::sender::{AutoSleep, ConnectionParams, SenderPool};
 use grammers_client::tl;
+use grammers_session::Session;
 use grammers_session::storages::SqliteSession;
-use grammers_session::types::{PeerAuth, PeerId, PeerRef};
+use grammers_session::types::{PeerId, PeerKind, PeerAuth, PeerRef};
 use tokio::io::AsyncReadExt;
-use pp_utils::{param, param_bool, format_duration, format_bytes, format_speed, parse_stem, find_cover, tmp_dir, image_dimensions, video_meta};
+use pp_utils::{format_duration, format_bytes, format_speed, parse_stem, find_cover, tmp_dir, image_dimensions, video_meta, ModuleInput};
 
 /// 进度上报的缩放基数 / Progress reporting scale base
 const PROGRESS_SCALE: usize = 10_000;
 
 /// 模块元数据 JSON，通过 `--describe` 参数输出。
+///
+/// `chat_id` 和 `username` 二者至少填写一个：公开群组/频道通过 `username` 发送
+/// （Telegram 允许按公开 username 直接解析目标，无需知道数字 ID）；私密群组/频道
+/// 没有公开 username，必须通过 `chat_id` 发送。两者都填时优先使用 `username`。
+///
 /// Module metadata JSON, output via `--describe` argument.
+///
+/// At least one of `chat_id`/`username` must be set: public groups/channels are sent
+/// via `username` (Telegram can resolve the target directly from its public username,
+/// no numeric ID needed); private groups/channels have no public username and must be
+/// sent via `chat_id`. When both are set, `username` takes priority.
 const DESCRIBE: &str = r#"{
     "id": "notify_telegram",
-    "name": "Telegram 通知 0.2.0",
-    "description": "将录制信息、封面图和视频通过 MTProto 发送到 Telegram（支持超过 50MB 的大文件，支持 HTTP/SOCKS5 代理）",
+    "name": "Telegram 通知",
+    "description": "将录制信息、封面图和视频通过 MTProto 发送到 Telegram（支持超过 50MB 的大文件，支持 HTTP/SOCKS5 代理）。公开群组/频道填 Username，私密群组/频道填 Chat ID",
+    "inputTypes": ["media_bundle"],
+    "outputTypes": ["media_bundle"],
+    "official": true,
     "params": [
-        {
-        "key": "api_id",
-        "label": "API ID（从 my.telegram.org 获取）",
-        "type": "string",
-        "default": ""
-        },
-        {
-        "key": "api_hash",
-        "label": "API Hash",
-        "type": "string",
-        "default": ""
-        },
-        {
-        "key": "bot_token",
-        "label": "Bot Token（从 @BotFather 获取）",
-        "type": "string",
-        "default": ""
-        },
-        {
-        "key": "chat_id",
-        "label": "Chat ID（超级群组填 -100xxxxxxxxxx 格式）",
-        "type": "string",
-        "default": ""
-        },
-        {
-        "key": "username",
-        "label": "群组 Username（超级群组必填，如 mygroupname，不含 @）",
-        "type": "string",
-        "default": ""
-        },
-        {
-        "key": "proxy",
-        "label": "代理地址（支持 http://、socks5://）",
-        "type": "string",
-        "default": ""
-        },
-        {
-        "key": "send_video",
-        "label": "同时发送视频文件",
-        "type": "boolean",
-        "default": true
-        }
+        { "key": "api_id",     "label": "API ID（从 my.telegram.org 获取）",         "type": "string",  "default": "" },
+        { "key": "api_hash",   "label": "API Hash",                                   "type": "string",  "default": "" },
+        { "key": "bot_token",  "label": "Bot Token（从 @BotFather 获取）",           "type": "string",  "default": "" },
+        { "key": "username",   "label": "公开群组/频道 Username（不含 @，公开时填写）", "type": "string",  "default": "" },
+        { "key": "chat_id",    "label": "Chat ID（私密群组/频道填写，格式 -100xxxxxxxxxx）", "type": "string",  "default": "" },
+        { "key": "proxy",      "label": "代理地址（支持 http://、socks5://）",       "type": "string",  "default": "" },
+        { "key": "send_video", "label": "同时发送视频文件",                           "type": "boolean", "default": true }
     ]
 }"#;
 
 /// 若封面图不满足 Telegram 限制（宽+高 < 10000 且宽高比 < 20:1），则等比缩放。
 /// Resize cover image if it violates Telegram limits (w+h < 10000 and aspect ratio < 20:1).
 /// Returns Some(new_path) if resized, None if no resize needed.
+///
+/// 若目标文件已存在且非空，则跳过 ffmpeg 直接复用。
+/// If the target file already exists and is non-empty, reuse it without calling ffmpeg.
 fn resize_cover_for_telegram(img: &Path) -> Result<Option<PathBuf>, String> {
     const MAX_PHOTO_BYTES: u64 = 10 * 1024 * 1024; // Telegram photo limit: 10 MB
 
@@ -138,12 +119,18 @@ fn resize_cover_for_telegram(img: &Path) -> Result<Option<PathBuf>, String> {
     let stem = img.file_stem().and_then(|s| s.to_str()).unwrap_or("cover");
     let out_path = tmp_dir().join(format!("{}_tg_resized.jpg", stem));
 
+    // 已存在且非空则直接复用，跳过 ffmpeg
+    // Reuse existing non-empty file without calling ffmpeg
+    if out_path.exists() && fs::metadata(&out_path).map(|m| m.len()).unwrap_or(0) > 0 {
+        return Ok(Some(out_path));
+    }
+
     // 若文件超过 10MB，逐步降低质量直到满足大小限制
     // If file exceeds 10MB, progressively lower quality until size limit is met
     let q_values: &[&str] = if !size_ok { &["5", "10", "15", "20", "25", "31"] } else { &["2"] };
     let mut success = false;
     for &q in q_values {
-        let status = Command::new("ffmpeg")
+        let status = Command::new(pp_utils::ffmpeg_program())
             .args(["-y", "-i"]).arg(img)
             .args(["-vf", &format!("scale={}:{}", tw, th), "-q:v", q])
             .arg(&out_path)
@@ -172,13 +159,23 @@ fn resize_cover_for_telegram(img: &Path) -> Result<Option<PathBuf>, String> {
 /// Extract the first frame from a video as a thumbnail using ffmpeg
 /// (used as preview image for Telegram video messages).
 ///
+/// 若目标缩略图文件已存在且非空，则跳过 ffmpeg 直接复用。
+/// If the target thumbnail already exists and is non-empty, reuse it without calling ffmpeg.
+///
 /// # 返回值 / Returns
 /// 缩略图文件路径，失败时返回错误。
 /// Thumbnail file path, or error on failure.
 fn extract_video_thumbnail(input: &Path) -> Result<PathBuf, String> {
     let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("recording");
     let thumb_path = tmp_dir().join(format!("{}.tg_thumb.png", stem));
-    let status = Command::new("ffmpeg")
+
+    // 已存在且非空则直接复用，跳过 ffmpeg
+    // Reuse existing non-empty thumbnail without calling ffmpeg
+    if thumb_path.exists() && fs::metadata(&thumb_path).map(|m| m.len()).unwrap_or(0) > 0 {
+        return Ok(thumb_path);
+    }
+
+    let status = Command::new(pp_utils::ffmpeg_program())
         .args(["-y", "-i"])
         .arg(input)
         .args(["-frames:v", "1", "-q:v", "2"])
@@ -205,7 +202,7 @@ fn extract_video_thumbnail(input: &Path) -> Result<PathBuf, String> {
 ///
 /// Get the average bitrate of a video via ffprobe (bps), returns None on failure.
 fn probe_bitrate(input: &Path) -> Option<u64> {
-    let out = Command::new("ffprobe")
+    let out = Command::new(pp_utils::ffprobe_program())
         .args(["-v", "error", "-show_entries", "format=bit_rate",
                "-of", "default=noprint_wrappers=1:nokey=1"])
         .arg(input)
@@ -236,11 +233,13 @@ fn split_one(input: &Path, max_bytes: u64, dir: &Path, stem: &str, ext: &str, of
 
     // ffmpeg segment 模式不支持任意起始编号，先生成临时名再重命名
     // ffmpeg segment mode doesn't support arbitrary start numbers; generate then rename
-    let tmp_dir_path = dir.join(format!("_split_tmp_{}", offset));
+    // 临时目录名加入 stem 和 offset，防止并发任务路径冲突
+    // Include stem and offset in temp dir name to avoid collisions under concurrent tasks
+    let tmp_dir_path = dir.join(format!("_split_tmp_{}_{}",  stem, offset));
     fs::create_dir_all(&tmp_dir_path).map_err(|e| format!("mkdir failed: {}", e))?;
     let tmp_pattern = tmp_dir_path.join(format!("seg%03d.{}", ext));
 
-    let status = Command::new("ffmpeg")
+    let status = Command::new(pp_utils::ffmpeg_program())
         .args(["-y", "-i"]).arg(input)
         .args(["-c", "copy", "-f", "segment",
                "-segment_time", &seg_duration.to_string(),
@@ -273,12 +272,51 @@ fn split_one(input: &Path, max_bytes: u64, dir: &Path, stem: &str, ext: &str, of
 }
 
 fn split_video(input: &Path, max_bytes: u64) -> Result<Vec<PathBuf>, String> {
-    let file_size = fs::metadata(input).map_err(|e| format!("stat failed: {}", e))?.len();
+    let meta = fs::metadata(input).map_err(|e| format!("stat failed: {}", e))?;
+    let file_size = meta.len();
     if file_size <= (max_bytes as f64 * 0.95) as u64 { return Ok(vec![input.to_path_buf()]); }
 
     let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("part");
     let ext  = input.extension().and_then(|e| e.to_str()).unwrap_or("mp4");
-    let dir  = tmp_dir();
+    // 目录名由文件内容特征（mtime_nanos + size）确定，同一个视频文件每次产生相同路径，
+    // 允许上传失败后的重试复用已有的分割片段，同时也保证不同视频之间不会冲突。
+    // 注意：主程序启动时会清空 tmp，超过 1 小时的残留也会被定时清理，因此只有同一次运行、
+    // 1 小时内的重试才能复用。
+    //
+    // Directory name is derived from the file's identity (mtime_nanos + size) so the same
+    // input file always maps to the same directory, letting retries after a failed upload reuse
+    // existing split segments, while different files remain collision-free.
+    // Note: the host app clears tmp at startup and the scheduled cleanup removes leftovers older
+    // than 1 hour, so only retries within the same run and within the hour can reuse them.
+    let mtime_nanos = meta.modified()
+        .map(|t| t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos())
+        .unwrap_or(0);
+    let dir = tmp_dir().join(format!("split_{}_{}_{}", stem, mtime_nanos, file_size));
+    fs::create_dir_all(&dir).map_err(|e| format!("mkdir split dir failed: {}", e))?;
+
+    // 若目录中已有所有分片文件则直接复用，跳过 ffmpeg split。
+    // 通过检查第一个片段是否存在来快速判断（若 ffmpeg 上次中途失败，片段不完整，
+    // 下次会因某片段缺失而重新切割）。
+    //
+    // Reuse existing segments if they are all present in the directory, skipping ffmpeg split.
+    // A quick check on the first segment is used as a proxy; if ffmpeg previously failed
+    // mid-split, missing segments will cause a fresh re-split on the next run.
+    let first_expected = dir.join(format!("{}_part000.{}", stem, ext));
+    if first_expected.exists() && fs::metadata(&first_expected).map(|m| m.len()).unwrap_or(0) > 0 {
+        // 收集目录下所有已有分片，按名称排序后返回
+        // Collect all existing segments in the directory, sorted by name
+        let mut existing: Vec<PathBuf> = fs::read_dir(&dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_file() && p.extension().and_then(|e| e.to_str()).unwrap_or("") == ext)
+            .collect();
+        existing.sort();
+        if !existing.is_empty() {
+            return Ok(existing);
+        }
+    }
     // 第一次切分
     // Initial split
     let initial = split_one(input, max_bytes, &dir, stem, ext, 0)?;
@@ -312,6 +350,86 @@ fn split_video(input: &Path, max_bytes: u64) -> Result<Vec<PathBuf>, String> {
     Ok(final_segments)
 }
 
+/// 生成 `n` 个非零的 64 位 random_id，用于 messages.Send* 请求。
+///
+/// 每个进程使用随机密钥的 `RandomState`，再混入系统时间纳秒、序号和进程 ID，
+/// 保证同一进程内互不相同、不同进程间极难碰撞。结果为 0 时改成 1（服务端对 0 返回 RANDOM_ID_EMPTY）。
+///
+/// Generate `n` non-zero 64-bit random_ids for messages.Send* requests.
+///
+/// Uses a per-process randomly keyed `RandomState`, mixed with system-time nanos, the index
+/// and the process ID, so ids are distinct within a process and collide across processes
+/// with negligible probability. A zero result becomes 1 (the server rejects 0 with
+/// RANDOM_ID_EMPTY).
+fn generate_send_ids(n: usize) -> Vec<i64> {
+    use std::collections::hash_map::RandomState;
+    use std::hash::{BuildHasher, Hasher};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let state = RandomState::new();
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
+    let pid = std::process::id();
+    (0..n)
+        .map(|i| {
+            let mut h = state.build_hasher();
+            h.write_u128(nanos);
+            h.write_usize(i);
+            h.write_u32(pid);
+            let id = h.finish() as i64;
+            if id == 0 { 1 } else { id }
+        })
+        .collect()
+}
+
+/// 一次模块运行内固定不变的发送 random_id 集合。
+///
+/// Telegram 按 random_id 对发送请求去重：同一 random_id 重发不会产生第二条消息，
+/// 而是返回 RANDOM_ID_DUPLICATE。本结构在 run() 中只创建一次，内层发送重试、
+/// FILE_PART_MISSING 重传后的重发以及外层 MAX_OUTER 整体重跑都复用同一组 id，
+/// 让"服务端已收到但客户端报错"后的重试对服务端幂等。
+///
+/// Send random_ids that stay fixed for one module run.
+///
+/// Telegram deduplicates send requests by random_id: re-sending with the same random_id does
+/// not create a second message and returns RANDOM_ID_DUPLICATE instead. This struct is created
+/// once in run(); inner send retries, re-sends after a FILE_PART_MISSING re-upload, and outer
+/// MAX_OUTER reruns all reuse the same ids, so retrying after "server received it but the
+/// client saw an error" is idempotent on the server side.
+struct SendIds {
+    /// 相册条目 id，按条目位置分配（封面在前，视频分片在后）
+    /// Album item ids, assigned by item position (cover first, then video parts)
+    album: std::sync::Mutex<Vec<i64>>,
+    /// 单条消息（仅封面图或纯文字）的 id / id for a single message (cover-only or text-only)
+    single: i64,
+}
+
+impl SendIds {
+    /// 创建新的 id 集合；相册 id 按需生成 / Create a new id set; album ids are generated lazily
+    fn new() -> Self {
+        Self { album: std::sync::Mutex::new(Vec::new()), single: generate_send_ids(1)[0] }
+    }
+
+    /// 返回前 `n` 个相册条目 id；已有 id 不足时追加生成。
+    /// 同一次运行内对同一位置的条目始终返回相同的 id。
+    ///
+    /// Return the first `n` album item ids, generating more when not enough exist yet.
+    /// Within one run, the same position always yields the same id.
+    fn album_ids(&self, n: usize) -> Vec<i64> {
+        let mut ids = self.album.lock().unwrap_or_else(|e| e.into_inner());
+        if ids.len() < n {
+            let extra = generate_send_ids(n - ids.len());
+            ids.extend(extra);
+        }
+        ids[..n].to_vec()
+    }
+}
+
+/// 服务端返回 RANDOM_ID_DUPLICATE 表示该 random_id 的消息此前已发送成功。
+/// RANDOM_ID_DUPLICATE from the server means a message with this random_id was already sent.
+fn is_already_delivered(e: &grammers_mtsender::InvocationError) -> bool {
+    e.is("RANDOM_ID_DUPLICATE")
+}
+
 /// 获取 Telegram 会话文件路径（存储在系统配置目录下）。
 /// Get the Telegram session file path (stored in the system config directory).
 fn session_path(api_id: i32) -> PathBuf {
@@ -322,22 +440,69 @@ fn session_path(api_id: i32) -> PathBuf {
     base.join(format!("{}.db", api_id))
 }
 
-/// 根据数字 chat_id 构建 Telegram PeerRef（不需要网络请求）。
-/// Build a Telegram PeerRef from a numeric chat_id (no network request needed).
+/// 将数字 chat_id 解析为 Telegram 内部 PeerId（不需要网络请求）。
 ///
-/// 支持用户、普通群组和超级群组/频道的 ID 格式。
-/// Supports user, regular group, and supergroup/channel ID formats.
-fn build_peer_ref(chat_id: i64) -> PeerRef {
-    let id = if chat_id < -1_000_000_000_000 {
-        PeerId::channel_unchecked((-chat_id) - 1_000_000_000_000)
-    } else if chat_id < -1_000_000_000 {
-        PeerId::channel_unchecked((-chat_id) - 1_000_000_000)
-    } else if chat_id < 0 {
-        PeerId::chat_unchecked(-chat_id)
+/// grammers 0.10 起提供官方的 `PeerId::from_bot_api_dialog_id`，直接按 Telegram
+/// 官方 "Bot API dialog ID" 规范（<https://core.telegram.org/api/bots/ids>）完成
+/// 用户/小群组/超级群组·频道三种 ID 区间的判定和转换，不再需要自己手写边界值
+/// 判断逻辑——此前手写版本存在一个中间分支误判区间的 bug（把部分真实小群组 ID
+/// 当成了频道 ID，导致其 access_hash 计算方式错误，直接造成 PEER_ID_INVALID /
+/// CHANNEL_INVALID），改用官方实现从根源上排除了这一类边界计算错误。
+///
+/// Parse a numeric chat_id into its Telegram-internal PeerId (no network request needed).
+///
+/// Since grammers 0.10, the official `PeerId::from_bot_api_dialog_id` performs the
+/// user/small-group/supergroup-channel range classification and conversion per Telegram's
+/// "Bot API dialog ID" spec (<https://core.telegram.org/api/bots/ids>) directly, so we no
+/// longer need to hand-roll the boundary logic ourselves — the previous hand-rolled version
+/// had a bug in one boundary branch (misclassifying some real small-group IDs as channel
+/// IDs, computing the wrong access_hash formula, and directly causing PEER_ID_INVALID /
+/// CHANNEL_INVALID). Using the official implementation eliminates this entire class of
+/// boundary-math error at the source.
+fn peer_id_from_chat_id(chat_id: i64) -> Result<PeerId, String> {
+    PeerId::from_bot_api_dialog_id(chat_id)
+        .ok_or_else(|| format!("chat_id {chat_id} is out of any valid Telegram peer ID range"))
+}
+
+/// 若错误信息表明是"peer 权限/解析"类问题（CHANNEL_INVALID、CHANNEL_PRIVATE、
+/// PEER_ID_INVALID 等），追加一句可操作的诊断提示；其他错误原样返回。
+///
+/// 不改变、不掩盖 Telegram 服务端返回的原始错误——只是附加上下文，帮助用户判断
+/// 该向哪个方向排查（bot 权限 vs. chat_id 填写错误 vs. 网络/代理问题等）。
+///
+/// If the error message indicates a "peer authority/resolution" issue
+/// (CHANNEL_INVALID, CHANNEL_PRIVATE, PEER_ID_INVALID, etc.), append an actionable
+/// diagnostic hint; other errors pass through unchanged.
+///
+/// Does not alter or mask the raw error returned by Telegram's server — only adds
+/// context to help the user narrow down where to look (bot permissions vs. a wrong
+/// chat_id vs. network/proxy issues, etc.).
+fn annotate_peer_error(err: String, chat_id: i64, username: &str) -> String {
+    let is_peer_issue = ["CHANNEL_INVALID", "CHANNEL_PRIVATE", "PEER_ID_INVALID", "CHAT_ID_INVALID"]
+        .iter()
+        .any(|code| err.contains(code));
+    if !is_peer_issue {
+        return err;
+    }
+    if !username.is_empty() {
+        format!(
+            "{err}\n\nHint: username=@{username} was resolved, but Telegram still rejected the \
+             target. Make sure the bot has actually been added as a member/admin of this \
+             group/channel — a bot cannot message a public group it hasn't joined.",
+        )
     } else {
-        PeerId::user_unchecked(chat_id)
-    };
-    PeerRef { id, auth: PeerAuth::default() }
+        format!(
+            "{err}\n\nHint: chat_id={chat_id} was used with a zero access_hash (the only option \
+             this bot has when it has never seen this peer before). This fails unless Telegram \
+             already grants the bot implicit authority over it. Checklist:\n\
+             1. The bot must be an actual member of this group/channel (add it there first).\n\
+             2. Double-check chat_id is correct: for a supergroup/channel it must be the full \
+             '-100xxxxxxxxxx' form; for a small (non-super) group it's a plain negative number \
+             without the -100 prefix.\n\
+             3. If this is a small group that was never upgraded to a supergroup, no access_hash \
+             is needed at all — a persistent failure there points to an incorrect chat_id instead.",
+        )
+    }
 }
 
 /// 计算字符串的 UTF-16 编码长度（Telegram 消息实体使用 UTF-16 偏移量）。
@@ -409,15 +574,127 @@ fn build_caption(
 }
 
 /// 解析 Telegram Peer（优先通过 username 解析，其次使用数字 chat_id）。
+///
+/// chat_id 路径的解析策略：
+/// 1. 小群组（chat，非超级群组）不需要 access_hash，Telegram 直接接受零凭证。
+/// 2. 频道/超级群组需要真实的 access_hash，优先从 session 缓存读取。
+/// 3. 缓存未命中（首次使用）时，调用 `channels.GetChannels` 向服务端主动查询——
+///    若 bot 已是该频道/超级群组的成员，服务端返回带真实 access_hash 的 Channel 对象，
+///    grammers 自动将其写入 session 缓存，之后再读即可拿到真实 hash。
+///    若 bot 不是成员，返回 CHANNEL_INVALID 并附带可操作的诊断提示。
+///
 /// Resolve a Telegram Peer (prefers username resolution, falls back to numeric chat_id).
-async fn resolve_peer(client: &Client, chat_id: i64, username: &str) -> Result<PeerRef, String> {
+///
+/// chat_id resolution strategy:
+/// 1. Small group chats (not supergroups) need no access_hash — zero credential works.
+/// 2. Channels/supergroups require a real access_hash — checked in the session cache first.
+/// 3. On a cache miss (first use), call `channels.GetChannels` to ask the server directly —
+///    if the bot is a member, the server returns a Channel with the real access_hash, which
+///    grammers writes into the session cache automatically. If the bot is not a member,
+///    the server returns CHANNEL_INVALID and we surface a diagnostic hint.
+async fn resolve_peer(
+    session: &Arc<SqliteSession>,
+    client: &Client,
+    chat_id: i64,
+    username: &str,
+) -> Result<PeerRef, String> {
     if !username.is_empty() {
         let peer = client.resolve_username(username).await
             .map_err(|e| format!("resolve_username failed: {}", e))?
-            .ok_or_else(|| format!("username @{} not found", username))?;
-        return peer.to_ref().await.ok_or_else(|| format!("@{} peer_ref unavailable", username));
+            .ok_or_else(|| format!(
+                "username @{username} not found. Note: `username` only works for PUBLIC \
+                 groups/channels that have an @username set — a private group's display \
+                 name/title is NOT a username. For private groups/channels, leave `username` \
+                 empty and use `chat_id` instead."
+            ))?;
+        return peer.to_ref().await
+            .map_err(|e| format!("to_ref failed for @{}: {}", username, e))?
+            .ok_or_else(|| format!("@{} peer_ref unavailable", username));
     }
-    Ok(build_peer_ref(chat_id))
+
+    let id = peer_id_from_chat_id(chat_id)?;
+
+    // 小群组（chat）没有 access_hash 的概念，零凭证即可访问
+    // Small group chats have no concept of access_hash; the zero credential works directly
+    if id.kind() == PeerKind::Chat {
+        return Ok(id.to_ambient_ref());
+    }
+
+    // 优先从 session 缓存读取 access_hash（首次使用时缓存为空）。
+    // 缓存未命中时，主动调用 channels.GetChannels 向服务端查询该频道/超级群组——
+    // 若 bot 已是成员，服务端会返回带真实 access_hash 的 Channel 对象，
+    // grammers 会将其自动写入 session 缓存；之后再从缓存读取即可拿到真实 hash。
+    // 这解决了首次使用私密频道时 zero access_hash 导致的 CHANNEL_INVALID 问题。
+    //
+    // Check session cache for access_hash first (empty on first use).
+    // On a cache miss, proactively call channels.GetChannels to ask the server —
+    // if the bot is a member, the server returns a Channel with a real access_hash
+    // which grammers automatically writes into the session cache; a subsequent cache
+    // read then yields the real hash.
+    // This fixes the CHANNEL_INVALID error caused by zero access_hash on first use
+    // of a private channel/supergroup.
+    if let Ok(Some(cached)) = session.peer_ref(id).await {
+        return Ok(cached);
+    }
+
+    // 缓存未命中：用 zero hash 构造 InputChannel，发起 GetChannels RPC，
+    // 直接从返回值里取出真实 access_hash 构造 PeerRef，不依赖自动缓存。
+    // Cache miss: call GetChannels with zero hash, extract the real access_hash
+    // from the response directly rather than relying on automatic session caching.
+    let channel_id = match id.kind() {
+        PeerKind::Channel => id.bare_id().ok_or_else(|| format!("chat_id {} has no bare id", chat_id))?,
+        _ => return Err(format!(
+            "chat_id {} resolved to a non-channel peer type; \
+             use the full -100xxxxxxxxxx format for supergroups/channels",
+            chat_id
+        )),
+    };
+
+    let input_channel = tl::types::InputChannel {
+        channel_id,
+        access_hash: 0,
+    };
+    let result = client.invoke(&tl::functions::channels::GetChannels {
+        id: vec![tl::enums::InputChannel::Channel(input_channel)],
+    }).await;
+
+    match result {
+        Ok(chats) => {
+            // 从返回的 Chat 列表里找到匹配的 Channel，取出其 access_hash 直接构造 PeerRef
+            // Find the matching Channel in the returned list and build PeerRef from its access_hash
+            for chat in chats.chats() {
+                if let tl::enums::Chat::Channel(ch) = chat
+                    && ch.id == channel_id {
+                        let hash = ch.access_hash.unwrap_or(0);
+                        let peer_id = PeerId::channel(ch.id).ok_or_else(|| {
+                            format!("channel id {} is out of valid range", ch.id)
+                        })?;
+                        return Ok(PeerRef {
+                            id: peer_id,
+                            auth: PeerAuth::from_hash(hash),
+                        });
+                    }
+            }
+            Err(format!(
+                "GetChannels succeeded but channel {} was not in the response; \
+                 the bot may not be a member of this channel/supergroup",
+                chat_id
+            ))
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("CHANNEL_INVALID") {
+                Err(format!(
+                    "Cannot resolve private channel/supergroup {chat_id}: {msg}\n\n\
+                     Hint: make sure the bot has been added as a member/admin of this \
+                     channel or supergroup before sending. The bot must be present so \
+                     Telegram can supply its access_hash.",
+                ))
+            } else {
+                Err(format!("GetChannels failed for chat_id {chat_id}: {msg}"))
+            }
+        }
+    }
 }
 
 /// 上传文件到 Telegram，支持断点续传、进度上报。
@@ -460,7 +737,9 @@ async fn upload_with_progress(
     let file_id = {
         use std::time::{SystemTime, UNIX_EPOCH};
         let t = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
-        (t.as_nanos() as i64) ^ (path.as_os_str().len() as i64 * 0x9e3779b97f4a7c15_u64 as i64)
+        let nanos = t.as_nanos() as i64;
+        let len_hash = (path.as_os_str().len() as i64).wrapping_mul(0x9e3779b97f4a7c15_u64 as i64);
+        nanos ^ len_hash
     };
 
     let mut buf = vec![0u8; CHUNK_SIZE];
@@ -571,6 +850,29 @@ async fn upload_with_progress(
 /// 3. Convert/remux video format if needed
 /// 4. Upload cover image, video thumbnails, and video files
 /// 5. Send as album (cover + videos, up to 10 per batch)
+///
+/// `upload_bytes_done` 和 `upload_bytes_total` 从外部传入，在整个重试循环中持续累计，
+/// 保证进度条在每次重连重试时不从 0 重置。每次外层重试开始时，调用方将 `upload_bytes_done`
+/// 重置为 0 后再传入。
+///
+/// `upload_bytes_done` and `upload_bytes_total` are passed in from the outer scope so they
+/// persist across the entire retry loop, preventing the progress bar from resetting to 0 on
+/// each reconnect retry. The caller resets `upload_bytes_done` to 0 at the start of each
+/// outer attempt.
+///
+/// 幂等发送：三处发送都直接调用原始 TL 请求（SendMultiMedia/SendMedia/SendMessage），
+/// random_id 取自调用方传入的 `send_ids`（整个模块运行只创建一次）。服务端已收到但
+/// 客户端报错时，重试用同一 random_id 由服务端去重；返回 RANDOM_ID_DUPLICATE 视为已送达。
+/// 服务端去重记录的保留时长官方文档未写明，因此这是尽力而为的保护。分片上传和
+/// UploadMedia 不产生消息，其重试逻辑不受影响。
+///
+/// Idempotent sending: all three send paths invoke the raw TL requests
+/// (SendMultiMedia/SendMedia/SendMessage) with random_ids taken from the caller's `send_ids`
+/// (created once per module run). If the server received a request but the client saw an
+/// error, the retry reuses the same random_id and the server deduplicates it;
+/// RANDOM_ID_DUPLICATE is treated as delivered. How long the server keeps random_ids is not
+/// documented, so this is best-effort. Chunk uploads and UploadMedia create no messages, so
+/// their retry logic is unchanged.
 #[allow(clippy::too_many_arguments)]
 async fn upload_and_send(
     api_id: i32, api_hash: &str, bot_token: &str, proxy: &str,
@@ -579,32 +881,46 @@ async fn upload_and_send(
     file_name: &str, file_size_str: &str,
     input: &Path, cover: Option<&Path>, send_video: bool,
     video_parts: &[PathBuf],
+    done: Arc<AtomicUsize>,
+    upload_total: usize,
+    send_ids: &SendIds,
 ) -> Result<(), String> {
     let (base_caption_text, base_caption_entities) =
         build_caption(model_name, timestamp, duration_str, file_name, file_size_str, None);
-
-    // 打开或创建 SQLite 会话文件 / Open or create SQLite session file
+    // 原始 TL 请求的 entities 字段：为空时传 None（与 grammers 内部行为一致）
+    // entities field for raw TL requests: None when empty (matches grammers' internal behavior)
+    let caption_entities: Option<Vec<tl::enums::MessageEntity>> =
+        if base_caption_entities.is_empty() { None } else { Some(base_caption_entities) };
     let session = Arc::new(
         SqliteSession::open(&session_path(api_id)).await
             .map_err(|e| format!("open session failed: {}", e))?,
     );
 
+    // 配置激进的 retry policy：I/O 错误视为 5 秒 flood，flood wait 阈值提高到 5 分钟，
+    // 每个请求最多自动重试 1 次（与 grammers 0.10 的 AutoSleep 行为一致）
+    // Aggressive retry policy: treat I/O errors as 5s flood, raise flood-wait threshold to 5 min,
+    // auto-retry each request at most once (matches grammers 0.10 AutoSleep behavior)
     let conn_params = ConnectionParams {
         proxy_url: if proxy.is_empty() { None } else { Some(proxy.to_string()) },
+        retry_policy: Box::new(AutoSleep {
+            tries: NonZeroU32::MIN,
+            threshold: Duration::from_secs(300),
+            io_errors_as_flood_of: Some(Duration::from_secs(5)),
+        }),
         ..Default::default()
     };
 
     // 创建连接池并在后台运行 / Create connection pool and run in background
     let pool = SenderPool::with_configuration(Arc::clone(&session), api_id, conn_params);
     let runner = pool.runner;
+    // pool.updates（未处理的更新流）在此模块中未被消费——这是符合预期的：本模块是
+    // 一次性 CLI 进程，只需要发送一条消息就退出，不需要长期监听更新。
+    // pool.updates (the raw update stream) is intentionally left undrained — this
+    // module is a one-shot CLI process that only needs to send a single message and
+    // exit; it has no need to listen for updates long-term.
+    drop(pool.updates);
     tokio::spawn(async move { runner.run().await });
-    // 配置激进的 retry policy：I/O 错误视为 5 秒 flood，flood wait 阈值提高到 5 分钟
-    // Aggressive retry policy: treat I/O errors as 5s flood, raise flood-wait threshold to 5 min
     let client = Client::with_configuration(pool.handle, ClientConfiguration {
-        retry_policy: Box::new(AutoSleep {
-            threshold: Duration::from_secs(300),
-            io_errors_as_flood_of: Some(Duration::from_secs(5)),
-        }),
         auto_cache_peers: true,
     });
 
@@ -614,7 +930,7 @@ async fn upload_and_send(
             .map_err(|e| format!("bot_sign_in failed: {}", e))?;
     }
 
-    let peer = resolve_peer(&client, chat_id, username).await?;
+    let peer = resolve_peer(&session, &client, chat_id, username).await?;
 
     // 处理封面图：非 jpg/png 格式需先用 ffmpeg 转换，然后检查尺寸限制
     // Handle cover image: non-jpg/png formats need ffmpeg conversion first, then check dimension limits
@@ -630,11 +946,15 @@ async fn upload_and_send(
                 "{}_tg_tmp.png",
                 img.file_stem().and_then(|s| s.to_str()).unwrap_or("cover")
             ));
-            let status = Command::new("ffmpeg")
-                .args(["-y", "-i"]).arg(img).arg(&tmp)
-                .stdout(Stdio::null()).stderr(Stdio::null())
-                .status().map_err(|e| format!("ffmpeg not found: {}", e))?;
-            if !status.success() { return Err("ffmpeg failed to convert cover image".to_string()); }
+            // 已存在且非空则直接复用，跳过 ffmpeg
+            // Reuse existing non-empty file without calling ffmpeg
+            if !tmp.exists() || fs::metadata(&tmp).map(|m| m.len()).unwrap_or(0) == 0 {
+                let status = Command::new(pp_utils::ffmpeg_program())
+                    .args(["-y", "-i"]).arg(img).arg(&tmp)
+                    .stdout(Stdio::null()).stderr(Stdio::null())
+                    .status().map_err(|e| format!("ffmpeg not found: {}", e))?;
+                if !status.success() { return Err("ffmpeg failed to convert cover image".to_string()); }
+            }
             converted_cover = Some(tmp);
         }
         let after_format: &Path = converted_cover.as_deref().unwrap_or(img);
@@ -662,21 +982,25 @@ async fn upload_and_send(
                     "{}_tg_tmp.mkv",
                     part.file_stem().and_then(|s| s.to_str()).unwrap_or("video")
                 ));
-                // 先尝试无损重封装 / Try lossless remux first
-                let remux_ok = Command::new("ffmpeg")
-                    .args(["-y", "-i"]).arg(part)
-                    .args(["-c", "copy", "-movflags", "+faststart"]).arg(&tmp)
-                    .stdout(Stdio::null()).stderr(Stdio::null())
-                    .status().map_err(|e| format!("ffmpeg not found: {}", e))?.success();
-                if !remux_ok {
-                    // 重封装失败则转码为 H.264 + AAC / Fall back to H.264 + AAC transcoding
-                    let ok = Command::new("ffmpeg")
+                // 已存在且非空则直接复用，跳过 ffmpeg
+                // Reuse existing non-empty file without calling ffmpeg
+                if !tmp.exists() || fs::metadata(&tmp).map(|m| m.len()).unwrap_or(0) == 0 {
+                    // 先尝试无损重封装 / Try lossless remux first
+                    let remux_ok = Command::new(pp_utils::ffmpeg_program())
                         .args(["-y", "-i"]).arg(part)
-                        .args(["-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-                               "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart"]).arg(&tmp)
+                        .args(["-c", "copy", "-movflags", "+faststart"]).arg(&tmp)
                         .stdout(Stdio::null()).stderr(Stdio::null())
                         .status().map_err(|e| format!("ffmpeg not found: {}", e))?.success();
-                    if !ok { return Err("ffmpeg failed to convert video to mkv".to_string()); }
+                    if !remux_ok {
+                        // 重封装失败则转码为 H.264 + AAC / Fall back to H.264 + AAC transcoding
+                        let ok = Command::new(pp_utils::ffmpeg_program())
+                            .args(["-y", "-i"]).arg(part)
+                            .args(["-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+                                   "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart"]).arg(&tmp)
+                            .stdout(Stdio::null()).stderr(Stdio::null())
+                            .status().map_err(|e| format!("ffmpeg not found: {}", e))?.success();
+                        if !ok { return Err("ffmpeg failed to convert video to mkv".to_string()); }
+                    }
                 }
                 converted_parts.push(tmp.clone());
                 parts_out.push(tmp);
@@ -697,20 +1021,10 @@ async fn upload_and_send(
         }).collect()
     } else { vec![] };
 
-    // 计算所有需要上传的文件总大小（用于进度计算）
-    // Calculate total size of all files to upload (for progress calculation)
-    let cover_size = effective_cover.and_then(|p| fs::metadata(p).ok()).map(|m| m.len() as usize).unwrap_or(0);
-    let video_size: usize = if send_video {
-        effective_parts.iter().map(|p| fs::metadata(p).ok().map(|m| m.len() as usize).unwrap_or(0)).sum()
-    } else { 0 };
-    let thumb_size: usize = part_metas.iter()
-        .filter_map(|m| m.thumb_path.as_ref())
-        .filter_map(|p| fs::metadata(p).ok())
-        .map(|m| m.len() as usize).sum();
-    let upload_total = cover_size + video_size + thumb_size;
-
-    // 共享的已上传字节计数器 / Shared uploaded bytes counter
-    let done = Arc::new(AtomicUsize::new(0));
+    // upload_total 和 done 计数器由外部传入，在整个外层重试循环中持续累计，
+    // 避免每次重连重试时进度从 0 重置。
+    // upload_total and done counter are passed in from the outer scope to persist across
+    // the outer retry loop, preventing progress from resetting to 0 on each reconnect attempt.
 
     if send_video {
         // 固化后的视频分片，包含服务端永久 Media 引用和元数据
@@ -724,9 +1038,42 @@ async fn upload_and_send(
         //
         // Upload a file then immediately commit it via messages.UploadMedia, with retry.
         // Committed Media is not subject to the ~10-minute upload session TTL.
+        //
+        // `peer` 传入实际解析出的目标 peer（与后面 send_album/send_message 用的是
+        // 同一个 `PeerRef`），而不是 `InputPeer::Empty`。
+        //
+        // 官方文档字面上写"peer can be inputPeerEmpty for bots"，此前据此认为传空
+        // 是安全的；但实测（本项目对私密群组的两轮真实测试，以及第三方 MTProto 客户端
+        // MadelineProto 的公开 issue：<https://github.com/danog/MadelineProto/issues/689>，
+        // 同样在 uploadMedia 传空 peer 时报 PEER_ID_INVALID，改传真实目标 peer 后问题
+        // 消失）一致表明：至少对私密群组/频道场景，服务端在 uploadMedia 阶段确实会
+        // 校验 peer——传空反而触发了这个校验的失败路径（此前误以为传空能跳过校验，
+        // 实际上传空本身就是一种会被拒绝的取值）。
+        //
+        // 改用真实 peer 后，uploadMedia 和最终发送使用的是同一个已解析目标——不存在
+        // "先用一个假 peer 上传、再用另一个真 peer 发送"之间的不一致，逻辑上也更简单、
+        // 更符合直觉。
+        //
+        // `peer` is the actual resolved target peer (the same `PeerRef` used later by
+        // send_album/send_message), not `InputPeer::Empty`.
+        //
+        // The official docs literally say "peer can be inputPeerEmpty for bots", which
+        // previously led us to assume passing empty was safe here. But real-world testing
+        // (two rounds of live testing against private groups in this project, plus a public
+        // issue from the MadelineProto MTProto client:
+        // <https://github.com/danog/MadelineProto/issues/689>, which hit the same
+        // PEER_ID_INVALID on uploadMedia with an empty peer and resolved it by supplying
+        // the real target peer) consistently shows: at least for private groups/channels,
+        // the server does validate the peer during uploadMedia — passing empty triggers
+        // this validation's failure path (previously assumed empty would skip validation
+        // entirely; in reality, empty itself is a value the validation rejects).
+        //
+        // Using the real peer means uploadMedia and the final send target the exact same
+        // resolved peer — no inconsistency between "upload against a fake peer, then send
+        // to a different real one", which is also simpler and more intuitive.
         async fn commit_media(
             client: &Client,
-            peer: &PeerRef,
+            peer: PeerRef,
             raw_media: tl::enums::InputMedia,
         ) -> Result<grammers_client::media::Media, String> {
             const MAX_RETRIES: u32 = 10;
@@ -735,7 +1082,7 @@ async fn upload_and_send(
             loop {
                 match client.invoke(&tl::functions::messages::UploadMedia {
                     business_connection_id: None,
-                    peer: (*peer).into(),
+                    peer: (&peer).into(),
                     media: raw_media.clone(),
                 }).await {
                     Ok(committed) => {
@@ -761,11 +1108,13 @@ async fn upload_and_send(
             let uploaded = upload_with_progress(&client, img, Arc::clone(&done), upload_total).await?;
             let raw: tl::enums::InputMedia = tl::types::InputMediaUploadedPhoto {
                 spoiler: false,
+                live_photo: false,
                 file: uploaded.raw,
                 stickers: None,
                 ttl_seconds: None,
+                video: None,
             }.into();
-            Some(commit_media(&client, &peer, raw).await?)
+            Some(commit_media(&client, peer, raw).await?)
         } else { None };
         if let Some(ref tmp) = converted_cover { let _ = fs::remove_file(tmp); }
         if let Some(ref tmp) = resized_cover { let _ = fs::remove_file(tmp); }
@@ -776,7 +1125,6 @@ async fn upload_and_send(
             let client = &client;
             let effective_parts = &effective_parts;
             let part_metas = &part_metas;
-            let peer = &peer;
             async move {
                 let mut parts: Vec<CommittedPart> = Vec::new();
                 for (part_path, meta) in effective_parts.iter().zip(part_metas.iter()) {
@@ -831,23 +1179,37 @@ async fn upload_and_send(
         let mut committed_parts = do_upload_and_commit(Arc::clone(&done)).await?;
         for tmp in &converted_parts { let _ = fs::remove_file(tmp); }
 
-        let total_parts = committed_parts.len();
-
-        // 辅助函数：从固化的 Media 重建 InputMedia 列表（用于发送重试）
-        // Helper: rebuild InputMedia list from committed Media (for send retry)
+        // 辅助函数：从固化的 Media 重建 InputSingleMedia 列表（用于发送重试）。
+        // 每个条目的 random_id 按位置取自 send_ids，重试与重传后都保持不变。
+        // Helper: rebuild the InputSingleMedia list from committed Media (for send retry).
+        // Each item's random_id comes from send_ids by position and stays the same across
+        // retries and re-uploads.
         let build_items = |cover: &Option<grammers_client::media::Media>,
-                           parts: &Vec<CommittedPart>| -> Vec<InputMedia> {
-            let mut items: Vec<InputMedia> = Vec::new();
-            if let Some(c) = cover {
-                items.push(InputMedia::new().copy_media(c));
+                           parts: &Vec<CommittedPart>|
+         -> Result<Vec<tl::enums::InputSingleMedia>, String> {
+            let medias: Vec<&grammers_client::media::Media> =
+                cover.iter().chain(parts.iter().map(|p| &p.media)).collect();
+            let n_items = medias.len();
+            let ids = send_ids.album_ids(n_items);
+            let mut items = Vec::with_capacity(n_items);
+            for (idx, media) in medias.into_iter().enumerate() {
+                let raw = media.to_raw_input_media()
+                    .ok_or_else(|| "committed media cannot be re-sent".to_string())?;
+                // 说明文字放在最后一个条目上 / Caption goes on the last item
+                let is_last = idx + 1 == n_items;
+                let (message, entities) = if is_last {
+                    (base_caption_text.clone(), caption_entities.clone())
+                } else {
+                    (String::new(), None)
+                };
+                items.push(tl::types::InputSingleMedia {
+                    media: raw,
+                    random_id: ids[idx],
+                    message,
+                    entities,
+                }.into());
             }
-            for (idx, part) in parts.iter().enumerate() {
-                let mut item = InputMedia::new().copy_media(&part.media);                if idx == total_parts - 1 {
-                    item = item.fmt_entities(base_caption_entities.clone()).caption(base_caption_text.clone());
-                }
-                items.push(item);
-            }
-            items
+            Ok(items)
         };
 
         // 每批最多 10 条发送相册。固化后的 InputMedia 不会有 FILE_PART_MISSING，
@@ -861,7 +1223,7 @@ async fn upload_and_send(
 
         let mut reupload_count = 0u32;
         loop {
-            let n_batches = build_items(&committed_cover, &committed_parts).len().div_ceil(MAX_ALBUM);
+            let n_batches = build_items(&committed_cover, &committed_parts)?.len().div_ceil(MAX_ALBUM);
             let mut need_reupload = false;
             let mut send_err = String::new();
 
@@ -869,10 +1231,34 @@ async fn upload_and_send(
                 let start = batch_idx * MAX_ALBUM;
                 let mut send_attempt = 0u32;
                 loop {
-                    let batch: Vec<InputMedia> = build_items(&committed_cover, &committed_parts)
+                    let batch: Vec<tl::enums::InputSingleMedia> = build_items(&committed_cover, &committed_parts)?
                         .into_iter().skip(start).take(MAX_ALBUM).collect();
-                    match client.send_album(peer, batch).await {
+                    // 同一批次每次重试都使用相同的 random_id，服务端据此去重
+                    // Every retry of a batch uses the same random_ids, so the server deduplicates
+                    let result = client.invoke(&tl::functions::messages::SendMultiMedia {
+                        silent: false,
+                        background: false,
+                        clear_draft: false,
+                        peer: (&peer).into(),
+                        reply_to: None,
+                        schedule_date: None,
+                        multi_media: batch,
+                        send_as: None,
+                        noforwards: false,
+                        update_stickersets_order: false,
+                        invert_media: false,
+                        quick_reply_shortcut: None,
+                        effect: None,
+                        allow_paid_floodskip: false,
+                        allow_paid_stars: None,
+                    }).await;
+                    match result {
                         Ok(_) => break,
+                        Err(e) if is_already_delivered(&e) => {
+                            eprintln!("album batch {} was already delivered (RANDOM_ID_DUPLICATE); treating as sent",
+                                batch_idx + 1);
+                            break;
+                        }
                         Err(e) => {
                             let msg = format!("send_album (batch {}) failed: {}", batch_idx + 1, e);
                             if msg.contains("FILE_PART_MISSING") {
@@ -910,12 +1296,44 @@ async fn upload_and_send(
         const SEND_RETRY_DELAY: Duration = Duration::from_secs(30);
         let mut send_attempt = 0u32;
         loop {
-            let msg = InputMessage::new()
-                .photo(uploaded.clone())
-                .fmt_entities(base_caption_entities.clone())
-                .text(base_caption_text.clone());
-            match client.send_message(peer, msg).await {
+            // 固定 random_id（send_ids.single），重试对服务端幂等
+            // Fixed random_id (send_ids.single) keeps retries idempotent on the server
+            let result = client.invoke(&tl::functions::messages::SendMedia {
+                silent: false,
+                background: false,
+                clear_draft: false,
+                peer: (&peer).into(),
+                reply_to: None,
+                media: tl::types::InputMediaUploadedPhoto {
+                    spoiler: false,
+                    file: uploaded.raw.clone(),
+                    stickers: None,
+                    ttl_seconds: None,
+                    live_photo: false,
+                    video: None,
+                }.into(),
+                message: base_caption_text.clone(),
+                random_id: send_ids.single,
+                reply_markup: None,
+                entities: caption_entities.clone(),
+                schedule_date: None,
+                schedule_repeat_period: None,
+                send_as: None,
+                noforwards: false,
+                update_stickersets_order: false,
+                invert_media: false,
+                quick_reply_shortcut: None,
+                effect: None,
+                allow_paid_floodskip: false,
+                allow_paid_stars: None,
+                suggested_post: None,
+            }).await;
+            match result {
                 Ok(_) => break,
+                Err(e) if is_already_delivered(&e) => {
+                    eprintln!("photo message was already delivered (RANDOM_ID_DUPLICATE); treating as sent");
+                    break;
+                }
                 Err(e) => {
                     send_attempt += 1;
                     let err = format!("send_message (photo) failed: {}", e);
@@ -933,11 +1351,40 @@ async fn upload_and_send(
         const SEND_RETRY_DELAY: Duration = Duration::from_secs(30);
         let mut send_attempt = 0u32;
         loop {
-            let msg = InputMessage::new()
-                .fmt_entities(base_caption_entities.clone())
-                .text(base_caption_text.clone());
-            match client.send_message(peer, msg).await {
+            // 固定 random_id（send_ids.single），重试对服务端幂等；
+            // no_webpage: true 与原 InputMessage 默认 link_preview=false 等价。
+            // Fixed random_id (send_ids.single) keeps retries idempotent on the server;
+            // no_webpage: true matches the previous InputMessage default link_preview=false.
+            let result = client.invoke(&tl::functions::messages::SendMessage {
+                no_webpage: true,
+                silent: false,
+                background: false,
+                clear_draft: false,
+                peer: (&peer).into(),
+                reply_to: None,
+                message: base_caption_text.clone(),
+                random_id: send_ids.single,
+                reply_markup: None,
+                entities: caption_entities.clone(),
+                schedule_date: None,
+                schedule_repeat_period: None,
+                send_as: None,
+                noforwards: false,
+                update_stickersets_order: false,
+                invert_media: false,
+                quick_reply_shortcut: None,
+                effect: None,
+                allow_paid_floodskip: false,
+                allow_paid_stars: None,
+                suggested_post: None,
+                rich_message: None,
+            }).await;
+            match result {
                 Ok(_) => break,
+                Err(e) if is_already_delivered(&e) => {
+                    eprintln!("text message was already delivered (RANDOM_ID_DUPLICATE); treating as sent");
+                    break;
+                }
                 Err(e) => {
                     send_attempt += 1;
                     let err = format!("send_message (text) failed: {}", e);
@@ -956,28 +1403,63 @@ async fn upload_and_send(
 /// 模块主逻辑：读取参数、准备文件、带重试的上传发送。
 /// Main module logic: read parameters, prepare files, upload and send with retries.
 fn run() -> Result<(), String> {
-    let input_str = env::var("PP_INPUT").map_err(|_| "PP_INPUT not set".to_string())?;
-    let input = PathBuf::from(&input_str);
+    let module_input = ModuleInput::read();
+    let bundle_input = module_input.first_input()
+        .ok_or_else(|| "inputs[0] (media_bundle) is required".to_string())?;
+
+    // 从 MediaBundle 解包视频路径和图片路径
+    // Unpack video path and image path from MediaBundle
+    let (input, cover_from_bundle) = {
+        let s = bundle_input.to_string_lossy();
+        if let Some(sep) = s.find('\n') {
+            let video = PathBuf::from(&s[..sep]);
+            let img_str = s[sep + 1..].trim();
+            let img = if img_str.is_empty() { None } else { Some(PathBuf::from(img_str)) };
+            (video, img)
+        } else {
+            (bundle_input.clone(), None)
+        }
+    };
+
     if !input.exists() { return Err(format!("Input file not found: {}", input.display())); }
 
-    // 读取并验证必填参数 / Read and validate required parameters
     let api_id: i32 = {
-        let s = param("api_id", "");
+        let s = module_input.param_str("api_id", "");
         if s.is_empty() { return Err("api_id is required".to_string()); }
         s.parse().map_err(|_| "api_id must be a number".to_string())?
     };
-    let api_hash  = param("api_hash", "");
+    let api_hash  = module_input.param_str("api_hash", "");
     if api_hash.is_empty()  { return Err("api_hash is required".to_string()); }
-    let bot_token = param("bot_token", "");
+    let bot_token = module_input.param_str("bot_token", "");
     if bot_token.is_empty() { return Err("bot_token is required".to_string()); }
-    let chat_id: i64 = {
-        let s = param("chat_id", "");
-        if s.is_empty() { return Err("chat_id is required".to_string()); }
-        s.parse().map_err(|_| "chat_id must be a number".to_string())?
+
+    // 公开群组/频道通过 username 发送，私密群组/频道通过 chat_id 发送——二者至少
+    // 填写一个，不再强制要求 chat_id（此前即使填了公开 username 也会因 chat_id
+    // 为空而报错，导致公开群组场景无法只靠 username 使用）。两者都填时优先用 username
+    // （与 resolve_peer 的解析优先级保持一致）。
+    //
+    // Public groups/channels are sent via username; private groups/channels via chat_id —
+    // at least one is required, chat_id is no longer unconditionally mandatory (previously
+    // even a valid public username would fail validation because chat_id was empty, making
+    // the username-only flow for public groups unusable). When both are set, username takes
+    // priority (matching resolve_peer's resolution order).
+    let username = module_input.param_str("username", "").trim().to_string();
+    let chat_id_str = module_input.param_str("chat_id", "").trim().to_string();
+    if username.is_empty() && chat_id_str.is_empty() {
+        return Err(
+            "Either username (for public groups/channels) or chat_id (for private ones) is required"
+                .to_string(),
+        );
+    }
+    let chat_id: i64 = if chat_id_str.is_empty() {
+        0 // 未使用：username 非空时 resolve_peer 优先走 username 路径，不会用到 chat_id
+          // Unused: resolve_peer prefers the username path when non-empty, chat_id is never read
+    } else {
+        chat_id_str.parse().map_err(|_| "chat_id must be a number".to_string())?
     };
-    let proxy      = param("proxy", "");
-    let username   = param("username", "");
-    let send_video = param_bool("send_video", true);
+
+    let proxy      = module_input.param_str("proxy", "");
+    let send_video = module_input.param_bool("send_video", true);
 
     // 从文件名解析元数据 / Parse metadata from filename
     let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("recording");
@@ -989,17 +1471,47 @@ fn run() -> Result<(), String> {
     let name_str  = input.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
     let size_str  = format_bytes(file_size);
 
-    let cover = find_cover(&input);
+    let cover = cover_from_bundle.or_else(|| find_cover(&input));
 
     // Telegram 单文件大小限制为 2GB
     // Telegram single file size limit is 2GB
     const TG_MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
     let video_parts: Vec<PathBuf> = if send_video { split_video(&input, TG_MAX_BYTES)? } else { vec![input.clone()] };
-    let is_split = video_parts.len() > 1 || video_parts.first().map(|p| p != &input).unwrap_or(false);
+
+    // 预计算上传总字节数（外层重试循环保持不变，done 计数器每次重试从 0 重置）。
+    // cover/sidecar 图片尺寸此时已是原始文件；ffmpeg 转换/缩放后的实际大小略有不同，
+    // 但差异极小（封面图通常远小于视频），仅影响百分比精度而不影响功能。
+    //
+    // Pre-calculate total upload bytes (stays constant across outer retries; done counter
+    // resets to 0 on each retry). Cover/sidecar sizes reflect the original files; converted/
+    // resized sizes differ slightly, but the difference is tiny (cover images are far smaller
+    // than the video) and only affects percentage precision.
+    let cover_size_estimate = cover.as_ref()
+        .and_then(|p| fs::metadata(p).ok())
+        .map(|m| m.len() as usize)
+        .unwrap_or(0);
+    let video_size_estimate: usize = if send_video {
+        video_parts.iter().map(|p| fs::metadata(p).ok().map(|m| m.len() as usize).unwrap_or(0)).sum()
+    } else { 0 };
+    // 缩略图大小未知（需实际提取后才知道），保守估计每个片段约 200 KB
+    // Thumbnail size is unknown until extracted; conservatively estimate ~200KB per part
+    let thumb_size_estimate: usize = if send_video { video_parts.len() * 200 * 1024 } else { 0 };
+    let upload_total = cover_size_estimate + video_size_estimate + thumb_size_estimate;
+
+    // 共享的已上传字节计数器，在整个外层重试循环中持续累计
+    // Shared uploaded bytes counter, persists across the outer retry loop
+    let done = Arc::new(AtomicUsize::new(0));
+
+    // 发送 random_id 在整个模块运行内只生成一次，外层每次重试都复用，
+    // 避免"服务端已收到但客户端报错"后整体重跑时重复发消息（详见 upload_and_send 文档）。
+    // Send random_ids are generated once per module run and reused by every outer retry,
+    // so a full rerun after "server received it but the client saw an error" does not post
+    // duplicates (see upload_and_send docs).
+    let send_ids = SendIds::new();
 
     // 构建 Tokio 运行时并执行异步上传，最多重试 3 次
     // Build Tokio runtime and execute async upload with up to 3 retries
-    tokio::runtime::Builder::new_multi_thread()
+    let upload_result = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|e| format!("tokio runtime error: {}", e))?
@@ -1008,49 +1520,159 @@ fn run() -> Result<(), String> {
             const RECONNECT_DELAY: Duration = Duration::from_secs(30);
             let mut attempt = 0u32;
             loop {
+                // 每次外层重试前将计数器重置为 0，保证进度从头计算
+                // Reset counter to 0 before each outer attempt so progress starts from scratch
+                done.store(0, Ordering::Relaxed);
                 let result = upload_and_send(
                     api_id, &api_hash, &bot_token, &proxy, chat_id, &username,
                     &model_name, &ts_str, &dur_str, &name_str, &size_str,
                     &input, cover.as_deref(), send_video, &video_parts,
+                    Arc::clone(&done), upload_total, &send_ids,
                 ).await;
                 match result {
                     Ok(()) => break Ok(()),
                     Err(e) => {
+                        // AUTH_KEY_DUPLICATED：本地 session 的 auth key 已被服务端吊销
+                        // （常见原因：数据库文件被复制到另一台机器后原机器继续使用）。
+                        // 唯一修复方法是删除本地 session 文件，下次重试时重新登录。
+                        //
+                        // AUTH_KEY_DUPLICATED: the local session's auth key has been
+                        // revoked server-side (typically caused by copying the session DB
+                        // to another machine while the original keeps using it).
+                        // The only fix is to delete the local session file so the next
+                        // retry performs a fresh sign-in.
+                        if e.contains("AUTH_KEY_DUPLICATED") {
+                            let path = session_path(api_id);
+                            eprintln!(
+                                "AUTH_KEY_DUPLICATED: deleting stale session file {} and retrying…",
+                                path.display()
+                            );
+                            let _ = fs::remove_file(&path);
+                        }
+                        let annotated = annotate_peer_error(e, chat_id, &username);
+                        // peer 权限/解析类错误不是网络瞬断，重连重试无法修复，直接放弹并
+                        // 附带诊断提示，避免用户多等 2 * 30s 才看到同样的错误。
+                        // Peer authority/resolution errors aren't transient network blips —
+                        // reconnect retries can't fix them. Fail fast with the diagnostic hint
+                        // instead of making the user wait through 2 * 30s of pointless retries.
+                        if annotated.contains("Hint:") { break Err(annotated); }
                         attempt += 1;
-                        if attempt >= MAX_OUTER { break Err(e); }
+                        if attempt >= MAX_OUTER { break Err(annotated); }
                         eprintln!(
                             "connection failed (attempt {}/{}): {}. rebuilding connection in {:?}…",
-                            attempt, MAX_OUTER, e, RECONNECT_DELAY
+                            attempt, MAX_OUTER, annotated, RECONNECT_DELAY
                         );
                         tokio::time::sleep(RECONNECT_DELAY).await;
                     }
                 }
             }
-        })?;
+        });
 
-    // 清理分割产生的临时片段文件 / Clean up temporary segment files from splitting
-    if is_split {
-        for part in &video_parts {
-            if part != &input { let _ = fs::remove_file(part); }
+    // 清理本次产生的所有 tmp 文件，无论成功还是失败均执行。
+    // 包含：封面格式转换、封面缩放、视频格式转换、视频缩略图，以及分割产生的临时片段。
+    //
+    // Clean up all tmp files produced this run, regardless of success or failure.
+    // Covers: cover format conversion, cover resize, video format conversion,
+    // video thumbnails, and temporary segment files from splitting.
+    {
+        let tmp = tmp_dir();
+        // 封面图相关 tmp / Cover-related tmp files
+        if let Some(ref img) = cover {
+            let cover_stem = img.file_stem().and_then(|s| s.to_str()).unwrap_or("cover");
+            // 格式转换产物（非 jpg/png 时才会产生）/ Format-conversion artifact (only for non-jpg/png)
+            let ext = img.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+            if !matches!(ext.as_str(), "jpg" | "jpeg" | "png") {
+                let conv_name = format!("{}_tg_tmp.png", cover_stem);
+                let _ = fs::remove_file(tmp.join(&conv_name));
+                // resize 以转换后文件的 stem 命名（"{cover_stem}_tg_tmp"）
+                // resize is named after the converted file's stem ("{cover_stem}_tg_tmp")
+                let conv_stem = format!("{}_tg_tmp", cover_stem);
+                let _ = fs::remove_file(tmp.join(format!("{}_tg_resized.jpg", conv_stem)));
+            }
+            // 直接对原封面 resize 的产物（jpg/png 格式时）
+            // Resize artifact when cover is already jpg/png
+            let _ = fs::remove_file(tmp.join(format!("{}_tg_resized.jpg", cover_stem)));
+        }
+        // 视频片段相关 tmp / Video-part-related tmp files
+        if send_video {
+            for part in &video_parts {
+                let part_stem = part.file_stem().and_then(|s| s.to_str()).unwrap_or("video");
+                let ext = part.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+                if ext == "mp4" || ext == "mkv" {
+                    // 原格式直接使用：缩略图基于原 stem
+                    // Native format: thumbnail is named after the original stem
+                    let _ = fs::remove_file(tmp.join(format!("{}.tg_thumb.png", part_stem)));
+                } else {
+                    // 需要格式转换：转换产物和基于转换产物的缩略图
+                    // Needs conversion: both the converted file and its derived thumbnail
+                    let conv_stem = format!("{}_tg_tmp", part_stem);
+                    let _ = fs::remove_file(tmp.join(format!("{}.mkv", conv_stem)));
+                    let _ = fs::remove_file(tmp.join(format!("{}.tg_thumb.png", conv_stem)));
+                }
+            }
+        }
+        // 分割产生的片段文件（每个分片都是原视频的完整拷贝，体积与原视频相当）：
+        // 上传成功后整个 split 目录不再需要，直接删除，避免每条大录制都在 tmp 里留下一份
+        // 完整副本、要等后端定时清理；上传失败时保留，目录名由视频的 mtime+size 决定，
+        // 同一次运行内 1 小时内的重试可直接复用、跳过重新切割（主程序重启会清空 tmp）。
+        // 缩略图已在上方循环中清理。
+        // 只删除 tmp 根目录下名为 split_* 的目录，防止误删其他路径。
+        //
+        // Split segment files (each part is a full copy of the source, together as large as the
+        // original video): once the upload succeeds the whole split directory is no longer
+        // needed and is removed right away, so every large recording doesn't leave a full copy
+        // in tmp until the backend's scheduled cleanup; on failure it is kept, and since its
+        // name derives from the video's mtime+size a retry within the hour in the same run
+        // reuses it without re-splitting (a host app restart clears tmp). Thumbnails have
+        // already been cleaned up in the loop above.
+        // Only a split_* directory directly under the tmp root is removed, never another path.
+        if send_video
+            && upload_result.is_ok()
+            && let Some(split_dir) = video_parts
+                .first()
+                .filter(|p| p.as_path() != input.as_path())
+                .and_then(|p| p.parent())
+            && split_dir.parent() == Some(tmp.as_path())
+            && split_dir
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("split_"))
+            && let Err(e) = fs::remove_dir_all(split_dir)
+        {
+            eprintln!("failed to remove split dir {}: {}", split_dir.display(), e);
         }
     }
 
-    println!("OUTPUT:{}", input.display());
+    upload_result?;
+
+    pp_utils::output_ok(&[&bundle_input.to_string_lossy()], "Telegram notification sent");
     Ok(())
 }
 
 /// 程序入口：处理 `--describe` 参数或执行主逻辑。
 /// Entry point: handle `--describe` argument or execute main logic.
 fn main() {
-    let args: Vec<String> = env::args().collect();
+    let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(|s| s.as_str()) == Some("--describe") {
-        print!("{}", DESCRIBE);
+        print!("{}", pp_utils::describe_with_version(DESCRIBE, env!("CARGO_PKG_VERSION")));
         return;
     }
-    // 确保临时目录存在 / Ensure temp directory exists
-    tmp_dir();
+    // 注：不在此处提前调用 tmp_dir() 创建目录——此时 stdin 尚未被 run() 内部的
+    // ModuleInput::read() 解析，PP_EXE_DIR 环境变量还未被设置为后端目录，提前调用
+    // 会在错误的位置（本模块自身可执行文件目录）创建一个用不到的空目录。run() 内部
+    // 每处实际写入临时文件前都会重新调用 tmp_dir()（此时已能正确解析到后端目录），
+    // 无需在此预先创建。
+    //
+    // Note: tmp_dir() is intentionally NOT called here to pre-create the directory —
+    // at this point stdin hasn't been parsed by run()'s internal ModuleInput::read()
+    // yet, so the PP_EXE_DIR env var isn't set to the backend's directory yet; calling
+    // it here would create an unused empty directory at the wrong location (this
+    // module's own executable directory). Every actual tmp-file write site inside run()
+    // calls tmp_dir() again right before writing (by which point it resolves correctly
+    // to the backend's directory), so no pre-creation is needed here.
     if let Err(e) = run() {
-        eprintln!("{}", e);
+        let json = serde_json::json!({ "code": "error", "message": e, "outputs": [] });
+        println!("{}", json);
         std::process::exit(1);
     }
 }

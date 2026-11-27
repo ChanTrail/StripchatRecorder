@@ -41,10 +41,7 @@ export const useModuleLocaleStore = defineStore("moduleLocale", () => {
 	 * @param localeCode - BCP 47 语言标签 / BCP 47 language tag
 	 * @param data - 模块翻译数据映射 / Module translation data map
 	 */
-	function setLocales(
-		localeCode: string,
-		data: Record<string, unknown>,
-	) {
+	function setLocales(localeCode: string, data: Record<string, unknown>) {
 		currentLocale.value = localeCode;
 		locales.value = data as Record<string, ModuleLocaleData>;
 	}

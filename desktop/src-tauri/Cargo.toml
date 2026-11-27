@@ -1,6 +1,6 @@
 [package]
 name = "stripchat-recorder-desktop"
-version = "0.3.5"
+version = "0.5.3"
 description = "Stripchat Stream Recorder (Desktop)"
 authors = ["ChanTrail"]
 edition = "2024"
@@ -8,6 +8,18 @@ edition = "2024"
 [lib]
 name = "stripchat_recorder_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+# 便携版特性：tauri build -- --features portable（Windows 配 --no-bundle、
+# Linux 配 --bundles appimage）产出的构建把数据根目录（config/、modules/、
+# tools/ 等）定位到程序本体所在目录而非系统每用户数据目录。
+#
+# Portable feature: builds produced via `tauri build -- --features portable`
+# (`--no-bundle` on Windows, `--bundles appimage` on Linux) resolve the data
+# root (config/, modules/, tools/ etc.) next to the executable instead of the
+# OS per-user data directory.
+[features]
+default = []
+portable = []
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -17,11 +29,10 @@ tauri-build = { version = "2", features = [] }
 stripchat-recorder-lib = { path = "../../backend", package = "stripchat-recorder" }
 
 tauri = { version = "2", features = [] }
-tauri-plugin-single-instance = "2"
-tauri-plugin-shell = "2"
-tauri-plugin-dialog = "2"
-tauri-plugin-fs = "2"
-tauri-plugin-opener = "2"
+tauri-plugin-single-instance = "2.5"
+tauri-plugin-opener = "2.7"
+tauri-plugin-updater = "2.14"
+tauri-plugin-process = "2.4"
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -29,4 +40,16 @@ tokio = { version = "1", features = ["full"] }
 parking_lot = "0.12"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-base64 = "0.22"
+base64 = "0.23"
+url = "2"
+
+[lints.rust]
+linker_messages = "allow"
+
+# 与 backend/Cargo.toml 相同的 wreq vendored 补丁（本 crate 是独立
+# 解析根，backend 里的 [patch] 对此构建不生效——两边必须都写）。
+# Same vendored-wreq patch as backend/Cargo.toml (this crate is a
+# separate resolution root; the backend's [patch] doesn't apply to this
+# build — both manifests must carry it).
+[patch.crates-io]
+wreq = { path = "../../vendor/wreq" }

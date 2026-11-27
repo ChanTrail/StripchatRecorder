@@ -1,18 +1,19 @@
 [package]
 name = "notify_telegram"
-version = "0.3.1"
+version = "0.5.0"
 edition = "2024"
 
 [[bin]]
-name = "notify_telegram_v031"
+name = "notify_telegram"
 path = "src/main.rs"
 
 [dependencies]
 pp_utils = { path = "../pp_utils" }
-grammers-client   = { version = "0.9", features = ["proxy", "fs"] }
-grammers-session  = { version = "0.9", features = ["sqlite-storage"] }
-grammers-mtsender = { version = "0.9", features = ["proxy"] }
+serde_json = "1"
+grammers-client   = { version = "0.11", features = ["proxy", "fs"] }
+grammers-session  = { version = "0.11", features = ["sqlite-storage"] }
+grammers-mtsender = { version = "0.11", features = ["proxy"] }
 futures  = "0.3"
 tokio    = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
-dirs = "6"
+dirs = "7"
 md5 = "0.8"

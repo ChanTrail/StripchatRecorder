@@ -17,27 +17,19 @@ export const useMergingStore = defineStore("merging", () => {
 	const mergingDirs = ref<Map<string, string>>(new Map());
 
 	/** 各会话目录的合并进度（已写入字节 / 总字节）/ Merge progress per session dir (written / total bytes) */
-	const mergeProgress = ref<
-		Record<string, { out_bytes: number; total_bytes: number }>
-	>({});
+	const mergeProgress = ref<Record<string, { out_bytes: number; total_bytes: number }>>({});
 
 	/** 等待合并（排队中）的会话目录 -> 目标文件路径 映射 / Map of waiting-to-merge session dir -> target file path */
 	const waitingMergeDirs = ref<Map<string, string>>(new Map());
 
 	/** 正在合并的目标文件路径集合（路径统一为正斜杠）/ Set of target paths currently merging (normalized to forward slashes) */
 	const mergingTargetPaths = computed(
-		() =>
-			new Set(
-				[...mergingDirs.value.values()].map((p) => p.replace(/\\/g, "/")),
-			),
+		() => new Set([...mergingDirs.value.values()].map((p) => p.replace(/\\/g, "/"))),
 	);
 
 	/** 等待合并的目标文件路径集合 / Set of target paths waiting to merge */
 	const waitingMergeTargetPaths = computed(
-		() =>
-			new Set(
-				[...waitingMergeDirs.value.values()].map((p) => p.replace(/\\/g, "/")),
-			),
+		() => new Set([...waitingMergeDirs.value.values()].map((p) => p.replace(/\\/g, "/"))),
 	);
 
 	/**
@@ -46,10 +38,7 @@ export const useMergingStore = defineStore("merging", () => {
 	 */
 	function isMerging(path: string): boolean {
 		const norm = path.replace(/\\/g, "/");
-		return (
-			mergingTargetPaths.value.has(norm) ||
-			waitingMergeTargetPaths.value.has(norm)
-		);
+		return mergingTargetPaths.value.has(norm) || waitingMergeTargetPaths.value.has(norm);
 	}
 
 	/**
@@ -70,10 +59,7 @@ export const useMergingStore = defineStore("merging", () => {
 			if (tp.replace(/\\/g, "/") === norm) {
 				const p = mergeProgress.value[sessionDir];
 				if (!p || p.total_bytes === 0) return 0;
-				return Math.min(
-					99,
-					Math.floor((p.out_bytes / p.total_bytes) * 10000) / 100,
-				);
+				return Math.min(99, Math.floor((p.out_bytes / p.total_bytes) * 10000) / 100);
 			}
 		}
 		return null;
@@ -96,10 +82,7 @@ export const useMergingStore = defineStore("merging", () => {
 	 * Add a session directory to the waiting-to-merge queue.
 	 */
 	function addWaitingMerge(sessionDir: string, mergedPath: string) {
-		waitingMergeDirs.value = new Map(waitingMergeDirs.value).set(
-			sessionDir,
-			mergedPath,
-		);
+		waitingMergeDirs.value = new Map(waitingMergeDirs.value).set(sessionDir, mergedPath);
 	}
 
 	/**

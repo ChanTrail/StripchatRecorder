@@ -1,0 +1,4 @@
+# 全库统一 tab 缩进 / Repo-wide tab indentation
+hard_tabs = true
+# 行宽与 Prettier 保持一致 / Match Prettier printWidth
+max_width = 100

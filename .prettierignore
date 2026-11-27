@@ -1,0 +1,18 @@
+# 依赖与构建产物 / Dependencies & build outputs
+**/node_modules
+**/dist
+**/dist-ssr
+**/target
+**/build_tmp
+**/vendor
+**/.output
+
+# 锁文件（工具自动生成，不手工排版）/ Lockfiles (tool-generated, never hand-formatted)
+Cargo.lock
+**/package-lock.json
+**/pnpm-lock.yaml
+**/yarn.lock
+
+# 压缩产物 / Minified artifacts
+**/*.min.js
+**/*.min.css

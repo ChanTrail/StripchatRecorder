@@ -10,281 +10,315 @@
 mod commands;
 mod emitter;
 mod state;
+mod window;
 
 use crate::emitter::TauriEmitter;
 use crate::state::DesktopState;
 use std::sync::Arc;
-use tauri::Manager;
 use stripchat_recorder_lib::{
-    config::settings::{AppState, schedule_config_checks, schedule_mouflon_sync},
-    core::emitter::{EmitterExt, Emitter},
-    recording::{
-        meta::{schedule_meta_cleanup, schedule_meta_version_check},
-        recorder::RecorderManager,
-    },
-    streaming::monitor::StatusMonitor,
-    watcher::fs_watch::{start_modules_dir_watcher, start_recordings_dir_watcher},
+	config::app_state::AppState,
+	core::emitter::Emitter,
+	platform::monitor::StatusMonitor,
+	recording::recorder::RecorderManager,
+	server::{scheduler, startup},
 };
-use tokio::sync::mpsc;
+use tauri::Manager;
 
 /// Tauri 应用的运行入口，由 `main.rs` 调用。
 /// Tauri application run entry point, called from `main.rs`.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // 创建专用 Tokio runtime，供 setup 和所有后台任务使用。
-    // Tauri 的 setup() 回调不在 Tokio 上下文里，必须在这里建立 runtime。
-    //
-    // Create a dedicated Tokio runtime for setup and all background tasks.
-    // Tauri's setup() callback does not run in a Tokio context, so we must
-    // establish the runtime here.
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(4)
-        .enable_all()
-        .build()
-        .expect("Failed to create Tokio runtime");
+	// 创建专用 Tokio runtime，供 setup 和所有后台任务使用。
+	// Tauri 的 setup() 回调不在 Tokio 上下文里，必须在这里建立 runtime。
+	//
+	// Create a dedicated Tokio runtime for setup and all background tasks.
+	// Tauri's setup() callback does not run in a Tokio context, so we must
+	// establish the runtime here.
+	let rt = tokio::runtime::Builder::new_multi_thread()
+		.worker_threads(4)
+		.enable_all()
+		.build()
+		.expect("Failed to create Tokio runtime");
 
-    // 将 runtime 用 Arc 包装，在 setup closure 和 builder 之间共享。
-    // Wrap the runtime in Arc so it can be shared across the setup closure.
-    let rt = Arc::new(rt);
-    let rt_for_setup = Arc::clone(&rt);
+	let rt = Arc::new(rt);
+	let rt_for_setup = Arc::clone(&rt);
 
-    tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            // 已有实例在运行时，把主窗口拉到前台并聚焦
-            // When another instance is launched, bring the existing window to front
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.unminimize();
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
-        }))
-        .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_opener::init())
-        .setup(move |app| {
-            let app_handle = app.handle().clone();
+	tauri::Builder::default()
+		.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+			// 已有实例在运行时，把主窗口拉到前台并聚焦
+			// When another instance is launched, bring the existing window to front
+			if let Some(window) = app.get_webview_window("main") {
+				let _ = window.unminimize();
+				let _ = window.show();
+				let _ = window.set_focus();
+			}
+		}))
+		.plugin(tauri_plugin_opener::init())
+		.plugin(tauri_plugin_updater::Builder::new().build())
+		.plugin(tauri_plugin_process::init())
+		.setup(move |app| {
+			let app_handle = app.handle().clone();
 
-            // 快速同步初始化（不含耗时的遗留片段合并），完成后立即显示窗口。
-            // Fast synchronous initialization (excluding time-consuming leftover segment merging),
-            // then show the window immediately.
-            rt_for_setup.block_on(async move {
-                setup_app(app_handle).await;
-            });
+			// 快速同步初始化，完成后立即显示窗口。
+			// Fast synchronous initialization, then show the window immediately.
+			rt_for_setup.block_on(async move {
+				setup_app(app_handle).await;
+			});
 
-            Ok(())
-        })
-        .invoke_handler(tauri::generate_handler![
-            // Streamers
-            commands::list_streamers,
-            commands::add_streamer,
-            commands::remove_streamer,
-            commands::set_auto_record,
-            commands::start_recording,
-            commands::stop_recording,
-            commands::verify_streamer,
-            // Settings
-            commands::get_settings,
-            commands::save_settings_cmd,
-            commands::get_disk_space,
-            // Mouflon Keys
-            commands::list_mouflon_keys,
-            commands::add_mouflon_key,
-            commands::remove_mouflon_key,
-            commands::sync_mouflon_keys,
-            // Recordings
-            commands::list_recordings,
-            commands::get_merging_dirs,
-            commands::delete_recording,
-            commands::open_recording,
-            commands::open_output_dir,
-            commands::read_output_file,
-            commands::get_module_outputs,
-            // Post-processing
-            commands::run_postprocess_cmd,
-            commands::run_postprocess_batch,
-            commands::cancel_postprocess,
-            commands::get_postprocess_tasks,
-            // Pipeline
-            commands::get_pipeline,
-            commands::save_pipeline,
-            commands::list_modules,
-            // Locale
-            commands::get_locale,
-            commands::list_locales,
-            // Startup warnings
-            commands::get_startup_warnings,
-            commands::remove_missing_pp_results,
-        ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+			Ok(())
+		})
+		.invoke_handler(tauri::generate_handler![
+			// Streamers
+			commands::list_streamers,
+			commands::add_streamer,
+			commands::remove_streamer,
+			commands::set_auto_record,
+			commands::start_recording,
+			commands::stop_recording,
+			commands::verify_streamer,
+			// Settings
+			commands::get_settings,
+			commands::save_settings_cmd,
+			commands::get_disk_space,
+			commands::get_system_info,
+			// Mouflon Keys
+			commands::list_mouflon_keys,
+			commands::add_mouflon_key,
+			commands::remove_mouflon_key,
+			commands::sync_mouflon_keys,
+			// Recordings
+			commands::list_recordings,
+			commands::get_merging_dirs,
+			commands::delete_recording,
+			commands::open_recording,
+			commands::open_output_dir,
+			commands::open_merged_dir,
+			commands::open_output_file,
+			commands::get_module_outputs,
+			// Post-processing
+			commands::run_postprocess_cmd,
+			commands::run_postprocess_batch,
+			commands::cancel_postprocess,
+			commands::get_postprocess_tasks,
+			// Pipeline
+			commands::get_pipeline,
+			commands::save_pipeline,
+			commands::list_modules,
+			// Community Modules
+			commands::get_install_tasks,
+			commands::install_community_module,
+			commands::uninstall_community_module,
+			// Locale
+			commands::get_locale,
+			commands::list_locales,
+			// Notifications
+			commands::get_notifications,
+			commands::mark_notifications_read,
+			// Startup warnings
+			commands::get_startup_warnings,
+			commands::remove_missing_pp_results,
+			// File system
+			commands::list_dir,
+			commands::list_drives,
+			commands::create_dir,
+			// Update
+			commands::check_for_updates_cmd,
+			commands::apply_update_cmd,
+			// SC 官方分类浏览列表（StripChat 页）/ Official SC category list (StripChat page)
+			commands::list_sc_models,
+			// 转发流：系统播放器打开 / Relay stream: open in the system player
+			commands::open_relay_stream,
+			// FFmpeg
+			commands::get_ffmpeg_status,
+			commands::get_ffmpeg_locations,
+			commands::download_ffmpeg,
+			// 资源占用 / Resource usage
+			commands::process_usage,
+			commands::service_status,
+		])
+		.run(tauri::generate_context!())
+		.expect("error while running tauri application");
 
-    // runtime 在此处 drop，应用退出时所有后台任务自然终止。
-    // Runtime is dropped here; all background tasks terminate naturally on exit.
-    drop(rt);
+	drop(rt);
 }
 
 /// 在 Tokio runtime 上下文中执行的应用初始化逻辑。
-/// 拆分为独立 async fn，使代码结构清晰，同时确保所有异步操作都在正确的上下文里运行。
-///
-/// 初始化分为两个阶段：
-/// 1. 快速初始化（同步阻塞）：完成后立即显示主窗口，用户可立即操作。
-/// 2. 后台初始化（异步非阻塞）：耗时的遗留片段合并在后台执行，不阻塞首屏交互。
-///
 /// Application initialization logic executed within the Tokio runtime context.
-///
-/// Initialization is split into two phases:
-/// 1. Fast initialization (synchronous, blocking): shows the main window immediately.
-/// 2. Background initialization (async, non-blocking): time-consuming leftover segment
-///    merging runs in the background after the window is shown.
 async fn setup_app(app_handle: tauri::AppHandle) {
-    // 初始化日志 / Initialize logging
-    let log_dir = AppState::log_dir();
-    if let Err(e) = stripchat_recorder_lib::core::logging::init_logging(&log_dir) {
-        eprintln!("Failed to initialize logging: {}", e);
-    }
+	// 数据根目录定位，必须在下面任何调用 `exe_dir()` 的代码
+	// （`AppState::log_dir`、`AppState::new` 等）之前完成。
+	// Resolve the data root directory; must run before any code below that
+	// calls `exe_dir()` (`AppState::log_dir`, `AppState::new`, etc.).
+	#[cfg(feature = "portable")]
+	setup_portable_data_root(&app_handle);
+	#[cfg(not(feature = "portable"))]
+	{
+		// 安装版：改用 Tauri 的 app_data_dir()（操作系统标准的每用户数据目录），
+		// 替代默认的"可执行文件同目录"约定。Desktop 端以系统安装包（NSIS/MSI、
+		// AppImage、deb/rpm、dmg）分发，可执行文件所在目录可能只读（AppImage 的
+		// FUSE 挂载点，每次启动路径还会变化）、无写权限（如 `/usr/bin`），或修改
+		// 会破坏代码签名（macOS `.app`），详见 `set_exe_dir_override` 文档。
+		// 解析失败时静默回退到旧的 exe-relative 行为，不阻断启动。
+		//
+		// Installed build: use Tauri's app_data_dir() (the OS-standard per-user
+		// data directory) instead of the default "next to the executable"
+		// convention. See `set_exe_dir_override` docs for why. Falls back
+		// silently to the old exe-relative behavior if resolution fails, so
+		// startup isn't blocked.
+		match app_handle.path().app_data_dir() {
+			Ok(dir) => stripchat_recorder_lib::config::app_state::set_exe_dir_override(dir),
+			Err(e) => eprintln!(
+				"Failed to resolve app data dir, falling back to exe-relative paths: {}",
+				e
+			),
+		}
+	}
 
-    // 初始化应用状态 / Initialize application state
-    let app_state = AppState::new().expect("Failed to initialize app state");
+	// 以下启动顺序与 Server（run_server）一致，详见 server::startup 模块文档
+	// The startup order below matches Server (run_server); see the server::startup module docs
 
-    // 初始化 locale 目录 / Initialize locale directories
-    stripchat_recorder_lib::locale::manager::init_locale_dirs();
+	// 在 AppState::new 之前初始化日志、locale 目录与日志翻译，让之后所有日志都有译文
+	// Initialize logging, locale dirs and log translations before AppState::new so every later
+	// log line is translated
+	startup::init_logging_and_locale();
 
-    // 创建 TauriEmitter / Create TauriEmitter
-    let emitter: Arc<dyn Emitter> = Arc::new(TauriEmitter::new(app_handle.clone()));
+	// 初始化应用状态 / Initialize application state
+	let app_state = AppState::new().expect("Failed to initialize app state");
 
-    // 创建录制管理器 / Create recorder manager
-    let recorder = RecorderManager::new(Arc::clone(&app_state));
+	// 创建 TauriEmitter / Create TauriEmitter
+	let emitter: Arc<dyn Emitter> = Arc::new(TauriEmitter::new(app_handle.clone()));
 
-    // 创建状态监控器 / Create status monitor
-    let monitor = StatusMonitor::new(Arc::clone(&app_state), Arc::clone(&recorder));
+	// 创建录制管理器 / Create recorder manager
+	let recorder = RecorderManager::new(Arc::clone(&app_state));
 
-    // 启动时清理空目录（同步，快速）
-    // Remove empty directories on startup (sync, fast)
-    {
-        let settings = app_state.get_settings();
-        let output_path_buf = std::path::PathBuf::from(&settings.output_dir);
-        let output_ref = output_path_buf.as_path();
-        stripchat_recorder_lib::recording::recorder::startup_remove_empty_dirs(output_ref);
-        stripchat_recorder_lib::recording::meta::startup_ensure_meta_files(
-            output_ref,
-            &settings.merge_format,
-        );
-    }
+	// 创建状态监控器 / Create status monitor
+	let monitor = StatusMonitor::new(Arc::clone(&app_state), Arc::clone(&recorder));
 
-    // 检测 ffmpeg 是否可用 / Check if ffmpeg is available
-    if !stripchat_recorder_lib::recording::recorder::ffmpeg_available() {
-        emitter.emit(
-            "ffmpeg-missing",
-            &serde_json::json!({
-                "message": "ffmpeg 未安装或不在 PATH 中，录制功能将不可用"
-            }),
-        );
-    }
+	// 尽早注册 DesktopState：只持有 Arc，没有初始化副作用，前端一加载就能调用命令
+	// Register DesktopState as early as possible: it only holds Arcs with no init side effects,
+	// so frontend commands work as soon as the webview loads
+	app_handle.manage(DesktopState {
+		app_state: Arc::clone(&app_state),
+		recorder: Arc::clone(&recorder),
+		monitor: Arc::clone(&monitor),
+		emitter: Arc::clone(&emitter),
+		pending_update: parking_lot::RwLock::new(None),
+		relay_manager: stripchat_recorder_lib::relay::state::RelayManager::new(),
+		relay_port: tokio::sync::OnceCell::new(),
+	});
 
-    // 校验并推送自定义 locale 文件警告 / Validate and push custom locale warnings
-    {
-        let warnings = stripchat_recorder_lib::locale::manager::check_custom_locale_files();
-        if !warnings.is_empty() {
-            let payload: Vec<serde_json::Value> = warnings
-                .into_iter()
-                .map(|(path, reason)| serde_json::json!({ "path": path, "reason": reason }))
-                .collect();
-            emitter.emit("locale-warnings", &payload);
-        }
-    }
+	// 启动时一次性任务（与 Server 共用）：清空 tmp → meta 迁移 → ffmpeg 检查
+	// （缺失时后台自动下载到 lib）→ 自定义语言文件校验 → 文件系统监控
+	// One-shot startup tasks (shared with Server): clear tmp → meta migrations → ffmpeg check
+	// (auto-downloads into lib in the background when missing) → custom locale file
+	// validation → file system watchers
+	startup::run_all(Arc::clone(&app_state), Arc::clone(&emitter));
 
-    // 注入 poll_interval 变更通知发送端 / Inject poll interval change notification sender
-    let (poll_tx, poll_rx) = mpsc::channel(1);
-    *app_state.poll_interval_notify_tx.write() = Some(poll_tx);
+	// 启动全部后台定时任务（与 Server 完全相同，各任务首轮均启动即执行）
+	// Start every background scheduled task (identical to Server — every
+	// task's first pass runs right at launch)
+	scheduler::start_all(
+		Arc::clone(&app_state),
+		Arc::clone(&monitor),
+		Arc::clone(&emitter),
+		Arc::clone(&recorder),
+	);
 
-    // 注入 mouflon 同步通知发送端 / Inject Mouflon sync notification sender
-    let (mouflon_tx, mouflon_rx) = mpsc::channel(1);
-    *app_state.mouflon_sync_notify_tx.write() = Some(mouflon_tx);
+	// ── 阶段一结束：显示主窗口 / Phase 1 complete: show the main window ────────
+	// 尺寸处理内部的 getter 需要事件循环回包，而本函数经 block_on 跑在事件
+	// 循环主线程上，交给 runtime worker 线程执行，setup 返回后才解阻塞
+	// The sizing getters round-trip through the event loop while this
+	// function runs on the event-loop main thread via block_on, so it is
+	// handed to a runtime worker thread that unblocks once setup returns
+	if let Some(window) = app_handle.get_webview_window("main") {
+		tokio::task::spawn_blocking(move || window::prepare_and_show(window));
+	}
+}
 
-    // 将 DesktopState 注册为 Tauri 托管状态 / Register DesktopState as Tauri-managed state
-    app_handle.manage(DesktopState {
-        app_state: Arc::clone(&app_state),
-        recorder: Arc::clone(&recorder),
-        monitor: Arc::clone(&monitor),
-        emitter: Arc::clone(&emitter),
-    });
+/// 便携版的数据根目录定位（`portable` feature，配合 `tauri build --no-bundle` /
+/// `--bundles appimage` 产出的分发形态使用）。
+///
+/// - AppImage：`current_exe()` 指向的是 FUSE 挂载点内的解包路径——只读且每次
+///   启动都会变化，必须用 `$APPIMAGE`（AppImage runtime 注入的环境变量，指向
+///   `.AppImage` 文件自身）定位其所在目录作为数据根目录。
+/// - 其他形态（Windows `--no-bundle` 裸 exe、手动解压运行的二进制）：不设覆盖，
+///   `exe_dir()` 默认值已经是可执行文件所在目录。
+///
+/// 确定数据根目录后做一次"安装版 → 便携版"的用户数据迁移：便携目录下还没有
+/// `config/`、`locale/`、`modules/` 而旧的每用户数据目录里有，就复制过来——
+/// 否则从安装版/旧 AppImage 换到便携版的用户会以为自己丢了全部配置。
+/// 各目录仅当目标不存在时复制（已存在的便携配置优先），失败只打 stderr 不阻断启动；
+/// `tools/` 不迁移（FFmpeg 可自动重新下载），`recordings/` 等输出目录由用户配置
+/// 指定，与数据根目录解耦，同样不涉及。
+///
+/// Data-root resolution for portable builds (the `portable` feature, used by the
+/// `--no-bundle` / `--bundles appimage` distribution artifacts).
+///
+/// - AppImage: `current_exe()` points inside the FUSE mount — read-only and a
+///   different path on every launch, so the data root is resolved from
+///   `$APPIMAGE` (injected by the AppImage runtime; the `.AppImage` file itself).
+/// - Other shapes (Windows `--no-bundle` exe, a manually extracted binary): no
+///   override needed — the default `exe_dir()` is already the exe's directory.
+///
+/// Once the root is known, a one-shot "installed → portable" migration runs: any
+/// of `config/`, `locale/`, `modules/` that is missing under the portable root
+/// but present in the old per-user data dir gets copied over — otherwise users
+/// switching from an installed build / older AppImage would appear to lose all
+/// settings. Each directory is only copied when the target does not exist
+/// (existing portable data wins); failures log to stderr without blocking
+/// startup. `tools/` is not migrated (FFmpeg re-downloads automatically), and
+/// `recordings/` etc. are user-configured output paths independent of the data
+/// root, so they are unaffected.
+#[cfg(feature = "portable")]
+fn setup_portable_data_root(app_handle: &tauri::AppHandle) {
+	use std::path::PathBuf;
 
-    // 启动后台异步任务 / Start background async tasks
+	// AppImage 运行时注入 $APPIMAGE；普通裸二进制走 exe_dir() 默认路径。
+	// $APPIMAGE is injected by the AppImage runtime; plain binaries fall back
+	// to the default exe_dir() resolution.
+	let portable_root: PathBuf = std::env::var_os("APPIMAGE")
+		.map(PathBuf::from)
+		.and_then(|p| p.parent().map(|d| d.to_path_buf()))
+		.unwrap_or_else(stripchat_recorder_lib::config::app_state::exe_dir);
+	if portable_root != stripchat_recorder_lib::config::app_state::exe_dir() {
+		stripchat_recorder_lib::config::app_state::set_exe_dir_override(portable_root.clone());
+	}
 
-    // 状态监控轮询 / Status monitor polling
-    let monitor_clone = Arc::clone(&monitor);
-    let emitter_for_monitor = Arc::clone(&emitter);
-    tokio::spawn(async move {
-        monitor_clone.start_with_emitter_inner(emitter_for_monitor, poll_rx).await;
-    });
+	// 安装版遗留数据的迁移源 / Migration source: the old per-user data dir
+	let Ok(old_root) = app_handle.path().app_data_dir() else {
+		return;
+	};
+	for name in ["config", "locale", "modules"] {
+		let dst = portable_root.join(name);
+		let src = old_root.join(name);
+		if !dst.exists()
+			&& src.is_dir()
+			&& let Err(e) = copy_dir_recursive(&src, &dst)
+		{
+			eprintln!(
+				"Failed to migrate {name} to portable dir ({} -> {}): {e}",
+				src.display(),
+				dst.display()
+			);
+		}
+	}
+}
 
-    // Mouflon Keys 自动同步 / Mouflon Keys auto-sync
-    let app_state_for_mouflon = Arc::clone(&app_state);
-    let emitter_for_mouflon = Arc::clone(&emitter);
-    tokio::spawn(async move {
-        schedule_mouflon_sync(app_state_for_mouflon, emitter_for_mouflon, mouflon_rx).await;
-    });
-
-    // 配置检查调度器 / Config check scheduler
-    let app_state_for_config = Arc::clone(&app_state);
-    let emitter_for_config = Arc::clone(&emitter);
-    tokio::spawn(async move {
-        schedule_config_checks(app_state_for_config, emitter_for_config).await;
-    });
-
-    // Meta 文件清理调度器 / Meta file cleanup scheduler
-    {
-        let output_dir = std::path::PathBuf::from(app_state.get_settings().output_dir.clone());
-        tokio::spawn(async move { schedule_meta_cleanup(output_dir).await });
-    }
-
-    // Meta 版本检查调度器 / Meta version check scheduler
-    {
-        let output_dir = std::path::PathBuf::from(app_state.get_settings().output_dir.clone());
-        let merge_format = app_state.get_settings().merge_format.clone();
-        tokio::spawn(async move {
-            schedule_meta_version_check(output_dir, merge_format, 3600).await;
-        });
-    }
-
-    // 文件系统监控（在独立线程中运行，不需要 Tokio）
-    // File system watchers (run in dedicated threads, no Tokio needed)
-    start_recordings_dir_watcher(Arc::clone(&app_state), Arc::clone(&emitter));
-    start_modules_dir_watcher(Arc::clone(&emitter));
-    stripchat_recorder_lib::watcher::fs_watch::start_locale_dir_watcher(Arc::clone(&emitter));
-
-    // ── 阶段一结束：显示主窗口，用户可立即操作 ─────────────────────────────────
-    // ── Phase 1 complete: show the main window so the user can interact immediately ──
-    if let Some(window) = app_handle.get_webview_window("main") {
-        let _ = window.show();
-        let _ = window.set_focus();
-    }
-
-    // ── 阶段二：后台合并遗留片段（耗时，不阻塞窗口显示）─────────────────────────
-    // ── Phase 2: merge leftover segments in the background (time-consuming, non-blocking) ──
-    //
-    // startup_merge_leftover_segments 内部调用 ffmpeg，可能耗时数秒到数分钟。
-    // 将其移至后台 spawn_blocking 线程，窗口已显示后再执行，不影响首屏交互。
-    //
-    // startup_merge_leftover_segments internally calls ffmpeg, which may take seconds to minutes.
-    // Running it in a background spawn_blocking thread after the window is shown avoids
-    // blocking the first interactive frame.
-    {
-        let settings = app_state.get_settings();
-        let output_path_buf = std::path::PathBuf::from(&settings.output_dir);
-        let merge_format = settings.merge_format.clone();
-        let emitter_blocking = Arc::clone(&emitter);
-        let recorder_blocking = Arc::clone(&recorder);
-        tokio::task::spawn_blocking(move || {
-            stripchat_recorder_lib::recording::recorder::startup_merge_leftover_segments(
-                output_path_buf.as_path(),
-                &merge_format,
-                &emitter_blocking,
-                &recorder_blocking,
-            );
-        });
-        // 注意：此处不 .await，让合并在后台异步进行
-        // Note: no .await here — merging proceeds asynchronously in the background
-    }
+/// 递归复制目录（便携版迁移辅助）：目标目录按需创建，逐文件复制，保留层级。
+/// Recursive directory copy (portable migration helper): creates the target as
+/// needed and copies files one by one, preserving the hierarchy.
+#[cfg(feature = "portable")]
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+	std::fs::create_dir_all(dst)?;
+	for entry in std::fs::read_dir(src)? {
+		let entry = entry?;
+		let ty = entry.file_type()?;
+		let (s, d) = (entry.path(), dst.join(entry.file_name()));
+		if ty.is_dir() {
+			copy_dir_recursive(&s, &d)?;
+		} else if ty.is_file() {
+			std::fs::copy(&s, &d)?;
+		}
+	}
+	Ok(())
 }

@@ -1,0 +1,430 @@
+//! 主播相关路由 handler / Streamer-related route handlers
+
+use crate::core::emitter::EmitterExt;
+use crate::server::error::{ApiError, ApiResult};
+use crate::server::router::ServerState;
+use axum::{
+	Json,
+	extract::{Path, Query, State as AxumState},
+};
+use serde::Deserialize;
+use std::sync::Arc;
+
+pub async fn list_streamers(AxumState(s): AxumState<ServerState>) -> ApiResult<serde_json::Value> {
+	let streamers = s.app_state.get_streamers();
+
+	let has_any_status = streamers
+		.iter()
+		.any(|st| s.monitor.get_status(&st.username).is_some());
+	if !has_any_status && !streamers.is_empty() {
+		let monitor = Arc::clone(&s.monitor);
+		let emitter = Arc::clone(&s.emitter);
+		tokio::spawn(async move {
+			monitor.poll_all_with_emitter(&emitter).await;
+		});
+	}
+
+	let result: Vec<serde_json::Value> = streamers
+		.into_iter()
+		.map(|st| {
+			let status = s.monitor.get_status(&st.username);
+			serde_json::json!({
+				"username": st.username,
+				"auto_record": st.auto_record,
+				"added_at": st.added_at,
+				"is_online": status.as_ref().map(|s| s.is_online).unwrap_or(false),
+				"is_recording": s.recorder.is_recording(&st.username),
+				"is_recordable": status.as_ref().map(|s| s.is_recordable).unwrap_or(false),
+				"status": status.as_ref().map(|s| s.status.clone()).unwrap_or_default(),
+				"thumbnail_url": status.and_then(|s| s.thumbnail_url),
+			})
+		})
+		.collect();
+	Ok(Json(serde_json::Value::Array(result)))
+}
+
+#[derive(Deserialize)]
+pub struct AddStreamerBody {
+	/// 支持单个用户名（兼容旧调用方）或多个用户名列表。
+	/// Accepts a single username (for backward compatibility) or a list.
+	pub usernames: Vec<String>,
+}
+
+pub async fn add_streamer(
+	AxumState(s): AxumState<ServerState>,
+	Json(body): Json<AddStreamerBody>,
+) -> ApiResult<serde_json::Value> {
+	// 去重、清理、过滤空值 / Deduplicate, trim, filter blanks
+	let mut seen = std::collections::HashSet::new();
+	let usernames: Vec<String> = body
+		.usernames
+		.into_iter()
+		.map(|u| u.trim().to_lowercase())
+		.filter(|u| !u.is_empty() && seen.insert(u.clone()))
+		.collect();
+
+	if usernames.is_empty() {
+		return Err(ApiError("用户名不能为空".into()));
+	}
+
+	let total = usernames.len();
+	let settings = s.app_state.get_settings();
+	let api = Arc::new(
+		crate::platform::stripchat::StripchatApi::new_api_only(
+			settings.api_proxy_url.as_deref(),
+			settings.cdn_proxy_url.as_deref(),
+			settings.sc_mirror_url.as_deref(),
+			Some(settings.sc_mirror_scheme.as_str()),
+			settings.ech_enabled,
+		)
+		.map_err(ApiError::from)?,
+	);
+
+	// 全量并发：所有请求同时发出，边完成边处理，最快速度
+	// Full concurrency: all requests sent at once, processed as they complete for maximum speed
+	let mut tasks = tokio::task::JoinSet::new();
+	for username in &usernames {
+		let api = Arc::clone(&api);
+		let username = username.clone();
+		tasks.spawn(async move {
+			let result = api.verify_user_exists(&username).await;
+			(username, result)
+		});
+	}
+
+	let mut success = 0usize;
+	let mut skipped = 0usize;
+	let mut failed = 0usize;
+	let mut done = 0usize;
+
+	// 每完成一个验证立即处理并推送进度事件，无需等待其他请求
+	// Process and emit progress for each result as soon as it completes
+	while let Some(res) = tasks.join_next().await {
+		let Ok((username, verify_result)) = res else {
+			continue;
+		};
+
+		let (ok, skipped_entry, error_msg) = match verify_result {
+			Ok(model_id) => match s.app_state.add_streamer(&username, Some(model_id)) {
+				Ok(()) => {
+					s.emitter.emit(
+						"streamer-added",
+						&serde_json::json!({ "username": username }),
+					);
+					// 首次添加成功后在后台异步拉取 camgirlfinder schedule，
+					// 与后续的状态轮询并行，不阻塞当前 HTTP 响应。
+					// 拉取失败（网络/CGF 无此主播）时静默忽略，不影响录制功能。
+					//
+					// After a successful first-add, fetch the CGF schedule in the
+					// background in parallel with the upcoming status poll.
+					// Failures (network error or account absent in CGF) are
+					// silently ignored — schedule data is best-effort only.
+					{
+						let app_state = Arc::clone(&s.app_state);
+						let uname = username.clone();
+						let proxy = s.app_state.get_settings().cgf_proxy_url;
+						tokio::spawn(async move {
+							if let Some(sched) = crate::platform::monitor::cgf_fetch_schedule(
+								&uname,
+								proxy.as_deref(),
+							)
+							.await
+							{
+								app_state.set_schedule(&uname, sched);
+								tracing::info!(
+									"{}",
+									crate::tl!("scheduler.cgfRefreshUpdated", username = uname)
+								);
+							} else {
+								tracing::warn!(
+									"{}",
+									crate::tl!("scheduler.cgfRefreshUnavailable", username = uname)
+								);
+							}
+						});
+					}
+					success += 1;
+					(true, false, None)
+				}
+				Err(e) if e.to_string().contains("已存在") => {
+					// 已存在视为跳过，不计入失败 / Already exists: treat as skipped, not failed
+					skipped += 1;
+					(true, true, None)
+				}
+				Err(e) => {
+					failed += 1;
+					(false, false, Some(e.to_string()))
+				}
+			},
+			Err(e) => {
+				failed += 1;
+				(false, false, Some(e.to_string()))
+			}
+		};
+
+		done += 1;
+		// 推送进度事件 / Emit progress event
+		s.emitter.emit(
+			"streamer-batch-progress",
+			&serde_json::json!({
+				"done": done,
+				"total": total,
+				"username": username,
+				"ok": ok,
+				"skipped": skipped_entry,
+				"error": error_msg,
+			}),
+		);
+	}
+
+	// 所有验证和添加完成后，统一触发一次全量状态轮询（而非每个主播单独 spawn），
+	// 避免与验证请求并发过多导致 API 限流。
+	// After all verifications and additions, trigger a single full poll (instead of per-streamer spawns)
+	// to avoid concurrent API rate limiting with the verify requests.
+	if success > 0 {
+		let emitter = Arc::clone(&s.emitter);
+		let monitor = Arc::clone(&s.monitor);
+		tokio::spawn(async move {
+			monitor.poll_all_with_emitter(&emitter).await;
+		});
+	}
+
+	Ok(Json(serde_json::json!({
+		"total": total,
+		"success": success,
+		"skipped": skipped,
+		"failed": failed,
+	})))
+}
+
+pub async fn remove_streamer(
+	AxumState(s): AxumState<ServerState>,
+	Path(name): Path<String>,
+) -> ApiResult<serde_json::Value> {
+	if s.recorder.is_recording(&name) {
+		s.recorder
+			.stop_recording(&name)
+			.await
+			.map_err(ApiError::from)?;
+	}
+	let settings = s.app_state.get_settings();
+
+	// 1. 删除 TS 分片目录 {output_dir}/{username}/
+	// 1. Remove TS segment directory {output_dir}/{username}/
+	let ts_dir = std::path::PathBuf::from(&settings.output_dir).join(&name);
+	if ts_dir.exists() {
+		let _ = std::fs::remove_dir_all(&ts_dir);
+	}
+
+	// 2. 删除 meta 子目录 {meta_dir}/{username}/
+	// 2. Remove meta subdirectory {meta_dir}/{username}/
+	let meta_dir = crate::recording::meta::meta_dir_for(&name);
+	if meta_dir.exists() {
+		let _ = std::fs::remove_dir_all(&meta_dir);
+	}
+
+	// 3. 删除 segment_merge 合并输出中属于该主播的文件
+	//    - split_by_streamer=true：删除 {merge_output_dir}/{username}/ 整个子目录
+	//    - split_by_streamer=false：删除 {merge_output_dir}/{username}_*.{format} 匹配的文件
+	//
+	// 3. Remove the streamer's merged output files from segment_merge output directory.
+	//    - split_by_streamer=true: remove {merge_output_dir}/{username}/ subdirectory
+	//    - split_by_streamer=false: remove files matching {merge_output_dir}/{username}_*.{format}
+	let pipeline = s.app_state.get_pipeline();
+	if let Some(node) = pipeline.nodes.iter().find(|n| {
+		(n.module_id == crate::postprocess::pipeline::SEGMENT_MERGE_MODULE_ID) && n.enabled
+	}) {
+		let merge_output_dir = node
+			.params
+			.get("output_dir")
+			.and_then(|v| v.as_str())
+			.map(|s| s.trim())
+			.filter(|s| !s.is_empty())
+			.map(std::path::PathBuf::from);
+
+		if let Some(merge_dir) = merge_output_dir {
+			let split_by_streamer = node
+				.params
+				.get("split_by_streamer")
+				.and_then(|v| v.as_bool())
+				.unwrap_or(false);
+			let format = node
+				.params
+				.get("format")
+				.and_then(|v| v.as_str())
+				.unwrap_or("mkv");
+
+			if split_by_streamer {
+				// 按主播子目录存放：直接删除 {merge_dir}/{username}/
+				// Per-streamer subdirectory: remove {merge_dir}/{username}/
+				let streamer_dir = merge_dir.join(&name);
+				if streamer_dir.exists() {
+					let _ = std::fs::remove_dir_all(&streamer_dir);
+				}
+			} else if merge_dir.is_dir() {
+				// 平铺模式：删除所有 {merge_dir}/{username}_*.{format} 文件
+				// Flat mode: remove all files matching {merge_dir}/{username}_*.{format}
+				let prefix = format!("{}_", name);
+				let suffix = format!(".{}", format);
+				if let Ok(entries) = std::fs::read_dir(&merge_dir) {
+					for entry in entries.flatten() {
+						let path = entry.path();
+						if !path.is_file() {
+							continue;
+						}
+						let fname = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+						if fname.starts_with(&prefix) && fname.ends_with(&suffix) {
+							let _ = std::fs::remove_file(&path);
+						}
+					}
+				}
+			}
+		}
+	}
+
+	s.app_state.remove_streamer(&name).map_err(ApiError::from)?;
+	// 清除 monitor 内存 dead 集合，避免重新添加同名主播后仍被跳过
+	// Clear monitor in-memory dead set so re-adding the same username isn't skipped
+	s.monitor.dead_streamers.write().remove(&name);
+	s.emitter
+		.emit("streamer-removed", &serde_json::json!({ "username": name }));
+	Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+pub struct AutoRecordBody {
+	pub enabled: bool,
+}
+
+pub async fn set_auto_record(
+	AxumState(s): AxumState<ServerState>,
+	Path(name): Path<String>,
+	Json(body): Json<AutoRecordBody>,
+) -> ApiResult<serde_json::Value> {
+	s.app_state
+		.set_auto_record(&name, body.enabled)
+		.map_err(ApiError::from)?;
+	s.emitter.emit(
+		"auto-record-changed",
+		&serde_json::json!({ "username": name, "enabled": body.enabled }),
+	);
+	Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+pub async fn start_recording(
+	AxumState(s): AxumState<ServerState>,
+	Path(name): Path<String>,
+) -> ApiResult<serde_json::Value> {
+	let playlist_url = if let Some(url) = s.monitor.get_cached_playlist_url(&name) {
+		url
+	} else {
+		let settings = s.app_state.get_settings();
+		let api = crate::platform::stripchat::StripchatApi::new_api_only(
+			settings.api_proxy_url.as_deref(),
+			settings.cdn_proxy_url.as_deref(),
+			settings.sc_mirror_url.as_deref(),
+			Some(settings.sc_mirror_scheme.as_str()),
+			settings.ech_enabled,
+		)
+		.map_err(ApiError::from)?
+		.with_mouflon_keys(s.app_state.get_mouflon_keys())
+		.with_resolution_selection(
+			settings.preferred_resolution,
+			&settings.resolution_preference,
+		)
+		.with_codec_selection(&settings.preferred_codec);
+		let info = api
+			.get_stream_info(&name, true, None, false)
+			.await
+			.map_err(ApiError::from)?;
+		info.playlist_url
+			.ok_or_else(|| ApiError(format!("Stream offline: {}", name)))?
+	};
+	let path = s
+		.recorder
+		.start_recording_with_emitter(&name, &playlist_url, Arc::clone(&s.emitter))
+		.await
+		.map_err(ApiError::from)?;
+	Ok(Json(serde_json::json!({ "path": path })))
+}
+
+pub async fn stop_recording(
+	AxumState(s): AxumState<ServerState>,
+	Path(name): Path<String>,
+) -> ApiResult<serde_json::Value> {
+	let _ = s.app_state.set_auto_record(&name, false);
+	s.emitter.emit(
+		"auto-record-changed",
+		&serde_json::json!({ "username": name, "enabled": false }),
+	);
+	s.recorder
+		.stop_recording(&name)
+		.await
+		.map_err(ApiError::from)?;
+	Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+pub async fn verify_streamer(
+	AxumState(s): AxumState<ServerState>,
+	Path(name): Path<String>,
+) -> ApiResult<serde_json::Value> {
+	let settings = s.app_state.get_settings();
+	let api = crate::platform::stripchat::StripchatApi::new_api_only(
+		settings.api_proxy_url.as_deref(),
+		settings.cdn_proxy_url.as_deref(),
+		settings.sc_mirror_url.as_deref(),
+		Some(settings.sc_mirror_scheme.as_str()),
+		settings.ech_enabled,
+	)
+	.map_err(ApiError::from)?;
+	match api.verify_user_exists(&name).await {
+		Ok(_) => Ok(Json(serde_json::json!({ "exists": true }))),
+		Err(crate::core::error::AppError::UserNotFound(_)) => {
+			Ok(Json(serde_json::json!({ "exists": false })))
+		}
+		Err(e) => Err(ApiError(e.to_string())),
+	}
+}
+
+/// SC 官方分类列表查询参数 / Query params for the official SC category list
+#[derive(Deserialize)]
+pub struct ScModelsQuery {
+	/// 一级分类 girls|couples|men|trans / Top-level category girls|couples|men|trans
+	pub primary_tag: Option<String>,
+	/// 二级标签 slug（filterGroupTags）/ Second-level tag slug (filterGroupTags)
+	pub tag: Option<String>,
+	/// 排序 stripRanking|trending / Sort order stripRanking|trending
+	pub sort_by: Option<String>,
+	/// 分页偏移 / Pagination offset
+	pub offset: Option<u32>,
+	/// 每页数量 / Page size
+	pub limit: Option<u32>,
+}
+
+/// GET /api/sc/models — SC 官方分类浏览列表（供「StripChat」页无限滚动）。
+/// StripchatApi::list_models 内部做参数白名单钳制。
+///
+/// GET /api/sc/models — the official SC category browse list (feeds the
+/// StripChat page's infinite scroll). StripchatApi::list_models clamps all
+/// params internally.
+pub async fn list_sc_models(
+	AxumState(s): AxumState<ServerState>,
+	Query(q): Query<ScModelsQuery>,
+) -> ApiResult<serde_json::Value> {
+	let settings = s.app_state.get_settings();
+	// 浏览页专用镜像/代理（sc_browse_*），与主 API 设置相互独立
+	// Browse-page mirror/proxy (sc_browse_*), independent from the main API settings
+	let api = crate::platform::stripchat::StripchatApi::new_for_browse(&settings)
+		.map_err(ApiError::from)?;
+	let json = api
+		.list_models(
+			q.primary_tag.as_deref().unwrap_or("girls"),
+			q.tag.as_deref(),
+			q.sort_by.as_deref().unwrap_or("stripRanking"),
+			q.offset.unwrap_or(0),
+			q.limit.unwrap_or(40),
+		)
+		.await
+		.map_err(ApiError::from)?;
+	Ok(Json(json))
+}

@@ -7,7 +7,21 @@
 use std::fs::{self, File};
 use std::path::PathBuf;
 use tracing::level_filters::LevelFilter;
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
+use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt};
+
+/// 使用系统本地时间格式化日志时间戳。
+/// Format log timestamps using the system local time.
+struct LocalTimer;
+
+impl tracing_subscriber::fmt::time::FormatTime for LocalTimer {
+	fn format_time(&self, w: &mut tracing_subscriber::fmt::format::Writer<'_>) -> std::fmt::Result {
+		write!(
+			w,
+			"{}",
+			chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.3f")
+		)
+	}
+}
 
 /// 初始化日志系统：创建日志目录、清理旧日志、配置控制台和文件输出层。
 /// Initialize the logging system: create log directory, clean up old logs,
@@ -16,43 +30,48 @@ use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, Env
 /// # 参数 / Parameters
 /// - `log_dir`: 日志文件存放目录 / Directory where log files are stored
 pub fn init_logging(log_dir: &PathBuf) -> std::io::Result<()> {
-    fs::create_dir_all(log_dir)?;
-    cleanup_old_logs(log_dir, 10)?;
+	fs::create_dir_all(log_dir)?;
+	cleanup_old_logs(log_dir, 10)?;
 
-    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-    let log_path = log_dir.join(format!("stripchat-recorder_{}.log", timestamp));
-    let log_file = File::create(&log_path)?;
+	let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+	let log_path = log_dir.join(format!("stripchat-recorder_{}.log", timestamp));
+	let log_file = File::create(&log_path)?;
 
-    // 控制台层：从 RUST_LOG 环境变量读取过滤级别，默认 info
-    // Console layer: reads filter level from RUST_LOG env var, defaults to info
-    let console_filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+	// 控制台层：从 RUST_LOG 环境变量读取过滤级别，默认 info
+	// Console layer: reads filter level from RUST_LOG env var, defaults to info
+	let console_filter =
+		EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
-    let console_layer = fmt::layer()
-        .with_writer(std::io::stdout)
-        .with_ansi(true)
-        .with_target(true)
-        .with_filter(console_filter);
+	let console_layer = fmt::layer()
+		.with_timer(LocalTimer)
+		.with_writer(std::io::stdout)
+		.with_ansi(true)
+		.with_target(true)
+		.with_filter(console_filter);
 
-    // 文件层：固定 INFO 级别，包含文件名和行号，不含 ANSI 颜色码
-    // File layer: fixed INFO level, includes filename and line number, no ANSI color codes
-    let file_layer = fmt::layer()
-        .with_writer(log_file)
-        .with_ansi(false)
-        .with_target(true)
-        .with_thread_ids(false)
-        .with_file(true)
-        .with_line_number(true)
-        .with_filter(LevelFilter::INFO);
+	// 文件层：固定 INFO 级别，包含文件名和行号，不含 ANSI 颜色码
+	// File layer: fixed INFO level, includes filename and line number, no ANSI color codes
+	let file_layer = fmt::layer()
+		.with_timer(LocalTimer)
+		.with_writer(log_file)
+		.with_ansi(false)
+		.with_target(true)
+		.with_thread_ids(false)
+		.with_file(true)
+		.with_line_number(true)
+		.with_filter(LevelFilter::INFO);
 
-    tracing_subscriber::registry()
-        .with(console_layer)
-        .with(file_layer)
-        .init();
+	tracing_subscriber::registry()
+		.with(console_layer)
+		.with(file_layer)
+		.init();
 
-    tracing::info!("Logging initialized → {:?}", log_path);
+	tracing::info!(
+		"{}",
+		crate::tl!("logging.initialized", path = log_path.display())
+	);
 
-    Ok(())
+	Ok(())
 }
 
 /// 清理日志目录中的旧日志文件，按修改时间降序排列，保留最新的 `keep_count` 个。
@@ -63,32 +82,32 @@ pub fn init_logging(log_dir: &PathBuf) -> std::io::Result<()> {
 /// - `log_dir`: 日志目录 / Log directory
 /// - `keep_count`: 保留的最大日志文件数 / Maximum number of log files to keep
 fn cleanup_old_logs(log_dir: &PathBuf, keep_count: usize) -> std::io::Result<()> {
-    let mut log_files: Vec<_> = fs::read_dir(log_dir)?
-        .filter_map(|e| e.ok())
-        .filter(|e| {
-            let name = e.file_name();
-            let name = name.to_string_lossy();
-            name.starts_with("stripchat-recorder_") && name.ends_with(".log")
-        })
-        .collect();
+	let mut log_files: Vec<_> = fs::read_dir(log_dir)?
+		.filter_map(|e| e.ok())
+		.filter(|e| {
+			let name = e.file_name();
+			let name = name.to_string_lossy();
+			name.starts_with("stripchat-recorder_") && name.ends_with(".log")
+		})
+		.collect();
 
-    if log_files.len() < keep_count {
-        return Ok(());
-    }
+	if log_files.len() < keep_count {
+		return Ok(());
+	}
 
-    // 按修改时间降序排列（最新的在前）/ Sort by modification time descending (newest first)
-    log_files.sort_by(|a, b| {
-        let ta = a.metadata().and_then(|m| m.modified()).ok();
-        let tb = b.metadata().and_then(|m| m.modified()).ok();
-        tb.cmp(&ta)
-    });
+	// 按修改时间降序排列（最新的在前）/ Sort by modification time descending (newest first)
+	log_files.sort_by(|a, b| {
+		let ta = a.metadata().and_then(|m| m.modified()).ok();
+		let tb = b.metadata().and_then(|m| m.modified()).ok();
+		tb.cmp(&ta)
+	});
 
-    // 删除超出保留数量的旧日志 / Delete old logs beyond the keep count
-    for entry in log_files.into_iter().skip(keep_count - 1) {
-        if let Err(e) = fs::remove_file(entry.path()) {
-            eprintln!("Failed to remove old log {:?}: {}", entry.path(), e);
-        }
-    }
+	// 删除超出保留数量的旧日志 / Delete old logs beyond the keep count
+	for entry in log_files.into_iter().skip(keep_count - 1) {
+		if let Err(e) = fs::remove_file(entry.path()) {
+			eprintln!("Failed to remove old log {:?}: {}", entry.path(), e);
+		}
+	}
 
-    Ok(())
+	Ok(())
 }

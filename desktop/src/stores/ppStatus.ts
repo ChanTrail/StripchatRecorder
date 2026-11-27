@@ -52,11 +52,7 @@ export const usePpStatusStore = defineStore("ppStatus", () => {
 		// 并发取消所有正在运行的任务 / Cancel all running tasks concurrently
 		await Promise.all(
 			pathsToRemove
-				.filter(
-					(p) =>
-						ppStatus.value[p] === "running" ||
-						ppStatus.value[p] === "waiting",
-				)
+				.filter((p) => ppStatus.value[p] === "running" || ppStatus.value[p] === "waiting")
 				.map((p) => call("cancel_postprocess", { path: p }).catch(() => {})),
 		);
 

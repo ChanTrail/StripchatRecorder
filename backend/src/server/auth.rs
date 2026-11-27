@@ -1,0 +1,387 @@
+//! 管理员认证模块 / Admin Authentication Module
+//!
+//! 功能：
+//! - Token 存储：绑定登录 IP，带过期时间（默认 8 小时），每次有效请求自动续期
+//! - IP 风控：同一 IP 登录失败超过阈值后临时封禁
+//! - 密码强度校验：至少 6 位，包含字母、数字和特殊字符
+//! - Axum 中间件：验证 Bearer Token，setup 阶段自动放行
+//!
+//! Features:
+//! - Token storage: bound to login IP, with expiry (default 8h), auto-renewed on each valid request
+//! - IP rate limiting: temporarily block IPs that exceed failed login attempts
+//! - Password strength validation: min 6 chars, must include letters, digits, and special chars
+//! - Axum middleware: validates Bearer Token; auto-allows during setup phase
+
+use axum::{
+	body::Body,
+	extract::{ConnectInfo, State},
+	http::{Request, StatusCode},
+	middleware::Next,
+	response::{IntoResponse, Response},
+};
+use parking_lot::RwLock;
+use std::{
+	collections::HashMap,
+	net::{IpAddr, SocketAddr},
+	sync::{
+		Arc,
+		atomic::{AtomicBool, Ordering},
+	},
+	time::{Duration, Instant},
+};
+
+/// `setup_done` 设置的进程内镜像：由 `AppState` 在加载与每次保存设置时同步，
+/// 供 auth 中间件判断"首次配置是否完成"——未完成时所有 API 放行（向导阶段需要
+/// 探测/保存/下载等权限；此时可能已存在历史密码但无登录会话，不能按密码拦）。
+/// 默认 `true`（视为已完成 → 强制鉴权），`AppState::new` 会尽早播种。
+///
+/// In-process mirror of the `setup_done` setting: synced by `AppState` on load
+/// and on every save, letting the auth middleware tell whether first-launch
+/// setup is complete — while incomplete, all API routes pass (the wizard needs
+/// probe/save/download access; a stale password may already exist without a
+/// session and must not block). Defaults to `true` (treated as done → enforce
+/// auth) and is seeded early by `AppState::new`.
+static SETUP_DONE: AtomicBool = AtomicBool::new(true);
+
+/// 同步 `setup_done` 镜像（由 `AppState` 在加载/保存设置时调用）。
+/// Sync the `setup_done` mirror (called by `AppState` when settings load or are saved).
+///
+/// # 参数 / Parameters
+/// - `done`: `settings.setup_done` 的当前值 / Current value of `settings.setup_done`
+pub fn set_setup_done(done: bool) {
+	SETUP_DONE.store(done, Ordering::Relaxed);
+}
+
+/// 读取 `setup_done` 镜像。/ Read the `setup_done` mirror.
+fn setup_done() -> bool {
+	SETUP_DONE.load(Ordering::Relaxed)
+}
+
+// ─── 常量 / Constants ──────────────────────────────────────────────────────
+
+/// Token 有效期（8 小时）/ Token expiry (8 hours)
+pub const TOKEN_TTL: Duration = Duration::from_secs(8 * 3600);
+/// 每次有效请求自动续期时长（1 小时）/ Auto-renew duration on each valid request (1 hour)
+pub const TOKEN_RENEW: Duration = Duration::from_secs(3600);
+/// 连续失败登录次数上限 / Max consecutive failed login attempts before lockout
+pub const MAX_FAIL: u32 = 5;
+/// 封禁时长（15 分钟）/ Lockout duration (15 minutes)
+pub const LOCKOUT_DURATION: Duration = Duration::from_secs(15 * 60);
+/// 最大并发登录 session 数 / Maximum number of concurrent login sessions
+pub const MAX_SESSIONS: usize = 5;
+
+// ─── 数据结构 / Data structures ─────────────────────────────────────────────
+
+struct SessionEntry {
+	/// Token 字符串 / Token string
+	token: String,
+	/// 绑定的登录 IP / Bound login IP address
+	bound_ip: IpAddr,
+	/// 过期时刻 / Expiry instant
+	expires_at: Instant,
+}
+
+struct FailEntry {
+	/// 连续失败次数 / Consecutive failure count
+	count: u32,
+	/// 封禁解除时刻（None = 未封禁）/ Lockout lift instant (None = not locked)
+	locked_until: Option<Instant>,
+}
+
+struct TokenStoreInner {
+	/// 活跃 session 列表，按登录时间升序排列（最旧在前）
+	/// Active sessions, sorted by login time ascending (oldest first)
+	sessions: std::collections::VecDeque<SessionEntry>,
+	password_configured: bool,
+	/// IP → 登录失败记录 / IP → login failure record
+	fail_map: HashMap<IpAddr, FailEntry>,
+}
+
+/// Token 存储（多 session，最多 MAX_SESSIONS 个）/ Token store (multi-session, up to MAX_SESSIONS)
+#[derive(Clone)]
+pub struct TokenStore(Arc<RwLock<TokenStoreInner>>);
+
+impl Default for TokenStore {
+	fn default() -> Self {
+		Self::new(false)
+	}
+}
+
+impl TokenStore {
+	pub fn new(password_already_set: bool) -> Self {
+		Self(Arc::new(RwLock::new(TokenStoreInner {
+			sessions: std::collections::VecDeque::new(),
+			password_configured: password_already_set,
+			fail_map: HashMap::new(),
+		})))
+	}
+
+	/// 登录成功：生成 Token，绑定 IP，重置该 IP 的失败计数。
+	/// 若 session 数已达 MAX_SESSIONS，踢出登录时间最早的那个（队首）。
+	///
+	/// Login success: generate token, bind IP, reset failure count for this IP.
+	/// If the session count reaches MAX_SESSIONS, evict the oldest session (queue front).
+	pub fn create_session(&self, ip: IpAddr) -> String {
+		let token = new_token();
+		let now = Instant::now();
+		let mut inner = self.0.write();
+		// 先清除所有已过期 session / Prune expired sessions first
+		inner.sessions.retain(|s| now <= s.expires_at);
+		// 若仍满员，踢出最旧的（队首）/ Evict oldest (front) if still at capacity
+		while inner.sessions.len() >= MAX_SESSIONS {
+			inner.sessions.pop_front();
+		}
+		inner.sessions.push_back(SessionEntry {
+			token: token.clone(),
+			bound_ip: ip,
+			expires_at: now + TOKEN_TTL,
+		});
+		inner.fail_map.remove(&ip);
+		token
+	}
+
+	/// 验证 Token：检查匹配、IP 绑定、是否过期。
+	/// 验证成功时自动续期 TOKEN_RENEW。
+	///
+	/// Verify token: checks match, IP binding, and expiry.
+	/// Auto-renews by TOKEN_RENEW on success.
+	pub fn verify(&self, token: &str, ip: IpAddr) -> VerifyResult {
+		let mut inner = self.0.write();
+		let now = Instant::now();
+		// 找到对应 session / Find matching session
+		let entry = inner.sessions.iter_mut().find(|s| s.token == token);
+		let session = match entry {
+			Some(s) => s,
+			None => return VerifyResult::Invalid,
+		};
+		if now > session.expires_at {
+			// 过期：从队列中移除 / Expired: remove from queue
+			let token_owned = token.to_string();
+			inner.sessions.retain(|s| s.token != token_owned);
+			return VerifyResult::Expired;
+		}
+		// IP 不匹配时拒绝（可能是 token 泄漏）
+		// Reject on IP mismatch (possible token leak)
+		if session.bound_ip != ip {
+			return VerifyResult::IpMismatch;
+		}
+		// 自动续期 / Auto-renew
+		let new_exp = now + TOKEN_RENEW;
+		if new_exp > session.expires_at {
+			session.expires_at = new_exp;
+		}
+		VerifyResult::Ok
+	}
+
+	/// 强制续期：将指定 Token 过期时间延长至 now + TOKEN_TTL（前端主动调用 /api/auth/renew 时）。
+	/// Force-renew: extend the given token's expiry to now + TOKEN_TTL (called by frontend via /api/auth/renew).
+	pub fn renew(&self, token: &str, ip: IpAddr) -> bool {
+		let mut inner = self.0.write();
+		let now = Instant::now();
+		if let Some(s) = inner.sessions.iter_mut().find(|s| s.token == token)
+			&& s.bound_ip == ip
+			&& now <= s.expires_at
+		{
+			s.expires_at = now + TOKEN_TTL;
+			return true;
+		}
+		false
+	}
+
+	/// 登出指定 Token（只清除该 session，不影响其他登录方）。
+	/// Logout the given token (only removes that session, leaving others intact).
+	pub fn remove_session(&self, token: &str) {
+		self.0.write().sessions.retain(|s| s.token != token);
+	}
+
+	/// 清除所有 session（密码修改时使用）。
+	/// Clear all sessions (used when password is changed).
+	pub fn clear(&self) {
+		self.0.write().sessions.clear();
+	}
+
+	/// 检查是否有任意有效（未过期）session。
+	/// Check whether any valid (non-expired) session exists.
+	pub fn is_logged_in(&self) -> bool {
+		let inner = self.0.read();
+		let now = Instant::now();
+		inner.sessions.iter().any(|s| now <= s.expires_at)
+	}
+
+	pub fn mark_password_configured(&self) {
+		self.0.write().password_configured = true;
+	}
+
+	/// 标记密码已清除：中间件恢复"无密码放行"态。
+	/// Mark the password as cleared: middleware returns to the pass-through state.
+	pub fn mark_password_unconfigured(&self) {
+		self.0.write().password_configured = false;
+	}
+
+	pub fn has_password(&self) -> bool {
+		self.0.read().password_configured
+	}
+
+	// ── IP 风控 / IP rate limiting ────────────────────────────────────────
+
+	/// 记录一次登录失败。返回该 IP 是否已被封禁。
+	/// Record a login failure. Returns whether this IP is now locked.
+	pub fn record_fail(&self, ip: IpAddr) -> bool {
+		let mut inner = self.0.write();
+		let entry = inner.fail_map.entry(ip).or_insert(FailEntry {
+			count: 0,
+			locked_until: None,
+		});
+		entry.count += 1;
+		if entry.count >= MAX_FAIL {
+			entry.locked_until = Some(Instant::now() + LOCKOUT_DURATION);
+		}
+		entry.locked_until.is_some_and(|t| Instant::now() < t)
+	}
+
+	/// 检查 IP 是否正在封禁中。封禁已过期时自动清除记录。
+	/// Check whether an IP is currently locked. Auto-clears expired lockouts.
+	pub fn is_locked(&self, ip: IpAddr) -> bool {
+		let mut inner = self.0.write();
+		if let Some(entry) = inner.fail_map.get_mut(&ip)
+			&& let Some(until) = entry.locked_until
+		{
+			if Instant::now() < until {
+				return true;
+			}
+			// 封禁已过期，清除 / Lockout expired; clear
+			inner.fail_map.remove(&ip);
+		}
+		false
+	}
+
+	/// 返回 IP 封禁剩余秒数（0 = 未封禁或已过期）。
+	/// Returns remaining lockout seconds for an IP (0 = not locked or expired).
+	pub fn lockout_remaining_secs(&self, ip: IpAddr) -> u64 {
+		let inner = self.0.read();
+		if let Some(entry) = inner.fail_map.get(&ip)
+			&& let Some(until) = entry.locked_until
+		{
+			let now = Instant::now();
+			if now < until {
+				return (until - now).as_secs();
+			}
+		}
+		0
+	}
+}
+
+/// Token 验证结果 / Token verification result
+pub enum VerifyResult {
+	Ok,
+	Invalid,
+	Expired,
+	IpMismatch,
+}
+
+// ─── 工具函数 / Utilities ──────────────────────────────────────────────────
+
+/// 生成 32 字节随机 Token（十六进制字符串）。
+fn new_token() -> String {
+	use rand::RngExt;
+	let bytes: [u8; 32] = rand::rng().random();
+	bytes.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+/// 从请求中提取客户端 IP（优先 X-Forwarded-For，其次 ConnectInfo）。
+/// Extract client IP from request (X-Forwarded-For first, then ConnectInfo).
+pub fn extract_ip(req: &Request<Body>) -> IpAddr {
+	// 优先信任反向代理的 X-Forwarded-For 首个地址
+	// Prefer first address from X-Forwarded-For (reverse proxy)
+	if let Some(fwd) = req.headers().get("x-forwarded-for")
+		&& let Ok(s) = fwd.to_str()
+		&& let Some(first) = s.split(',').next()
+		&& let Ok(ip) = first.trim().parse::<IpAddr>()
+	{
+		return ip;
+	}
+	// 其次用 ConnectInfo / Fall back to ConnectInfo
+	req.extensions()
+		.get::<ConnectInfo<SocketAddr>>()
+		.map(|ci| ci.0.ip())
+		.unwrap_or(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST))
+}
+
+/// 密码强度校验：至少 6 位，包含字母、数字、特殊字符。
+/// Password strength check: min 6 chars, must contain letters, digits, and special chars.
+pub fn validate_password_strength(password: &str) -> Result<(), &'static str> {
+	if password.len() < 6 {
+		return Err("密码长度不能少于 6 位 / Password must be at least 6 characters");
+	}
+	let has_letter = password.chars().any(|c| c.is_alphabetic());
+	let has_digit = password.chars().any(|c| c.is_ascii_digit());
+	let has_special = password.chars().any(|c| !c.is_alphanumeric());
+	if !has_letter {
+		return Err("密码必须包含字母 / Password must contain at least one letter");
+	}
+	if !has_digit {
+		return Err("密码必须包含数字 / Password must contain at least one digit");
+	}
+	if !has_special {
+		return Err("密码必须包含特殊字符 / Password must contain at least one special character");
+	}
+	Ok(())
+}
+
+// ─── Axum 中间件 / Axum middleware ─────────────────────────────────────────
+
+pub async fn auth_middleware(
+	State(store): State<TokenStore>,
+	req: Request<Body>,
+	next: Next,
+) -> Response {
+	let path = req.uri().path();
+
+	if !path.starts_with("/api/") {
+		return next.run(req).await;
+	}
+	// 首次配置未完成时全部放行：向导需要探测/保存/下载等 API 权限；此时可能已
+	// 存在历史密码（setup_done 被重置或未写盘）但无登录会话，按未完成态处理
+	// While first-launch setup is incomplete, all API routes pass: the wizard
+	// needs probe/save/download access; a stale password may already exist
+	// (setup_done reset or never flushed) with no session — treat as unconfigured
+	if !setup_done() {
+		return next.run(req).await;
+	}
+	if (path.starts_with("/api/auth/")
+		&& path != "/api/auth/change-password"
+		&& path != "/api/auth/remove-password")
+		|| path == "/api/events"
+	{
+		return next.run(req).await;
+	}
+	// locale 路由公开，未登录时也需要加载语言包 / Locale routes are public
+	if path.starts_with("/api/locale/") || path == "/api/locales" {
+		return next.run(req).await;
+	}
+	// GET /api/settings 公开只读：前端需在登录前读取 language 字段决定界面语言
+	// GET /api/settings is public read-only: frontend needs the language field before login
+	if path == "/api/settings" && req.method() == axum::http::Method::GET {
+		return next.run(req).await;
+	}
+	if !store.has_password() {
+		return next.run(req).await;
+	}
+
+	let ip = extract_ip(&req);
+	let token = req
+		.headers()
+		.get("authorization")
+		.and_then(|v| v.to_str().ok())
+		.and_then(|v| v.strip_prefix("Bearer "));
+
+	match token {
+		Some(t) => match store.verify(t, ip) {
+			VerifyResult::Ok => next.run(req).await,
+			VerifyResult::Expired => (StatusCode::UNAUTHORIZED, "Token expired").into_response(),
+			VerifyResult::IpMismatch => (StatusCode::UNAUTHORIZED, "IP mismatch").into_response(),
+			VerifyResult::Invalid => (StatusCode::UNAUTHORIZED, "Unauthorized").into_response(),
+		},
+		None => (StatusCode::UNAUTHORIZED, "Unauthorized").into_response(),
+	}
+}

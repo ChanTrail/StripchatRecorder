@@ -9,13 +9,19 @@
 //! - 标准输出 `OUTPUT:{path}`: 成功后输出视频路径 / Output video path on success
 //! - 标准输出 `PROGRESS:{done}/{total}`: 进度上报 / Progress reporting
 //! - 标准输出 `STATUS:{speed}`: 上传速度上报 / Upload speed reporting
+//!
+//! # TLS
+//! HTTPS 证书校验使用操作系统信任库（rustls-platform-verifier），
+//! 兼容将根证书装入系统信任库的 TLS 拦截代理/杀毒软件。
+//! HTTPS certificate verification uses the operating-system trust store
+//! (rustls-platform-verifier), compatible with TLS-intercepting proxies and
+//! antivirus software that install their root into the OS trust store.
 
 use pp_utils::{
-    emit_progress_step, find_cover, format_bytes, format_duration, format_speed, param, parse_stem,
-    tmp_dir, video_duration, PROGRESS_SCALE,
+    emit_progress_step, find_cover, format_bytes, format_duration, format_speed, parse_stem,
+    tmp_dir, video_duration, PROGRESS_SCALE, ModuleInput,
 };
 use socket2::{Domain, Socket, Type};
-use std::env;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
@@ -25,27 +31,15 @@ use std::time::{Duration, Instant};
 
 const DESCRIBE: &str = r#"{
     "id": "notify_discord",
-    "name": "Discord 通知 0.2.0",
+    "name": "Discord 通知",
     "description": "将录制信息和封面图发送到 Discord Webhook",
+    "inputTypes": ["media_bundle"],
+    "outputTypes": ["media_bundle"],
+    "official": true,
     "params": [
-        {
-        "key": "webhook_url",
-        "label": "Webhook URL",
-        "type": "string",
-        "default": ""
-        },
-        {
-        "key": "proxy",
-        "label": "代理地址（支持 http://、socks5://）",
-        "type": "string",
-        "default": ""
-        },
-        {
-        "key": "username",
-        "label": "Bot 显示名称",
-        "type": "string",
-        "default": "Recorder Bot"
-        }
+        { "key": "webhook_url", "label": "Webhook URL",                                "type": "string", "default": "" },
+        { "key": "proxy",       "label": "代理地址（支持 http://、socks5://）",        "type": "string", "default": "" },
+        { "key": "username",    "label": "Bot 显示名称",                               "type": "string", "default": "Recorder Bot" }
     ]
 }"#;
 
@@ -66,7 +60,7 @@ fn resize_cover_for_discord(img: &Path) -> Result<Option<PathBuf>, String> {
     // 逐步降低 JPEG 质量（ffmpeg -q:v 越大质量越低）直到文件小于 10MB
     // Progressively lower JPEG quality until the file is under 10 MB
     for &q in &["5", "10", "15", "20", "25", "31"] {
-        let status = Command::new("ffmpeg")
+        let status = Command::new(pp_utils::ffmpeg_program())
             .args(["-y", "-i"])
             .arg(img)
             .args(["-q:v", q])
@@ -297,12 +291,23 @@ fn tls_wrap(stream: TcpStream, host: &str) -> Result<rustls_wrapper::TlsStream, 
     rustls_wrapper::wrap(stream, host)
 }
 
+/// rustls 封装：证书校验交给操作系统信任库（rustls-platform-verifier），
+/// 而不是内置的 Mozilla 根证书集合。这样当用户环境存在 TLS 拦截代理或杀毒软件、
+/// 其根证书安装在系统信任库中时，HTTPS 仍能正常校验通过。
+///
+/// rustls wrapper: certificate verification is delegated to the operating-system
+/// trust store (rustls-platform-verifier) instead of a bundled Mozilla root set.
+/// This keeps HTTPS working in environments where a TLS-intercepting proxy or
+/// antivirus product installs its root certificate into the OS trust store.
 mod rustls_wrapper {
     use rustls::pki_types::ServerName;
     use rustls::{ClientConfig, ClientConnection, StreamOwned};
     use std::io::{self, Read, Write};
     use std::net::TcpStream;
-    use std::sync::Arc;
+    use std::sync::{Arc, OnceLock};
+
+    /// 缓存的全局 TLS 客户端配置 / Cached global TLS client configuration
+    static TLS_CONFIG: OnceLock<Result<Arc<ClientConfig>, String>> = OnceLock::new();
 
     pub struct TlsStream(StreamOwned<ClientConnection, TcpStream>);
 
@@ -320,15 +325,48 @@ mod rustls_wrapper {
         }
     }
 
-    pub fn wrap(stream: TcpStream, host: &str) -> Result<TlsStream, String> {
-        let mut root_store = rustls::RootCertStore::empty();
-        root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        let config = ClientConfig::builder()
-            .with_root_certificates(root_store)
+    /// 构造 TLS 客户端配置：ring 加密提供者 + 平台证书校验器。
+    /// 证书链/主机名/有效期全部交给操作系统校验器处理（Windows 证书链引擎、
+    /// macOS Security Framework、Linux 系统 CA 目录），不做任何校验绕过。
+    ///
+    /// Build the TLS client configuration: ring crypto provider + platform
+    /// certificate verifier. Chain building, host-name matching and validity
+    /// checks are all delegated to the OS verifier (Windows chain engine,
+    /// macOS Security Framework, Linux system CA store); nothing is bypassed.
+    fn build_config() -> Result<Arc<ClientConfig>, String> {
+        let provider: Arc<rustls::crypto::CryptoProvider> =
+            Arc::new(rustls::crypto::ring::default_provider());
+        let verifier = rustls_platform_verifier::Verifier::new(provider.clone())
+            .map_err(|e| format!("platform verifier init failed: {}", e))?;
+        let config = ClientConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .map_err(|e| format!("TLS protocol versions init failed: {}", e))?
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(verifier))
             .with_no_client_auth();
+        Ok(Arc::new(config))
+    }
+
+    /// 返回缓存的 TLS 客户端配置（首次调用时构造；构造失败只返回 Err，不 panic）。
+    /// Return the cached TLS client config (built on first use; a build failure
+    /// yields Err instead of panicking).
+    pub fn client_config() -> Result<Arc<ClientConfig>, String> {
+        TLS_CONFIG.get_or_init(build_config).clone()
+    }
+
+    /// 将已建立的 TCP 连接升级为 TLS，`host` 用于 SNI 与证书主机名校验。
+    /// Upgrade an established TCP connection to TLS; `host` is used for SNI
+    /// and certificate host-name verification.
+    ///
+    /// # 参数 / Parameters
+    /// - `stream`: 已建立的 TCP 连接（可经 HTTP/SOCKS5 代理隧道）
+    ///   established TCP stream (possibly through an HTTP/SOCKS5 proxy tunnel)
+    /// - `host`: 目标主机名 / target host name
+    pub fn wrap(stream: TcpStream, host: &str) -> Result<TlsStream, String> {
+        let config = client_config()?;
         let server_name = ServerName::try_from(host.to_string())
             .map_err(|e| format!("invalid server name '{}': {}", host, e))?;
-        let conn = ClientConnection::new(Arc::new(config), server_name)
+        let conn = ClientConnection::new(config, server_name)
             .map_err(|e| format!("TLS init failed: {}", e))?;
         Ok(TlsStream(StreamOwned::new(conn, stream)))
     }
@@ -459,20 +497,99 @@ fn read_http_response(stream: &mut dyn Read) -> Result<(u16, String), String> {
     Ok((status, body))
 }
 
+/// 一次 Webhook 请求的失败类型。Discord Webhook 没有幂等键，同一请求重发就会多一条消息，
+/// 所以要区分"服务端肯定没处理"和"服务端可能已处理"。
+///
+/// Failure kind of a single webhook request. Discord webhooks have no idempotency key, so
+/// re-sending the same request posts another message; we must tell "certainly not processed"
+/// apart from "possibly processed".
+#[derive(Debug)]
+enum SendError {
+    /// 请求未被处理（未完整写出、连接失败、4xx 拒绝，或 502/503/504 网关/服务不可用），
+    /// 可以重试。
+    /// The request was not processed (not fully written, connect failure, a 4xx rejection, or
+    /// a 502/503/504 gateway/service-unavailable response); safe to retry.
+    NotDelivered(String),
+    /// 请求已完整写出但结果未知（读响应失败、其他 5xx、状态码无法解析），重试可能重复发消息。
+    /// The request was fully written but the outcome is unknown (response read failure, other
+    /// 5xx, unparseable status); retrying may post a duplicate.
+    Uncertain(String),
+}
+
+impl SendError {
+    /// 错误信息文本 / Error message text
+    fn message(&self) -> &str {
+        match self {
+            SendError::NotDelivered(m) | SendError::Uncertain(m) => m,
+        }
+    }
+}
+
+/// HTTP 状态码对应的投递结论 / Delivery verdict derived from an HTTP status code
+#[derive(Debug, PartialEq, Eq)]
+enum StatusOutcome {
+    /// 2xx：已送达 / 2xx: delivered
+    Delivered,
+    /// 4xx（含 429）：服务端明确拒绝，消息未发出 / 4xx (incl. 429): explicitly rejected, nothing posted
+    Rejected,
+    /// 502/503/504：网关错误或服务暂不可用，通常是请求没有到达 Discord 的应用层（由
+    /// Cloudflare 或代理直接返回），按可重试处理；极少数情况下可能已处理而导致重复一条。
+    /// 502/503/504: gateway error or service temporarily unavailable; the request usually never
+    /// reached Discord's application layer (answered by Cloudflare or the proxy), so it is
+    /// treated as retryable; in rare cases it may already have been processed and post a duplicate.
+    Unavailable,
+    /// 其他 5xx、0（无法解析）及其他：可能已处理 / Other 5xx, 0 (unparseable) and others: possibly processed
+    Uncertain,
+}
+
+/// 根据状态码判断投递结论 / Classify delivery outcome by status code
+fn status_outcome(status: u16) -> StatusOutcome {
+    match status {
+        200..=299 => StatusOutcome::Delivered,
+        400..=499 => StatusOutcome::Rejected,
+        502..=504 => StatusOutcome::Unavailable,
+        _ => StatusOutcome::Uncertain,
+    }
+}
+
+/// 读取响应并按状态码转换为发送结果；读响应失败说明请求已写出但结果未知。
+/// Read the response and map its status to a send result; a read failure means the request
+/// was written but its outcome is unknown.
+fn finish_response(stream: &mut dyn Read) -> Result<(), SendError> {
+    let (status, body) = read_http_response(stream).map_err(SendError::Uncertain)?;
+    match status_outcome(status) {
+        StatusOutcome::Delivered => Ok(()),
+        // 502/503/504 与 4xx 一样按可重试处理 / 502/503/504 are retried just like 4xx
+        StatusOutcome::Rejected | StatusOutcome::Unavailable => Err(SendError::NotDelivered(
+            format!("Discord returned {}: {}", status, body),
+        )),
+        StatusOutcome::Uncertain => Err(SendError::Uncertain(format!(
+            "Discord returned {}: {}",
+            status, body
+        ))),
+    }
+}
+
 /// 执行一次 Discord Webhook 请求（含封面图或纯文字）。
+/// 请求完整写出之前的错误都是 NotDelivered；之后的错误按 [`finish_response`] 分类。
+///
+/// Perform a single Discord webhook request (with cover image or text only).
+/// Errors before the request is fully written are NotDelivered; later errors are classified
+/// by [`finish_response`].
 fn send_once(
     webhook_url: &str,
     proxy: &str,
     bot_name: &str,
     content: &str,
     cover: Option<&PathBuf>,
-) -> Result<(), String> {
-    let (host, port, path) = parse_url(webhook_url)?;
+) -> Result<(), SendError> {
+    let (host, port, path) = parse_url(webhook_url).map_err(SendError::NotDelivered)?;
     let is_https = port == 443;
 
     if let Some(img_path) = cover {
-        let img_bytes =
-            fs::read(img_path).map_err(|e| format!("Failed to read cover image: {}", e))?;
+        let img_bytes = fs::read(img_path).map_err(|e| {
+            SendError::NotDelivered(format!("Failed to read cover image: {}", e))
+        })?;
         let img_name = img_path
             .file_name()
             .and_then(|n| n.to_str())
@@ -522,10 +639,10 @@ fn send_once(
         println!("PROGRESS:0/{}", PROGRESS_SCALE);
         let upload_start = Instant::now();
 
-        let tcp = tcp_connect(&host, port, proxy)?;
+        let tcp = tcp_connect(&host, port, proxy).map_err(SendError::NotDelivered)?;
 
         if is_https {
-            let mut tls = tls_wrap(tcp, &host)?;
+            let mut tls = tls_wrap(tcp, &host).map_err(SendError::NotDelivered)?;
             write_multipart_with_progress(
                 &mut tls,
                 http_header.as_bytes(),
@@ -533,7 +650,7 @@ fn send_once(
                 &img_bytes,
                 &post_file,
             )
-            .map_err(|e| format!("write failed: {}", e))?;
+            .map_err(|e| SendError::NotDelivered(format!("write failed: {}", e)))?;
             let elapsed = upload_start.elapsed();
             if elapsed.as_secs_f64() > 0.0 {
                 println!(
@@ -541,10 +658,7 @@ fn send_once(
                     format_speed(body_len as f64 / elapsed.as_secs_f64())
                 );
             }
-            let (status, body) = read_http_response(&mut tls)?;
-            if status != 200 && status != 204 {
-                return Err(format!("Discord returned {}: {}", status, body));
-            }
+            finish_response(&mut tls)?;
         } else {
             let mut tcp = tcp;
             write_multipart_with_progress(
@@ -554,7 +668,7 @@ fn send_once(
                 &img_bytes,
                 &post_file,
             )
-            .map_err(|e| format!("write failed: {}", e))?;
+            .map_err(|e| SendError::NotDelivered(format!("write failed: {}", e)))?;
             let elapsed = upload_start.elapsed();
             if elapsed.as_secs_f64() > 0.0 {
                 println!(
@@ -562,10 +676,7 @@ fn send_once(
                     format_speed(body_len as f64 / elapsed.as_secs_f64())
                 );
             }
-            let (status, body) = read_http_response(&mut tcp)?;
-            if status != 200 && status != 204 {
-                return Err(format!("Discord returned {}: {}", status, body));
-            }
+            finish_response(&mut tcp)?;
         }
     } else {
         // 无封面图：纯文字消息，用 ureq 发送即可
@@ -575,47 +686,59 @@ fn send_once(
             "POST {path} HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n",
             path = path, host = host, len = body_len
         );
-        let tcp = tcp_connect(&host, port, proxy)?;
+        let tcp = tcp_connect(&host, port, proxy).map_err(SendError::NotDelivered)?;
         if is_https {
-            let mut tls = tls_wrap(tcp, &host)?;
+            let mut tls = tls_wrap(tcp, &host).map_err(SendError::NotDelivered)?;
             tls.write_all(http_header.as_bytes())
-                .map_err(|e| format!("write: {}", e))?;
+                .map_err(|e| SendError::NotDelivered(format!("write: {}", e)))?;
             tls.write_all(payload.as_bytes())
-                .map_err(|e| format!("write: {}", e))?;
-            tls.flush().map_err(|e| format!("flush: {}", e))?;
-            let (status, body) = read_http_response(&mut tls)?;
-            if status != 200 && status != 204 {
-                return Err(format!("Discord returned {}: {}", status, body));
-            }
+                .map_err(|e| SendError::NotDelivered(format!("write: {}", e)))?;
+            tls.flush()
+                .map_err(|e| SendError::NotDelivered(format!("flush: {}", e)))?;
+            finish_response(&mut tls)?;
         } else {
             let mut tcp = tcp;
             tcp.write_all(http_header.as_bytes())
-                .map_err(|e| format!("write: {}", e))?;
+                .map_err(|e| SendError::NotDelivered(format!("write: {}", e)))?;
             tcp.write_all(payload.as_bytes())
-                .map_err(|e| format!("write: {}", e))?;
-            tcp.flush().map_err(|e| format!("flush: {}", e))?;
-            let (status, body) = read_http_response(&mut tcp)?;
-            if status != 200 && status != 204 {
-                return Err(format!("Discord returned {}: {}", status, body));
-            }
+                .map_err(|e| SendError::NotDelivered(format!("write: {}", e)))?;
+            tcp.flush()
+                .map_err(|e| SendError::NotDelivered(format!("flush: {}", e)))?;
+            finish_response(&mut tcp)?;
         }
     }
     Ok(())
 }
 
 fn run() -> Result<(), String> {
-    let input_str = env::var("PP_INPUT").map_err(|_| "PP_INPUT not set".to_string())?;
-    let input = PathBuf::from(&input_str);
+    let module_input = ModuleInput::read();
+    let bundle_input = module_input.first_input()
+        .ok_or_else(|| "inputs[0] (media_bundle) is required".to_string())?;
+
+    // 从 MediaBundle 解包视频路径和图片路径
+    // Unpack video path and image path from MediaBundle
+    let (input, cover_from_bundle) = {
+        let s = bundle_input.to_string_lossy();
+        if let Some(sep) = s.find('\n') {
+            let video = PathBuf::from(&s[..sep]);
+            let img_str = s[sep + 1..].trim();
+            let img = if img_str.is_empty() { None } else { Some(PathBuf::from(img_str)) };
+            (video, img)
+        } else {
+            (bundle_input.clone(), None)
+        }
+    };
+
     if !input.exists() {
         return Err(format!("Input file not found: {}", input.display()));
     }
 
-    let webhook_url = param("webhook_url", "");
+    let webhook_url = module_input.param_str("webhook_url", "");
     if webhook_url.is_empty() {
         return Err("webhook_url is required".to_string());
     }
-    let proxy = param("proxy", "");
-    let bot_name = param("username", "Recorder Bot");
+    let proxy = module_input.param_str("proxy", "");
+    let bot_name = module_input.param_str("username", "Recorder Bot");
 
     emit_progress_step(0, 3);
 
@@ -646,7 +769,9 @@ fn run() -> Result<(), String> {
 
     emit_progress_step(1, 3);
 
-    let cover = find_cover(&input);
+    // 优先使用 bundle 中的图片；没有时回退到同目录查找（向后兼容）
+    // Prefer image from bundle; fall back to find_cover for backward compatibility
+    let cover = cover_from_bundle.or_else(|| find_cover(&input));
 
     // 若封面图超过 Discord 10MB 限制则压缩 / Compress cover if it exceeds Discord's 10 MB limit
     let effective_cover: Option<PathBuf> = if let Some(ref img) = cover {
@@ -659,7 +784,7 @@ fn run() -> Result<(), String> {
     const RETRY_DELAYS: [u64; 6] = [10, 20, 30, 40, 50, 60];
 
     let mut attempt = 0u32;
-    loop {
+    let send_result: Result<(), String> = loop {
         let result = send_once(
             &webhook_url,
             &proxy,
@@ -668,11 +793,23 @@ fn run() -> Result<(), String> {
             effective_cover.as_ref(),
         );
         match result {
-            Ok(()) => break,
-            Err(e) => {
+            Ok(()) => break Ok(()),
+            // 请求已完整写出但结果未知：Webhook 无幂等键，重试可能重复发消息。
+            // 取舍：宁可少发一条（报错给用户），也不重复发送。
+            // Request fully written but outcome unknown: webhooks have no idempotency key, so a
+            // retry may post a duplicate. Trade-off: fail (and report) rather than risk a duplicate.
+            Err(SendError::Uncertain(msg)) => {
+                break Err(format!(
+                    "{} (delivery status unknown; not retrying to avoid a duplicate message)",
+                    msg
+                ));
+            }
+            // 请求未被处理（含 502/503/504），可重试 / Request not processed (incl. 502/503/504); retry
+            Err(e @ SendError::NotDelivered(_)) => {
+                let e = e.message().to_string();
                 attempt += 1;
                 if attempt >= RETRY_DELAYS.len() as u32 {
-                    return Err(e);
+                    break Err(e);
                 }
                 let delay = RETRY_DELAYS[(attempt as usize - 1).min(RETRY_DELAYS.len() - 1)];
                 eprintln!(
@@ -685,21 +822,146 @@ fn run() -> Result<(), String> {
                 std::thread::sleep(Duration::from_secs(delay));
             }
         }
+    };
+
+    // 无论成功失败都删除本次为 Discord 压缩生成的封面临时文件（tmp/{stem}_dc_resized.jpg），
+    // 之前从不删除，只能等后端定时清理；重新运行时会重新压缩，代价很小。
+    // Remove the cover temp file compressed for Discord this run (tmp/{stem}_dc_resized.jpg)
+    // regardless of the outcome; it used to be left for the backend's scheduled cleanup,
+    // and re-running simply compresses it again, which is cheap.
+    if let (Some(img), Some(resized)) = (cover.as_ref(), effective_cover.as_ref())
+        && resized != img
+    {
+        let _ = fs::remove_file(resized);
     }
+    send_result?;
 
     emit_progress_step(3, 3);
-    println!("OUTPUT:{}", input.display());
+    pp_utils::output_ok(&[&bundle_input.to_string_lossy()], "Discord notification sent");
     Ok(())
 }
 
 fn main() {
-    let args: Vec<String> = env::args().collect();
+    let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(|s| s.as_str()) == Some("--describe") {
-        print!("{}", DESCRIBE);
+        print!("{}", pp_utils::describe_with_version(DESCRIBE, env!("CARGO_PKG_VERSION")));
         return;
     }
     if let Err(e) = run() {
-        eprintln!("{}", e);
+        let json = serde_json::json!({ "code": "error", "message": e, "outputs": [] });
+        println!("{}", json);
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! 单元测试与联网测试。
+    //! 联网测试需要可用的 HTTP 代理（环境变量 `NOTIFY_DISCORD_TEST_PROXY`，
+    //! 缺省 `http://192.168.1.5:10808`），故用 `#[ignore]` 默认跳过，用
+    //! `cargo test -- --ignored` 显式运行。
+    //!
+    //! Unit tests and networked tests. The networked ones need a working HTTP
+    //! proxy (`NOTIFY_DISCORD_TEST_PROXY`, default `http://192.168.1.5:10808`),
+    //! so they are `#[ignore]`d by default and run via `cargo test -- --ignored`.
+    use super::*;
+
+    /// TLS 客户端配置能成功构造（仅构造，不联网）。
+    /// The TLS client config can be built (construction only, no network).
+    #[test]
+    fn client_config_builds() {
+        let config = rustls_wrapper::client_config();
+        assert!(
+            config.is_ok(),
+            "TLS config build failed: {:?}",
+            config.err()
+        );
+    }
+
+    /// 联网测试用的代理地址：环境变量覆盖，缺省本机 HTTP 代理。
+    /// Proxy for the networked tests: env override, defaults to the local HTTP proxy.
+    fn test_proxy() -> String {
+        std::env::var("NOTIFY_DISCORD_TEST_PROXY")
+            .unwrap_or_else(|_| "http://192.168.1.5:10808".to_string())
+    }
+
+    /// 经代理对目标完成 TLS 握手并读取 HTTP 状态行。
+    /// 握手实际发生在第一次 IO（rustls 惰性握手）：证书校验失败会在此处返回
+    /// 包含证书信息的 IO 错误；代理隧道失败则在此之前就报错，两类错误可区分。
+    ///
+    /// Perform a TLS handshake with `host:port` through the proxy and read the
+    /// HTTP status line. The handshake happens on first IO (rustls is lazy):
+    /// certificate verification failures surface here as IO errors containing
+    /// certificate details, while proxy-tunnel failures fail earlier — the two
+    /// error classes stay distinguishable.
+    ///
+    /// # 参数 / Parameters
+    /// - `host`: 目标主机名 / target host name
+    /// - `port`: 目标端口 / target port
+    fn https_get_status_line(host: &str, port: u16) -> Result<String, String> {
+        let proxy = test_proxy();
+        let tcp = tcp_connect(host, port, &proxy)?;
+        let mut tls = tls_wrap(tcp, host)?;
+        tls.write_all(
+            format!("GET / HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n", host).as_bytes(),
+        )
+        .map_err(|e| format!("write: {}", e))?;
+        tls.flush().map_err(|e| format!("flush: {}", e))?;
+        let mut line = Vec::new();
+        let mut b = [0u8; 1];
+        loop {
+            tls.read_exact(&mut b).map_err(|e| format!("read: {}", e))?;
+            line.push(b[0]);
+            if line.ends_with(b"\n") || line.len() > 8192 {
+                break;
+            }
+        }
+        Ok(String::from_utf8_lossy(&line).trim_end().to_string())
+    }
+
+    /// 正向：经代理对 discord.com:443 握手成功并读到 `HTTP/1.` 状态行。
+    /// Positive: handshake with discord.com:443 through the proxy must succeed
+    /// and yield an `HTTP/1.` status line.
+    #[test]
+    #[ignore = "networked: requires the test proxy"]
+    fn handshake_discord_through_proxy() {
+        let status = https_get_status_line("discord.com", 443)
+            .expect("TLS exchange with discord.com failed");
+        println!("status line: {}", status);
+        assert!(
+            status.starts_with("HTTP/1."),
+            "unexpected status line: {}",
+            status
+        );
+    }
+
+    /// 负向：过期证书必须被拒绝（证明校验未被关闭）。
+    /// 断言错误文本包含证书相关字样，避免把网络故障误当成证书拒绝。
+    /// 说明：*.badssl.com 各测试端点会对 rustls 的 ClientHello 直接回
+    /// handshake-failure 警报（其 nginx 只支持旧式握手，openssl -tls1_3 同样被拒），
+    /// 与证书校验无关；因此改用 `expired-rsa-dv.ssl.com`（TLS1.3 + 过期证书）。
+    ///
+    /// Negative: an expired certificate must be rejected (proves verification
+    /// is still enabled). The error text must mention the certificate so that a
+    /// network failure is not mistaken for a certificate rejection.
+    /// Note: the *.badssl.com test endpoints abort rustls ClientHellos with a
+    /// handshake-failure alert (their nginx only accepts legacy handshakes;
+    /// `openssl -tls1_3` is rejected identically) — unrelated to certificate
+    /// verification — so `expired-rsa-dv.ssl.com` (TLS1.3 + expired cert) is used.
+    #[test]
+    #[ignore = "networked: requires the test proxy"]
+    fn handshake_rejects_expired_cert() {
+        // 目标可用环境变量覆盖便于排障 / target is env-overridable for troubleshooting
+        let host = std::env::var("NOTIFY_DISCORD_TEST_BAD_HOST")
+            .unwrap_or_else(|_| "expired-rsa-dv.ssl.com".to_string());
+        let result = https_get_status_line(&host, 443);
+        println!("raw result: {:?}", result);
+        let err = result.expect_err("expired certificate must be rejected");
+        let lower = err.to_lowercase();
+        assert!(
+            lower.contains("cert") || lower.contains("unknownissuer"),
+            "expected a certificate error, got: {}",
+            err
+        );
     }
 }

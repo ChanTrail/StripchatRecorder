@@ -11,80 +11,154 @@ use std::fmt;
 /// 应用统一错误类型 / Unified application error type
 #[derive(Debug)]
 pub enum AppError {
-    /// 文件系统 IO 错误 / File system IO error
-    Io(std::io::Error),
-    /// HTTP 网络请求错误 / HTTP network request error
-    Reqwest(reqwest::Error),
-    /// JSON 序列化/反序列化错误 / JSON serialization/deserialization error
-    Json(serde_json::Error),
-    /// 直播间已下线 / Stream is offline
-    StreamOffline(String),
-    /// 该主播已在录制中 / Streamer is already being recorded
-    AlreadyRecording(String),
-    /// 该主播当前未在录制 / Streamer is not currently being recorded
-    NotRecording(String),
-    /// 用户不存在 / User not found
-    UserNotFound(String),
-    /// 其他错误 / Other errors
-    Other(String),
+	/// 文件系统 IO 错误 / File system IO error
+	Io(std::io::Error),
+	/// HTTP 网络请求错误 / HTTP network request error
+	Reqwest(reqwest::Error),
+	/// JSON 序列化/反序列化错误 / JSON serialization/deserialization error
+	Json(serde_json::Error),
+	/// 直播间已下线 / Stream is offline
+	StreamOffline(String),
+	/// 该主播已在录制中 / Streamer is already being recorded
+	AlreadyRecording(String),
+	/// 该主播当前未在录制 / Streamer is not currently being recorded
+	NotRecording(String),
+	/// 用户不存在 / User not found
+	UserNotFound(String),
+	/// 用户名查询不到，但通过缓存的 model_id 反查确认该主播已改名
+	/// （携带旧用户名、新用户名、model_id，供调用方更新追踪列表）。
+	/// Username lookup failed, but a cached model_id confirms the streamer was renamed
+	/// (carries old username, new username, and model_id for the caller to update the
+	/// tracking list).
+	UserRenamed {
+		old: String,
+		new: String,
+		model_id: i64,
+	},
+	/// 所有 CDN 节点对该 URL 都返回了 HTTP 404（携带 URL）。对 HLS 分片来说通常表示
+	/// 它还没发布完，而不是下载出了问题，调用方可据此留到下一轮再试。
+	/// Every CDN node answered HTTP 404 for this URL (carries the URL). For an HLS segment this
+	/// usually means it has not been published yet rather than a download problem, so callers
+	/// can leave it for the next round.
+	HttpNotFound(String),
+	/// 其他错误 / Other errors
+	Other(String),
 }
 
 impl fmt::Display for AppError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Io(e) => write!(f, "IO error: {}", e),
-            Self::Reqwest(e) => write!(f, "Network error: {}", e),
-            Self::Json(e) => write!(f, "JSON error: {}", e),
-            Self::StreamOffline(s) => write!(f, "Stream offline: {}", s),
-            Self::AlreadyRecording(s) => write!(f, "Already recording: {}", s),
-            Self::NotRecording(s) => write!(f, "Not recording: {}", s),
-            Self::UserNotFound(s) => write!(f, "User not found: {}", s),
-            Self::Other(s) => write!(f, "{}", s),
-        }
-    }
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		match self {
+			Self::Io(e) => write!(f, "IO error: {}", e),
+			Self::Reqwest(e) => write!(f, "Network error: {}", e),
+			Self::Json(e) => write!(f, "JSON error: {}", e),
+			Self::StreamOffline(s) => write!(f, "Stream offline: {}", s),
+			Self::AlreadyRecording(s) => write!(f, "Already recording: {}", s),
+			Self::NotRecording(s) => write!(f, "Not recording: {}", s),
+			Self::UserNotFound(s) => write!(f, "User not found: {}", s),
+			Self::UserRenamed { old, new, .. } => {
+				write!(f, "Streamer renamed: {} -> {}", old, new)
+			}
+			Self::HttpNotFound(url) => write!(f, "HTTP 404 on all CDN TLDs → {}", url),
+			Self::Other(s) => write!(f, "{}", s),
+		}
+	}
 }
 
-impl std::error::Error for AppError {}
+impl std::error::Error for AppError {
+	/// 暴露内层错误，供 [`error_chain`] 逐层取出底层原因。
+	/// Expose the inner error so [`error_chain`] can walk down to the underlying causes.
+	fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+		match self {
+			Self::Io(e) => Some(e),
+			Self::Reqwest(e) => Some(e),
+			Self::Json(e) => Some(e),
+			_ => None,
+		}
+	}
+}
+
+impl AppError {
+	/// 错误信息加上全部底层原因（见 [`error_chain`]）。网络错误的 Display 只有外层的
+	/// "error sending request for url (...)"，看不出是连接被拒、TLS 握手失败、DNS 失败还是
+	/// 连接被关闭，排查时用这个方法输出完整原因。
+	///
+	/// The error message plus every underlying cause (see [`error_chain`]). A network error's
+	/// Display only shows the outer "error sending request for url (...)", hiding whether the
+	/// connection was refused, the TLS handshake failed, DNS failed or the connection was closed;
+	/// use this when the full cause is needed for troubleshooting.
+	pub fn detailed(&self) -> String {
+		error_chain(self)
+	}
+}
+
+/// 把错误及其 `source()` 链上的全部底层原因拼成一行，以 ": " 分隔；与已输出内容重复的层级
+/// 跳过（如 `AppError::Reqwest` 外层已经包含 reqwest 错误本身的信息）。
+///
+/// Join an error and every underlying cause in its `source()` chain into one line, separated by
+/// ": "; levels whose message is already included are skipped (e.g. the outer
+/// `AppError::Reqwest` message already contains the reqwest error's own text).
+pub fn error_chain(err: &(dyn std::error::Error + 'static)) -> String {
+	let mut out = err.to_string();
+	let mut cause = err.source();
+	while let Some(e) = cause {
+		let msg = e.to_string();
+		if !msg.is_empty() && !out.contains(&msg) {
+			out.push_str(": ");
+			out.push_str(&msg);
+		}
+		cause = e.source();
+	}
+	out
+}
 
 impl From<std::io::Error> for AppError {
-    fn from(e: std::io::Error) -> Self {
-        Self::Io(e)
-    }
+	fn from(e: std::io::Error) -> Self {
+		Self::Io(e)
+	}
 }
 
 impl From<reqwest::Error> for AppError {
-    fn from(e: reqwest::Error) -> Self {
-        Self::Reqwest(e)
-    }
+	fn from(e: reqwest::Error) -> Self {
+		Self::Reqwest(e)
+	}
+}
+
+impl From<wreq::Error> for AppError {
+	fn from(e: wreq::Error) -> Self {
+		// 带完整 source 链——单独 `e.to_string()` 只剩顶层
+		// "error sending request" / keeps the full source chain — bare
+		// to_string() only yields the top-level "error sending request"
+		Self::Other(error_chain(&e))
+	}
 }
 
 impl From<serde_json::Error> for AppError {
-    fn from(e: serde_json::Error) -> Self {
-        Self::Json(e)
-    }
+	fn from(e: serde_json::Error) -> Self {
+		Self::Json(e)
+	}
 }
 
 impl From<String> for AppError {
-    fn from(s: String) -> Self {
-        Self::Other(s)
-    }
+	fn from(s: String) -> Self {
+		Self::Other(s)
+	}
 }
 
 impl From<&str> for AppError {
-    fn from(s: &str) -> Self {
-        Self::Other(s.to_string())
-    }
+	fn from(s: &str) -> Self {
+		Self::Other(s.to_string())
+	}
 }
 
 /// 序列化为错误消息字符串，使 Tauri 命令可以直接将错误返回给前端。
 /// Serializes to an error message string so Tauri commands can return errors directly to the frontend.
 impl serde::Serialize for AppError {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_str(&self.to_string())
-    }
+	fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+	where
+		S: serde::Serializer,
+	{
+		serializer.serialize_str(&self.to_string())
+	}
 }
 
 /// 应用统一 Result 类型别名 / Unified Result type alias for the application

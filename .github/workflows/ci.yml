@@ -4,63 +4,90 @@ on:
   push:
     branches: [master, beta]
     paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - '.gitignore'
-      - 'docker-compose.yml'
+      - "**.md"
+      - "docs/**"
+      - ".gitignore"
+      - "docker-compose.yml"
   pull_request:
     branches: [master]
     paths-ignore:
-      - '**.md'
-      - 'docs/**'
+      - "**.md"
+      - "docs/**"
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # ── 前端类型检查与构建 / Frontend type-check & build ────────────────────────
-  frontend:
-    name: Frontend (type-check + build)
+  # ── 前端类型检查 / Frontend type-check ──────────────────────────────────────
+  # 前端产物与平台无关，单平台检查足够；仅 vue-tsc 通过即可。
+  # Frontend is platform-independent; only type-check (vue-tsc) is required.
+  check-frontend:
+    name: Check frontend (vue-tsc)
     runs-on: ubuntu-22.04
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+
+      # pnpm 版本取自根 package.json 的 packageManager / pnpm version comes from the root package.json packageManager
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: lts/*
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
 
       - name: Install dependencies
-        run: npm i
+        run: pnpm install --frozen-lockfile
         working-directory: frontend
 
-      - name: Type-check & build
-        run: npm run build
+      - name: Type-check
+        run: pnpm exec vue-tsc --noEmit
         working-directory: frontend
 
-  # ── 桌面端类型检查 / Desktop type-check (vue-tsc + modules) ─────────────────
-  check-desktop:
-    name: Check desktop (type-check + modules)
+  # ── 桌面端前端类型检查 / Desktop frontend type-check ────────────────────────
+  # 同上，仅 vue-tsc 通过即可，不涉及 Rust。
+  # Same reasoning — frontend only, no Rust needed.
+  check-desktop-frontend:
+    name: Check desktop frontend (vue-tsc)
     runs-on: ubuntu-22.04
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+
+      # pnpm 版本取自根 package.json 的 packageManager / pnpm version comes from the root package.json packageManager
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: lts/*
-          cache: npm
-          cache-dependency-path: desktop/package-lock.json
+          cache: pnpm
+          cache-dependency-path: desktop/pnpm-lock.yaml
 
       - name: Install desktop dependencies
-        run: npm i
+        run: pnpm install --frozen-lockfile
         working-directory: desktop
+
+      - name: Type-check
+        run: pnpm exec vue-tsc --noEmit
+        working-directory: desktop
+
+  # ── 桌面端后端检查 / Desktop backend check ──────────────────────────────────
+  # 拆分自原 check-desktop-frontend，单独跑 Tauri (Rust) 部分。
+  # Split from check-desktop-frontend; runs the Tauri (Rust) side only.
+  check-desktop-backend:
+    name: Check desktop backend (cargo)
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
 
       - name: Install system dependencies
         run: |
@@ -71,48 +98,82 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: "1.98"
           components: clippy
 
       - name: Cache Rust dependencies (desktop)
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop/src-tauri -> ../../../build_tmp/desktop/target
-          key: desktop-ci
+          key: desktop-ci-linux
 
-      - name: Run desktop check
-        run: node scripts/check.desktop.js
+      - name: Check
+        run: cargo check --manifest-path desktop/src-tauri/Cargo.toml
         env:
-          CHECK_NESTED: "1"
           CARGO_TARGET_DIR: build_tmp/desktop/target
 
-  # ── 服务器端检查 / Server check + clippy ──────────────────────────────────
+      - name: Clippy
+        run: cargo clippy --manifest-path desktop/src-tauri/Cargo.toml -- -D warnings
+        env:
+          CARGO_TARGET_DIR: build_tmp/desktop/target
+
+  # ── 服务器端三平台检查 / Server cross-platform check ──────────────────────
   check-server:
-    name: Check server
-    runs-on: ubuntu-22.04
+    name: Check server (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-latest, windows-11-arm, macos-latest]
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
-      - name: Install system dependencies
+      - name: Install Linux system dependencies
+        if: matrix.os == 'ubuntu-22.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y pkg-config build-essential libssl-dev
 
+      - name: Install macOS system dependencies
+        if: matrix.os == 'macos-latest'
+        run: brew install pkg-config
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: "1.98"
           components: clippy
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: backend -> ../build_tmp/backend/target
-          key: server-ci
+          key: server-ci-${{ matrix.os }}
 
       # RustEmbed 要求 dist 目录存在 / RustEmbed requires the dist directory to exist
       - name: Ensure build_tmp/frontend/dist exists
+        shell: bash
         run: mkdir -p build_tmp/frontend/dist
+
+      # ── Windows ARM64 BoringSSL 回避 / Windows ARM64 BoringSSL workaround ──
+      # btls-sys 在原生 aarch64-pc-windows-msvc 构建（host == target）时提前
+      # 返回，不会定义 OPENSSL_NO_ASM；BoringSSL 于是启用 GAS 语法 .S 汇编源，
+      # MSVC armasm64 无法编译导致 LNK1181。通过 CMAKE_TOOLCHAIN_FILE 注入
+      # cmake/boringssl-win-arm64.cmake 关闭汇编（详见该文件注释）。
+      #
+      # On native aarch64-pc-windows-msvc builds (host == target) btls-sys
+      # returns early and never defines OPENSSL_NO_ASM, so BoringSSL enables
+      # GAS-syntax .S sources that MSVC's armasm64 cannot assemble (LNK1181).
+      # CMAKE_TOOLCHAIN_FILE injects cmake/boringssl-win-arm64.cmake which
+      # disables assembly (see that file for details).
+      - name: Configure BoringSSL no-asm toolchain (windows-11-arm)
+        if: matrix.os == 'windows-11-arm'
+        shell: pwsh
+        run: |
+          $toolchain = ($env:GITHUB_WORKSPACE -replace '\\', '/') + '/cmake/boringssl-win-arm64.cmake'
+          "CMAKE_TOOLCHAIN_FILE=$toolchain" >> $env:GITHUB_ENV
 
       - name: Check
         run: cargo check --manifest-path backend/Cargo.toml
@@ -124,39 +185,67 @@ jobs:
         env:
           CARGO_TARGET_DIR: build_tmp/backend/target
 
-  # ── 模块检查 / Modules check + clippy ───────────────────────────────────────
+  # ── 模块三平台检查 / Modules cross-platform check ───────────────────────────
   check-modules:
-    name: Check modules
-    runs-on: ubuntu-22.04
+    name: Check modules (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-latest, windows-11-arm, macos-latest]
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
-      - name: Install system dependencies
+      - name: Install Linux system dependencies
+        if: matrix.os == 'ubuntu-22.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y libssl-dev pkg-config build-essential
 
+      - name: Install macOS system dependencies
+        if: matrix.os == 'macos-latest'
+        run: brew install pkg-config
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: "1.98"
           components: clippy
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
+            modules/cleanup -> ../../build_tmp/modules/cleanup/target
             modules/contact_sheet -> ../../build_tmp/modules/contact_sheet/target
             modules/filter_short -> ../../build_tmp/modules/filter_short/target
             modules/notify_discord -> ../../build_tmp/modules/notify_discord/target
             modules/notify_telegram -> ../../build_tmp/modules/notify_telegram/target
             modules/pp_utils -> ../../build_tmp/modules/pp_utils/target
-          key: modules-ci
+            modules/segment_merge -> ../../build_tmp/modules/segment_merge/target
+          key: modules-ci-${{ matrix.os }}
+
+      # ── Windows ARM64 BoringSSL 回避 / Windows ARM64 BoringSSL workaround ──
+      # 目前模块不依赖 btls-sys；若未来引入 cmake 构建的 -sys 依赖，
+      # windows-11-arm 会踩与 check-server 相同的 LNK1181，预先注入同一
+      # toolchain 文件以免疫（详见 cmake/boringssl-win-arm64.cmake 注释）。
+      #
+      # Modules don't depend on btls-sys today; inject the same toolchain
+      # file anyway so a future cmake-built -sys dep can't trip the same
+      # LNK1181 on windows-11-arm (see cmake/boringssl-win-arm64.cmake).
+      - name: Configure BoringSSL no-asm toolchain (windows-11-arm)
+        if: matrix.os == 'windows-11-arm'
+        shell: pwsh
+        run: |
+          $toolchain = ($env:GITHUB_WORKSPACE -replace '\\', '/') + '/cmake/boringssl-win-arm64.cmake'
+          "CMAKE_TOOLCHAIN_FILE=$toolchain" >> $env:GITHUB_ENV
 
       - name: Check all modules
+        shell: bash
         run: |
-          for module_dir in modules/contact_sheet modules/filter_short modules/notify_discord modules/notify_telegram modules/pp_utils; do
+          for module_dir in modules/cleanup modules/contact_sheet modules/filter_short modules/notify_discord modules/notify_telegram modules/pp_utils modules/segment_merge; do
             if [ -f "$module_dir/Cargo.toml" ]; then
               echo "=== Checking $module_dir ==="
               cargo check --manifest-path "$module_dir/Cargo.toml"
@@ -164,125 +253,35 @@ jobs:
             fi
           done
 
-  # ── 桌面端构建 / Desktop build (Linux) ──────────────────────────────────────
-  build-desktop:
-    name: Build desktop (Linux)
-    runs-on: ubuntu-22.04
-    needs: [check-desktop, check-modules]
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: lts/*
-          cache: npm
-          cache-dependency-path: desktop/package-lock.json
-
-      - name: Install desktop dependencies
-        run: npm i
-        working-directory: desktop
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            pkg-config build-essential libssl-dev \
-            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust dependencies (desktop)
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            desktop/src-tauri -> ../../../build_tmp/desktop/target
-            modules/contact_sheet -> ../../build_tmp/modules/contact_sheet/target
-            modules/filter_short -> ../../build_tmp/modules/filter_short/target
-            modules/notify_discord -> ../../build_tmp/modules/notify_discord/target
-            modules/notify_telegram -> ../../build_tmp/modules/notify_telegram/target
-            modules/pp_utils -> ../../build_tmp/modules/pp_utils/target
-          key: desktop-release
-
-      - name: Full desktop release build
-        run: node scripts/release.desktop.js
-        env:
-          CARGO_TARGET_DIR: build_tmp/desktop/target
-
-  # ── 服务器端构建 / Server build (Linux) ───────────────────────────────────
-  build-server:
-    name: Build server  (Linux)
-    runs-on: ubuntu-22.04
-    needs: [frontend, check-server, check-modules]
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: lts/*
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install frontend dependencies
-        run: npm i
-        working-directory: frontend
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y pkg-config build-essential libssl-dev
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: backend -> ../build_tmp/backend/target
-          key: server-release
-
-      - name: Full release build
-        run: node scripts/release.js
-
-  # ── 自动打 Tag / Auto-tag after CI (master only) ─────────────────────────────
+  # ── 自动打 Tag / Auto-tag (master only) ──────────────────────────────────────
   #
-  # 仅在 master 分支且所有构建通过后运行。
-  # 从 package.json 读取版本号，若对应 tag 不存在则创建并推送，
-  # 从而自动触发 release.yml 工作流。
+  # 所有平台的 check 全部通过后才运行，beta 分支不触发。
+  # 从 package.json 读取版本号，若 tag 不存在则用 PAT 推送，触发 release.yml。
   #
-  # Only runs on master after all builds pass.
-  # Reads version from package.json; creates and pushes the tag if it doesn't
-  # exist yet, which in turn triggers the release.yml workflow.
+  # Only runs after all platform checks pass; not triggered on beta.
+  # Reads version from package.json; pushes a tag via PAT if it doesn't exist,
+  # which triggers release.yml.
   auto-tag:
     name: Auto-tag release
     runs-on: ubuntu-22.04
-    needs: [build-server, build-desktop]
-    if: (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/beta') && github.event_name == 'push'
+    needs:
+      [check-frontend, check-desktop-frontend, check-desktop-backend, check-server, check-modules]
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          # 使用 PAT checkout，确保后续 push 也携带同一凭据
-          # Checkout with PAT so the subsequent push uses the same credential
           token: ${{ secrets.RELEASE_PAT }}
 
-      # 从 package.json 读取版本号并构造 tag / Read version from package.json and build tag name
       - name: Read version
         id: version
         run: |
           VERSION=$(node -p "require('./package.json').version")
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "tag=v$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=v$VERSION"    >> $GITHUB_OUTPUT
 
-      # 若 tag 已存在则跳过，避免重复发布 / Skip if tag already exists to avoid duplicate releases
       - name: Check if tag exists
         id: tag_check
         run: |
@@ -293,10 +292,65 @@ jobs:
             echo "exists=false" >> $GITHUB_OUTPUT
           fi
 
-      # 用 PAT 推送 tag，绕过 GITHUB_TOKEN 不触发下游 workflow 的限制
-      # Push tag with PAT to bypass the GITHUB_TOKEN cross-workflow trigger restriction
       - name: Create and push tag
         if: steps.tag_check.outputs.exists == 'false'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "${{ steps.version.outputs.tag }}"
+          git push origin "${{ steps.version.outputs.tag }}"
+
+  # ── 自动打 Tag / Auto-tag (beta only) ────────────────────────────────────────
+  #
+  # 逻辑与 auto-tag 相同，但仅在 beta 分支触发。
+  # 版本号必须包含预发布后缀（如 -beta），否则跳过，避免意外覆盖稳定版 tag。
+  #
+  # Same logic as auto-tag, but triggered on the beta branch only.
+  # Skips if the version has no pre-release suffix to avoid overwriting stable tags.
+  auto-tag-beta:
+    name: Auto-tag pre-release (beta)
+    runs-on: ubuntu-22.04
+    needs:
+      [check-frontend, check-desktop-frontend, check-desktop-backend, check-server, check-modules]
+    if: github.ref == 'refs/heads/beta' && github.event_name == 'push'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PAT }}
+
+      - name: Read version
+        id: version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=v$VERSION"    >> $GITHUB_OUTPUT
+
+      - name: Verify pre-release suffix
+        id: pre_check
+        run: |
+          if echo "${{ steps.version.outputs.version }}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+-.+$'; then
+            echo "is_prerelease=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_prerelease=false" >> $GITHUB_OUTPUT
+            echo "Version '${{ steps.version.outputs.version }}' has no pre-release suffix, skipping tag."
+          fi
+
+      - name: Check if tag exists
+        id: tag_check
+        if: steps.pre_check.outputs.is_prerelease == 'true'
+        run: |
+          if git ls-remote --tags origin "${{ steps.version.outputs.tag }}" | grep -q .; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Tag ${{ steps.version.outputs.tag }} already exists, skipping."
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create and push tag
+        if: steps.pre_check.outputs.is_prerelease == 'true' && steps.tag_check.outputs.exists == 'false'
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"

@@ -1,8 +1,13 @@
 /**
  * 路由配置（桌面版）/ Router Configuration (Desktop)
  *
- * 与服务器版相比，移除了 /relay 路由（桌面版不支持流转发）。
- * Compared to the server version, the /relay route is removed (desktop does not support stream relay).
+ * 与服务器版相比：
+ * - 无 /login、/relay（桌面版不支持流转发、无独立认证）
+ * - 新增 /community、/about（与服务器版同步）
+ *
+ * Compared to the server version:
+ * - No /login or /relay (desktop has no relay and no separate auth)
+ * - Added /community and /about (synced with server version)
  */
 
 import { createRouter, createWebHistory } from "vue-router";
@@ -16,8 +21,13 @@ const router = createRouter({
 		{ path: "/", component: () => import("../views/HomeView.vue") },
 		{ path: "/recordings", component: () => import("../views/RecordingsView.vue") },
 		{ path: "/postprocess", component: () => import("../views/PostprocessView.vue") },
+		{ path: "/community", component: () => import("../views/CommunityView.vue") },
 		{ path: "/settings", component: () => import("../views/SettingsView.vue") },
+		{ path: "/usage", component: () => import("../views/UsageView.vue") },
+		{ path: "/status", component: () => import("../views/StatusView.vue") },
 		{ path: "/finder", component: () => import("../views/FinderView.vue") },
+		{ path: "/stripchat", component: () => import("../views/StripchatView.vue") },
+		{ path: "/about", component: () => import("../views/AboutView.vue") },
 	],
 });
 

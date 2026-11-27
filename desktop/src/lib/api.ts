@@ -73,12 +73,15 @@ export async function call<T = unknown>(
  * @param cb    - 事件回调 / Event callback
  * @returns 取消订阅函数 / Unsubscribe function
  */
-export async function on(
-	event: string,
-	cb: (payload: unknown) => void,
-): Promise<() => void> {
+export async function on(event: string, cb: (payload: unknown) => void): Promise<() => void> {
 	const unlisten: UnlistenFn = await listen<unknown>(event, (e) => {
 		cb(e.payload);
 	});
 	return unlisten;
+}
+
+// ─── startTokenRenew 存根（供 stores 兼容引用，Tauri 无需 token 续期）───────
+// startTokenRenew stub (for store compatibility; Tauri does not need token renewal)
+export function startTokenRenew(): void {
+	// no-op in Tauri mode
 }

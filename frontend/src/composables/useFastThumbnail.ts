@@ -10,13 +10,10 @@
 
 import { ref, watch, type Ref } from "vue";
 
-/** 支持的 CDN 顶级域名列表 / Supported CDN top-level domains */
-const CDN_TLDS = [
-	"doppiocdn.com",
-	"doppiocdn.org",
-	"doppiocdn.live",
-	"doppiocdn.net",
-];
+/** 缩略图竞速用的 CDN 顶级域名列表（与后端 CDN_TLDS 不同：无 .media，
+ * 且顺序即生产竞速顺序）/ CDN TLDs raced for thumbnails (differs from
+ * the backend CDN_TLDS: no .media; order mirrors production racing) */
+export const THUMB_CDN_TLDS = ["doppiocdn.com", "doppiocdn.org", "doppiocdn.live", "doppiocdn.net"];
 
 /**
  * 对给定的缩略图 URL 进行多 CDN 竞速，返回最快加载成功的 URL。
@@ -37,26 +34,42 @@ export function useFastThumbnail(thumbnailUrl: Ref<string | null | undefined>) {
 	async function race(url: string) {
 		// 检查 URL 是否包含已知 CDN 域名，否则直接使用原始 URL
 		// Check if URL contains a known CDN TLD, otherwise use the original URL directly
-		const matchedTld = CDN_TLDS.find((tld) => url.includes(tld));
+		const matchedTld = THUMB_CDN_TLDS.find((tld) => url.includes(tld));
 		if (!matchedTld) {
 			resolvedUrl.value = url;
 			return;
 		}
 
-		// 对每个 CDN 域名创建一个图片加载 Promise，取最先成功的
-		// Create an image load Promise for each CDN TLD, take the first to succeed
+		// 创建所有候选 img 元素，胜出后立即清空其余 img 的 src 以中止请求
+		// Create all candidate img elements; clear the src of losers immediately after a winner is found
+		const imgs = THUMB_CDN_TLDS.map((tld) => {
+			const img = new Image();
+			img.src = url.replace(matchedTld, tld);
+			return { tld, img };
+		});
+
 		const winner = await Promise.any(
-			CDN_TLDS.map(
-				(tld) =>
+			imgs.map(
+				({ tld, img }) =>
 					new Promise<string>((resolve, reject) => {
-						const candidate = url.replace(matchedTld, tld);
-						const img = new Image();
-						img.onload = () => resolve(candidate);
+						img.onload = () => resolve(img.src);
 						img.onerror = () => reject();
-						img.src = candidate;
+						// src 已在上面赋值，此处无需重复赋值
+						// src is already set above, no need to reassign here
+						void tld;
 					}),
 			),
 		).catch(() => url); // 全部失败时回退到原始 URL / Fall back to original URL if all fail
+
+		// 中止未完成的请求：将非胜出者的 src 清空
+		// Abort unfinished requests by clearing the src of non-winners
+		for (const { img } of imgs) {
+			if (img.src !== winner) {
+				img.onload = null;
+				img.onerror = null;
+				img.src = "";
+			}
+		}
 
 		resolvedUrl.value = winner;
 	}

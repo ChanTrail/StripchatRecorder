@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    stripchat_recorder_desktop_lib::run()
+	stripchat_recorder_desktop_lib::run()
 }

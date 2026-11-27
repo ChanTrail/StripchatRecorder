@@ -1,10 +1,10 @@
 [package]
 name = "contact_sheet"
-version = "0.3.1"
+version = "0.5.0"
 edition = "2024"
 
 [[bin]]
-name = "contact_sheet_v031"
+name = "contact_sheet"
 path = "src/main.rs"
 
 [dependencies]

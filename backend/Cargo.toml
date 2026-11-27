@@ -1,6 +1,6 @@
 [package]
 name = "stripchat-recorder"
-version = "0.3.5"
+version = "0.5.3"
 description = "Stripchat Stream Recorder"
 authors = ["ChanTrail"]
 edition = "2024"
@@ -13,22 +13,78 @@ crate-type = ["rlib"]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
-reqwest = { version = "0.13", features = ["json", "socks", "rustls", "http2"], default-features = false }
+# ECH 探活用裸 TLS 握手（TLS1.3 + ECH），不经 HTTP——避免重定向把探活
+# 拖进无关主机。与 wreq 数据腿同一 BoringSSL 家族，握手行为一致。/
+# The ECH liveness probe uses a bare TLS handshake (TLS1.3 + ECH) without
+# HTTP, so redirects can't drag it onto unrelated hosts. Same BoringSSL
+# family as the wreq data legs so handshake behavior matches.
+btls = "0.5.6"
+tokio-btls = "0.5.6"
+reqwest = { version = "0.13", features = ["json", "socks", "rustls", "http2", "stream"], default-features = false }
+# Stripchat 全链路的浏览器指纹客户端：reqwest fork + BoringSSL，模拟
+# Chrome 的 TLS(JA3/JA4)/H2(Akamai)/头部序指纹——CF WAF 按指纹判 bot，
+# rustls 裸指纹是 403 主因。直连与 ECH 腿同栈：ECH 经 vendored 补丁的
+# `TlsOptions::ech_config_list` 注入（见 vendor/wreq + vendor/README.md）。/
+# Browser-fingerprint client for all Stripchat legs: a reqwest fork on
+# BoringSSL emulating Chrome's TLS (JA3/JA4), H2 (Akamai) and header-order
+# fingerprints — CF WAF scores on fingerprint and bare rustls was the main
+# 403 driver. Direct and ECH legs share the stack: ECH injects via the
+# vendored patch `TlsOptions::ech_config_list` (see vendor/wreq +
+# vendor/README.md).
+wreq = { version = "0.16", features = ["json", "socks", "gzip", "brotli", "zstd"] }
+wreq-util = { version = "0.2", features = ["emulation"] }
+bytes = "1"
+futures-util = "0.3"
 chrono = { version = "0.4", features = ["serde"] }
 regex = "1"
 sha2 = "0.11"
-base64 = "0.22"
+base64 = "0.23"
 parking_lot = "0.12"
-dirs = "6"
+dirs = "7"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 axum = { version = "0.8", features = ["macros"] }
 axum-extra = { version = "0.12", features = ["typed-header"] }
-tower-http = { version = "0.6", features = ["cors", "fs"] }
+tower-http = { version = "0.7", features = ["cors", "fs"] }
 tokio-stream = "0.1"
 async-stream = "0.3"
 rust-embed = { version = "8", features = ["axum"] }
 mime_guess = "2"
 rand = "0.10"
+argon2 = { version = "0.6", features = ["rand_core"] }
 notify = "8"
 libc = "0.2"
+zip = { version = "9", default-features = false, features = ["deflate"] }
+sysinfo = { version = "0.39", default-features = false, features = ["system", "network"] }
+self_update = { version = "1.3.1", default-features = false, features = ["archive-zip", "compression-zip-deflate", "rustls", "async"] }
+duct = "1.1.2"
+wait-timeout = "0.2.1"
+tempfile = "3.27.0"
+# FFmpeg 自动下载：解压 .tar.xz（Linux / macOS 构建产物）。static 特性从内置源码静态链接 liblzma，
+# 不依赖系统库。/ FFmpeg auto-download: unpack .tar.xz archives (Linux / macOS builds). The `static`
+# feature links liblzma statically from the bundled source, so no system library is needed.
+tar = { version = "0.4", default-features = false }
+liblzma = { version = "0.4", features = ["static"] }
+sevenz-rust2 = { version = "0.25", default-features = false }
+
+[dev-dependencies]
+# 测试需要构造 7z 压缩包：compress 特性启用编码器。resolver v2 下 dev-deps 的
+# feature 不会并入正常构建，发布产物仍只带解码器。
+# Tests build 7z archives, which needs the encoder behind `compress`. Under
+# resolver v2 a dev-dependency's features don't leak into normal builds, so
+# shipped binaries still only carry the decoder.
+sevenz-rust2 = { version = "0.25", default-features = false, features = ["compress"] }
+
+# wreq 定向到 vendored 补丁版（`TlsOptions::ech_config_list` 注入点，
+# ECH 腿必需）——wreq-util 也以 wreq 为依赖，不 patch 会同时出现
+# registry 与 vendored 两份 wreq、模拟档类型对不上。
+# 注意：[patch] 只对本 crate 为根的解析生效——desktop/src-tauri 独立
+# 构建后端，自己的 manifest 里也要带同一段。
+# Points wreq at the vendored patched copy (the `TlsOptions::ech_config_list`
+# injection point the ECH legs need) — wreq-util also depends on wreq, so
+# without the patch both a registry and a vendored wreq would coexist and
+# the emulation types would not match. Note: [patch] only applies to
+# resolutions rooted at this manifest — desktop/src-tauri builds the
+# backend separately and carries the same stanza in its own manifest.
+[patch.crates-io]
+wreq = { path = "../vendor/wreq" }

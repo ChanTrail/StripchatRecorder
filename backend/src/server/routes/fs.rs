@@ -1,0 +1,92 @@
+//! 文件系统工具 handler（目录浏览、磁盘空间）
+//! File system utility handlers (directory browser, disk space)
+
+use crate::server::error::{ApiError, ApiResult};
+use crate::server::router::ServerState;
+use axum::{Json, extract::State as AxumState};
+use serde::Deserialize;
+
+pub async fn get_disk_space_handler(
+	AxumState(s): AxumState<ServerState>,
+) -> ApiResult<serde_json::Value> {
+	let state = std::sync::Arc::clone(&s.app_state);
+	let result = tokio::task::spawn_blocking(move || {
+		let settings = state.get_settings();
+		let fragment_dir = settings.output_dir.clone();
+
+		// 查找流水线中已启用的 segment_merge 节点的 output_dir 参数
+		// Find the output_dir param of any enabled segment_merge node in the pipeline
+		let merge_dir: Option<String> = state
+			.get_pipeline()
+			.nodes
+			.iter()
+			.find(|n| {
+				(n.module_id == crate::postprocess::pipeline::SEGMENT_MERGE_MODULE_ID) && n.enabled
+			})
+			.and_then(|n| n.params.get("output_dir"))
+			.and_then(|v| v.as_str())
+			.filter(|s| !s.trim().is_empty())
+			.map(|s| s.trim().to_string());
+
+		crate::system::disk::get_disk_space_entries(&fragment_dir, merge_dir.as_deref())
+	})
+	.await
+	.map_err(|e| ApiError(e.to_string()))?;
+	Ok(Json(serde_json::to_value(result).unwrap()))
+}
+
+#[derive(Deserialize)]
+pub struct ListDirQuery {
+	#[serde(default)]
+	pub path: String,
+	/// 是否同时返回文件条目（文件选择模式）/ Also return file entries (file-picking mode)
+	#[serde(default)]
+	pub include_files: bool,
+	/// 文件条目仅保留可执行程序（配合 include_files）/ Restrict file entries to executables (with include_files)
+	#[serde(default)]
+	pub exec_only: bool,
+}
+
+/// 列出指定路径下的子目录（`include_files` 时含文件，`exec_only` 时只留可执行项），
+/// 供前端目录浏览器使用。
+/// List subdirectories under the given path (plus files with `include_files`,
+/// executables only with `exec_only`), for the frontend directory browser.
+pub async fn list_dir_handler(
+	axum::extract::Query(q): axum::extract::Query<ListDirQuery>,
+) -> ApiResult<serde_json::Value> {
+	let result = tokio::task::spawn_blocking(move || {
+		crate::system::fs_browser::list_dir_inner(&q.path, q.include_files, q.exec_only)
+	})
+	.await
+	.map_err(|e| ApiError(e.to_string()))?
+	.map_err(ApiError::from)?;
+	Ok(Json(serde_json::to_value(result).unwrap()))
+}
+
+#[derive(Deserialize)]
+pub struct CreateDirBody {
+	pub parent: String,
+	pub name: String,
+}
+
+/// 在指定路径下创建新子目录，供前端目录浏览器的"新建文件夹"使用。
+/// Create a new subdirectory under the given path, for the frontend directory browser's "new folder" action.
+pub async fn create_dir_handler(Json(body): Json<CreateDirBody>) -> ApiResult<serde_json::Value> {
+	let result = tokio::task::spawn_blocking(move || {
+		crate::system::fs_browser::create_dir_inner(&body.parent, &body.name)
+	})
+	.await
+	.map_err(|e| ApiError(e.to_string()))?
+	.map_err(ApiError::from)?;
+	Ok(Json(serde_json::json!({ "path": result })))
+}
+
+/// 列出系统所有可用驱动器（"此电脑"），供前端目录浏览器的顶层导航使用。
+/// List all available system drives ("This PC"), for the frontend directory browser's top-level navigation.
+pub async fn list_drives_handler() -> ApiResult<serde_json::Value> {
+	let result = tokio::task::spawn_blocking(crate::system::fs_browser::list_drives_inner)
+		.await
+		.map_err(|e| ApiError(e.to_string()))?
+		.map_err(ApiError::from)?;
+	Ok(Json(serde_json::to_value(result).unwrap()))
+}

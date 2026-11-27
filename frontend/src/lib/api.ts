@@ -42,6 +42,32 @@ export function onSseDisconnect(cb: () => void): () => void {
 	return () => sseDisconnectCallbacks.delete(cb);
 }
 
+/** Token 自动续期定时器 / Token auto-renew interval */
+let renewTimer: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * 启动 Token 自动续期：每 30 分钟调用一次 /api/auth/renew。
+ * 若续期失败（token 已过期），清除 localStorage token（下次 API 请求会 401）。
+ *
+ * Start token auto-renew: call /api/auth/renew every 30 minutes.
+ * If renewal fails (token expired), clear localStorage so next API call returns 401.
+ */
+export function startTokenRenew() {
+	if (renewTimer) return;
+	const INTERVAL_MS = 30 * 60 * 1000; // 30 分钟 / 30 minutes
+	renewTimer = setInterval(async () => {
+		const token = localStorage.getItem("admin_token");
+		if (!token) return;
+		try {
+			await httpCall("renew_token", {});
+		} catch {
+			// 续期失败说明 token 已过期，清除本地 token
+			// Renewal failed means token expired; clear local token
+			localStorage.removeItem("admin_token");
+		}
+	}, INTERVAL_MS);
+}
+
 /**
  * 确保 SSE 连接已建立。
  * 连接断开后每 3 秒自动重连，并触发相应回调。
@@ -113,10 +139,7 @@ export async function call<T = unknown>(
  * @param cb - 事件回调函数 / Event callback function
  * @returns 取消订阅函数 / Unsubscribe function
  */
-export async function on(
-	event: string,
-	cb: EventCallback,
-): Promise<() => void> {
+export async function on(event: string, cb: EventCallback): Promise<() => void> {
 	ensureSse();
 	await sseReady;
 	if (!sseListeners.has(event)) sseListeners.set(event, new Set());
@@ -140,7 +163,7 @@ const COMMAND_MAP: Record<
 	add_streamer: {
 		method: "POST",
 		url: () => "/api/streamers",
-		body: (a) => ({ username: a.username }),
+		body: (a) => ({ usernames: a.usernames }),
 	},
 	remove_streamer: {
 		method: "DELETE",
@@ -163,7 +186,36 @@ const COMMAND_MAP: Record<
 		method: "GET",
 		url: (a) => `/api/streamers/${a.username}/verify`,
 	},
+	// SC 官方分类浏览列表（StripChat 页）/ Official SC category list (StripChat page)
+	list_sc_models: {
+		method: "GET",
+		url: (a) => {
+			const p = new URLSearchParams();
+			if (a.primaryTag) p.set("primary_tag", String(a.primaryTag));
+			if (a.tag) p.set("tag", String(a.tag));
+			if (a.sortBy) p.set("sort_by", String(a.sortBy));
+			if (a.offset != null) p.set("offset", String(a.offset));
+			if (a.limit != null) p.set("limit", String(a.limit));
+			return `/api/sc/models?${p.toString()}`;
+		},
+	},
 	get_settings: { method: "GET", url: () => "/api/settings" },
+	get_system_info: { method: "GET", url: () => "/api/system-info" },
+	// 服务状态页：并行探测后端各依赖的连通性与延时（skip_mirrored=1 跳过一次性的镜像条目）
+	// Service status page: parallel connectivity+latency probes of backend
+	// dependencies (skip_mirrored=1 skips one-shot mirror-routed items)
+	service_status: {
+		method: "GET",
+		url: (a) =>
+			a?.skip_mirrored ? "/api/service-status?skip_mirrored=1" : "/api/service-status",
+	},
+	// 资源占用页：本进程及其后代（ffmpeg、后处理模块等）的 CPU/内存快照
+	// Resource usage page: CPU/memory snapshot of this process and its
+	// descendants (ffmpeg, post-process modules, ...)
+	process_usage: {
+		method: "GET",
+		url: () => "/api/process-usage",
+	},
 	save_settings_cmd: {
 		method: "POST",
 		url: () => "/api/settings",
@@ -173,7 +225,7 @@ const COMMAND_MAP: Record<
 	add_mouflon_key: {
 		method: "POST",
 		url: () => "/api/mouflon-keys",
-		body: (a) => ({ pkey: a.pkey, pdkey: a.pdkey }),
+		body: (a) => ({ pkey: a.pkey, pdkey: a.pdkey, keystream: a.keystream }),
 	},
 	remove_mouflon_key: {
 		method: "DELETE",
@@ -183,12 +235,20 @@ const COMMAND_MAP: Record<
 		method: "POST",
 		url: () => "/api/mouflon-keys/sync",
 	},
-	remove_missing_pp_results: {
-		method: "POST",
-		url: () => "/api/startup-warnings/pp-results",
-		body: (a) => ({ paths: a.paths }),
-	},
 	get_disk_space: { method: "GET", url: () => "/api/disk-space" },
+	list_dir: {
+		method: "GET",
+		url: (a) => `/api/fs/list-dir?path=${encodeURIComponent(String(a.path ?? ""))}`,
+	},
+	list_drives: {
+		method: "GET",
+		url: () => "/api/fs/list-drives",
+	},
+	create_dir: {
+		method: "POST",
+		url: () => "/api/fs/create-dir",
+		body: (a) => ({ parent: a.parent, name: a.name }),
+	},
 	list_recordings: { method: "GET", url: () => "/api/recordings" },
 	get_merging_dirs: { method: "GET", url: () => "/api/recordings/merging" },
 	delete_recording: {
@@ -233,6 +293,64 @@ const COMMAND_MAP: Record<
 		method: "POST",
 		url: (a) => `/api/relay/${a.username}/stop`,
 	},
+	change_password: {
+		method: "POST",
+		url: () => "/api/auth/change-password",
+		body: (a) => ({ old_password: a.old_password, new_password: a.new_password }),
+	},
+	renew_token: {
+		method: "POST",
+		url: () => "/api/auth/renew",
+	},
+	install_community_module: {
+		method: "POST",
+		url: () => "/api/community-modules/install",
+		body: (a) => a.module,
+	},
+	get_install_tasks: {
+		method: "GET",
+		url: () => "/api/community-modules/tasks",
+	},
+	uninstall_community_module: {
+		method: "POST",
+		url: () => "/api/community-modules/uninstall",
+		body: (a) => ({ module_id: a.moduleId }),
+	},
+	get_notifications: {
+		method: "GET",
+		url: () => "/api/notifications",
+	},
+	mark_notifications_read: {
+		method: "POST",
+		url: () => "/api/notifications/read",
+		body: (a) => ({ ids: a.ids }),
+	},
+	get_update_info: {
+		method: "GET",
+		url: () => "/api/update/info",
+	},
+	get_update_status: {
+		method: "GET",
+		url: () => "/api/update/status",
+	},
+	get_ffmpeg_status: {
+		method: "GET",
+		url: () => "/api/ffmpeg/status",
+	},
+	get_ffmpeg_locations: {
+		method: "GET",
+		url: () => "/api/ffmpeg/locations",
+	},
+	download_ffmpeg: {
+		method: "POST",
+		url: () => "/api/ffmpeg/download",
+		body: (a) => ({ platform: a.platform, variant: a.variant }),
+	},
+	start_update_download: {
+		method: "POST",
+		url: () => "/api/update/download",
+		body: (a) => ({ download_url: a.download_url }),
+	},
 };
 
 /**
@@ -244,22 +362,32 @@ const COMMAND_MAP: Record<
  * @returns 解析后的响应数据 / Parsed response data
  * @throws 命令未知或 HTTP 请求失败时抛出错误 / Throws on unknown command or HTTP failure
  */
-async function httpCall<T>(
-	command: string,
-	args: Record<string, unknown> = {},
-): Promise<T> {
+async function httpCall<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
 	const def = COMMAND_MAP[command];
 	if (!def) throw new Error(`Unknown command: ${command}`);
 
 	const url = def.url(args);
 	const hasBody = def.body !== undefined;
+
+	// 从 localStorage 取 token，注入 Authorization 头
+	// Inject Authorization header from localStorage token
+	const token = localStorage.getItem("admin_token");
+	const headers: Record<string, string> = {};
+	if (hasBody) headers["Content-Type"] = "application/json";
+	if (token) headers["Authorization"] = `Bearer ${token}`;
+
 	const res = await fetch(url, {
 		method: def.method,
-		headers: hasBody ? { "Content-Type": "application/json" } : undefined,
+		headers: Object.keys(headers).length ? headers : undefined,
 		body: hasBody ? JSON.stringify(def.body!(args)) : undefined,
 	});
 
 	if (!res.ok) {
+		if (res.status === 401) {
+			// Token 失效，清除本地 token，router 守卫会在下次导航时检测到并跳转登录页
+			// Token invalid; clear local token — router guard will redirect on next navigation
+			localStorage.removeItem("admin_token");
+		}
 		const text = await res.text().catch(() => res.statusText);
 		throw new Error(text);
 	}

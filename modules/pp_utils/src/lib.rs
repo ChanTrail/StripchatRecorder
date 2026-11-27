@@ -1,7 +1,6 @@
 //! 后处理工具库 / Post-processing Utility Library
 //!
 //! 为所有后处理模块提供共享的工具函数，包括：
-//! - 从环境变量读取模块参数
 //! - 通过 ffprobe 获取视频时长
 //! - 格式化时长、文件大小和传输速度
 //! - 解析录制文件名中的主播名和时间戳
@@ -9,7 +8,6 @@
 //! - 向标准输出发送进度信息
 //!
 //! Provides shared utility functions for all post-processing modules, including:
-//! - Reading module parameters from environment variables
 //! - Getting video duration via ffprobe
 //! - Formatting duration, file size, and transfer speed
 //! - Parsing streamer name and timestamp from recording filenames
@@ -17,44 +15,32 @@
 //! - Emitting progress information to stdout
 
 use std::env;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-/// 读取字符串类型的模块参数，参数通过环境变量 `PP_PARAM_{KEY}` 传入。
-/// Read a string module parameter passed via environment variable `PP_PARAM_{KEY}`.
+/// 主程序按 `ffmpeg_preference` 设置解析好的 ffmpeg 程序路径（`PP_FFMPEG`
+/// 环境变量），由后端 `exec.rs` 在拉起模块进程时注入——模块侧应与主程序
+/// 使用同一个 ffmpeg 副本；未注入（如模块脱离主程序单独手动调用）时回退为
+/// 裸命令名，交由操作系统按 PATH 解析。
 ///
-/// # 参数 / Parameters
-/// - `key`: 参数键名（不区分大小写）/ Parameter key (case-insensitive)
-/// - `fallback`: 环境变量未设置时的默认值 / Default value when env var is not set
-pub fn param(key: &str, fallback: &str) -> String {
-    env::var(format!("PP_PARAM_{}", key.to_uppercase())).unwrap_or_else(|_| fallback.to_string())
+/// The ffmpeg path the host resolved per its `ffmpeg_preference` setting
+/// (`PP_FFMPEG` env var), injected by the backend's `exec.rs` when spawning the
+/// module — modules should invoke the same ffmpeg copy as the host. Falls back
+/// to the bare command name resolved via PATH when unset (e.g. the module is
+/// invoked standalone).
+pub fn ffmpeg_program() -> OsString {
+    env::var_os("PP_FFMPEG")
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| OsString::from("ffmpeg"))
 }
 
-/// 读取 u32 类型的模块参数，解析失败时返回默认值。
-/// Read a u32 module parameter, returns fallback on parse failure.
-pub fn param_u32(key: &str, fallback: u32) -> u32 {
-    param(key, &fallback.to_string())
-        .parse()
-        .unwrap_or(fallback)
-}
-
-/// 读取 f64 类型的模块参数，解析失败时返回默认值。
-/// Read an f64 module parameter, returns fallback on parse failure.
-pub fn param_f64(key: &str, fallback: f64) -> f64 {
-    param(key, &fallback.to_string())
-        .parse()
-        .unwrap_or(fallback)
-}
-
-/// 读取布尔类型的模块参数，"true"/"1"/"yes"（不区分大小写）均视为 true。
-/// Read a boolean module parameter; "true"/"1"/"yes" (case-insensitive) are treated as true.
-pub fn param_bool(key: &str, fallback: bool) -> bool {
-    matches!(
-        param(key, if fallback { "true" } else { "false" })
-            .to_lowercase()
-            .as_str(),
-        "true" | "1" | "yes"
-    )
+/// 同 [`ffmpeg_program`]，解析 ffprobe（`PP_FFPROBE` 环境变量）。
+/// Same as [`ffmpeg_program`], resolving ffprobe (`PP_FFPROBE` env var).
+pub fn ffprobe_program() -> OsString {
+    env::var_os("PP_FFPROBE")
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| OsString::from("ffprobe"))
 }
 
 /// 使用 ffprobe 获取视频文件的时长（秒）。
@@ -64,7 +50,7 @@ pub fn param_bool(key: &str, fallback: bool) -> bool {
 /// 视频时长（秒），ffprobe 不可用或解析失败时返回 `None`。
 /// Video duration in seconds, or `None` if ffprobe is unavailable or parsing fails.
 pub fn video_duration(input: &Path) -> Option<f64> {
-    let out = Command::new("ffprobe")
+    let out = Command::new(ffprobe_program())
         .args([
             "-v",
             "error",
@@ -171,10 +157,44 @@ pub fn find_cover(video: &Path) -> Option<PathBuf> {
     None
 }
 
-/// 获取临时文件目录（优先使用 `PP_EXE_DIR` 环境变量指定目录下的 `tmp` 子目录）。
+/// 获取临时文件目录：`{后端可执行文件所在目录}/tmp/`。
+///
+/// 优先使用 `PP_EXE_DIR` 环境变量指定的目录（该变量由 [`ModuleInput::read`] 在解析
+/// stdin JSON 后自动设置为 `exe_dir` 字段的值——即**后端**可执行文件所在目录，
+/// 由后端 `exec.rs` 通过 `crate::config::settings::exe_dir()` 传入，而不是本模块
+/// 自身可执行文件所在目录）。仅当 `PP_EXE_DIR` 未被设置（如模块脱离主程序单独
+/// 手动调用、或走的是旧版环境变量协议）时，才回退到 `env::current_exe()` 推断的
+/// 模块自身可执行文件目录。
+///
+/// 之所以要用后端可执行文件目录而非模块自身目录：所有模块二进制文件被统一复制到
+/// 同一个共享目录 `{后端目录}/modules/`（见 `discovery.rs` 的 `modules_dir()`），
+/// 若临时目录挂在这个共享目录下（`modules/tmp/`），会与 `modules/` 目录本身的
+/// 语义混淆（`modules/` 应该只存放可执行文件，不该混入运行时产生的缓存文件）；
+/// 挂在后端目录下（`{后端目录}/tmp/`）则与 `meta/`、`locale/`、`logs/` 等其他
+/// 运行时目录保持同一层级，语义更清晰，也不会因构建脚本清理/替换模块二进制文件
+/// 而影响到缓存内容。
+///
 /// 若设置了 `PP_MAX_TMP_MB` 环境变量，会在返回前自动清理超出限制的旧文件。
 ///
-/// Get the temporary file directory (prefers a `tmp` subdirectory under `PP_EXE_DIR` env var).
+/// Get the temporary file directory: `{backend executable's directory}/tmp/`.
+///
+/// Prefers the directory specified by the `PP_EXE_DIR` env var (automatically set by
+/// [`ModuleInput::read`] to the `exe_dir` field's value after parsing the stdin JSON —
+/// i.e. the **backend's own** executable directory, passed in by the backend's
+/// `exec.rs` via `crate::config::settings::exe_dir()`, not this module's own executable
+/// directory). Only falls back to the module's own executable directory (via
+/// `env::current_exe()`) when `PP_EXE_DIR` isn't set (e.g. the module is invoked
+/// standalone outside the host app, or via the legacy env-var protocol).
+///
+/// Why the backend's directory rather than the module's own: all module binaries are
+/// copied into one shared directory, `{backend dir}/modules/` (see `modules_dir()` in
+/// `discovery.rs`). Nesting the tmp directory under that shared directory
+/// (`modules/tmp/`) would blur its meaning (`modules/` should only ever hold
+/// executables, not runtime-generated cache files); nesting it under the backend's own
+/// directory (`{backend dir}/tmp/`) keeps it at the same level as the other runtime
+/// directories (`meta/`, `locale/`, `logs/`, etc.), which is clearer and keeps cache
+/// contents unaffected by the build script cleaning up/replacing module binaries.
+///
 /// If `PP_MAX_TMP_MB` is set, automatically prunes old files that exceed the size limit before returning.
 pub fn tmp_dir() -> PathBuf {
     let base = env::var("PP_EXE_DIR")
@@ -254,7 +274,7 @@ pub fn cleanup_tmp_dir(tmp: &Path, max_mb: u64) {
 /// `(width, height)`, or `None` on failure.
 pub fn image_dimensions(path: &Path) -> Option<(u32, u32)> {
     use std::process::Command;
-    let out = Command::new("ffprobe")
+    let out = Command::new(ffprobe_program())
         .args([
             "-v", "error",
             "-select_streams", "v:0",
@@ -280,7 +300,7 @@ pub fn image_dimensions(path: &Path) -> Option<(u32, u32)> {
 /// `(duration_secs, width, height)`，失败时返回 `None`。
 /// `(duration_secs, width, height)`, or `None` on failure.
 pub fn video_meta(input: &Path) -> Option<(f64, i32, i32)> {
-    let out = Command::new("ffprobe")
+    let out = Command::new(ffprobe_program())
         .args([
             "-v", "error",
             "-select_streams", "v:0",
@@ -337,4 +357,222 @@ pub fn emit_progress_step(step: u32, total_steps: u32) {
             .min(PROGRESS_SCALE as u64) as u32
     };
     println!("PROGRESS:{}/{}", scaled, PROGRESS_SCALE);
+}
+
+// ─── 新 JSON 协议帮助函数 / New JSON Protocol Helpers ────────────────────────
+
+/// 模块 stdin 输入 JSON 结构 / Module stdin input JSON structure
+#[derive(Debug, serde::Deserialize)]
+pub struct ModuleInput {
+    /// 输入路径列表（文件或目录）/ Input path list (files or directories)
+    #[serde(default)]
+    pub inputs: Vec<String>,
+    /// 模块参数 / Module parameters
+    #[serde(default)]
+    pub params: serde_json::Value,
+    /// 模块可执行文件所在目录 / Module executables directory
+    #[serde(default)]
+    pub exe_dir: Option<String>,
+    /// tmp 目录最大占用（MB）/ Max tmp directory size (MB)
+    #[serde(default)]
+    pub max_tmp_mb: Option<u64>,
+    /// 录制上下文 / Recording context
+    #[serde(default)]
+    pub recording: Option<serde_json::Value>,
+}
+
+impl ModuleInput {
+    /// 从 stdin 读取并解析 JSON 输入。
+    /// 若 stdin 为空或解析失败，回退到旧协议（`PP_INPUT` 环境变量）。
+    ///
+    /// 解析成功后，若 JSON 中的 `max_tmp_mb` 大于 0，会写入 `PP_MAX_TMP_MB`，
+    /// 让 [`tmp_dir`] 的大小兜底清理生效。
+    /// On successful parse, a `max_tmp_mb` greater than 0 is written into `PP_MAX_TMP_MB`
+    /// so [`tmp_dir`]'s size-cap cleanup takes effect.
+    ///
+    /// 解析成功后，若 JSON 中的 `exe_dir` 字段非空，会将其写入 `PP_EXE_DIR`
+    /// 环境变量——这样 [`tmp_dir`] 无论在 `ModuleInput::read()` 调用前还是调用后
+    /// 被使用，都能读到同一个值，不需要每个模块自己在 `main()` 里手动转发这个字段。
+    /// `exe_dir` 字段的值来自后端 `exec.rs`（`crate::config::settings::exe_dir()`），
+    /// 是后端可执行文件所在目录，不是本模块自身可执行文件所在目录——[`tmp_dir`] 由此
+    /// 得到的临时目录路径是 `{后端目录}/tmp/`。
+    ///
+    /// Read and parse JSON input from stdin.
+    /// Falls back to legacy protocol (`PP_INPUT` env var) if stdin is empty or parse fails.
+    ///
+    /// On successful parse, if the JSON's `exe_dir` field is non-empty, it's written into
+    /// the `PP_EXE_DIR` env var — so [`tmp_dir`] sees the same value whether it's called
+    /// before or after `ModuleInput::read()`, without every module having to manually
+    /// forward this field in `main()`. The `exe_dir` field's value comes from the
+    /// backend's `exec.rs` (`crate::config::settings::exe_dir()`) — the backend's own
+    /// executable directory, not this module's own — so the tmp directory path
+    /// [`tmp_dir`] resolves to is `{backend dir}/tmp/`.
+    pub fn read() -> Self {
+        use std::io::Read;
+        let mut buf = String::new();
+        std::io::stdin().lock().read_to_string(&mut buf).ok();
+        let trimmed = buf.trim();
+        let parsed = if trimmed.is_empty() {
+            Self::from_legacy_env()
+        } else {
+            serde_json::from_str(trimmed).unwrap_or_else(|_| Self::from_legacy_env())
+        };
+        if let Some(ref dir) = parsed.exe_dir
+            && !dir.is_empty()
+        {
+            // SAFETY: 本进程是一次性 CLI 子进程，且此时刚从 stdin 完成一次性解析，
+            // 尚未 spawn 任何线程，不存在与其他线程并发读写环境变量的竞争。
+            // SAFETY: this process is a one-shot CLI subprocess, and we're right after a
+            // one-time stdin parse with no threads spawned yet, so there's no concurrent
+            // read/write race on the environment from other threads.
+            unsafe {
+                env::set_var("PP_EXE_DIR", dir);
+            }
+        }
+        // 同理转发 tmp 大小上限：tmp_dir() 只读 PP_MAX_TMP_MB 环境变量，之前没有转发时
+        // 后端传入的 max_tmp_mb 从未生效，模块侧的大小兜底清理是死代码。
+        // Forward the tmp size cap the same way: tmp_dir() only reads the PP_MAX_TMP_MB env
+        // var, and without forwarding the backend's max_tmp_mb never took effect, leaving the
+        // module-side size cleanup as dead code.
+        if let Some(mb) = parsed.max_tmp_mb
+            && mb > 0
+        {
+            // SAFETY: 同上，单线程的一次性解析阶段 / SAFETY: same as above, single-threaded one-time parse
+            unsafe {
+                env::set_var("PP_MAX_TMP_MB", mb.to_string());
+            }
+        }
+        parsed
+    }
+
+    /// 从旧协议环境变量构建输入（`PP_INPUT`、`PP_EXE_DIR`、`PP_MAX_TMP_MB`）。
+    /// Build input from legacy env vars (`PP_INPUT`, `PP_EXE_DIR`, `PP_MAX_TMP_MB`).
+    fn from_legacy_env() -> Self {
+        let inputs = env::var("PP_INPUT")
+            .map(|v| vec![v])
+            .unwrap_or_default();
+        let max_tmp_mb = env::var("PP_MAX_TMP_MB")
+            .ok()
+            .and_then(|v| v.trim().parse().ok());
+        let exe_dir = env::var("PP_EXE_DIR").ok();
+        Self { inputs, params: serde_json::Value::Null, exe_dir, max_tmp_mb, recording: None }
+    }
+
+    /// 获取第一个输入路径（单输入模块使用）/ Get the first input path (for single-input modules)
+    pub fn first_input(&self) -> Option<std::path::PathBuf> {
+        self.inputs.first().map(std::path::PathBuf::from)
+    }
+
+    /// 读取字符串参数（从 JSON params 读取，未设置时返回 fallback）。
+    /// Read a string parameter from JSON params, returning fallback if not set.
+    pub fn param_str(&self, key: &str, fallback: &str) -> String {
+        if let Some(v) = self.params.get(key).and_then(|v| v.as_str()) {
+            return v.to_string();
+        }
+        if let serde_json::Value::Object(ref map) = self.params
+            && let Some(v) = map.get(key) 
+                && !matches!(v, serde_json::Value::Null) {
+                    return match v {
+                        serde_json::Value::String(s) => s.clone(),
+                        other => other.to_string(),
+                    };
+                }
+
+        fallback.to_string()
+    }
+
+    /// 读取 f64 参数 / Read an f64 parameter
+    pub fn param_f64(&self, key: &str, fallback: f64) -> f64 {
+        self.param_str(key, &fallback.to_string()).parse().unwrap_or(fallback)
+    }
+
+    /// 读取 u32 参数 / Read a u32 parameter
+    pub fn param_u32(&self, key: &str, fallback: u32) -> u32 {
+        self.param_str(key, &fallback.to_string()).parse().unwrap_or(fallback)
+    }
+
+    /// 读取 bool 参数 / Read a bool parameter
+    pub fn param_bool(&self, key: &str, fallback: bool) -> bool {
+        matches!(
+            self.param_str(key, if fallback { "true" } else { "false" })
+                .to_lowercase()
+                .as_str(),
+            "true" | "1" | "yes"
+        )
+    }
+
+    /// 获取有效的 max_tmp_mb（优先 JSON，回退环境变量）/ Get effective max_tmp_mb
+    pub fn max_tmp_mb(&self) -> Option<u64> {
+        self.max_tmp_mb.or_else(|| {
+            env::var("PP_MAX_TMP_MB").ok()?.trim().parse().ok()
+        })
+    }
+}
+
+/// 输出最终 JSON 结果（`ok` 状态，有输出路径）并写入 stdout。
+/// Print final JSON result to stdout (`ok` code with output paths).
+pub fn output_ok(outputs: &[&str], message: &str) {
+    let json = serde_json::json!({
+        "code": "ok",
+        "message": message,
+        "outputs": outputs,
+    });
+    println!("{}", json);
+}
+
+/// 输出最终 JSON 结果（`done` 状态，流水线终止）并写入 stdout。
+/// Print final JSON result to stdout (`done` code, pipeline terminates).
+pub fn output_done(message: &str) {
+    let json = serde_json::json!({
+        "code": "done",
+        "message": message,
+        "outputs": [],
+    });
+    println!("{}", json);
+}
+
+/// 输出最终 JSON 结果（`skipped` 状态，原样传递输入）并写入 stdout。
+/// Print final JSON result to stdout (`skipped` code, passes input through).
+pub fn output_skipped(input: &str, message: &str) {
+    let json = serde_json::json!({
+        "code": "skipped",
+        "message": message,
+        "outputs": [input],
+    });
+    println!("{}", json);
+}
+
+/// 解析模块的 `DESCRIBE` JSON 模板并注入版本号，返回可直接打印到 stdout 的完整 JSON 字符串。
+///
+/// 各模块的 `DESCRIBE` 常量本身不再手写版本号；版本号统一在编译期通过
+/// `env!("CARGO_PKG_VERSION")` 从模块自身 `Cargo.toml` 的 `version` 字段读取，
+/// 调用方式为 `pp_utils::describe_with_version(DESCRIBE, env!("CARGO_PKG_VERSION"))`。
+/// 这样升级模块版本时只需改动一处（Cargo.toml），不会再出现 Cargo.toml、DESCRIBE 的
+/// `name` 字段、locale 翻译文件三处版本号各自漂移、互相不一致的问题。
+///
+/// Parse a module's `DESCRIBE` JSON template and inject the version, returning a JSON
+/// string ready to print to stdout.
+///
+/// Each module's `DESCRIBE` constant no longer hardcodes a version number; the version is
+/// read once at compile time from the module's own `Cargo.toml` `version` field via
+/// `env!("CARGO_PKG_VERSION")`, called as
+/// `pp_utils::describe_with_version(DESCRIBE, env!("CARGO_PKG_VERSION"))`. This way,
+/// bumping a module's version only requires editing one place (Cargo.toml), eliminating
+/// the previous drift between Cargo.toml, the DESCRIBE `name` field, and locale
+/// translation files.
+///
+/// # Panics
+/// Panics if `template` is not valid JSON — this indicates a bug in the module's own
+/// `DESCRIBE` constant that should surface immediately during development rather than
+/// silently emitting broken metadata to the host.
+pub fn describe_with_version(template: &str, version: &str) -> String {
+    let mut value: serde_json::Value = serde_json::from_str(template)
+        .expect("pp_utils::describe_with_version: DESCRIBE template is not valid JSON");
+    if let serde_json::Value::Object(map) = &mut value {
+        map.insert(
+            "version".to_string(),
+            serde_json::Value::String(version.to_string()),
+        );
+    }
+    serde_json::to_string(&value).unwrap_or_else(|_| template.to_string())
 }

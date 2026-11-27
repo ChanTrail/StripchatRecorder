@@ -1,586 +1,1348 @@
 //! Tauri 命令层 / Tauri Command Layer
 //!
-//! 将 backend commands/ 模块中的业务函数包装为 `#[tauri::command]`，
-//! 供前端通过 `invoke()` 调用。命令名与 server 模式下 HTTP 路由的语义一一对应。
+//! 将后端业务函数包装为 `#[tauri::command]`，供前端通过 `invoke()` 调用。
+//! 命令名与 server 模式下 HTTP 路由的语义一一对应。
 //!
-//! Wraps backend commands/ functions as `#[tauri::command]` for frontend
-//! invocation via `invoke()`. Command names correspond to HTTP route semantics in server mode.
+//! Wraps backend functions as `#[tauri::command]` for frontend invocation via `invoke()`.
+//! Command names correspond to HTTP route semantics in server mode.
 
 use crate::state::DesktopState;
 use std::sync::Arc;
 use tauri::State;
 
 use stripchat_recorder_lib::{
-    commands::{postprocess_cmd, recording_cmd, settings_cmd},
-    config::settings::Settings,
-    core::{emitter::EmitterExt, error::AppError},
-    postprocess::pipeline::PipelineConfig,
+	config::app_state::Settings,
+	core::{emitter::EmitterExt, error::AppError},
+	platform::stripchat::StripchatApi,
+	postprocess::{RegistryModule, community, pipeline::PipelineConfig},
+	system::disk::get_disk_space_entries,
 };
 
 type CmdResult<T> = std::result::Result<T, String>;
 
 fn map_err(e: AppError) -> String {
-    e.to_string()
+	e.to_string()
 }
 
 // ─── Streamers ────────────────────────────────────────────────────────────────
 
 #[tauri::command]
 pub async fn list_streamers(state: State<'_, DesktopState>) -> CmdResult<serde_json::Value> {
-    let streamers = state.app_state.get_streamers();
-    let has_any_status = streamers
-        .iter()
-        .any(|s| state.monitor.get_status(&s.username).is_some());
+	let streamers = state.app_state.get_streamers();
+	let has_any_status = streamers
+		.iter()
+		.any(|s| state.monitor.get_status(&s.username).is_some());
 
-    // 若无任何缓存状态则触发一次轮询（非阻塞）
-    // If no cached status exists, trigger a poll (non-blocking)
-    if !has_any_status && !streamers.is_empty() {
-        let monitor = Arc::clone(&state.monitor);
-        let emitter = Arc::clone(&state.emitter);
-        tokio::spawn(async move {
-            monitor.poll_all_with_emitter(&emitter).await;
-        });
-    }
+	if !has_any_status && !streamers.is_empty() {
+		let monitor = Arc::clone(&state.monitor);
+		let emitter = Arc::clone(&state.emitter);
+		tokio::spawn(async move {
+			monitor.poll_all_with_emitter(&emitter).await;
+		});
+	}
 
-    let result: Vec<serde_json::Value> = streamers
-        .into_iter()
-        .map(|s| {
-            let status = state.monitor.get_status(&s.username);
-            serde_json::json!({
-                "username": s.username,
-                "auto_record": s.auto_record,
-                "added_at": s.added_at,
-                "is_online": status.as_ref().map(|st| st.is_online).unwrap_or(false),
-                "is_recording": state.recorder.is_recording(&s.username),
-                "is_recordable": status.as_ref().map(|st| st.is_recordable).unwrap_or(false),
-                "viewers": status.as_ref().map(|st| st.viewers).unwrap_or(0),
-                "status": status.as_ref().map(|st| st.status.clone()).unwrap_or_default(),
-                "thumbnail_url": status.and_then(|st| st.thumbnail_url),
-            })
-        })
-        .collect();
-    Ok(serde_json::Value::Array(result))
+	let result: Vec<serde_json::Value> = streamers
+		.into_iter()
+		.map(|s| {
+			let status = state.monitor.get_status(&s.username);
+			serde_json::json!({
+				"username": s.username,
+				"auto_record": s.auto_record,
+				"added_at": s.added_at,
+				"is_online": status.as_ref().map(|st| st.is_online).unwrap_or(false),
+				"is_recording": state.recorder.is_recording(&s.username),
+				"is_recordable": status.as_ref().map(|st| st.is_recordable).unwrap_or(false),
+				"status": status.as_ref().map(|st| st.status.clone()).unwrap_or_default(),
+				"thumbnail_url": status.and_then(|st| st.thumbnail_url),
+			})
+		})
+		.collect();
+	Ok(serde_json::Value::Array(result))
 }
 
 #[tauri::command]
 pub async fn add_streamer(
-    username: String,
-    state: State<'_, DesktopState>,
+	usernames: Vec<String>,
+	state: State<'_, DesktopState>,
 ) -> CmdResult<serde_json::Value> {
-    let username = username.trim().to_lowercase();
-    if username.is_empty() {
-        return Err("用户名不能为空".to_string());
-    }
-    let settings = state.app_state.get_settings();
-    let api = stripchat_recorder_lib::streaming::stripchat::StripchatApi::new_api_only(
-        settings.api_proxy_url.as_deref(),
-        settings.cdn_proxy_url.as_deref(),
-        settings.sc_mirror_url.as_deref(),
-    )
-    .map_err(map_err)?;
-    api.get_stream_info(&username, false).await.map_err(map_err)?;
-    state.app_state.add_streamer(&username).map_err(map_err)?;
-    state.emitter.emit("streamer-added", &serde_json::json!({ "username": username }));
-    let emitter = Arc::clone(&state.emitter);
-    let monitor = Arc::clone(&state.monitor);
-    tokio::spawn(async move {
-        monitor.poll_one_with_emitter(&username, &emitter).await;
-    });
-    Ok(serde_json::json!({ "ok": true }))
+	let settings = state.app_state.get_settings();
+	let mut total = 0usize;
+	let mut success = 0usize;
+	let mut skipped = 0usize;
+	let mut failed = 0usize;
+
+	for raw in usernames {
+		let username = raw.trim().to_lowercase();
+		if username.is_empty() {
+			failed += 1;
+			continue;
+		}
+		total += 1;
+
+		// 已存在则跳过 / Skip if already tracked
+		if state
+			.app_state
+			.get_streamers()
+			.iter()
+			.any(|s| s.username == username)
+		{
+			skipped += 1;
+			state.emitter.emit(
+				"streamer-batch-progress",
+				&serde_json::json!({
+					"done": success + skipped + failed,
+					"username": username,
+				}),
+			);
+			continue;
+		}
+
+		let api_res = StripchatApi::new_api_only(
+			settings.api_proxy_url.as_deref(),
+			settings.cdn_proxy_url.as_deref(),
+			settings.sc_mirror_url.as_deref(),
+			Some(settings.sc_mirror_scheme.as_str()),
+			settings.ech_enabled,
+		);
+		match api_res {
+			Err(e) => {
+				failed += 1;
+				tracing::warn!("add_streamer: api init failed for {username}: {e}");
+			}
+			Ok(api) => {
+				match api.get_stream_info(&username, false, None, false).await {
+					Err(_) => {
+						failed += 1;
+					}
+					Ok(info) => {
+						let model_id = info.model_id;
+						match state.app_state.add_streamer(&username, model_id) {
+							Err(_) => {
+								failed += 1;
+							}
+							Ok(_) => {
+								success += 1;
+								state.emitter.emit(
+									"streamer-added",
+									&serde_json::json!({ "username": username }),
+								);
+								let monitor = Arc::clone(&state.monitor);
+								let emitter = Arc::clone(&state.emitter);
+								let u = username.clone();
+								tokio::spawn(async move {
+									monitor.poll_all_with_emitter(&emitter).await;
+									// 轮询完成后单独推一次该主播的状态（近似 poll_one 的效果）
+									// After polling, the streamer's status will be emitted by the monitor
+									let _ = u; // suppress unused warning
+								});
+							}
+						}
+					}
+				}
+			}
+		}
+		state.emitter.emit(
+			"streamer-batch-progress",
+			&serde_json::json!({
+				"done": success + skipped + failed,
+				"username": username,
+			}),
+		);
+	}
+	Ok(
+		serde_json::json!({ "total": total, "success": success, "skipped": skipped, "failed": failed }),
+	)
 }
 
 #[tauri::command]
 pub async fn remove_streamer(
-    username: String,
-    state: State<'_, DesktopState>,
+	username: String,
+	state: State<'_, DesktopState>,
 ) -> CmdResult<serde_json::Value> {
-    if state.recorder.is_recording(&username) {
-        state.recorder.stop_recording(&username).await.map_err(map_err)?;
-    }
-    let settings = state.app_state.get_settings();
-    let dir = std::path::PathBuf::from(&settings.output_dir).join(&username);
-    if dir.exists() {
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-    state.app_state.remove_streamer(&username).map_err(map_err)?;
-    state.emitter.emit("streamer-removed", &serde_json::json!({ "username": username }));
-    Ok(serde_json::json!({ "ok": true }))
+	if state.recorder.is_recording(&username) {
+		state
+			.recorder
+			.stop_recording(&username)
+			.await
+			.map_err(map_err)?;
+	}
+	state
+		.app_state
+		.remove_streamer(&username)
+		.map_err(map_err)?;
+	state.emitter.emit(
+		"streamer-removed",
+		&serde_json::json!({ "username": username }),
+	);
+	Ok(serde_json::json!({ "ok": true }))
 }
 
 #[tauri::command]
 pub async fn set_auto_record(
-    username: String,
-    enabled: bool,
-    state: State<'_, DesktopState>,
+	username: String,
+	enabled: bool,
+	state: State<'_, DesktopState>,
 ) -> CmdResult<serde_json::Value> {
-    state.app_state.set_auto_record(&username, enabled).map_err(map_err)?;
-    state.emitter.emit(
-        "auto-record-changed",
-        &serde_json::json!({ "username": username, "enabled": enabled }),
-    );
-    Ok(serde_json::json!({ "ok": true }))
+	state
+		.app_state
+		.set_auto_record(&username, enabled)
+		.map_err(map_err)?;
+	state.emitter.emit(
+		"auto-record-changed",
+		&serde_json::json!({ "username": username, "enabled": enabled }),
+	);
+	Ok(serde_json::json!({ "ok": true }))
 }
 
 #[tauri::command]
 pub async fn start_recording(
-    username: String,
-    state: State<'_, DesktopState>,
+	username: String,
+	state: State<'_, DesktopState>,
 ) -> CmdResult<serde_json::Value> {
-    let playlist_url = if let Some(url) = state.monitor.get_cached_playlist_url(&username) {
-        url
-    } else {
-        let settings = state.app_state.get_settings();
-        let api = stripchat_recorder_lib::streaming::stripchat::StripchatApi::new_api_only(
-            settings.api_proxy_url.as_deref(),
-            settings.cdn_proxy_url.as_deref(),
-            settings.sc_mirror_url.as_deref(),
-        )
-        .map_err(map_err)?
-        .with_mouflon_keys(state.app_state.get_mouflon_keys())
-        .with_resolution_selection(
-            settings.preferred_resolution,
-            &settings.resolution_preference,
-        );
-        let info = api.get_stream_info(&username, true).await.map_err(map_err)?;
-        info.playlist_url
-            .ok_or_else(|| format!("Stream offline: {}", username))?
-    };
-    let path = state
-        .recorder
-        .start_recording_with_emitter(&username, &playlist_url, Arc::clone(&state.emitter))
-        .await
-        .map_err(map_err)?;
-    Ok(serde_json::json!({ "path": path }))
+	let playlist_url = if let Some(url) = state.monitor.get_cached_playlist_url(&username) {
+		url
+	} else {
+		let settings = state.app_state.get_settings();
+		let api = StripchatApi::new_api_only(
+			settings.api_proxy_url.as_deref(),
+			settings.cdn_proxy_url.as_deref(),
+			settings.sc_mirror_url.as_deref(),
+			Some(settings.sc_mirror_scheme.as_str()),
+			settings.ech_enabled,
+		)
+		.map_err(map_err)?
+		.with_mouflon_keys(state.app_state.get_mouflon_keys())
+		// 与 Server 的 start_recording 路由一致：按设置选择分辨率与编码
+		// Same as the Server start_recording route: select resolution and codec from the settings
+		.with_resolution_selection(
+			settings.preferred_resolution,
+			&settings.resolution_preference,
+		)
+		.with_codec_selection(&settings.preferred_codec);
+		let info = api
+			.get_stream_info(&username, true, None, false)
+			.await
+			.map_err(map_err)?;
+		info.playlist_url
+			.ok_or_else(|| format!("Stream offline: {}", username))?
+	};
+	let path = state
+		.recorder
+		.start_recording_with_emitter(&username, &playlist_url, Arc::clone(&state.emitter))
+		.await
+		.map_err(map_err)?;
+	Ok(serde_json::json!({ "path": path }))
 }
 
 #[tauri::command]
 pub async fn stop_recording(
-    username: String,
-    state: State<'_, DesktopState>,
+	username: String,
+	state: State<'_, DesktopState>,
 ) -> CmdResult<serde_json::Value> {
-    let _ = state.app_state.set_auto_record(&username, false);
-    state.emitter.emit(
-        "auto-record-changed",
-        &serde_json::json!({ "username": username, "enabled": false }),
-    );
-    state.recorder.stop_recording(&username).await.map_err(map_err)?;
-    Ok(serde_json::json!({ "ok": true }))
+	let _ = state.app_state.set_auto_record(&username, false);
+	state.emitter.emit(
+		"auto-record-changed",
+		&serde_json::json!({ "username": username, "enabled": false }),
+	);
+	state
+		.recorder
+		.stop_recording(&username)
+		.await
+		.map_err(map_err)?;
+	Ok(serde_json::json!({ "ok": true }))
 }
 
 #[tauri::command]
 pub async fn verify_streamer(
-    username: String,
-    state: State<'_, DesktopState>,
+	username: String,
+	state: State<'_, DesktopState>,
 ) -> CmdResult<serde_json::Value> {
-    let settings = state.app_state.get_settings();
-    let api = stripchat_recorder_lib::streaming::stripchat::StripchatApi::new_api_only(
-        settings.api_proxy_url.as_deref(),
-        settings.cdn_proxy_url.as_deref(),
-        settings.sc_mirror_url.as_deref(),
-    )
-    .map_err(map_err)?;
-    match api.get_stream_info(&username, false).await {
-        Ok(_) => Ok(serde_json::json!({ "exists": true })),
-        Err(AppError::UserNotFound(_)) => Ok(serde_json::json!({ "exists": false })),
-        Err(e) => Err(e.to_string()),
-    }
+	let settings = state.app_state.get_settings();
+	let api = StripchatApi::new_api_only(
+		settings.api_proxy_url.as_deref(),
+		settings.cdn_proxy_url.as_deref(),
+		settings.sc_mirror_url.as_deref(),
+		Some(settings.sc_mirror_scheme.as_str()),
+		settings.ech_enabled,
+	)
+	.map_err(map_err)?;
+	match api.get_stream_info(&username, false, None, false).await {
+		Ok(_) => Ok(serde_json::json!({ "exists": true })),
+		Err(AppError::UserNotFound(_)) => Ok(serde_json::json!({ "exists": false })),
+		Err(e) => Err(e.to_string()),
+	}
+}
+
+/// SC 官方分类浏览列表（StripChat 页无限滚动，等价于 `GET /api/sc/models`）。
+/// The official SC category browse list (feeds the StripChat page's infinite
+/// scroll; equivalent to `GET /api/sc/models`).
+#[tauri::command]
+pub async fn list_sc_models(
+	primary_tag: Option<String>,
+	tag: Option<String>,
+	sort_by: Option<String>,
+	offset: Option<u32>,
+	limit: Option<u32>,
+	state: State<'_, DesktopState>,
+) -> CmdResult<serde_json::Value> {
+	let settings = state.app_state.get_settings();
+	// 浏览页专用镜像/代理（sc_browse_*），与主 API 设置相互独立
+	// Browse-page mirror/proxy (sc_browse_*), independent from the main API settings
+	let api = StripchatApi::new_for_browse(&settings).map_err(map_err)?;
+	api.list_models(
+		primary_tag.as_deref().unwrap_or("girls"),
+		tag.as_deref(),
+		sort_by.as_deref().unwrap_or("stripRanking"),
+		offset.unwrap_or(0),
+		limit.unwrap_or(40),
+	)
+	.await
+	.map_err(map_err)
+}
+
+/// 用系统媒体播放器打开指定主播的转发流：懒启动 `127.0.0.1:0` 上仅含
+/// `/{modelname}` 的转发监听（`relay_port` OnceCell 缓存端口），再按平台
+/// 探测并拉起本地播放器（mpv/VLC/PotPlayer/IINA 等）。播放器连上
+/// `/stream/{username}` 时按 `stream_handler` 既有逻辑按需拉起 worker。
+/// 未找到可用播放器时返回 `no_player` 标记，由前端给出本地化提示。
+///
+/// Open the streamer's relay stream in the system media player: lazily
+/// starts the `127.0.0.1:0` listener carrying only `/{modelname}` (the port
+/// is cached in `relay_port`), then probes for and launches a local player
+/// per platform (mpv/VLC/PotPlayer/IINA etc.). The player's own connection
+/// to `/stream/{username}` spawns the worker via `stream_handler`'s
+/// existing on-demand logic. Returns the `no_player` marker when no usable
+/// player is found so the frontend can show a localized hint.
+///
+/// ## 参数 / Parameters
+/// - `username`：主播用户名 / streamer username
+#[tauri::command]
+pub async fn open_relay_stream(
+	username: String,
+	state: State<'_, DesktopState>,
+) -> CmdResult<serde_json::Value> {
+	let relay_state = stripchat_recorder_lib::relay::handler::RelayState {
+		app_state: Arc::clone(&state.app_state),
+		relay_manager: Arc::clone(&state.relay_manager),
+	};
+	let port = *state
+		.relay_port
+		.get_or_try_init(|| async {
+			stripchat_recorder_lib::relay::start_stream_listener(relay_state)
+				.await
+				.map_err(|e| e.to_string())
+		})
+		.await?;
+	let url = format!("http://127.0.0.1:{port}/stream/{username}");
+	// 设置中的自定义播放器路径（空 = 平台自动探测）/ Custom player path
+	// from settings (empty = platform auto-probe)
+	let player_path = state.app_state.get_settings().player_path;
+	let player = stripchat_recorder_lib::relay::player::open_in_media_player(&url, &player_path)
+		.map_err(|e| e.to_string())?;
+	Ok(serde_json::json!({ "url": url, "player": player }))
 }
 
 // ─── Settings ─────────────────────────────────────────────────────────────────
 
 #[tauri::command]
 pub async fn get_settings(state: State<'_, DesktopState>) -> CmdResult<Settings> {
-    Ok(state.app_state.get_settings())
+	Ok(state.app_state.get_settings())
 }
 
 #[tauri::command]
 pub async fn save_settings_cmd(
-    new_settings: Settings,
-    state: State<'_, DesktopState>,
+	new_settings: Settings,
+	state: State<'_, DesktopState>,
 ) -> CmdResult<serde_json::Value> {
-    state.app_state.update_settings(new_settings).map_err(map_err)?;
-    state.emitter.emit("settings-updated", &state.app_state.get_settings());
-    Ok(serde_json::json!({ "ok": true }))
+	// 与 Server 路由一致：语言变化时重新加载日志翻译
+	// Same as the Server route: reload log translations when the language changes
+	let old_lang = state.app_state.get_settings().language;
+	let new_lang = new_settings.language.clone();
+	state
+		.app_state
+		.update_settings(new_settings)
+		.map_err(map_err)?;
+	if old_lang != new_lang {
+		stripchat_recorder_lib::locale::manager::load_log_translations(&new_lang);
+	}
+	state
+		.emitter
+		.emit("settings-updated", &state.app_state.get_settings());
+	Ok(serde_json::json!({ "ok": true }))
 }
 
 #[tauri::command]
 pub async fn get_disk_space(state: State<'_, DesktopState>) -> CmdResult<serde_json::Value> {
-    let output_dir = state.app_state.get_settings().output_dir;
-    let result = tokio::task::spawn_blocking(move || {
-        settings_cmd::get_disk_space_inner(&output_dir)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-    .map_err(map_err)?;
-    Ok(serde_json::to_value(result).unwrap())
+	let settings = state.app_state.get_settings();
+	let output_dir = settings.output_dir.clone();
+
+	// 取 segment_merge 节点的自定义输出目录（若已配置）
+	let merge_dir = {
+		let pipeline = state.app_state.get_pipeline();
+		pipeline
+			.nodes
+			.iter()
+			.find(|n| {
+				(n.module_id
+					== stripchat_recorder_lib::postprocess::pipeline::SEGMENT_MERGE_MODULE_ID)
+					&& n.enabled
+			})
+			.and_then(|n| n.params.get("output_dir"))
+			.and_then(|v| v.as_str())
+			.filter(|s| !s.is_empty())
+			.map(|s| s.to_string())
+	};
+
+	let result = tokio::task::spawn_blocking(move || {
+		get_disk_space_entries(&output_dir, merge_dir.as_deref())
+	})
+	.await
+	.map_err(|e| e.to_string())?;
+
+	Ok(serde_json::to_value(result).unwrap())
+}
+
+#[tauri::command]
+pub async fn get_system_info() -> CmdResult<serde_json::Value> {
+	let cpu_count = std::thread::available_parallelism()
+		.map(|n| n.get())
+		.unwrap_or(1);
+	let cap = (cpu_count * 2).max(1);
+	Ok(serde_json::json!({
+		"cpuCount": cpu_count,
+		"maxPpConcurrentCap": cap,
+		"maxConcurrentCap": cap,
+	}))
 }
 
 // ─── Mouflon Keys ─────────────────────────────────────────────────────────────
 
 #[tauri::command]
 pub async fn list_mouflon_keys(state: State<'_, DesktopState>) -> CmdResult<serde_json::Value> {
-    Ok(serde_json::to_value(state.app_state.get_mouflon_keys_store()).unwrap())
+	Ok(serde_json::to_value(state.app_state.get_mouflon_keys_store()).unwrap())
 }
 
 #[tauri::command]
 pub async fn add_mouflon_key(
-    pkey: String,
-    pdkey: String,
-    state: State<'_, DesktopState>,
+	pkey: String,
+	pdkey: Option<String>,
+	keystream: Option<String>,
+	state: State<'_, DesktopState>,
 ) -> CmdResult<serde_json::Value> {
-    state.app_state.add_mouflon_key(&pkey, &pdkey).map_err(map_err)?;
-    state.emitter.emit("mouflon-keys-updated", &state.app_state.get_mouflon_keys_store());
-    Ok(serde_json::json!({ "ok": true }))
+	state
+		.app_state
+		.add_mouflon_key(&pkey, pdkey.as_deref(), keystream.as_deref())
+		.map_err(map_err)?;
+	state.emitter.emit(
+		"mouflon-keys-updated",
+		&state.app_state.get_mouflon_keys_store(),
+	);
+	Ok(serde_json::json!({ "ok": true }))
 }
 
 #[tauri::command]
 pub async fn remove_mouflon_key(
-    pkey: String,
-    state: State<'_, DesktopState>,
+	pkey: String,
+	state: State<'_, DesktopState>,
 ) -> CmdResult<serde_json::Value> {
-    state.app_state.remove_mouflon_key(&pkey).map_err(map_err)?;
-    state.emitter.emit("mouflon-keys-updated", &state.app_state.get_mouflon_keys_store());
-    Ok(serde_json::json!({ "ok": true }))
+	state.app_state.remove_mouflon_key(&pkey).map_err(map_err)?;
+	state.emitter.emit(
+		"mouflon-keys-updated",
+		&state.app_state.get_mouflon_keys_store(),
+	);
+	Ok(serde_json::json!({ "ok": true }))
 }
 
 #[tauri::command]
 pub async fn sync_mouflon_keys(state: State<'_, DesktopState>) -> CmdResult<serde_json::Value> {
-    let settings = state.app_state.get_settings();
-    let url = settings
-        .mouflon_sync_url
-        .as_deref()
-        .filter(|u| !u.is_empty())
-        .ok_or("未配置 mouflon_sync_url")?
-        .to_string();
-    let token = settings.mouflon_sync_token.clone();
-    let updated = state
-        .app_state
-        .sync_mouflon_keys_from_worker(&url, token.as_deref())
-        .await
-        .map_err(map_err)?;
-    if updated {
-        state.emitter.emit("mouflon-keys-updated", &state.app_state.get_mouflon_keys_store());
-    }
-    Ok(serde_json::json!({ "updated": updated }))
+	let settings = state.app_state.get_settings();
+	let url = settings
+		.mouflon_sync_url
+		.as_deref()
+		.filter(|u| !u.is_empty())
+		.ok_or("未配置 mouflon_sync_url")?
+		.to_string();
+	let token = settings.mouflon_sync_token.clone();
+	let updated = state
+		.app_state
+		.sync_mouflon_keys_from_worker(&url, token.as_deref())
+		.await
+		.map_err(map_err)?;
+	if updated {
+		state.emitter.emit(
+			"mouflon-keys-updated",
+			&state.app_state.get_mouflon_keys_store(),
+		);
+	}
+	Ok(serde_json::json!({ "updated": updated }))
 }
 
 // ─── Recordings ───────────────────────────────────────────────────────────────
 
 #[tauri::command]
 pub async fn list_recordings(state: State<'_, DesktopState>) -> CmdResult<serde_json::Value> {
-    let app_state = Arc::clone(&state.app_state);
-    let recorder = Arc::clone(&state.recorder);
-    let files = tokio::task::spawn_blocking(move || {
-        recording_cmd::list_recordings_inner(&app_state, &recorder)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-    .map_err(|e| e.to_string())?;
-    Ok(serde_json::to_value(files).unwrap())
+	let app_state = Arc::clone(&state.app_state);
+	let recorder = Arc::clone(&state.recorder);
+	let files = tokio::task::spawn_blocking(move || {
+		stripchat_recorder_lib::recording::service::list_recordings_inner(&app_state, &recorder)
+	})
+	.await
+	.map_err(|e| e.to_string())?
+	.map_err(|e| e.to_string())?;
+	Ok(serde_json::to_value(files).unwrap())
 }
 
 #[tauri::command]
 pub async fn get_merging_dirs(state: State<'_, DesktopState>) -> CmdResult<serde_json::Value> {
-    let settings = state.app_state.get_settings();
-    let merge_format = settings.merge_format.clone();
+	let settings = state.app_state.get_settings();
+	// merge_format 字段现在通过 segment_merge pipeline 节点控制，默认 mp4
+	let merge_format = {
+		let pipeline = state.app_state.get_pipeline();
+		pipeline
+			.nodes
+			.iter()
+			.find(|n| {
+				n.module_id
+					== stripchat_recorder_lib::postprocess::pipeline::SEGMENT_MERGE_MODULE_ID
+			})
+			.and_then(|n| n.params.get("format"))
+			.and_then(|v| v.as_str())
+			.unwrap_or("mkv")
+			.to_string()
+	};
 
-    let make_entry = |path: &std::path::PathBuf, status: &str| {
-        let path_str = path.to_string_lossy().to_string();
-        let stem = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
-        let username = path
-            .parent()
-            .and_then(|p| p.file_name())
-            .and_then(|n| n.to_str())
-            .unwrap_or("unknown")
-            .to_string();
-        let parent = path.parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
-        let sep = if path_str.contains('\\') { "\\" } else { "/" };
-        let merged_path = format!("{}{}{}.{}", parent, sep, stem, merge_format);
-        serde_json::json!({
-            "session_dir": path_str,
-            "merged_path": merged_path,
-            "merge_format": merge_format,
-            "username": username,
-            "status": status,
-        })
-    };
+	let make_entry = |path: &std::path::PathBuf, status: &str| {
+		let path_str = path.to_string_lossy().to_string();
+		let stem = path
+			.file_name()
+			.and_then(|n| n.to_str())
+			.unwrap_or("")
+			.to_string();
+		let username = path
+			.parent()
+			.and_then(|p| p.file_name())
+			.and_then(|n| n.to_str())
+			.unwrap_or("unknown")
+			.to_string();
+		let parent = path
+			.parent()
+			.map(|p| p.to_string_lossy().to_string())
+			.unwrap_or_default();
+		let sep = if path_str.contains('\\') { "\\" } else { "/" };
+		let merged_path = format!("{}{}{}.{}", parent, sep, stem, merge_format);
+		serde_json::json!({
+			"session_dir": path_str,
+			"merged_path": merged_path,
+			"merge_format": merge_format,
+			"username": username,
+			"status": status,
+		})
+	};
 
-    let mut result: Vec<serde_json::Value> = state
-        .recorder
-        .merging_dirs
-        .read()
-        .iter()
-        .map(|p| make_entry(p, "merging"))
-        .collect();
-    result.extend(
-        state.recorder.waiting_merge_dirs.read().iter().map(|p| make_entry(p, "waiting")),
-    );
-    Ok(serde_json::json!(result))
+	let mut result: Vec<serde_json::Value> = state
+		.recorder
+		.merging_dirs
+		.read()
+		.iter()
+		.map(|p| make_entry(p, "merging"))
+		.collect();
+	result.extend(
+		state
+			.recorder
+			.waiting_merge_dirs
+			.read()
+			.iter()
+			.map(|p| make_entry(p, "waiting")),
+	);
+	let _ = settings;
+	Ok(serde_json::json!(result))
 }
 
 #[tauri::command]
 pub async fn delete_recording(
-    path: String,
-    state: State<'_, DesktopState>,
+	path: String,
+	state: State<'_, DesktopState>,
 ) -> CmdResult<serde_json::Value> {
-    let recorder = Arc::clone(&state.recorder);
-    let app_state = Arc::clone(&state.app_state);
-    let path_clone = path.clone();
-    tokio::task::spawn_blocking(move || {
-        recording_cmd::delete_recording_inner(&path_clone, &recorder, &app_state)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-    .map_err(map_err)?;
-    state.emitter.emit("recording-deleted", &serde_json::json!({ "path": path }));
-    Ok(serde_json::json!({ "ok": true }))
+	let recorder = Arc::clone(&state.recorder);
+	let app_state = Arc::clone(&state.app_state);
+	let path_clone = path.clone();
+
+	let outcome = tokio::task::spawn_blocking(move || {
+		stripchat_recorder_lib::recording::service::delete_recording_inner(
+			&path_clone,
+			&recorder,
+			&app_state,
+		)
+	})
+	.await
+	.map_err(|e| e.to_string())?
+	.map_err(map_err)?;
+
+	// 与 Server 路由一致：只有本次请求实际删除时才广播，已被其他请求删除时不重复广播；
+	// 两种结果都返回成功
+	// Same as the Server route: broadcast only when this request actually deleted it, not
+	// again when another request already did; both outcomes return success
+	if outcome == stripchat_recorder_lib::recording::service::DeleteOutcome::Deleted {
+		state
+			.emitter
+			.emit("recording-deleted", &serde_json::json!({ "path": path }));
+	}
+	Ok(serde_json::json!({ "ok": true }))
 }
 
 // ─── Post-processing ──────────────────────────────────────────────────────────
 
 #[tauri::command]
 pub async fn run_postprocess_cmd(
-    path: String,
-    state: State<'_, DesktopState>,
+	path: String,
+	state: State<'_, DesktopState>,
 ) -> CmdResult<serde_json::Value> {
-    let pipeline = state.app_state.get_pipeline();
-    if pipeline.nodes.is_empty() {
-        return Err("后处理流水线为空".to_string());
-    }
-    let video_path = std::path::PathBuf::from(&path);
-    let emitter = Arc::clone(&state.emitter);
-    let app_state = Arc::clone(&state.app_state);
-    app_state.pp_task_enqueue(&path);
-    emitter.emit("postprocess-waiting", &serde_json::json!({ "path": path }));
-    tokio::task::spawn_blocking(move || {
-        postprocess_cmd::run_postprocess_for_path_inner(&video_path, &pipeline, &emitter, &app_state);
-    });
-    Ok(serde_json::json!({ "ok": true }))
+	let pipeline = state.app_state.get_pipeline();
+	if !pipeline.nodes.iter().any(|n| n.enabled) {
+		return Err("后处理流水线为空".to_string());
+	}
+	let video_path = std::path::PathBuf::from(&path);
+	let initial_path =
+		stripchat_recorder_lib::postprocess::service::infer_initial_path(&video_path);
+	let emitter = Arc::clone(&state.emitter);
+	let app_state = Arc::clone(&state.app_state);
+	tokio::task::spawn_blocking(move || {
+		stripchat_recorder_lib::postprocess::service::run_postprocess_for_path(
+			&initial_path,
+			&video_path,
+			&pipeline,
+			&emitter,
+			&app_state,
+		);
+	});
+	Ok(serde_json::json!({ "ok": true }))
 }
 
 #[tauri::command]
 pub async fn run_postprocess_batch(
-    paths: Vec<String>,
-    state: State<'_, DesktopState>,
+	paths: Vec<String>,
+	state: State<'_, DesktopState>,
 ) -> CmdResult<serde_json::Value> {
-    let pipeline = state.app_state.get_pipeline();
-    if pipeline.nodes.is_empty() {
-        return Err("后处理流水线为空".to_string());
-    }
-    for path in paths {
-        let video_path = std::path::PathBuf::from(&path);
-        let emitter = Arc::clone(&state.emitter);
-        let app_state = Arc::clone(&state.app_state);
-        let pipeline = pipeline.clone();
-        app_state.pp_task_enqueue(&path);
-        emitter.emit("postprocess-waiting", &serde_json::json!({ "path": path }));
-        tokio::task::spawn_blocking(move || {
-            postprocess_cmd::run_postprocess_for_path_inner(&video_path, &pipeline, &emitter, &app_state);
-        });
-    }
-    Ok(serde_json::json!({ "ok": true }))
+	let pipeline = state.app_state.get_pipeline();
+	if !pipeline.nodes.iter().any(|n| n.enabled) {
+		return Err("后处理流水线为空".to_string());
+	}
+	for path in paths {
+		let video_path = std::path::PathBuf::from(&path);
+		let initial_path =
+			stripchat_recorder_lib::postprocess::service::infer_initial_path(&video_path);
+		let emitter = Arc::clone(&state.emitter);
+		let app_state = Arc::clone(&state.app_state);
+		let pipeline = pipeline.clone();
+		tokio::task::spawn_blocking(move || {
+			stripchat_recorder_lib::postprocess::service::run_postprocess_for_path(
+				&initial_path,
+				&video_path,
+				&pipeline,
+				&emitter,
+				&app_state,
+			);
+		});
+	}
+	Ok(serde_json::json!({ "ok": true }))
 }
 
 #[tauri::command]
 pub async fn cancel_postprocess(
-    path: String,
-    state: State<'_, DesktopState>,
+	path: String,
+	state: State<'_, DesktopState>,
 ) -> CmdResult<serde_json::Value> {
-    state.app_state.pp_task_cancel(&path);
-    Ok(serde_json::json!({ "ok": true }))
+	state.app_state.pp_queue.cancel(&path);
+	Ok(serde_json::json!({ "ok": true }))
 }
 
 #[tauri::command]
 pub async fn get_postprocess_tasks(state: State<'_, DesktopState>) -> CmdResult<serde_json::Value> {
-    Ok(serde_json::to_value(state.app_state.get_pp_tasks()).unwrap())
+	Ok(serde_json::to_value(state.app_state.pp_queue.get_all_tasks()).unwrap())
 }
 
 // ─── Pipeline ─────────────────────────────────────────────────────────────────
 
 #[tauri::command]
 pub async fn get_pipeline(state: State<'_, DesktopState>) -> CmdResult<PipelineConfig> {
-    Ok(state.app_state.get_pipeline())
+	Ok(state.app_state.get_pipeline())
 }
 
 #[tauri::command]
 pub async fn save_pipeline(
-    pipeline: PipelineConfig,
-    state: State<'_, DesktopState>,
+	pipeline: PipelineConfig,
+	state: State<'_, DesktopState>,
 ) -> CmdResult<serde_json::Value> {
-    state.app_state.update_pipeline(pipeline).map_err(map_err)?;
-    state.emitter.emit("pipeline-updated", &state.app_state.get_pipeline());
-    Ok(serde_json::json!({ "ok": true }))
+	state.app_state.update_pipeline(pipeline).map_err(map_err)?;
+	state
+		.emitter
+		.emit("pipeline-updated", &state.app_state.get_pipeline());
+	Ok(serde_json::json!({ "ok": true }))
 }
 
 #[tauri::command]
 pub async fn list_modules() -> CmdResult<serde_json::Value> {
-    let modules = tokio::task::spawn_blocking(
-        stripchat_recorder_lib::postprocess::pipeline::discover_modules,
-    )
-    .await
-    .unwrap_or_default();
-    Ok(serde_json::to_value(modules).unwrap())
+	let modules = tokio::task::spawn_blocking(
+		stripchat_recorder_lib::postprocess::pipeline::discover_modules,
+	)
+	.await
+	.unwrap_or_default();
+	Ok(serde_json::to_value(modules).unwrap())
+}
+
+// ─── Community Modules ────────────────────────────────────────────────────────
+
+/// 获取当前正在安装的社区模块列表（模块 ID → 已下载字节数）。
+/// Get the list of currently in-progress community module installs (module ID → downloaded bytes).
+#[tauri::command]
+pub async fn get_install_tasks(state: State<'_, DesktopState>) -> CmdResult<serde_json::Value> {
+	let tasks: std::collections::HashMap<String, u64> =
+		state.app_state.install_tasks.read().clone();
+	Ok(serde_json::to_value(tasks).unwrap())
+}
+
+/// 安装指定社区模块（下载 + sha256 校验 + 写入 modules/ 目录）。
+/// 安装完成或失败后推送事件 `community-module-install-done`。
+///
+/// Install a community module (download + sha256 verify + write to modules/).
+/// Pushes event `community-module-install-done` on completion or failure.
+#[tauri::command]
+pub async fn install_community_module(
+	module: RegistryModule,
+	state: State<'_, DesktopState>,
+) -> CmdResult<serde_json::Value> {
+	let settings = state.app_state.get_settings();
+	let proxy_url = settings.community_proxy_url.clone();
+	let mirror_url = settings.community_mirror_url.clone();
+	let emitter = Arc::clone(&state.emitter);
+	let module_id = module.id.clone();
+	let app_state = Arc::clone(&state.app_state);
+	let app_state2 = Arc::clone(&state.app_state);
+
+	// 写入安装任务表，记录初始已下载字节数为 0 / Record install task with 0 downloaded bytes
+	app_state.install_tasks.write().insert(module_id.clone(), 0);
+
+	let result = community::install_module(&module, proxy_url, mirror_url, |downloaded, total| {
+		// 更新内存中的已下载字节数 / Update in-memory downloaded bytes
+		app_state2
+			.install_tasks
+			.write()
+			.insert(module_id.clone(), downloaded);
+
+		let pct = if total > 0 {
+			(downloaded as f64 / total as f64 * 100.0).min(100.0)
+		} else {
+			-1.0
+		};
+		emitter.emit(
+			"community-module-download-progress",
+			&serde_json::json!({
+				"moduleId": module_id,
+				"downloaded": downloaded,
+				"total": total,
+				"pct": pct,
+			}),
+		);
+	})
+	.await;
+
+	// 无论成功失败都从任务表中删除 / Remove from task map regardless of outcome
+	app_state.install_tasks.write().remove(&module.id);
+
+	match result {
+		Ok(()) => {
+			state.emitter.emit(
+				"community-module-install-done",
+				&serde_json::json!({ "moduleId": module.id, "success": true }),
+			);
+			Ok(serde_json::json!({ "ok": true }))
+		}
+		Err(e) => {
+			tracing::error!(
+				"community module install failed: id={} error={}",
+				module.id,
+				e
+			);
+			state.emitter.emit(
+				"community-module-install-done",
+				&serde_json::json!({ "moduleId": module.id, "success": false, "error": e.to_string() }),
+			);
+			Err(e.to_string())
+		}
+	}
+}
+
+/// 卸载指定社区模块（从 modules/ 目录删除对应可执行文件）。
+/// 幂等操作：若模块未安装，静默成功。
+///
+/// Uninstall a community module (remove the executable from modules/ directory).
+/// Idempotent: silently succeeds if the module is not installed.
+#[tauri::command]
+pub async fn uninstall_community_module(module_id: String) -> CmdResult<serde_json::Value> {
+	tokio::task::spawn_blocking(move || community::uninstall_module(&module_id))
+		.await
+		.map_err(|e| e.to_string())?
+		.map_err(map_err)?;
+	Ok(serde_json::json!({ "ok": true }))
 }
 
 // ─── Locale ───────────────────────────────────────────────────────────────────
 
 #[tauri::command]
 pub async fn get_locale(locale_code: String) -> CmdResult<serde_json::Value> {
-    let lc = locale_code.clone();
-    let (locale, warning) = tokio::task::spawn_blocking(move || {
-        let data = stripchat_recorder_lib::locale::manager::get_full_locale(&lc);
-        let warning = stripchat_recorder_lib::locale::manager::validate_locale_file(&lc);
-        (data, warning)
-    })
-    .await
-    .map_err(|e| e.to_string())?;
+	let lc = locale_code.clone();
+	let (locale, warning) = tokio::task::spawn_blocking(move || {
+		let data = stripchat_recorder_lib::locale::manager::get_full_locale(&lc);
+		let warning = stripchat_recorder_lib::locale::manager::validate_locale_file(&lc);
+		(data, warning)
+	})
+	.await
+	.map_err(|e| e.to_string())?;
 
-    let mut result = locale;
-    if let Some(w) = warning {
-        result["warning"] = serde_json::Value::String(w);
-    }
-    Ok(result)
+	let mut result = locale;
+	if let Some(w) = warning {
+		result["warning"] = serde_json::Value::String(w);
+	}
+	Ok(result)
 }
 
 #[tauri::command]
 pub async fn list_locales() -> CmdResult<serde_json::Value> {
-    let locales = tokio::task::spawn_blocking(
-        stripchat_recorder_lib::locale::manager::list_available_locales,
-    )
-    .await
-    .map_err(|e| e.to_string())?;
-    Ok(serde_json::to_value(locales).unwrap())
+	let locales = tokio::task::spawn_blocking(
+		stripchat_recorder_lib::locale::manager::list_available_locales,
+	)
+	.await
+	.map_err(|e| e.to_string())?;
+	Ok(serde_json::to_value(locales).unwrap())
+}
+
+// ─── Notifications ────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn get_notifications(state: State<'_, DesktopState>) -> CmdResult<serde_json::Value> {
+	let notifications = state.app_state.notification_store.list();
+	let unread = notifications.len();
+	Ok(serde_json::json!({
+		"notifications": serde_json::to_value(notifications).unwrap(),
+		"unread_count": unread,
+	}))
+}
+
+/// 标记指定通知（或全部）为已读。空 ids = 全部清除，与 backend
+/// `routes::notifications::mark_notifications_read` 的分支逻辑保持一致——
+/// `NotificationStore::mark_read(&[])` 对空切片是空操作（保留所有元素），
+/// 必须显式调用 `clear_all()` 才能真正清空。
+///
+/// Mark specified (or all) notifications as read. Empty ids = clear all, matching
+/// the branch logic in backend's `routes::notifications::mark_notifications_read` —
+/// `NotificationStore::mark_read(&[])` is a no-op on an empty slice (keeps everything),
+/// so `clear_all()` must be called explicitly to actually clear.
+#[tauri::command]
+pub async fn mark_notifications_read(
+	ids: Vec<u64>,
+	state: State<'_, DesktopState>,
+) -> CmdResult<serde_json::Value> {
+	if ids.is_empty() {
+		state.app_state.notification_store.clear_all();
+	} else {
+		state.app_state.notification_store.mark_read(&ids);
+	}
+	Ok(serde_json::json!({ "ok": true }))
 }
 
 // ─── Startup Warnings ─────────────────────────────────────────────────────────
 
 #[tauri::command]
-pub async fn get_startup_warnings(state: State<'_, DesktopState>) -> CmdResult<serde_json::Value> {
-    let app_state = Arc::clone(&state.app_state);
-    let result = tokio::task::spawn_blocking(move || {
-        let data = app_state.data.read();
-        let missing_pp_results: Vec<String> = data
-            .pp_results
-            .iter()
-            .filter(|p| !std::path::Path::new(p.as_str()).exists())
-            .cloned()
-            .collect();
-        serde_json::json!({
-            "missing_streamers": [],
-            "missing_pp_results": missing_pp_results,
-        })
-    })
-    .await
-    .map_err(|e| e.to_string())?;
-    Ok(result)
+pub async fn get_startup_warnings(_state: State<'_, DesktopState>) -> CmdResult<serde_json::Value> {
+	// 新架构中启动警告已通过 maintain_output_dir 和 notification_store 处理
+	// In the new architecture, startup warnings are handled via maintain_output_dir and notification_store
+	Ok(serde_json::json!({
+		"missing_streamers": [],
+		"missing_pp_results": [],
+	}))
 }
 
 #[tauri::command]
 pub async fn remove_missing_pp_results(
-    paths: Vec<String>,
-    state: State<'_, DesktopState>,
+	_paths: Vec<String>,
+	_state: State<'_, DesktopState>,
 ) -> CmdResult<serde_json::Value> {
-    let mut data = state.app_state.data.write();
-    data.pp_results.retain(|p| !paths.contains(p));
-    drop(data);
-    state.app_state.save().map_err(map_err)?;
-    Ok(serde_json::json!({ "ok": true }))
+	Ok(serde_json::json!({ "ok": true }))
 }
 
 // ─── File Ops ─────────────────────────────────────────────────────────────────
 
-/// 打开录制文件（用系统默认播放器）/ Open a recording file with the system default player
+/// 打开录制文件：设置中配置了自定义播放器时优先用它（路径失效返回
+/// player_missing 标记），否则回落系统默认打开方式。
+///
+/// Open a recording file: the configured custom player wins when set
+/// (a stale path returns the player_missing marker); otherwise falls back
+/// to the system default handler.
 #[tauri::command]
 pub async fn open_recording(
-    path: String,
-    app: tauri::AppHandle,
+	path: String,
+	app: tauri::AppHandle,
+	state: State<'_, DesktopState>,
 ) -> CmdResult<serde_json::Value> {
-    use tauri_plugin_opener::OpenerExt;
-    app.opener().open_path(&path, None::<&str>).map_err(|e| e.to_string())?;
-    Ok(serde_json::json!({ "ok": true }))
+	let player_path = state.app_state.get_settings().player_path;
+	if !player_path.trim().is_empty() {
+		stripchat_recorder_lib::relay::player::open_in_media_player(&path, &player_path)
+			.map_err(|e| e.to_string())?;
+	} else {
+		use tauri_plugin_opener::OpenerExt;
+		app.opener()
+			.open_path(&path, None::<&str>)
+			.map_err(|e| e.to_string())?;
+	}
+	Ok(serde_json::json!({ "ok": true }))
 }
 
 /// 在文件管理器中打开输出目录 / Open the output directory in the file manager
 #[tauri::command]
 pub async fn open_output_dir(
-    app: tauri::AppHandle,
-    state: State<'_, DesktopState>,
+	app: tauri::AppHandle,
+	state: State<'_, DesktopState>,
 ) -> CmdResult<serde_json::Value> {
-    use tauri_plugin_opener::OpenerExt;
-    let output_dir = state.app_state.get_settings().output_dir;
-    app.opener().open_path(&output_dir, None::<&str>).map_err(|e| e.to_string())?;
-    Ok(serde_json::json!({ "ok": true }))
+	use tauri_plugin_opener::OpenerExt;
+	let output_dir = state.app_state.get_settings().output_dir;
+	app.opener()
+		.open_path(&output_dir, None::<&str>)
+		.map_err(|e| e.to_string())?;
+	Ok(serde_json::json!({ "ok": true }))
 }
 
-/// 读取输出目录中的图片文件（base64 编码，用于缩略图显示）
-/// Read an image file in the output directory as base64 (for thumbnail display)
+/// 在文件管理器中打开合并后视频文件夹。
+/// - segment_merge 节点配置了 output_dir → 打开该目录
+/// - 未配置 → 打开 settings.output_dir（分片目录，合并文件存放于此）
+///
+/// Open the merged video directory in the file manager.
+/// - If segment_merge has an output_dir param → open that directory
+/// - Otherwise → open settings.output_dir (the fragment dir, where merged files also live)
 #[tauri::command]
-pub async fn read_output_file(
-    path: String,
-    state: State<'_, DesktopState>,
+pub async fn open_merged_dir(
+	app: tauri::AppHandle,
+	state: State<'_, DesktopState>,
 ) -> CmdResult<serde_json::Value> {
-    let settings = state.app_state.get_settings();
-    let output_dir = std::path::Path::new(&settings.output_dir);
-    let requested = std::path::Path::new(&path);
+	use tauri_plugin_opener::OpenerExt;
 
-    // 安全检查：确保请求的文件在输出目录范围内
-    // Safety check: ensure requested file is within the output directory
-    let canonical_output = output_dir.canonicalize().map_err(|e| e.to_string())?;
-    let canonical_requested = requested.canonicalize().map_err(|_| "文件不存在".to_string())?;
-    if !canonical_requested.starts_with(&canonical_output) {
-        return Err("访问被拒绝".to_string());
-    }
+	let dir = {
+		let pipeline = state.app_state.get_pipeline();
+		pipeline
+			.nodes
+			.iter()
+			.find(|n| {
+				(n.module_id
+					== stripchat_recorder_lib::postprocess::pipeline::SEGMENT_MERGE_MODULE_ID)
+					&& n.enabled
+			})
+			.and_then(|n| n.params.get("output_dir"))
+			.and_then(|v| v.as_str())
+			.filter(|s| !s.is_empty())
+			.map(|s| s.to_string())
+			.unwrap_or_else(|| state.app_state.get_settings().output_dir)
+	};
 
-    let data = std::fs::read(&canonical_requested).map_err(|e| e.to_string())?;
-    let ext = canonical_requested
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("");
-    let mime = match ext {
-        "webp" => "image/webp",
-        "jpg" | "jpeg" => "image/jpeg",
-        "png" => "image/png",
-        _ => "application/octet-stream",
-    };
-    use base64::Engine;
-    let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
-    Ok(serde_json::json!({
-        "data": format!("data:{};base64,{}", mime, b64),
-        "mime": mime,
-    }))
+	// 目录不存在时提前报错，比让 opener 静默失败更友好
+	// Fail early if the directory doesn't exist — better than opener silently doing nothing
+	if !std::path::Path::new(&dir).exists() {
+		return Err(format!("目录不存在: {}", dir));
+	}
+
+	app.opener()
+		.open_path(&dir, None::<&str>)
+		.map_err(|e| e.to_string())?;
+	Ok(serde_json::json!({ "ok": true }))
+}
+
+/// 读取输出目录中的图片文件（base64 编码）
+/// 用系统默认程序打开模块输出文件（如 contact_sheet 预览图）。
+/// 通过 video_path + module_id 经 meta 解析出真实路径后调用 opener，
+/// 与 open_recording 保持一致，无需 base64 转换。
+///
+/// Open a module output file (e.g. contact_sheet preview image) with the system
+/// default application. Resolves the real path via meta from video_path + module_id,
+/// then calls opener — consistent with open_recording, no base64 conversion needed.
+#[tauri::command]
+pub async fn open_output_file(
+	video_path: String,
+	module_id: String,
+	app: tauri::AppHandle,
+	state: State<'_, DesktopState>,
+) -> CmdResult<serde_json::Value> {
+	let vp = std::path::PathBuf::from(&video_path);
+	let mid = module_id;
+
+	let real_path_str = tokio::task::spawn_blocking(move || {
+		let pp_execution =
+			stripchat_recorder_lib::recording::meta::read_meta(&vp).and_then(|m| m.pp_execution);
+		let outputs = stripchat_recorder_lib::recording::meta::extract_verified_module_outputs(
+			pp_execution.as_deref(),
+		);
+		outputs.get(&mid).cloned()
+	})
+	.await
+	.map_err(|e| e.to_string())?
+	.ok_or_else(|| "模块输出不存在或文件已被删除".to_string())?;
+
+	// 自定义播放器只接管媒体文件（视频/音频）；图片等其余输出仍走系统默认程序——
+	// 把 contact_sheet 预览图丢给 mpv 没有意义
+	// The custom player only takes over media files (video/audio); images and
+	// other outputs keep the system default handler — feeding a contact_sheet
+	// preview to mpv makes no sense
+	let player_path = state.app_state.get_settings().player_path;
+	if !player_path.trim().is_empty() && is_media_file(&real_path_str) {
+		stripchat_recorder_lib::relay::player::open_in_media_player(&real_path_str, &player_path)
+			.map_err(|e| e.to_string())?;
+	} else {
+		use tauri_plugin_opener::OpenerExt;
+		app.opener()
+			.open_path(&real_path_str, None::<&str>)
+			.map_err(|e| e.to_string())?;
+	}
+
+	Ok(serde_json::json!({ "ok": true }))
+}
+
+/// 按扩展名判断是否为媒体文件（决定自定义播放器是否接管）/
+/// Extension check deciding whether the custom player takes over a file
+fn is_media_file(path: &str) -> bool {
+	const MEDIA_EXTS: &[&str] = &[
+		"mkv", "mp4", "m4v", "ts", "m2ts", "flv", "avi", "mov", "wmv", "webm", "mpg", "mpeg",
+		"3gp", "mp3", "aac", "flac", "m4a", "wav", "ogg", "opus",
+	];
+	std::path::Path::new(path)
+		.extension()
+		.and_then(|e| e.to_str())
+		.map(|e| MEDIA_EXTS.contains(&e.to_ascii_lowercase().as_str()))
+		.unwrap_or(false)
 }
 
 /// 获取模块输出路径 / Get module output paths
 #[tauri::command]
 pub async fn get_module_outputs(
-    path: String,
-    state: State<'_, DesktopState>,
+	path: String,
+	state: State<'_, DesktopState>,
 ) -> CmdResult<serde_json::Value> {
-    let video_path = std::path::Path::new(&path);
-    let pipeline = state.app_state.get_pipeline();
-    let mut outputs: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+	let video_path = std::path::PathBuf::from(&path);
+	let app_state = Arc::clone(&state.app_state);
+	let outputs = tokio::task::spawn_blocking(move || {
+		// extract_verified_module_outputs(pp_execution: Option<&[PpExecutionEntry]>)
+		// read_meta 直接返回 Option<VideoMeta> / read_meta directly returns Option<VideoMeta>
+		let pp_execution = stripchat_recorder_lib::recording::meta::read_meta(&video_path)
+			.and_then(|m| m.pp_execution);
+		let entries_ref = pp_execution.as_deref();
+		stripchat_recorder_lib::recording::meta::extract_verified_module_outputs(entries_ref)
+	})
+	.await
+	.map_err(|e| e.to_string())?;
+	let _ = app_state;
+	Ok(serde_json::to_value(outputs).unwrap())
+}
 
-    for node in &pipeline.nodes {
-        if !node.enabled {
-            continue;
-        }
-        if node.module_id == "contact_sheet" {
-            let format = node
-                .params
-                .get("format")
-                .and_then(|v| v.as_str())
-                .unwrap_or("webp");
-            if let (Some(parent), Some(stem)) = (
-                video_path.parent(),
-                video_path.file_stem().and_then(|s| s.to_str()),
-            ) {
-                let img_path = parent.join(format!("{}.{}", stem, format));
-                if img_path.exists() {
-                    outputs.insert(node.module_id.clone(), img_path.to_string_lossy().to_string());
-                }
-            }
-        }
-    }
+// ─── File System (Directory Browser) ─────────────────────────────────────────
 
-    Ok(serde_json::to_value(outputs).unwrap())
+/// 列出目录内容；`include_files` 为 true 时同时返回文件条目（文件选择模式），
+/// `exec_only` 时文件条目仅保留可执行程序 /
+/// List directory contents; `include_files` also returns file entries
+/// (file-picking mode), `exec_only` restricts files to executables
+#[tauri::command]
+pub async fn list_dir(
+	path: String,
+	include_files: Option<bool>,
+	exec_only: Option<bool>,
+) -> CmdResult<serde_json::Value> {
+	let include_files = include_files.unwrap_or(false);
+	let exec_only = exec_only.unwrap_or(false);
+	let result = tokio::task::spawn_blocking(move || {
+		stripchat_recorder_lib::system::fs_browser::list_dir_inner(&path, include_files, exec_only)
+	})
+	.await
+	.map_err(|e| e.to_string())?
+	.map_err(|e| e.to_string())?;
+	Ok(serde_json::to_value(result).unwrap())
+}
+
+/// 列出所有驱动器 / List all drives
+#[tauri::command]
+pub async fn list_drives() -> CmdResult<serde_json::Value> {
+	let result =
+		tokio::task::spawn_blocking(stripchat_recorder_lib::system::fs_browser::list_drives_inner)
+			.await
+			.map_err(|e| e.to_string())?
+			.map_err(|e| e.to_string())?;
+	Ok(serde_json::to_value(result).unwrap())
+}
+
+/// 创建目录 / Create a directory
+#[tauri::command]
+pub async fn create_dir(parent: String, name: String) -> CmdResult<serde_json::Value> {
+	let result = tokio::task::spawn_blocking(move || {
+		stripchat_recorder_lib::system::fs_browser::create_dir_inner(&parent, &name)
+	})
+	.await
+	.map_err(|e| e.to_string())?
+	.map_err(|e| e.to_string())?;
+	Ok(serde_json::json!({ "path": result }))
+}
+
+// ─── Update Check ─────────────────────────────────────────────────────────────
+
+/// 检查桌面端更新。
+///
+/// 根据设置中的 `check_prerelease`（beta 版强制开启）决定检查正式版还是 beta 版：
+/// - `check_prerelease = false`：使用 `/releases/latest/download/latest.json`（仅正式版）
+/// - `check_prerelease = true` ：先通过 GitHub API 找到最新 Release（含 prerelease），
+///   再构造对应的 `latest.json` 下载 URL 用于 tauri-plugin-updater 检查。
+///
+/// Check for desktop updates.
+///
+/// Selects the update endpoint based on `check_prerelease` in settings (forced on for beta builds):
+/// - `check_prerelease = false`: uses `/releases/latest/download/latest.json` (stable only)
+/// - `check_prerelease = true` : queries GitHub API for the latest release (including prerelease),
+///   then constructs the corresponding `latest.json` URL for tauri-plugin-updater.
+///
+/// `force = true`（关于页点版本号 5 次激活的强制模式）时跳过版本比较，
+/// 只要远端存在 release 即视为可更新，便于测试更新 UI。
+/// With `force = true` (force mode armed by tapping the version 5× on the About
+/// page), version comparison is skipped — any remote release counts as
+/// available, for exercising the update UI.
+#[tauri::command]
+pub async fn check_for_updates_cmd(
+	app: tauri::AppHandle,
+	state: State<'_, DesktopState>,
+	force: Option<bool>,
+) -> CmdResult<serde_json::Value> {
+	use tauri_plugin_updater::UpdaterExt;
+
+	let settings = state.app_state.get_settings();
+	let proxy_url = settings.api_proxy_url.clone();
+	let check_prerelease =
+		stripchat_recorder_lib::update::is_beta_version() || settings.check_prerelease;
+
+	const OWNER: &str = "ChanTrail";
+	const REPO: &str = "StripchatRecorder";
+
+	// 根据 check_prerelease 决定 latest.json 的 URL
+	// Choose latest.json URL based on check_prerelease
+	let endpoint_url: String = if check_prerelease {
+		// 通过 GitHub API 获取最新 Release（含 prerelease），找到其 latest.json
+		// Use GitHub API to get the newest release (including prereleases)
+		match stripchat_recorder_lib::update::fetch_latest_release_with_assets(
+			proxy_url.as_deref(),
+			true,
+		)
+		.await
+		{
+			Ok((release, _)) => {
+				let tag = format!("v{}", release.latest_version);
+				format!(
+					"https://github.com/{}/{}/releases/download/{}/latest.json",
+					OWNER, REPO, tag
+				)
+			}
+			Err(e) => return Err(format!("获取最新 Release 信息失败: {}", e)),
+		}
+	} else {
+		format!(
+			"https://github.com/{}/{}/releases/latest/download/latest.json",
+			OWNER, REPO
+		)
+	};
+
+	let url = endpoint_url
+		.parse::<url::Url>()
+		.map_err(|e| e.to_string())?;
+
+	let mut builder = app
+		.updater_builder()
+		.endpoints(vec![url])
+		.map_err(|e| e.to_string())?;
+
+	// 强制模式：比较器恒真，远端有 release 即「有更新」
+	// Force mode: comparator always true — any remote release counts as an update
+	if force.unwrap_or(false) {
+		builder = builder.version_comparator(|_current, _remote| true);
+	}
+
+	if let Some(proxy) = proxy_url.as_deref().filter(|s| !s.is_empty())
+		&& let Ok(proxy_url_parsed) = proxy.parse::<url::Url>()
+	{
+		builder = builder.proxy(proxy_url_parsed);
+	}
+
+	let updater = builder.build().map_err(|e| e.to_string())?;
+	match updater.check().await.map_err(|e| e.to_string())? {
+		Some(update) => {
+			let info = serde_json::json!({
+				"available": true,
+				"version": update.version,
+				"date": update.date.map(|d| d.unix_timestamp()),
+				"body": update.body,
+				"current_version": update.current_version,
+			});
+			// 缓存 Update 对象供后续安装使用 / Cache Update object for later installation
+			*state.pending_update.write() = Some(update);
+			Ok(info)
+		}
+		None => {
+			*state.pending_update.write() = None;
+			Ok(serde_json::json!({ "available": false }))
+		}
+	}
+}
+
+/// 下载并安装已检查到的更新，通过 SSE 事件推送进度。
+/// 必须先调用 `check_for_updates_cmd` 才能调用本命令。
+///
+/// Download and install the pending update, pushing progress via SSE events.
+/// `check_for_updates_cmd` must be called first.
+#[tauri::command]
+pub async fn apply_update_cmd(state: State<'_, DesktopState>) -> CmdResult<serde_json::Value> {
+	use stripchat_recorder_lib::core::emitter::EmitterExt;
+
+	let update = state
+		.pending_update
+		.write()
+		.take()
+		.ok_or("没有可用的更新，请先执行检查更新 / No pending update, run check first")?;
+
+	let emitter = Arc::clone(&state.emitter);
+
+	emitter.emit(
+		"desktop-update-progress",
+		&serde_json::json!({ "phase": "downloading", "pct": 0, "downloaded": 0, "total": 0 }),
+	);
+
+	let emitter2 = Arc::clone(&emitter);
+	let emitter3 = Arc::clone(&emitter);
+	let mut downloaded: u64 = 0;
+	update
+		.download_and_install(
+			move |chunk, total| {
+				downloaded += chunk as u64;
+				let pct = total
+					.and_then(|t| (downloaded).checked_mul(100)?.checked_div(t))
+					.map(|p| p.min(100));
+				emitter2.emit(
+					"desktop-update-progress",
+					&serde_json::json!({
+						"phase": "downloading",
+						"pct": pct,
+						"downloaded": downloaded,
+						"total": total.unwrap_or(0),
+					}),
+				);
+			},
+			move || {
+				emitter3.emit(
+					"desktop-update-progress",
+					&serde_json::json!({ "phase": "installing" }),
+				);
+			},
+		)
+		.await
+		.map_err(|e| e.to_string())?;
+
+	emitter.emit(
+		"desktop-update-progress",
+		&serde_json::json!({ "phase": "done" }),
+	);
+	Ok(serde_json::json!({ "ok": true }))
+}
+
+// ─── FFmpeg Status ────────────────────────────────────────────────────────────
+
+/// 查询当前 FFmpeg 下载/安装进度（与 `GET /api/ffmpeg/status` 等价，
+/// SSE `ffmpeg-progress` 事件断线重连后前端用本命令恢复状态）。
+///
+/// Query the current FFmpeg download/install progress (equivalent to
+/// `GET /api/ffmpeg/status`); the frontend uses this to restore state after an
+/// SSE `ffmpeg-progress` reconnect.
+#[tauri::command]
+pub async fn get_ffmpeg_status(state: State<'_, DesktopState>) -> CmdResult<serde_json::Value> {
+	let progress = stripchat_recorder_lib::ffmpeg::download::current_progress(&state.app_state);
+	serde_json::to_value(progress).map_err(|e| e.to_string())
+}
+
+/// 探测 system（PATH）与 tools 目录中 ffmpeg/ffprobe/ffplay 的存在情况与
+/// ffmpeg 版本（与 `GET /api/ffmpeg/locations` 等价，"FFmpeg 首选项"向导用）。
+/// 探测会对找到的 ffmpeg 运行 `-version`（拉起子进程），放到 blocking 线程执行。
+///
+/// Probe ffmpeg/ffprobe/ffplay presence plus the ffmpeg version on the system
+/// PATH and in the tools directory (equivalent to `GET /api/ffmpeg/locations`,
+/// used by the FFmpeg preference wizard). The probe runs `-version` on each
+/// found ffmpeg (spawns child processes), so it runs on a blocking thread.
+#[tauri::command]
+pub async fn get_ffmpeg_locations() -> CmdResult<serde_json::Value> {
+	let locations = tokio::task::spawn_blocking(stripchat_recorder_lib::ffmpeg::ffmpeg_locations)
+		.await
+		.map_err(|e| e.to_string())?;
+	serde_json::to_value(locations).map_err(|e| e.to_string())
+}
+
+/// 手动触发 tools 目录的 FFmpeg 下载安装（"FFmpeg 首选项"向导的"下载"
+/// 按钮，等价于 `POST /api/ffmpeg/download`）。立即返回：下载在后台进行，
+/// 进度经 `ffmpeg-progress` 事件广播。首选项为系统环境变量或平台不支持
+/// 下载时为 no-op。
+///
+/// Manually trigger a tools-directory FFmpeg download/install (the FFmpeg
+/// preference wizard's Download button; equivalent to
+/// `POST /api/ffmpeg/download`). Returns immediately: the download runs in
+/// the background with progress over the `ffmpeg-progress` event. No-op when
+/// the preference is the system PATH or the platform can't download.
+/// `platform`/`variant` 是可选的构建选择（平台轨 × 变体后缀），缺省自动解析。
+/// `platform`/`variant` are the optional build selection (platform track ×
+/// variant suffix); auto-resolved when absent.
+#[tauri::command]
+pub async fn download_ffmpeg(
+	state: State<'_, DesktopState>,
+	platform: Option<String>,
+	variant: Option<String>,
+) -> CmdResult<()> {
+	stripchat_recorder_lib::ffmpeg::download::spawn_manual_install(
+		Arc::clone(&state.app_state),
+		Arc::clone(&state.emitter),
+		stripchat_recorder_lib::ffmpeg::download::FFmpegDownloadChoice { platform, variant },
+	);
+	Ok(())
+}
+
+// ─── 资源占用 / Resource usage ───────────────────────────────────────────────
+
+/// 返回本进程及其全部后代（ffmpeg、后处理模块及其子进程等）的 CPU/内存
+/// 快照（与 `GET /api/process-usage` 等价）。单次调用内部跨一个 CPU 差分
+/// 采样窗口（约 450ms）。
+///
+/// Returns a CPU/memory snapshot of this process plus every descendant
+/// (ffmpeg, post-process modules and their children, ...) — equivalent to
+/// `GET /api/process-usage`. One call spans a CPU differential sampling
+/// window (~450 ms) internally.
+#[tauri::command]
+pub async fn process_usage() -> CmdResult<serde_json::Value> {
+	let snapshot = stripchat_recorder_lib::system::process::collect_process_usage().await;
+	serde_json::to_value(snapshot).map_err(|e| e.to_string())
+}
+
+// ─── 服务状态 / Service status ───────────────────────────────────────────────
+
+/// 并行探测后端各依赖的连通性与延时（与 `GET /api/service-status` 等价）。
+/// `skip_mirrored` 为非 0 时跳过走镜像的一次性条目（前端首轮全量探测后
+/// 改走此参，省流量）。前端传 `{ skip_mirrored: 1 }`，数值型实参。
+///
+/// Parallel connectivity+latency probes of backend dependencies —
+/// equivalent to `GET /api/service-status`. A non-zero `skip_mirrored`
+/// skips the one-shot mirror-routed items (the frontend switches to this
+/// after the first full round to save traffic). The frontend passes
+/// `{ skip_mirrored: 1 }` — a numeric argument.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn service_status(
+	state: State<'_, DesktopState>,
+	skip_mirrored: Option<i64>,
+) -> CmdResult<serde_json::Value> {
+	let resp = stripchat_recorder_lib::server::routes::status::collect_service_status(
+		&state.app_state,
+		matches!(skip_mirrored, Some(v) if v != 0),
+	)
+	.await;
+	serde_json::to_value(resp).map_err(|e| e.to_string())
 }

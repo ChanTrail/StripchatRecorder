@@ -20,667 +20,646 @@
     - Multi-column sorting and group collapsing
 -->
 <script setup lang="ts">
-	import { onMounted, onUnmounted, computed, ref, watchEffect } from "vue";
-	import { call, on } from "@/lib/api";
-	import { useNotify } from "../composables/useNotify";
-	import { usePostprocessStore } from "@/stores/postprocess";
-	import { useRecordings } from "@/composables/useRecordings";
-	import { usePostprocess, makePpProgress } from "@/composables/usePostprocess";
-	import { useImagePreview } from "@/composables/useImagePreview";
-	import { Button } from "@/components/ui/button";
-	import { Badge } from "@/components/ui/badge";
-	import { Checkbox } from "@/components/ui/checkbox";
-	import { Loader2, Image } from "@lucide/vue";
-	import { Progress } from "@/components/ui/progress";
-	import {
-		Dialog,
-		DialogContent,
-		DialogHeader,
-		DialogTitle,
-	} from "@/components/ui/dialog";
-	import {
-		Table,
-		TableBody,
-		TableCell,
-		TableHead,
-		TableHeader,
-		TableRow,
-	} from "@/components/ui/table";
-	import { formatSize, formatDuration } from "@/utils/format";
-	import { useI18n } from "vue-i18n";
+import { onMounted, onUnmounted, computed, ref, watchEffect } from "vue";
+import { call, on } from "@/lib/api";
+import { useNotify } from "../composables/useNotify";
+import { usePostprocessStore, countPipelineTotal } from "@/stores/postprocess";
+import { useRecordings } from "@/composables/useRecordings";
+import { usePostprocess, ppProgressFromMeta } from "@/composables/usePostprocess";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Tooltip } from "@/components/ui/tooltip";
+import { Progress } from "@/components/ui/progress";
+import {
+	Table,
+	TableBody,
+	TableCell,
+	TableHead,
+	TableHeader,
+	TableRow,
+} from "@/components/ui/table";
+import { ChevronRight, ChevronDown, Image, Loader2 } from "@lucide/vue";
+import RecordingRow from "@/components/RecordingRow.vue";
+import ImagePreviewDialog from "@/components/ImagePreviewDialog.vue";
+import SegmentStatsBadges from "@/components/SegmentStatsBadges.vue";
+import PostprocessProgressCell from "@/components/PostprocessProgressCell.vue";
+import { formatSize, formatDuration } from "@/utils/format";
+import { useI18n } from "vue-i18n";
+import { useMobileLayout } from "@/composables/useMobileLayout";
 
-	const { toast, confirm } = useNotify();
-	const { t } = useI18n();
-	const ppStore = usePostprocessStore();
-	/** 事件取消订阅函数列表 / Event unsubscribe function list */
-	const unlisteners: (() => void)[] = [];
-	/** 本地已发起删除的文件路径集合（用于过滤 recording-deleted 事件通知）/ Locally deleted paths (to filter recording-deleted notifications) */
-	const localDeletedPaths = new Set<string>();
-	/**
-	 * 删除时正在后处理的文件路径集合。
-	 * 与 localDeletedPaths 不同，此集合不在 recording-deleted 时清除，
-	 * 而是等到 postprocess-done 事件处理完后才清除，确保能正确抑制后处理失败 toast。
-	 *
-	 * Paths that were being post-processed when deleted.
-	 * Unlike localDeletedPaths, this set is NOT cleared on recording-deleted;
-	 * it is cleared after postprocess-done is handled, so the failure toast is correctly suppressed.
-	 */
-	const ppCancelledByDelete = new Set<string>();
+const { toast, confirm } = useNotify();
+const { t } = useI18n();
+const ppStore = usePostprocessStore();
+const { isMobile } = useMobileLayout();
+/** 事件取消订阅函数列表 / Event unsubscribe function list */
+const unlisteners: (() => void)[] = [];
+/** 本地已发起删除的文件路径集合（用于过滤 recording-deleted 事件通知）/ Locally deleted paths (to filter recording-deleted notifications) */
+const localDeletedPaths = new Set<string>();
+/**
+ * 删除时正在后处理的文件路径集合。
+ * 与 localDeletedPaths 不同，此集合不在 recording-deleted 时清除，
+ * 而是等到 postprocess-done 事件处理完后才清除，确保能正确抑制后处理失败 toast。
+ *
+ * Paths that were being post-processed when deleted.
+ * Unlike localDeletedPaths, this set is NOT cleared on recording-deleted;
+ * it is cleared after postprocess-done is handled, so the failure toast is correctly suppressed.
+ */
+const ppCancelledByDelete = new Set<string>();
 
-	/** 磁盘空间信息 / Disk space information */
-	interface DiskSpace {
-		total_bytes: number;
-		available_bytes: number;
-		used_bytes: number;
-	}
-	const diskSpace = ref<DiskSpace | null>(null);
+/** 磁盘空间条目 / Disk space entry */
+interface DiskSpaceEntry {
+	label: string; // "fragment" | "segment_merge"
+	path: string;
+	total_bytes: number;
+	available_bytes: number;
+	used_bytes: number;
+}
+const diskSpaces = ref<DiskSpaceEntry[]>([]);
 
-	/**
-	 * 从后端刷新磁盘空间信息。
-	 * Refresh disk space information from the backend.
-	 */
-	async function refreshDiskSpace() {
-		try {
-			diskSpace.value = await call<DiskSpace>("get_disk_space");
-		} catch {}
-	}
+/**
+ * 从后端刷新磁盘空间信息。
+ * Refresh disk space information from the backend.
+ */
+async function refreshDiskSpace() {
+	try {
+		diskSpaces.value = await call<DiskSpaceEntry[]>("get_disk_space");
+	} catch {}
+}
 
-	/** 各文件的实时录制速度（字节/秒）/ Real-time recording speed per file (bytes/second) */
-	const recordingSpeed = ref<Record<string, number>>({});
+/** 各文件的实时录制速度（字节/秒）/ Real-time recording speed per file (bytes/second) */
+const recordingSpeed = ref<Record<string, number>>({});
 
-	/** 合并进度（video_path -> {out_bytes, total_bytes}）/ Merge progress per video path */
-	const mergeProgress = ref<Record<string, { out_bytes: number; total_bytes: number }>>({});
+/** 分片下载统计（video_path -> {downloaded, failed}）/ Segment download stats per video path */
+const segmentStats = ref<Record<string, { downloaded: number; failed: number }>>({});
 
-	const rec = useRecordings();
-	const {
-		files,
-		loading,
-		elapsed,
-		selected,
-		selectedCount,
-		collapsedGroups,
-		groups,
-		load,
-		startTick,
-		stopTick,
-		scheduleDirRefresh,
-		cleanup: recCleanup,
-		toggleSort,
-		sortIcon,
-		toggleGroup,
-		getFileChecked,
-		setFileChecked,
-		getGroupChecked,
-		setGroupChecked,
-		getAllChecked,
-		setAllChecked,
-	} = rec;
+const rec = useRecordings();
+const {
+	files,
+	loading,
+	elapsed,
+	selected,
+	selectedCount,
+	collapsedGroups,
+	groups,
+	load,
+	startTick,
+	stopTick,
+	scheduleDirRefresh,
+	cleanup: recCleanup,
+	toggleSort,
+	sortIcon,
+	toggleGroup,
+	getFileChecked,
+	setFileChecked,
+	getGroupChecked,
+	setGroupChecked,
+	getAllChecked,
+	setAllChecked,
+} = rec;
 
-	const pp = usePostprocess();
-	const {
-		ppStatus,
-		ppProgress,
-		moduleOutputs,
-		runPostprocess,
-		restoreFromBackend,
-		handlePostprocessDone,
-		removeFile: ppRemoveFile,
-	} = pp;
+const pp = usePostprocess();
+const {
+	ppStatus,
+	ppProgress,
+	moduleOutputs,
+	runPostprocess,
+	restoreFromBackend,
+	handlePostprocessDone,
+	removeFile: ppRemoveFile,
+} = pp;
 
-	/**
-	 * 从当前 files.value 列表中同步模块输出路径到 moduleOutputs。
-	 * 仅补充缺失的条目，不覆盖已有的（如推断值或实时更新值）。
-	 * 用于 load() 之后确保 contact_sheet 等预览图按钮能正确显示。
-	 *
-	 * Sync module output paths from the current files.value list into moduleOutputs.
-	 * Only fills in missing entries; does not overwrite existing ones (e.g. inferred or live-updated values).
-	 * Called after load() to ensure preview buttons (e.g. contact_sheet) are correctly shown.
-	 */
-	function syncModuleOutputsFromFiles() {
-		for (const f of files.value) {
-			if (f.is_recording) continue;
-			if (f.module_outputs && Object.keys(f.module_outputs).length > 0) {
-				// meta 是持久化真相来源，直接覆盖写入（与 onMounted 初始化行为一致）
-				// Meta is the persistent source of truth; overwrite directly (consistent with onMounted init)
-				moduleOutputs.value[f.path] = {
-					...moduleOutputs.value[f.path],
-					...f.module_outputs,
-				};
-			}
+/**
+ * 从当前 files.value 列表中同步模块输出路径到 moduleOutputs。
+ * 直接采用后端已验证的 `f.module_outputs`（result.code === "ok" 且路径当前
+ * 确实存在于磁盘上，见 `extract_verified_module_outputs`），不再自行从
+ * pp_execution 推断——前端没有文件系统访问权限，无法验证路径是否真实存在。
+ *
+ * Sync module output paths from the current files.value list into moduleOutputs.
+ * Directly uses the backend-verified `f.module_outputs` (result.code === "ok" and
+ * the path currently exists on disk, see `extract_verified_module_outputs`), no
+ * longer inferring from pp_execution itself — the frontend has no filesystem access
+ * and cannot verify a path actually exists.
+ */
+function syncModuleOutputsFromFiles() {
+	for (const f of files.value) {
+		if (f.is_recording) continue;
+		if (f.module_outputs && Object.keys(f.module_outputs).length > 0) {
+			moduleOutputs.value[f.path] = { ...moduleOutputs.value[f.path], ...f.module_outputs };
 		}
 	}
+}
 
-	const preview = useImagePreview();
-	const {
-		previewOpen,
-		previewUrl,
-		previewTitle,
-		previewScale,
-		previewTranslate,
-		previewViewportRef,
-		previewImageRef,
-		isDragging,
-		viewportSize,
-		resetPreviewTransform,
-		onPreviewImageLoad,
-		onPreviewWheel,
-		onPreviewMousedown,
-		onDocMousemove,
-		onDocMouseup,
-		openPreview,
-	} = preview;
-
-	/**
-	 * 用系统默认程序打开录制文件。
-	 * Open a recording file with the system default application.
-	 */
-	async function openFile(path: string) {
-		await call("open_recording", { path });
+/**
+ * 从当前 files.value 列表的 meta status/pp_execution/pp_progress 字段，
+ * 同步后处理状态(ppStatus)、进度(ppProgress)和模块输出路径(moduleOutputs)。
+ * meta 是持久化的真相来源，优先级高于内存推断值，直接覆盖写入。
+ * 用于 onMounted 初始加载和 sse-lagged 事件后的全量状态恢复。
+ *
+ * Sync post-processing status (ppStatus), progress (ppProgress), and module output
+ * paths (moduleOutputs) from the current files.value list's meta status/pp_execution/pp_progress
+ * fields. Meta is the persistent source of truth and takes priority over in-memory inferred
+ * values, overwriting them directly. Used for the initial onMounted load and full state
+ * restoration after an sse-lagged event.
+ */
+function syncPpStateFromFiles() {
+	for (const f of files.value) {
+		if (f.is_recording) continue;
+		if (f.status === "finish") {
+			ppStatus.value[f.path] = "done";
+		} else if (f.status === "pp_error") {
+			ppStatus.value[f.path] = "error";
+		} else if (f.status === "pp_waiting") {
+			if (ppStatus.value[f.path] !== "running") ppStatus.value[f.path] = "waiting";
+		} else if (f.status === "pp_running") {
+			ppStatus.value[f.path] = "running";
+		}
+		// 从 meta 的 pp_execution + pp_progress 恢复进度（含运行中节点）
+		// Restore progress from meta pp_execution + pp_progress (covers running nodes too)
+		if (f.pp_execution && f.pp_execution.length > 0) {
+			ppProgress.value[f.path] = ppProgressFromMeta(
+				f.pp_execution,
+				f.pp_progress,
+				countPipelineTotal(ppStore.pipeline),
+				{
+					processing: t("usePostprocess.processing"),
+					waiting: t("usePostprocess.waitingProgress"),
+				},
+			);
+		}
+		// 直接使用后端已验证的模块输出路径（result.code === "ok" 且文件当前确实存在）
+		// Directly use the backend-verified module output paths (result.code === "ok"
+		// and the file currently exists)
+		if (f.module_outputs && Object.keys(f.module_outputs).length > 0) {
+			moduleOutputs.value[f.path] = f.module_outputs;
+		}
 	}
+}
 
-	/**
-	 * 打开模块输出文件（使用预览弹窗）。
-	 * Open module output file (preview dialog).
-	 */
-	async function openModuleOutput(filePath: string, moduleId: string) {
-		const outputPath = moduleOutputs.value[filePath]?.[moduleId];
-		if (!outputPath) return;
-		openPreview(
-			`/api/files?path=${encodeURIComponent(outputPath)}`,
-			outputPath.split(/[\\/]/).pop() ?? "预览图",
-		);
+/** 图片预览对话框组件引用 / Image preview dialog component ref */
+const previewDialogRef = ref<InstanceType<typeof ImagePreviewDialog> | null>(null);
+
+/**
+ * 用系统默认程序打开录制文件。
+ * Open a recording file with the system default application.
+ */
+async function openFile(path: string) {
+	await call("open_recording", { path });
+}
+
+/**
+ * 打开模块输出文件（使用预览弹窗）。
+ * Web 版：直接用后端的静态文件路由（`GET /api/files?video_path=...&module_id=...`，
+ * 见 backend/src/server_mod/routes/recording.rs 的 serve_output_file）拼出图片 URL
+ * 交给 <img> 加载，不需要先整个读进内存转 base64。
+ *
+ * 传的是 `(video_path, module_id)` 而不是具体文件路径——后端会通过 meta 解析出
+ * 该模块真正的输出路径（与 moduleOutputs 的来源同一套校验逻辑），不管该路径是否
+ * 落在默认的 output_dir 内（segment_merge 等模块支持自定义输出目录，产物可能在别处）。
+ *
+ * Open module output file (preview dialog).
+ * Web version: builds the image URL directly from the backend's static file route
+ * (`GET /api/files?video_path=...&module_id=...`, see serve_output_file in
+ * backend/src/server_mod/routes/recording.rs) and lets <img> load it — no need to
+ * read the whole file into memory and base64-encode it first.
+ *
+ * Passes `(video_path, module_id)` rather than a concrete file path — the backend
+ * resolves that module's actual output path via meta (the same verification logic
+ * that populates moduleOutputs), regardless of whether that path falls within the
+ * default output_dir (modules like segment_merge support a custom output directory, so
+ * the artifact may live elsewhere).
+ */
+function openModuleOutput(filePath: string, moduleId: string) {
+	const outputPath = moduleOutputs.value[filePath]?.[moduleId];
+	if (!outputPath) return;
+	const url = `/api/files?video_path=${encodeURIComponent(filePath)}&module_id=${encodeURIComponent(moduleId)}`;
+	previewDialogRef.value?.openPreview(url, outputPath.split(/[\\/]/).pop() ?? "预览图");
+}
+
+/**
+ * 删除单个录制文件（需要用户确认）。
+ * Delete a single recording file (requires user confirmation).
+ */
+async function deleteFile(f: { name: string; path: string; is_recording: boolean }) {
+	const ok = await confirm({
+		title: t("recordings.delete.title"),
+		message: t("recordings.delete.message", { name: f.name }),
+		confirmText: t("recordings.delete.confirm"),
+		danger: true,
+	});
+	if (!ok) return;
+	try {
+		if (ppStatus.value[f.path] === "running") {
+			ppCancelledByDelete.add(f.path);
+			await call("cancel_postprocess", { path: f.path }).catch(() => {});
+		}
+		localDeletedPaths.add(f.path);
+		await call("delete_recording", { path: f.path });
+		files.value = files.value.filter((r) => r.path !== f.path);
+		delete elapsed.value[f.path];
+		ppRemoveFile(f.path);
+		selected.value.delete(f.path);
+		toast(t("recordings.delete.done", { name: f.name }), "success");
+	} catch (e) {
+		localDeletedPaths.delete(f.path);
+		toast(String(e), "error");
 	}
+}
 
-	/**
-	 * 删除单个录制文件（需要用户确认）。
-	 * Delete a single recording file (requires user confirmation).
-	 */
-	async function deleteFile(f: {
-		name: string;
-		path: string;
-		is_recording: boolean;
-	}) {
-		const ok = await confirm({
-			title: t("recordings.delete.title"),
-			message: t("recordings.delete.message", { name: f.name }),
-			confirmText: t("recordings.delete.confirm"),
-			danger: true,
-		});
-		if (!ok) return;
+/**
+ * 批量删除已选中的文件（需要用户确认）。
+ * Batch delete selected files (requires user confirmation).
+ */
+async function deleteSelected() {
+	const paths = [...selected.value];
+	const count = paths.length;
+	const ok = await confirm({
+		title: t("recordings.delete.batchTitle"),
+		message: t("recordings.delete.batchMessage", { count }),
+		confirmText: t("recordings.delete.confirm"),
+		danger: true,
+	});
+	if (!ok) return;
+	await Promise.all(
+		paths
+			.filter((p) => ppStatus.value[p] === "running")
+			.map((p) => {
+				ppCancelledByDelete.add(p);
+				return call("cancel_postprocess", { path: p }).catch(() => {});
+			}),
+	);
+	let failed = 0;
+	for (const path of paths) {
 		try {
-			if (ppStatus.value[f.path] === "running") {
-				ppCancelledByDelete.add(f.path);
-				await call("cancel_postprocess", { path: f.path }).catch(() => {});
-			}
-			localDeletedPaths.add(f.path);
-			await call("delete_recording", { path: f.path });
-			files.value = files.value.filter((r) => r.path !== f.path);
-			delete elapsed.value[f.path];
-			ppRemoveFile(f.path);
-			selected.value.delete(f.path);
-			toast(t("recordings.delete.done", { name: f.name }), "success");
-		} catch (e) {
-			localDeletedPaths.delete(f.path);
+			localDeletedPaths.add(path);
+			await call("delete_recording", { path });
+			files.value = files.value.filter((r) => r.path !== path);
+			delete elapsed.value[path];
+			ppRemoveFile(path);
+			selected.value.delete(path);
+		} catch {
+			localDeletedPaths.delete(path);
+			failed++;
+		}
+	}
+	if (failed > 0) toast(t("recordings.delete.batchFailed", { count: failed }), "error");
+	else toast(t("recordings.delete.batchDone", { count }), "success");
+}
+
+/**
+ * 对所有已选中且符合条件的文件批量触发后处理。
+ * 按录制开始时间排序，确保处理顺序一致。
+ *
+ * Trigger post-processing for all selected eligible files in batch.
+ * Sorted by recording start time to ensure consistent processing order.
+ */
+async function postProcessSelected() {
+	if (!hasPipelineNodes.value) {
+		toast(t("recordings.postprocessEmptyPipeline"), "error");
+		return;
+	}
+	const paths = [...selected.value].filter(
+		(p) =>
+			ppStatus.value[p] !== "running" &&
+			ppStatus.value[p] !== "waiting" &&
+			!files.value.find((f) => f.path === p)?.is_recording,
+	);
+	if (paths.length === 0) return;
+	selected.value.clear();
+	paths.sort((a, b) => {
+		const fa = files.value.find((f) => f.path === a);
+		const fb = files.value.find((f) => f.path === b);
+		return new Date(fa?.started_at ?? 0).getTime() - new Date(fb?.started_at ?? 0).getTime();
+	});
+	for (const path of paths) {
+		await call("run_postprocess_cmd", { path }).catch((e) => {
 			toast(String(e), "error");
-		}
-	}
-
-	/**
-	 * 批量删除已选中的文件（需要用户确认）。
-	 * Batch delete selected files (requires user confirmation).
-	 */
-	async function deleteSelected() {
-		const paths = [...selected.value];
-		const count = paths.length;
-		const ok = await confirm({
-			title: t("recordings.delete.batchTitle"),
-			message: t("recordings.delete.batchMessage", { count }),
-			confirmText: t("recordings.delete.confirm"),
-			danger: true,
 		});
-		if (!ok) return;
-		await Promise.all(
-			paths
-				.filter((p) => ppStatus.value[p] === "running")
-				.map((p) => {
-					ppCancelledByDelete.add(p);
-					return call("cancel_postprocess", { path: p }).catch(() => {});
-				}),
-		);
-		let failed = 0;
-		for (const path of paths) {
-			try {
-				localDeletedPaths.add(path);
-				await call("delete_recording", { path });
-				files.value = files.value.filter((r) => r.path !== path);
-				delete elapsed.value[path];
-				ppRemoveFile(path);
-				selected.value.delete(path);
-			} catch {
-				localDeletedPaths.delete(path);
-				failed++;
-			}
-		}
-		if (failed > 0)
-			toast(t("recordings.delete.batchFailed", { count: failed }), "error");
-		else toast(t("recordings.delete.batchDone", { count }), "success");
 	}
+}
 
-	/**
-	 * 对所有已选中且符合条件的文件批量触发后处理。
-	 * 按录制开始时间排序，确保处理顺序一致。
-	 *
-	 * Trigger post-processing for all selected eligible files in batch.
-	 * Sorted by recording start time to ensure consistent processing order.
-	 */
-	async function postProcessSelected() {
-		const paths = [...selected.value].filter(
+/** 已选中文件中可触发后处理的数量 / Number of selected files eligible for post-processing */
+const ppSelectableCount = computed(
+	() =>
+		[...selected.value].filter(
 			(p) =>
 				ppStatus.value[p] !== "running" &&
 				ppStatus.value[p] !== "waiting" &&
-				!files.value.find((f) => f.path === p)?.is_recording &&
-				!files.value.find((f) => f.path === p)?.status?.startsWith("merging"),
-		);
-		if (paths.length === 0) return;
-		selected.value.clear();
-		paths.sort((a, b) => {
-			const fa = files.value.find((f) => f.path === a);
-			const fb = files.value.find((f) => f.path === b);
-			return (
-				new Date(fa?.started_at ?? 0).getTime() -
-				new Date(fb?.started_at ?? 0).getTime()
-			);
-		});
-		for (const path of paths) {
-			await call("run_postprocess_cmd", { path }).catch((e) => {
-				toast(String(e), "error");
-			});
-		}
-	}
+				!files.value.find((f) => f.path === p)?.is_recording,
+		).length,
+);
 
-	/** 已选中文件中可触发后处理的数量 / Number of selected files eligible for post-processing */
-	const ppSelectableCount = computed(
-		() =>
-			[...selected.value].filter(
-				(p) =>
-					ppStatus.value[p] !== "running" &&
-					ppStatus.value[p] !== "waiting" &&
-					!files.value.find((f) => f.path === p)?.is_recording &&
-					!files.value.find((f) => f.path === p)?.status?.startsWith("merging"),
-			).length,
-	);
+/** 流水线是否有已连接输入节点的启用节点（即输入节点有连线）
+ * / Whether the pipeline has any enabled node connected to the recording input node */
+const hasPipelineNodes = computed(
+	() =>
+		ppStore.pipeline?.nodes?.some(
+			(n) => n.enabled && Object.values(n.inputs ?? {}).some((ref) => ref.nodeId === "0"),
+		) ?? false,
+);
 
-	/** 所有正在录制文件的总录制速度（字节/秒）/ Total recording speed (bytes/second) */
-	const totalRecordingSpeed = computed(() =>
-		Object.values(recordingSpeed.value).reduce((sum, s) => sum + s, 0),
-	);
+/** 所有正在录制文件的总录制速度（字节/秒）/ Total recording speed (bytes/second) */
+const totalRecordingSpeed = computed(() =>
+	Object.values(recordingSpeed.value).reduce((sum, s) => sum + s, 0),
+);
 
-	/** 正在录制的文件数量 / Number of files currently recording */
-	const recordingCount = computed(
-		() => files.value.filter((f) => f.is_recording).length,
-	);
+/** 正在录制的文件数量 / Number of files currently recording */
+const recordingCount = computed(() => files.value.filter((f) => f.is_recording).length);
 
-	/** 磁盘使用率百分比 / Disk usage percentage */
-	const diskUsedPct = computed(() => {
-		if (!diskSpace.value || diskSpace.value.total_bytes === 0) return 0;
-		return Math.min(
-			100,
-			(diskSpace.value.used_bytes / diskSpace.value.total_bytes) * 100,
-		);
+/** 各磁盘使用率百分比 / Disk usage percentage per entry */
+function diskUsedPct(entry: DiskSpaceEntry) {
+	if (entry.total_bytes === 0) return 0;
+	return Math.min(100, (entry.used_bytes / entry.total_bytes) * 100);
+}
+
+/**
+ * 根据磁盘使用率返回三级颜色等级。
+ * Return a three-level color tier based on disk usage ratio.
+ * - "warn"  : 50% ≤ used < 80%
+ * - "danger": used ≥ 80%
+ * - ""      : normal (< 50%)
+ */
+function diskColorTier(entry: DiskSpaceEntry): "warn" | "danger" | "" {
+	if (entry.total_bytes === 0) return "";
+	const pct = (entry.used_bytes / entry.total_bytes) * 100;
+	if (pct >= 80) return "danger";
+	if (pct >= 50) return "warn";
+	return "";
+}
+onMounted(async () => {
+	await load();
+	startTick();
+	await refreshDiskSpace();
+	const diskTimer = setInterval(refreshDiskSpace, 30_000);
+	unlisteners.push(() => clearInterval(diskTimer));
+	if (!ppStore.pipeline?.nodes?.length) await ppStore.fetchPipeline();
+
+	// 监听其他客户端的流水线更新，实时刷新模块输出路径推断结果
+	// Listen for pipeline updates from other clients and re-infer module output paths
+	ppStore.initModuleWatcher(() => {
+		syncModuleOutputsFromFiles();
 	});
-	onMounted(async () => {
-		document.addEventListener("mousemove", onDocMousemove);
-		document.addEventListener("mouseup", onDocMouseup);
 
-		await load();
-		startTick();
-		await refreshDiskSpace();
-		const diskTimer = setInterval(refreshDiskSpace, 30_000);
-		unlisteners.push(() => clearInterval(diskTimer));
-		if (!ppStore.pipeline?.nodes?.length) await ppStore.fetchPipeline();
+	// 先恢复运行中/等待中的后处理任务状态（来自内存，不依赖 meta）
+	// First restore running/waiting post-processing task states (from memory, independent of meta)
+	await restoreFromBackend();
 
-		// 先恢复运行中/等待中的后处理任务状态（来自内存，不依赖 meta）
-		// First restore running/waiting post-processing task states (from memory, independent of meta)
-		await restoreFromBackend();
+	// 再从文件列表的 meta status 字段初始化 done/error 状态和模块输出路径。
+	// meta 是持久化的真相来源，优先级高于推断值，直接覆盖写入。
+	//
+	// Then initialize status and module output paths from meta status fields in the file list.
+	// Meta is the persistent source of truth and takes priority over inferred values.
+	syncPpStateFromFiles();
 
-		// 再从文件列表的 meta status 字段初始化 done/error 状态和模块输出路径。
-		// meta 是持久化的真相来源，优先级高于推断值，直接覆盖写入。
-		//
-		// Then initialize status and module output paths from meta status fields in the file list.
-		// Meta is the persistent source of truth and takes priority over inferred values.
-		for (const f of files.value) {
-			if (f.is_recording) continue;
-			if (f.status === "finish") {
-				ppStatus.value[f.path] = "done";
-			} else if (f.status === "pp_error") {
-				ppStatus.value[f.path] = "error";
-			} else if (f.status === "pp_waiting") {
-				if (ppStatus.value[f.path] !== "running") ppStatus.value[f.path] = "waiting";
-			} else if (f.status === "pp_running") {
-				ppStatus.value[f.path] = "running";
+	unlisteners.push(
+		await on("recordings-dir-changed", () => scheduleDirRefresh(syncModuleOutputsFromFiles)),
+	);
+
+	unlisteners.push(
+		await on("sse-lagged", async () => {
+			// SSE 广播队列溢出，事件已丢失，重新从后端恢复完整状态
+			// SSE broadcast queue overflowed, events lost; restore full state from backend
+			await load();
+			await restoreFromBackend();
+			syncPpStateFromFiles();
+		}),
+	);
+
+	unlisteners.push(
+		await on("recording-deleted", (payload) => {
+			const p = payload as { path: string };
+			const isLocal = localDeletedPaths.has(p.path);
+			localDeletedPaths.delete(p.path);
+			files.value = files.value.filter((r) => r.path !== p.path);
+			delete elapsed.value[p.path];
+			ppRemoveFile(p.path);
+			selected.value.delete(p.path);
+			if (!files.value.some((f) => f.is_recording)) stopTick();
+			if (!isLocal) {
+				const name = p.path.split(/[\\/]/).pop() ?? p.path;
+				toast(t("recordings.otherClientDeleted", { name }), "info");
 			}
-			// 从 meta pp_results 恢复各模块执行结果，用于 done/error 状态下的详情展示
-			// Restore per-module results from meta pp_results for detail display in done/error state
-			if (f.pp_results && f.pp_results.length > 0 &&
-				(f.status === "finish" || f.status === "pp_error")) {
-				const results = f.pp_results.map((r) => ({
-					moduleId: r.module_id,
-					success: r.success,
-					message: r.message,
-				}));
-				const allOk = results.every((r) => r.success);
-				ppProgress.value[f.path] = {
-					...makePpProgress(
-						allOk ? results.length : 0,
-						results.length,
-						0, 0, "", allOk ? 100 : 0, "", 0,
-						{ processing: t("usePostprocess.processing"), waiting: t("usePostprocess.waitingProgress") },
-					),
-					moduleResults: results,
-				};
-			}
-			if (f.module_outputs && Object.keys(f.module_outputs).length > 0) {
-				moduleOutputs.value[f.path] = f.module_outputs;
-			}
-		}
+		}),
+	);
 
-		unlisteners.push(
-			await on("recordings-dir-changed", () => scheduleDirRefresh(syncModuleOutputsFromFiles)),
-		);
-
-		unlisteners.push(
-			await on("sse-lagged", async () => {
-				// SSE 广播队列溢出，事件已丢失，重新从后端恢复完整状态
-				// SSE broadcast queue overflowed, events lost; restore full state from backend
-				await load();
-				// 先恢复运行中任务，再用 meta 覆盖 done/error 状态
-				// First restore running tasks, then overwrite done/error status from meta
-				await restoreFromBackend();
-				for (const f of files.value) {
-					if (f.is_recording) continue;
-					if (f.status === "finish") {
-						ppStatus.value[f.path] = "done";
-					} else if (f.status === "pp_error") {
-						ppStatus.value[f.path] = "error";
-					} else if (f.status === "pp_waiting") {
-						if (ppStatus.value[f.path] !== "running") ppStatus.value[f.path] = "waiting";
-					} else if (f.status === "pp_running") {
-						ppStatus.value[f.path] = "running";
-					}
-					if (f.pp_results && f.pp_results.length > 0 &&
-						(f.status === "finish" || f.status === "pp_error")) {
-						const results = f.pp_results.map((r) => ({
-							moduleId: r.module_id,
-							success: r.success,
-							message: r.message,
-						}));
-						const allOk = results.every((r) => r.success);
-						ppProgress.value[f.path] = {
-							...makePpProgress(
-								allOk ? results.length : 0,
-								results.length,
-								0, 0, "", allOk ? 100 : 0, "", 0,
-								{ processing: t("usePostprocess.processing"), waiting: t("usePostprocess.waitingProgress") },
-							),
-							moduleResults: results,
-						};
-					}
-					if (f.module_outputs && Object.keys(f.module_outputs).length > 0) {
-						moduleOutputs.value[f.path] = f.module_outputs;
-					}
+	unlisteners.push(
+		await on("recording-file-update", async (payload) => {
+			const p = payload as {
+				path: string;
+				size_bytes: number;
+				speed_bps?: number;
+				segments_downloaded?: number;
+				segments_failed?: number;
+			};
+			// path is the video file path (from meta)
+			const f = files.value.find((r) => r.path === p.path);
+			if (f) {
+				if (p.speed_bps != null && f.is_recording) {
+					recordingSpeed.value = {
+						...recordingSpeed.value,
+						[p.path]: p.speed_bps,
+					};
+				} else if (!f.is_recording) {
+					delete recordingSpeed.value[p.path];
 				}
-			}),
-		);
-
-		unlisteners.push(
-			await on("recording-deleted", (payload) => {
-				const p = payload as { path: string };
-				const isLocal = localDeletedPaths.has(p.path);
-				localDeletedPaths.delete(p.path);
-				files.value = files.value.filter((r) => r.path !== p.path);
-				delete elapsed.value[p.path];
-				ppRemoveFile(p.path);
-				selected.value.delete(p.path);
-				if (!files.value.some((f) => f.is_recording)) stopTick();
-				if (!isLocal) {
-					const name = p.path.split(/[\\/]/).pop() ?? p.path;
-					toast(t("recordings.otherClientDeleted", { name }), "info");
+				f.size_bytes = p.size_bytes;
+				// 更新分片统计 / Update segment stats
+				if (
+					f.is_recording &&
+					(p.segments_downloaded != null || p.segments_failed != null)
+				) {
+					segmentStats.value = {
+						...segmentStats.value,
+						[p.path]: {
+							downloaded:
+								p.segments_downloaded ??
+								segmentStats.value[p.path]?.downloaded ??
+								0,
+							failed: p.segments_failed ?? segmentStats.value[p.path]?.failed ?? 0,
+						},
+					};
 				}
-			}),
-		);
-
-		unlisteners.push(
-			await on("recording-file-update", async (payload) => {
-				const p = payload as {
-					path: string;
-					size_bytes: number;
-					speed_bps?: number;
-				};
-				// path is the video file path (from meta)
-				const f = files.value.find((r) => r.path === p.path);
-				if (f) {
-					if (p.speed_bps != null && f.is_recording) {
-						recordingSpeed.value = {
-							...recordingSpeed.value,
-							[p.path]: p.speed_bps,
-						};
-					} else if (!f.is_recording) {
-						delete recordingSpeed.value[p.path];
-					}
-					f.size_bytes = p.size_bytes;
-				} else {
-					await load();
-					startTick();
-					syncModuleOutputsFromFiles();
-				}
-			}),
-		);
-
-		unlisteners.push(
-			await on("recording-started", async () => {
+			} else {
 				await load();
 				startTick();
 				syncModuleOutputsFromFiles();
-			}),
-		);
+			}
+		}),
+	);
 
-		unlisteners.push(
-			await on("recording-stopped", async (payload) => {
-				const p = payload as { video_path?: string };
-				await load();
-				syncModuleOutputsFromFiles();
-				// 录制结束时清理速度数据 / Clean up recording speed when recording stops
-				if (p.video_path) {
-					const nextSpeed = { ...recordingSpeed.value };
-					delete nextSpeed[p.video_path];
-					recordingSpeed.value = nextSpeed;
-				}
-				// 合并完成后清理进度数据 / Clean up merge progress after merge completes
-				if (p.video_path) {
-					const next = { ...mergeProgress.value };
-					delete next[p.video_path];
-					mergeProgress.value = next;
-				}
-			}),
-		);
+	unlisteners.push(
+		await on("recording-started", async () => {
+			await load();
+			startTick();
+			syncModuleOutputsFromFiles();
+		}),
+	);
 
-		unlisteners.push(
-			await on("merge-progress", (payload) => {
-				const p = payload as {
-					video_path: string;
-					out_bytes: number;
-					total_bytes: number;
+	unlisteners.push(
+		await on("recording-stopped", async (payload) => {
+			const p = payload as { video_path?: string };
+			await load();
+			syncModuleOutputsFromFiles();
+			// 录制结束时清理速度数据 / Clean up recording speed when recording stops
+			if (p.video_path) {
+				const nextSpeed = { ...recordingSpeed.value };
+				delete nextSpeed[p.video_path];
+				recordingSpeed.value = nextSpeed;
+			}
+			// 录制结束时清理分片统计 / Clean up segment stats when recording stops
+			if (p.video_path) {
+				const nextStats = { ...segmentStats.value };
+				delete nextStats[p.video_path];
+				segmentStats.value = nextStats;
+			}
+		}),
+	);
+
+	unlisteners.push(
+		await on("postprocess-waiting", (payload) => {
+			const p = payload as { path: string };
+			ppStatus.value[p.path] = "waiting";
+		}),
+	);
+
+	unlisteners.push(
+		await on("postprocess-started", (payload) => {
+			const p = payload as { path: string };
+			ppStatus.value[p.path] = "running";
+			// 进度由后续 postprocess-meta-update 事件初始化，此处无需设置
+			// Progress will be initialized by the first postprocess-meta-update event
+		}),
+	);
+
+	// postprocess-meta-update：每次节点开始/进度更新/节点完成时后端推送最新 meta 快照，
+	// 前端直接从 pp_execution + pp_progress 重算进度，无需依赖独立进度事件字段。
+	// postprocess-meta-update: backend pushes the latest meta snapshot on each node start/progress/done.
+	// Frontend recalculates progress directly from pp_execution + pp_progress without relying on
+	// individual progress event fields.
+	unlisteners.push(
+		await on("postprocess-meta-update", (payload) => {
+			const p = payload as {
+				path: string;
+				old_path?: string | null;
+				meta: {
+					pp_execution?: import("@/types/recordings").PpExecutionEntry[] | null;
+					pp_progress?: import("@/types/recordings").PpNodeProgress | null;
 				};
-				if (p.video_path) {
-					mergeProgress.value = {
-						...mergeProgress.value,
-						[p.video_path]: { out_bytes: p.out_bytes, total_bytes: p.total_bytes },
-					};
+				module_outputs?: Record<string, string>;
+			};
+			if (!p.meta) return;
+
+			// 路径迁移：segment_merge 成功后后端会在同一事件里携带 old_path，
+			// 用精确的旧路径完成迁移，避免多任务并发时靠搜索猜测导致的状态错乱。
+			// Path migration: after segment_merge the backend includes old_path in the same event;
+			// use the precise old path to migrate state, avoiding corruption when multiple
+			// tasks run concurrently and guessing the old path would pick the wrong one.
+			const oldPath = p.old_path ?? null;
+			if (!ppStatus.value[p.path] && oldPath && ppStatus.value[oldPath]) {
+				// 迁移状态：旧路径 → 新路径
+				// Migrate state: old path → new path
+				ppStatus.value[p.path] = ppStatus.value[oldPath];
+				if (ppProgress.value[oldPath]) {
+					ppProgress.value[p.path] = ppProgress.value[oldPath];
 				}
-			}),
-		);
+				if (moduleOutputs.value[oldPath]) {
+					moduleOutputs.value[p.path] = moduleOutputs.value[oldPath];
+				}
+				// 清理旧路径
+				// Clean up old path
+				delete ppStatus.value[oldPath];
+				delete ppProgress.value[oldPath];
+				delete moduleOutputs.value[oldPath];
+			}
 
-		unlisteners.push(
-			await on("postprocess-waiting", (payload) => {
-				const p = payload as { path: string };
-				ppStatus.value[p.path] = "waiting";
-			}),
-		);
-
-		unlisteners.push(
-			await on("postprocess-started", (payload) => {
-				const p = payload as { path: string };
-				ppStatus.value[p.path] = "running";
-				ppProgress.value[p.path] = makePpProgress(0, 0, 0, 0, "", 0, "", 0, {
+			ppProgress.value[p.path] = ppProgressFromMeta(
+				p.meta.pp_execution,
+				p.meta.pp_progress,
+				countPipelineTotal(ppStore.pipeline),
+				{
 					processing: t("usePostprocess.processing"),
 					waiting: t("usePostprocess.waitingProgress"),
-				});
-			}),
-		);
-
-		unlisteners.push(
-			await on("postprocess-progress", (payload) => {
-				const p = payload as {
-					path: string;
-					done: number;
-					total: number;
-					pct: number;
-					modDone: number;
-					modTotal: number;
-					moduleName: string;
+				},
+				// 传入当前流水线的节点 ID 集合，过滤掉已删除节点的历史记录——
+				// 此时 set_pp_done 尚未写入最终 meta，meta 里可能还有旧记录
+				//
+				// Pass the current pipeline's node ID set to filter out stale records
+				// of deleted nodes — set_pp_done hasn't written the final meta yet,
+				// so meta may still contain old entries
+				ppStore.pipeline?.nodes
+					? new Set(
+							ppStore.pipeline.nodes
+								.filter((n) => n.enabled && !n.moduleId.includes("__builtin__"))
+								.map((n) => n.nodeId ?? n.moduleId),
+						)
+					: undefined,
+			);
+			// 直接使用后端已验证的模块输出路径（result.code === "ok" 且文件当前确实
+			// 存在于磁盘上，见 extract_verified_module_outputs），实时反映新完成节点
+			// 的预览图（如 contact_sheet），不展示失败节点残留的旧输出
+			// Directly use the backend-verified module output paths (result.code === "ok"
+			// and the file currently exists on disk, see extract_verified_module_outputs),
+			// reflecting newly completed nodes' previews (e.g. contact_sheet) in real
+			// time, without showing stale outputs left over from a failed node
+			if (p.module_outputs && Object.keys(p.module_outputs).length > 0) {
+				moduleOutputs.value = {
+					...moduleOutputs.value,
+					[p.path]: { ...moduleOutputs.value[p.path], ...p.module_outputs },
 				};
-				const prev = ppProgress.value[p.path];
-				ppProgress.value[p.path] = makePpProgress(
-					p.done,
-					p.total,
-					p.modDone,
-					p.modTotal,
-					p.moduleName ?? "",
-					p.pct,
-					prev?.moduleName ?? "",
-					prev?.modulePct ?? 0,
-					{
-						processing: t("usePostprocess.processing"),
-						waiting: t("usePostprocess.waitingProgress"),
-					},
-				);
-			}),
-		);
+			}
+		}),
+	);
 
-		unlisteners.push(
-			await on("postprocess-done", async (payload) => {
-				const p = payload as {
-					path: string;
-					results: { moduleId: string; success: boolean; message: string }[];
-				};
-				const wasCancelledByDelete = ppCancelledByDelete.has(p.path);
-				ppCancelledByDelete.delete(p.path);
-				handlePostprocessDone(
-					p,
-					async () => {
-						await load();
-						syncModuleOutputsFromFiles();
-					},
-					() => wasCancelledByDelete,
-				);
-			}),
-		);
-	});
+	unlisteners.push(
+		await on("postprocess-done", async (payload) => {
+			const p = payload as { path: string; success: boolean; message?: string };
+			const wasCancelledByDelete = ppCancelledByDelete.has(p.path);
+			ppCancelledByDelete.delete(p.path);
+			handlePostprocessDone(
+				p,
+				async () => {
+					await load();
+					syncPpStateFromFiles();
+					syncModuleOutputsFromFiles();
+				},
+				() => wasCancelledByDelete,
+			);
+		}),
+	);
+});
 
-	onUnmounted(() => {
-		document.removeEventListener("mousemove", onDocMousemove);
-		document.removeEventListener("mouseup", onDocMouseup);
-		recCleanup();
-		unlisteners.forEach((fn) => fn());
-	});
+onUnmounted(() => {
+	recCleanup();
+	unlisteners.forEach((fn) => fn());
+});
 
-	/** 顶部 header 元素引用，用于动态计算表头 sticky 偏移 */
-	const headerEl = ref<HTMLElement | null>(null);
-	const headerHeight = ref(0);
-	let headerRo: ResizeObserver | null = null;
-	watchEffect(() => {
-		headerRo?.disconnect();
-		if (!headerEl.value) return;
-		headerRo = new ResizeObserver((entries) => {
-			headerHeight.value = entries[0].borderBoxSize[0].blockSize;
-		});
-		headerRo.observe(headerEl.value);
+/** 顶部 header 元素引用，用于动态计算表头 sticky 偏移 */
+const headerEl = ref<HTMLElement | null>(null);
+const headerHeight = ref(0);
+let headerRo: ResizeObserver | null = null;
+watchEffect(() => {
+	headerRo?.disconnect();
+	if (!headerEl.value) return;
+	headerRo = new ResizeObserver((entries) => {
+		headerHeight.value = entries[0].borderBoxSize[0].blockSize;
 	});
-	onUnmounted(() => headerRo?.disconnect());
+	headerRo.observe(headerEl.value);
+});
+onUnmounted(() => headerRo?.disconnect());
 </script>
 
 <template>
-	<div class="flex flex-col">
-		<Dialog :open="previewOpen" @update:open="previewOpen = $event">
-			<DialogContent
-				class="p-0 overflow-hidden flex flex-col w-fit"
-				style="max-width: 90vw; max-height: 90vh"
-			>
-				<DialogHeader class="px-4 pt-4 pb-2 shrink-0">
-					<DialogTitle class="text-sm font-mono truncate">{{
-						previewTitle
-					}}</DialogTitle>
-				</DialogHeader>
-				<div
-					ref="previewViewportRef"
-					class="relative overflow-hidden flex items-center justify-center bg-black/5 px-4 pb-4"
-					:style="{
-						width: viewportSize.width,
-						height: viewportSize.height,
-						cursor: isDragging
-							? 'grabbing'
-							: previewScale > 1
-								? 'grab'
-								: 'default',
-					}"
-					@wheel.prevent="onPreviewWheel"
-					@mousedown="onPreviewMousedown"
-				>
-					<img
-						ref="previewImageRef"
-						:src="previewUrl"
-						:alt="previewTitle"
-						class="rounded select-none pointer-events-none"
-						@load="onPreviewImageLoad"
-						:style="{
-							maxWidth: '100%',
-							maxHeight: '100%',
-							transform: `translate(${previewTranslate.x}px, ${previewTranslate.y}px) scale(${previewScale})`,
-							transformOrigin: 'center center',
-							transition: isDragging ? 'none' : 'transform 0.1s',
-						}"
-					/>
-					<Transition name="fade">
-						<Button
-							v-if="previewScale !== 1"
-							variant="secondary"
-							size="sm"
-							class="absolute bottom-5 left-1/2 -translate-x-1/2 z-10 rounded-full bg-black/60 hover:bg-black/80 text-white text-xs px-3 py-1.5 backdrop-blur-sm"
-							@click="resetPreviewTransform"
-						>
-							{{
-								t("recordings.resetZoom", {
-									pct: Math.round(previewScale * 100),
-								})
-							}}
-						</Button>
-					</Transition>
-				</div>
-			</DialogContent>
-		</Dialog>
+	<div class="flex flex-col h-full gap-0">
+		<ImagePreviewDialog ref="previewDialogRef" />
 
 		<header
 			ref="headerEl"
-			class="flex items-start justify-between gap-4 shrink-0 pb-4 bg-background sticky top-0 z-20"
+			class="flex items-start justify-between gap-4 shrink-0 pb-4 bg-background sticky top-0 z-20 px-4 pt-5 border-b"
 		>
 			<div class="flex-1 min-w-0">
 				<h1 class="text-xl font-bold mb-0.5">{{ t("recordings.title") }}</h1>
-				<div
-					class="flex items-center gap-3 text-sm text-muted-foreground flex-wrap"
-				>
-					<span>{{
-						t("recordings.subtitle.total", { count: files.length })
-					}}</span>
+				<div class="flex items-center gap-3 text-sm text-muted-foreground flex-wrap">
+					<span>{{ t("recordings.subtitle.total", { count: files.length }) }}</span>
 					<span v-if="recordingCount > 0" class="text-destructive">{{
 						t("recordings.subtitle.recording", { count: recordingCount })
 					}}</span>
@@ -694,39 +673,59 @@
 						>
 					</span>
 				</div>
-				<div v-if="diskSpace" class="mt-2 flex items-center gap-2 max-w-xs">
-					<Progress
-						:model-value="diskUsedPct"
-						class="h-1.5 flex-1"
-						:class="
-							diskSpace.available_bytes < 5 * 1024 ** 3
-								? '[&>div]:bg-destructive'
-								: ''
-						"
-					/>
-					<span
-						class="text-xs text-muted-foreground whitespace-nowrap tabular-nums"
-						:class="
-							diskSpace.available_bytes < 5 * 1024 ** 3
-								? 'text-destructive'
-								: ''
-						"
+				<div class="mt-2 flex gap-3" :class="isMobile ? 'flex-col' : 'flex-row'">
+					<div
+						v-for="entry in diskSpaces"
+						:key="entry.label"
+						class="flex flex-col gap-1"
+						:class="isMobile ? '' : 'min-w-40 max-w-56 flex-1'"
 					>
-						{{ formatSize(diskSpace.used_bytes) }} /
-						{{ formatSize(diskSpace.total_bytes) }}
-					</span>
+						<div class="flex items-center justify-between gap-2">
+							<span class="text-xs text-muted-foreground whitespace-nowrap">
+								{{ t(`recordings.diskLabel.${entry.label}`) }}
+							</span>
+							<span
+								class="text-xs text-muted-foreground whitespace-nowrap tabular-nums"
+								:class="{
+									'text-destructive': diskColorTier(entry) === 'danger',
+									'text-yellow-500': diskColorTier(entry) === 'warn',
+								}"
+							>
+								{{ formatSize(entry.used_bytes) }} /
+								{{ formatSize(entry.total_bytes) }}
+							</span>
+						</div>
+						<Progress
+							:model-value="diskUsedPct(entry)"
+							class="h-1.5"
+							:class="{
+								'[&>div]:bg-destructive': diskColorTier(entry) === 'danger',
+								'[&>div]:bg-yellow-500': diskColorTier(entry) === 'warn',
+							}"
+						/>
+					</div>
 				</div>
 			</div>
-			<div class="flex gap-2 shrink-0">
-				<Button
+			<div class="flex gap-2 shrink-0" :class="isMobile ? 'flex-col items-end' : ''">
+				<Tooltip
 					v-if="selectedCount > 0"
-					variant="outline"
-					size="sm"
-					:disabled="ppSelectableCount === 0"
-					@click="postProcessSelected"
+					:content="
+						!hasPipelineNodes
+							? t('recordings.postprocessEmptyPipeline')
+							: ppSelectableCount === 0
+								? t('recordings.postprocessNoneSelectable')
+								: undefined
+					"
 				>
-					{{ t("recordings.batchPostprocess", { count: ppSelectableCount }) }}
-				</Button>
+					<Button
+						variant="outline"
+						size="sm"
+						:disabled="ppSelectableCount === 0 || !hasPipelineNodes"
+						@click="postProcessSelected"
+					>
+						{{ t("recordings.batchPostprocess", { count: ppSelectableCount }) }}
+					</Button>
+				</Tooltip>
 				<Button
 					v-if="selectedCount > 0"
 					variant="destructive"
@@ -738,25 +737,20 @@
 			</div>
 		</header>
 
-		<div class="pb-6">
+		<div class="px-4 flex-1 overflow-y-auto">
 			<div
 				v-if="loading && files.length === 0"
 				class="text-center text-muted-foreground py-16"
 			>
 				{{ t("recordings.loading") }}
 			</div>
-			<div
-				v-else-if="files.length === 0"
-				class="text-center text-muted-foreground py-16"
-			>
+			<div v-else-if="files.length === 0" class="text-center text-muted-foreground py-16">
 				{{ t("recordings.empty") }}
 			</div>
 
-			<Table v-else>
-				<TableHeader
-					class="sticky z-10 bg-background"
-					:style="{ top: `${headerHeight}px` }"
-				>
+			<!-- ── 桌面端：表格视图 / Desktop: table view ── -->
+			<Table v-else-if="!isMobile">
+				<TableHeader class="sticky top-0 z-10 bg-background">
 					<TableRow>
 						<TableHead class="w-8">
 							<Checkbox
@@ -798,7 +792,11 @@
 								class="inline size-3.5 ml-0.5"
 							/>
 						</TableHead>
+						<TableHead class="whitespace-nowrap">{{
+							t("recordings.table.resolution")
+						}}</TableHead>
 						<TableHead>{{ t("recordings.table.speed") }}</TableHead>
+						<TableHead>{{ t("recordings.table.segments") }}</TableHead>
 						<TableHead class="min-w-45">{{
 							t("recordings.table.postprocess")
 						}}</TableHead>
@@ -817,10 +815,15 @@
 									@update:model-value="setGroupChecked(group)"
 								/>
 							</TableCell>
-							<TableCell colspan="7" class="font-semibold">
-								<span class="mr-2 text-muted-foreground text-xs">{{
-									collapsedGroups.has(group.username) ? "▶" : "▼"
-								}}</span>
+							<TableCell colspan="9" class="font-semibold">
+								<component
+									:is="
+										collapsedGroups.has(group.username)
+											? ChevronRight
+											: ChevronDown
+									"
+									class="inline-block size-3.5 mr-1.5 text-muted-foreground align-middle"
+								/>
 								{{ group.username }}
 								<Badge
 									v-if="group.hasRecording"
@@ -842,262 +845,217 @@
 						</TableRow>
 
 						<template v-if="!collapsedGroups.has(group.username)">
-							<TableRow v-for="f in group.files" :key="f.path" class="relative">
-								<template v-if="f.status === 'merging_waiting' || f.status === 'merging'">
-									<TableCell class="w-8">
-										<Checkbox :model-value="false" :disabled="true" />
-									</TableCell>
-									<TableCell class="font-medium w-px whitespace-nowrap pl-7">
-										<div class="flex items-center gap-1.5">
-											<span>{{ f.name }}</span>
-											<Badge variant="outline" class="text-[10px] shrink-0">{{
-												f.status === 'merging_waiting'
-													? t("recordings.status.waitingMerge")
-													: t("recordings.status.merging")
-											}}</Badge>
-										</div>
-									</TableCell>
-									<td colspan="7" class="p-2 align-middle w-full">
-										<div class="flex items-center gap-3 h-9 w-full">
-											<Loader2
-												class="size-4 animate-spin shrink-0 text-muted-foreground"
-											/>
-											<span class="text-xs text-muted-foreground shrink-0">{{
-												f.status === 'merging_waiting'
-													? t("recordings.status.waitingMergeVideo")
-													: t("recordings.status.mergingVideo")
-											}}</span>
-											<template v-if="f.status === 'merging' && mergeProgress[f.path]">
-												<div
-													class="flex-1 bg-muted rounded-full h-1.5 overflow-hidden"
-												>
-													<div
-														class="h-full bg-primary rounded-full transition-all duration-500"
-														:style="{
-															width: `${mergeProgress[f.path].total_bytes > 0
-																? Math.min(99, Math.floor(mergeProgress[f.path].out_bytes / mergeProgress[f.path].total_bytes * 10000) / 100)
-																: 0}%`,
-														}"
-													/>
-												</div>
-												<span class="tabular-nums text-xs text-muted-foreground w-14 shrink-0">{{
-													mergeProgress[f.path].total_bytes > 0
-														? (Math.min(99, Math.floor(mergeProgress[f.path].out_bytes / mergeProgress[f.path].total_bytes * 10000) / 100)).toFixed(2)
-														: '0.00'
-												}}%</span>
-											</template>
-										</div>
-									</td>
-								</template>
-
-								<template v-else>
-									<TableCell class="w-8">
-										<Checkbox
-											:model-value="getFileChecked(f.path)"
-											:disabled="f.is_recording"
-											@update:model-value="setFileChecked(f.path)"
-										/>
-									</TableCell>
-									<TableCell class="font-medium w-px whitespace-nowrap pl-7">
-										{{ f.name }}
-										<Badge
-											v-if="f.is_recording"
-											variant="destructive"
-											class="ml-1.5 text-[10px]"
-											>{{ t("recordings.status.recording") }}</Badge
-										>
-									</TableCell>
-									<TableCell class="tabular-nums">{{
-										formatSize(f.size_bytes)
-									}}</TableCell>
-									<TableCell class="tabular-nums text-muted-foreground">{{
-										new Date(f.started_at).toLocaleString()
-									}}</TableCell>
-									<TableCell class="tabular-nums">
-										<span v-if="f.is_recording" class="text-destructive">{{
-											formatDuration(elapsed[f.path] ?? 0)
-										}}</span>
-										<span v-else class="text-muted-foreground">—</span>
-									</TableCell>
-									<TableCell class="tabular-nums">
-										<span v-if="f.video_duration_secs != null">{{
-											formatDuration(f.video_duration_secs)
-										}}</span>
-										<span v-else class="text-muted-foreground">—</span>
-									</TableCell>
-									<TableCell class="tabular-nums">
-										<span
-											v-if="f.is_recording && recordingSpeed[f.path] != null"
-											class="text-xs"
-										>
-											{{ formatSize(recordingSpeed[f.path]) }}/s
-										</span>
-										<span v-else class="text-muted-foreground">—</span>
-									</TableCell>
-									<TableCell class="min-w-45">
-										<div v-if="!f.is_recording">
-											<div
-												v-if="
-													ppStatus[f.path] === 'running' && ppProgress[f.path]
-												"
-												class="flex flex-col gap-1.5"
-											>
-												<div
-													class="flex items-center justify-between text-xs text-muted-foreground"
-												>
-													<span>{{
-														ppProgress[f.path].moduleExecLabel
-															? t(
-																	"recordings.status.overallProgressWithLabel",
-																	{ label: ppProgress[f.path].moduleExecLabel },
-																)
-															: t("recordings.status.overallProgress")
-													}}</span>
-													<span class="tabular-nums shrink-0">{{
-														ppProgress[f.path].overallLabel
-													}}</span>
-												</div>
-												<Progress
-													:model-value="ppProgress[f.path].overallPct"
-													:animated="false"
-													class="h-1.5"
-												/>
-												<div
-													class="flex items-center justify-between text-xs text-muted-foreground"
-												>
-													<span class="truncate max-w-50">{{
-														ppProgress[f.path].moduleName === "processing"
-															? t("usePostprocess.processing")
-															: ppProgress[f.path].moduleName
-													}}</span>
-													<span class="tabular-nums shrink-0">{{
-														ppProgress[f.path].moduleLabel === "waiting"
-															? t("usePostprocess.waitingProgress")
-															: ppProgress[f.path].moduleLabel
-													}}</span>
-												</div>
-												<Progress
-													:model-value="ppProgress[f.path].modulePct"
-													:animated="false"
-													class="h-1.5"
-												/>
-											</div>
-											<div
-												v-else-if="ppStatus[f.path] === 'waiting'"
-												class="flex items-center gap-1.5 text-xs text-muted-foreground"
-											>
-												<Loader2 class="size-3 animate-spin shrink-0" />
-												<span>{{ t("recordings.status.waiting") }}</span>
-											</div>
-											<div
-												v-else-if="ppStatus[f.path] === 'done' || ppStatus[f.path] === 'error'"
-												class="flex flex-col gap-0.5"
-											>
-												<template v-if="ppProgress[f.path]?.moduleResults?.length">
-													<div
-														v-for="r in ppProgress[f.path].moduleResults"
-														:key="r.moduleId"
-														class="flex items-center gap-1.5 text-xs"
-														:class="r.success ? 'text-green-500' : 'text-destructive'"
-														:title="r.success ? r.moduleId : `${r.moduleId}: ${r.message}`"
-													>
-														<span class="shrink-0">{{ r.success ? "✓" : "✗" }}</span>
-														<span class="truncate max-w-40">{{ r.moduleId }}</span>
-													</div>
-												</template>
-												<template v-else>
-													<div
-														v-if="ppStatus[f.path] === 'done'"
-														class="text-lg text-green-500"
-													>
-														{{ t("recordings.status.done") }}
-													</div>
-													<div v-else class="text-lg text-destructive">
-														{{ t("recordings.status.failed") }}
-													</div>
-												</template>
-											</div>
-											<span v-else class="text-xs text-muted-foreground"
-												>—</span
-											>
-										</div>
-										<span v-else class="text-xs text-muted-foreground">—</span>
-									</TableCell>
-									<TableCell>
-										<div class="flex gap-1.5">
-											<Button
-												size="sm"
-												variant="outline"
-												:disabled="f.is_recording"
-												:title="
-													f.is_recording
-														? t('recordings.actions.playDisabled')
-														: ''
-												"
-												@click="openFile(f.path)"
-												>{{ t("recordings.actions.play") }}</Button
-											>
-											<Button
-												v-if="moduleOutputs[f.path]?.['contact_sheet']"
-												size="sm"
-												variant="outline"
-												title="查看 Contact Sheet 预览图"
-												@click="openModuleOutput(f.path, 'contact_sheet')"
-											>
-												<Image class="size-3.5" />
-											</Button>
-											<Button
-												size="sm"
-												variant="outline"
-												:disabled="
-													f.is_recording ||
-													ppStatus[f.path] === 'running' ||
-													ppStatus[f.path] === 'waiting'
-												"
-												:title="
-													f.is_recording ? t('recordings.status.recording') : ''
-												"
-												@click="runPostprocess(f.path)"
-											>
-												<Loader2
-													v-if="ppStatus[f.path] === 'running'"
-													class="size-3.5 animate-spin"
-												/>
-												<span v-else>{{
-													t("recordings.actions.postprocess")
-												}}</span>
-											</Button>
-											<Button
-												size="sm"
-												variant="destructive"
-												:disabled="f.is_recording"
-												:title="
-													f.is_recording
-														? t('recordings.actions.deleteDisabled')
-														: ''
-												"
-												@click="deleteFile(f)"
-												>{{ t("recordings.actions.delete") }}</Button
-											>
-										</div>
-									</TableCell>
-								</template>
-							</TableRow>
+							<RecordingRow
+								v-for="f in group.files"
+								:key="f.path"
+								:file="f"
+								:checked="getFileChecked(f.path)"
+								:elapsed-secs="elapsed[f.path] ?? 0"
+								:speed-bps="recordingSpeed[f.path] ?? null"
+								:segment-stats="segmentStats[f.path] ?? null"
+								:pp-status="ppStatus[f.path]"
+								:pp-progress="ppProgress[f.path]"
+								:has-contact-sheet="!!moduleOutputs[f.path]?.['contact_sheet']"
+								:has-pipeline-nodes="hasPipelineNodes"
+								@toggle-checked="setFileChecked(f.path)"
+								@open="openFile(f.path)"
+								@open-contact-sheet="openModuleOutput(f.path, 'contact_sheet')"
+								@run-postprocess="runPostprocess(f.path)"
+								@delete="deleteFile(f)"
+							/>
 						</template>
 					</template>
 				</TableBody>
 			</Table>
+
+			<!-- ── 移动端：卡片列表 / Mobile: card list ── -->
+			<div v-else class="flex flex-col gap-3 py-3">
+				<!-- 全选行 / Select-all row -->
+				<div class="flex items-center gap-3 px-1 pb-1 border-b">
+					<Checkbox :model-value="getAllChecked()" @update:model-value="setAllChecked" />
+					<span class="text-sm text-muted-foreground">
+						{{
+							selectedCount > 0
+								? t("recordings.subtitle.selected", { count: selectedCount })
+								: t("recordings.subtitle.total", { count: files.length })
+						}}
+					</span>
+				</div>
+
+				<template v-for="group in groups" :key="group.username">
+					<!-- 分组标题 / Group header -->
+					<div class="flex items-center gap-2 px-1 py-1">
+						<Checkbox
+							:model-value="getGroupChecked(group)"
+							@update:model-value="setGroupChecked(group)"
+							@click.stop
+						/>
+						<button
+							class="flex items-center gap-2 flex-1 text-left min-w-0"
+							@click="toggleGroup(group.username)"
+						>
+							<component
+								:is="
+									collapsedGroups.has(group.username) ? ChevronRight : ChevronDown
+								"
+								class="size-4 text-muted-foreground shrink-0"
+							/>
+							<span class="font-semibold text-sm truncate">{{ group.username }}</span>
+							<Badge
+								v-if="group.hasRecording"
+								variant="destructive"
+								class="text-[10px] shrink-0"
+								>{{ t("recordings.status.recording") }}</Badge
+							>
+						</button>
+						<span class="text-xs text-muted-foreground shrink-0">
+							{{ t("recordings.group.fileCount", { count: group.files.length }) }}
+							· {{ formatSize(group.totalSize) }}
+						</span>
+					</div>
+
+					<template v-if="!collapsedGroups.has(group.username)">
+						<div
+							v-for="f in group.files"
+							:key="f.path"
+							class="rounded-lg border bg-card px-4 py-3 flex flex-col gap-2"
+						>
+							<!-- 文件名 + 录制角标 -->
+							<div class="flex items-start gap-2">
+								<Checkbox
+									:model-value="getFileChecked(f.path)"
+									:disabled="f.is_recording"
+									class="mt-0.5 shrink-0"
+									@update:model-value="setFileChecked(f.path)"
+								/>
+								<div class="flex-1 min-w-0">
+									<span class="text-sm font-medium break-all leading-snug">{{
+										f.name
+									}}</span>
+									<Badge
+										v-if="f.is_recording"
+										variant="destructive"
+										class="ml-1.5 text-[10px] align-middle"
+										>{{ t("recordings.status.recording") }}</Badge
+									>
+								</div>
+							</div>
+
+							<!-- 元数据行 / Metadata row -->
+							<div
+								class="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground pl-6"
+							>
+								<span>
+									<span class="font-medium text-foreground tabular-nums">{{
+										formatSize(f.size_bytes)
+									}}</span>
+								</span>
+								<span class="tabular-nums">{{
+									new Date(f.started_at).toLocaleString()
+								}}</span>
+								<span v-if="f.is_recording" class="text-destructive tabular-nums">
+									{{ formatDuration(elapsed[f.path] ?? 0) }}
+								</span>
+								<span
+									v-else-if="f.video_duration_secs != null"
+									class="tabular-nums"
+								>
+									{{ formatDuration(f.video_duration_secs) }}
+								</span>
+								<span v-if="f.video_resolution" class="font-mono tabular-nums">{{
+									f.video_resolution
+								}}</span>
+								<span
+									v-if="f.is_recording && recordingSpeed[f.path] != null"
+									class="tabular-nums"
+								>
+									{{ formatSize(recordingSpeed[f.path]!) }}/s
+								</span>
+							</div>
+
+							<!-- 分片统计 / Segment stats -->
+							<div
+								v-if="
+									(segmentStats[f.path]?.downloaded ?? f.segments_downloaded) !=
+									null
+								"
+								class="pl-6"
+							>
+								<SegmentStatsBadges
+									:downloaded="
+										segmentStats[f.path]?.downloaded ??
+										f.segments_downloaded ??
+										0
+									"
+									:failed="segmentStats[f.path]?.failed ?? f.segments_failed ?? 0"
+								/>
+							</div>
+
+							<!-- 后处理进度 / Post-process progress -->
+							<div v-if="!f.is_recording && ppStatus[f.path]" class="pl-6 text-xs">
+								<PostprocessProgressCell
+									:status="ppStatus[f.path]"
+									:progress="ppProgress[f.path]"
+								/>
+							</div>
+
+							<!-- 操作按钮 / Action buttons -->
+							<div class="flex gap-2 pl-6 flex-wrap">
+								<Button
+									size="sm"
+									variant="outline"
+									:disabled="f.is_recording"
+									@click="openFile(f.path)"
+									>{{ t("recordings.actions.play") }}</Button
+								>
+								<Button
+									v-if="moduleOutputs[f.path]?.['contact_sheet']"
+									size="sm"
+									variant="outline"
+									@click="openModuleOutput(f.path, 'contact_sheet')"
+								>
+									<Image class="size-3.5" />
+								</Button>
+								<Button
+									size="sm"
+									variant="outline"
+									:disabled="
+										f.is_recording ||
+										ppStatus[f.path] === 'running' ||
+										ppStatus[f.path] === 'waiting' ||
+										!hasPipelineNodes
+									"
+									@click="runPostprocess(f.path)"
+								>
+									<Loader2
+										v-if="ppStatus[f.path] === 'running'"
+										class="size-3.5 animate-spin"
+									/>
+									<span v-else>{{ t("recordings.actions.postprocess") }}</span>
+								</Button>
+								<Button
+									size="sm"
+									variant="destructive"
+									:disabled="f.is_recording"
+									@click="deleteFile(f)"
+									>{{ t("recordings.actions.delete") }}</Button
+								>
+							</div>
+						</div>
+					</template>
+				</template>
+			</div>
 		</div>
 	</div>
 </template>
 
 <style scoped>
-	.fade-enter-active,
-	.fade-leave-active {
-		transition: opacity 0.15s;
-	}
-	.fade-enter-from,
-	.fade-leave-to {
-		opacity: 0;
-	}
+.fade-enter-active,
+.fade-leave-active {
+	transition: opacity 0.15s;
+}
+.fade-enter-from,
+.fade-leave-to {
+	opacity: 0;
+}
 </style>
